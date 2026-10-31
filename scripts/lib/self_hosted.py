@@ -799,8 +799,24 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
                     'and do not draft the packet in a tool call or commentary. '
                     'For edit ops, return only the assigned dispositions and changed fields/insertions; '
                     'unchanged plan content is carried forward mechanically.')
+    if stage_name.startswith('preflight-worker-') or stage_name == 'preflight-investigate' or os.environ.get('UNCLE_PREFLIGHT_READONLY') == '1':
+        policy = Policy(root, shell=allow_shell)
+        policy.preflight_worker = stage_name
+        if stage_name == 'preflight-investigate':
+            relative, document = INVESTIGATION_DOCUMENTS[stage_name]
+            policy.write = True
+            policy.writable = {policy.root / relative}
+            policy.preflight_delivery = policy.root / relative
+            policy.draft_checks[policy.root / relative] = lambda text: validate_investigation(document, text)
+        request += ('\nRead-only preflight: never edit project inputs. Shell probes run in a private scratch copy; '
+                    'use relative paths.')
+        if stage_name == 'preflight-investigate':
+            request += '\nWrite only the required investigation document; the driver publishes it after validation.'
+        else:
+            request += '\nReturn the worker packet as final JSON; the driver writes it.'
+    from writer_deadline import seconds
     return (request, policy, schema, (schema_kind or 'artifact').replace('-', '_'), output_token_limit(stage_name),
-            int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))
+            seconds(int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))))
 
 
 def run_http_stage(stage, directory, values, root, allow_shell=True):
@@ -815,6 +831,18 @@ def run_http_stage(stage, directory, values, root, allow_shell=True):
 
 
 def run_http_agent(side, values, prompt, root, allow_shell=True, usage=None, schema_kind=None, read_cache=None,
+                   protected=False, require_dispositions=False, turns=None):
+    from writer_deadline import deadline, seconds
+    stage_name = os.environ.get('UNCLE_STATUS_STAGE', '')
+    if '-worker-edits-' in stage_name or '-worker-resolve-' in stage_name:
+        with deadline(seconds(int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))):
+            return _run_http_agent(side, values, prompt, root, allow_shell, usage, schema_kind, read_cache,
+                                   protected, require_dispositions, turns)
+    return _run_http_agent(side, values, prompt, root, allow_shell, usage, schema_kind, read_cache,
+                           protected, require_dispositions, turns)
+
+
+def _run_http_agent(side, values, prompt, root, allow_shell=True, usage=None, schema_kind=None, read_cache=None,
                    protected=False, require_dispositions=False, turns=None):
     """One self-hosted stage over direct HTTP; returns (final text, requests made).
 
@@ -1409,10 +1437,35 @@ def repair_http_plan(values, prompt, root, raw, error, artifact, kind, usage,
 
 
 def run_opencode(side, values, prompt, root, stage=None, usage=None):
+    from writer_deadline import deadline, seconds
+    stage_name = stage or os.environ.get('UNCLE_STATUS_STAGE', '')
+    if '-worker-edits-' in stage_name or '-worker-resolve-' in stage_name:
+        with deadline(seconds(int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))):
+            return _run_stage(side, values, prompt, root, stage, usage)
+    return _run_stage(side, values, prompt, root, stage, usage)
+
+
+def _run_stage(side, values, prompt, root, stage=None, usage=None):
     # The normal OpenCode CLI has no observer attached while it runs.  Supply
     # validated reads from earlier stages up front, then ingest its canonical
     # JSON tool events below for the next stage.  Live sessions already do
     # this through native_stage, so never append the packet twice.
+    if (stage or os.environ.get('UNCLE_STATUS_STAGE', '')) == 'preflight-investigate':
+        from preflight_readonly import copy_project, temp_parent
+        relative, document = INVESTIGATION_DOCUMENTS['preflight-investigate']
+        with tempfile.TemporaryDirectory(prefix='uncle-preflight-investigation-', dir=temp_parent(root)) as temporary:
+            staged = Path(temporary).resolve() / 'project'
+            copy_project(root, staged)
+            response, turns = run_http_agent(side, values, prompt, staged, usage=usage)
+            candidate = staged / relative
+            text = candidate.read_text(encoding='utf-8')
+            validate_investigation(document, text)
+            target = root / relative
+            if target.is_symlink():
+                raise ValueError('Refusing symlinked preflight investigation')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding='utf-8')
+            return response, turns
     from read_cache import ReadCache
     read_cache = ReadCache(root)
     if os.environ.get('UNCLE_STEERING') != '1':
@@ -1438,7 +1491,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
     if stage_name == 'project-plan' and 'You perform two consecutive roles in a single pass' in prompt:
         artifact = PLAN_ARTIFACTS['requirements']
     if not artifact:
-        if http_transport():
+        if (http_transport() or stage_name.startswith('preflight-worker-')
+                or os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1'):
             kind = reviewer_artifact_kind(prompt)
             text, turns = run_http_agent(side, values, prompt, root, usage=usage, schema_kind=kind, read_cache=read_cache)
             delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')

@@ -23,7 +23,7 @@ import uuid
 import self_hosted_http as transport
 from self_hosted_http import OutputTruncated, add_usage, chat, conforms, constrained_completion
 
-def strip_thinking(text):
+def strip_thinking(text, trim=True):
     """Drop a reasoning model's <think>...</think> preamble from its message content.
 
     A server without a reasoning parser configured (common for a local DeepSeek-class
@@ -35,7 +35,8 @@ def strip_thinking(text):
     and -- for a plain-text stage with no final_schema -- straight into stage.final_answer,
     the value the rest of the driver treats as the stage's actual output.
     """
-    return re.sub(r'<think>.*?</think>', '', text or '', flags=re.S).strip()
+    text = re.sub(r'<think>.*?</think>', '', text or '', flags=re.S)
+    return text.strip() if trim else text
 
 
 READ_LIMIT = 200_000
@@ -97,6 +98,10 @@ class Policy:
         self.input_digests = {}
         self.reuse_observations = []
         self.reuse_unsafe = False
+        self.preflight_worker = None
+        self.preflight_violation = None
+        self.preflight_delivery = None
+        self.preflight_scratch = None
 
     def observe_input(self, path, raw):
         if self.write or self.shell:
@@ -123,11 +128,16 @@ class Policy:
             except OSError:
                 pass
         self.shell_children.clear()
+        if self.preflight_scratch is not None:
+            self.preflight_scratch.cleanup()
+            self.preflight_scratch = None
 
     def tools(self):
         return READ_TOOLS + (WRITE_TOOLS if self.write else []) + (_shell_tools(self.root) if self.shell else [])
 
     def complete(self):
+        if self.preflight_violation:
+            raise ValueError(self.preflight_violation)
         for path in self.draft_checks:
             if path in self.draft_errors:
                 raise ValueError('Unrepaired draft: ' + self.draft_errors[path])
@@ -311,6 +321,8 @@ def _bash(policy, command, timeout):
     from process_tree import start_check, launch_command, kill_tree, finish_check, bash_executable
     env = {k: v for k, v in os.environ.items() if not k.startswith(('OPENCODE_', 'AIDER_')) and k not in ENV_STRIPPED}
     env.update(PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+    if policy.preflight_worker:
+        return _preflight_bash(policy, command, timeout, env)
     with tempfile.TemporaryFile() as log:
         child = start_check(launch_command([bash_executable(), '-c', command]), cwd=policy.root, env=env,
                             stdout=log, stderr=subprocess.STDOUT)
@@ -332,7 +344,58 @@ def _bash(policy, command, timeout):
     return '%s\n[%s]' % (output.rstrip(), 'timed out after %ds' % timeout if timed_out else 'exit status %d' % status)
 
 
+def _preflight_bash(policy, command, timeout, env):
+    from preflight_readonly import copy_project, probe_command, temp_parent, Violation
+    from process_tree import start_check, launch_command, kill_tree, finish_check
+    if policy.preflight_scratch is None:
+        parent = (policy.root.parent if policy.root.name == 'project' and
+                  policy.root.parent.name.startswith('uncle-preflight-') else temp_parent(policy.root))
+        policy.preflight_scratch = tempfile.TemporaryDirectory(prefix='uncle-preflight-probe-', dir=parent)
+        directory = Path(policy.preflight_scratch.name).resolve()
+        copy_project(policy.root, directory / 'project')
+        for name in ('home', 'tmp', 'cache'):
+            (directory / name).mkdir()
+        # Installed browsers remain readable, but installs and cache updates can
+        # only write into this worker's cache. Never link the shared directory.
+        shared = Path(os.environ.get('PLAYWRIGHT_BROWSERS_PATH') or
+                      (Path.home() / ('Library/Caches/ms-playwright' if sys.platform == 'darwin' else '.cache/ms-playwright')))
+        browsers = directory / 'cache/ms-playwright'
+        browsers.mkdir()
+        if shared.is_dir():
+            for entry in shared.iterdir():
+                if entry.is_dir() and not entry.name.startswith('.'):
+                    (browsers / entry.name).symlink_to(entry.resolve(), target_is_directory=True)
+    directory = Path(policy.preflight_scratch.name).resolve()
+    env.update(HOME=str(directory / 'home'), TMPDIR=str(directory / 'tmp'),
+               XDG_CACHE_HOME=str(directory / 'cache'), npm_config_cache=str(directory / 'cache/npm'),
+               PLAYWRIGHT_BROWSERS_PATH=str(directory / 'cache/ms-playwright'))
+    with tempfile.TemporaryFile(dir=directory) as log:
+        child = start_check(launch_command(probe_command(command, directory)),
+                            cwd=directory / 'project', env=env, stdout=log, stderr=subprocess.STDOUT)
+        try:
+            try:
+                status = child.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                kill_tree(child)
+                child.wait()
+                raise ValueError('%s: probe timed out after %ds' % (policy.preflight_worker, timeout))
+        finally:
+            finish_check(child)
+            policy.shell_children.append(child)
+        log.seek(0)
+        output = log.read().decode('utf-8', errors='replace')
+    if 'Operation not permitted' in output or 'Read-only file system' in output:
+        raise Violation('%s: read-only preflight refused probe write: %s' %
+                        (policy.preflight_worker, output[:1000]))
+    return '%s\n[%s: exit status %d]' % (output[:OUTPUT_LIMIT].rstrip(), policy.preflight_worker, status)
+
+
 def run_tool(policy, name, arguments):
+    if (policy.preflight_worker and name in ('write_file', 'edit_file')
+            and (policy.root / arguments.get('path', '')).resolve() != policy.preflight_delivery):
+        policy.preflight_violation = '%s: read-only preflight refused %s on %s' % (
+            policy.preflight_worker, name, arguments.get('path', ''))
+        return 'error: ' + policy.preflight_violation
     try:
         if name == 'read_file':
             path = policy.resolve(arguments.get('path'))
@@ -430,6 +493,9 @@ def run_tool(policy, name, arguments):
             return output
         return 'error: unknown tool %s' % name
     except (ValueError, KeyError, TypeError, re.error, OSError) as error:
+        from preflight_readonly import Violation
+        if isinstance(error, Violation):
+            policy.preflight_violation = str(error)
         return 'error: ' + str(error)
 
 
@@ -936,7 +1002,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # free-form chat draft to repair (run 13: 10 of 22 writers failed repairing one).
     schema_first = (final_schema is not None and (
         (bool(os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'))
-         and transport.option('writer-schema-first', 'on') not in ('off', '0', 'false'))
+         and (os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1'
+              or transport.option('writer-schema-first', 'on') not in ('off', '0', 'false')))
         or (os.environ.get('UNCLE_ADVERSARIAL_SLICE') == '1'
             and final_name == 'adversarial_review_worker_packet')))
     exhausted = False
@@ -975,7 +1042,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         choice = data['choices'][0]
         message = transport.clean_message(choice['message'])
         calls = message.get('tool_calls') or []
-        text = strip_thinking(message.get('content') or '')
+        content = strip_thinking(message.get('content') or '', trim=False)
+        text = content.strip()
         if choice.get('finish_reason') == 'length':
             saved = save_truncated('turn', turn_limit, text, calls, data.get('usage'))
             raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete.%s'
@@ -988,7 +1056,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 for identifier in steered:
                     stage.answered(identifier, str(requests))
                 steered.clear()
-        captured, feedback = policy.capture(text, calls)
+        captured, feedback = policy.capture(content, calls)
         packet = answer_already_given(text, final_schema) if final_schema is not None else None
         if learned.soft and calls and not policy.write and not policy.shell and packet is None:
             learned.intervene('tools_after_final_request')
@@ -1053,6 +1121,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 except (OSError, ValueError):
                     pass
             result = run_tool(policy, name, arguments)
+            if policy.preflight_violation:
+                raise ValueError(policy.preflight_violation)
             if name in ('read_file', 'list_dir', 'grep') and not policy.write and not policy.shell:
                 policy.reuse_observations.append((name, arguments, hashlib.sha256(result.encode()).hexdigest()))
             if name in ('read_file', 'list_dir', 'grep') and len(json.dumps(arguments)) <= 1024:
@@ -1201,7 +1271,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         unbudgeted = ACTIVE.set(None) if schema_first else None
         try:
             final, reason, final_usage, mode = constrained_completion(values, messages, final_schema, final_name, cap,
-                                                                      effort, timeout, skip=skip)
+                                                                      effort, min(timeout, max(.001, deadline - time.monotonic())), skip=skip)
         except transport.StreamStopped as error:
             if unbudgeted is not None:
                 ACTIVE.reset(unbudgeted)

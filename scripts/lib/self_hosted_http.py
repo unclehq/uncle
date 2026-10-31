@@ -81,6 +81,11 @@ def request_options(stage=None, config=None):
 
 def configure_request_options(values, stage=None, config=None):
     """Snapshot and validate at stage start, before tools or server discovery."""
+    if os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1':
+        options = dict(values.get('_request_options', request_options(stage, config)))
+        options['chat_template_kwargs'] = dict(options.get('chat_template_kwargs') or {}, enable_thinking=False)
+        return dict(values, _request_options=options,
+                    _request_options_stage=stage or os.environ.get('UNCLE_STATUS_STAGE', ''))
     if '_request_options' in values:
         return values
     stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
@@ -278,6 +283,8 @@ def reasoning_effort(values=None, effort=None):
     # Off by default: on DeepSeek V4 any reasoning_effort value switches thinking
     # back on even when a stage's request options turn it off, and the hint showed
     # no measurable benefit on tool-using requests. Opt in per project.
+    if os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1':
+        return None
     enabled = option('reasoning-effort', 'off')
     if enabled in ('off', '0', 'false'):
         return None

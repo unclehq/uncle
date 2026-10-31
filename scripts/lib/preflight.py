@@ -108,7 +108,7 @@ def run(commands, report):
     import json
     payload = {
         'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report',
-        'narrative': ('Deterministic runtime probes completed. Approved commands were not executed.\n\n'
+        'narrative': ('Deterministic runtime probes completed with no application acceptance claims. Approved commands were not executed.\n\n'
                       'Dependency installation and application-specific browser, service, credential, and human checks remain subject to implementation and checklist verification.\n\n'
                       'Findings: ' + ('; '.join(results) or 'No external runtime required by the command list.')),
         'rows': [{'id': 'PF-RUNTIME', 'required': True, 'status': 'PASS',

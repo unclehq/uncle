@@ -110,7 +110,8 @@ def main(argv):
         model = load(argv[1], argv[2] if len(argv) > 2 and argv[2] else None)
         if model is None and argv[0] in ('steps', 'owns', 'depends'):
             path = canonical_path(argv[1], argv[2] if len(argv) > 2 and argv[2] else None)
-            narrative = (json.loads(path.read_text(encoding='utf-8')).get('narrative', '') if path else
+            payload = json.loads(path.read_text(encoding='utf-8')) if path else {}
+            narrative = (payload['narrative'] if 'narrative' in payload else
                          Path(argv[1]).read_text(encoding='utf-8') if Path(argv[1]).is_file() else '')
             from plan_steps import extract
             steps = extract(narrative)

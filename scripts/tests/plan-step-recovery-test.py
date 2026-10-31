@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded, schema-first publication recovery; all runners are stubbed."""
-import copy
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -46,6 +47,22 @@ class Recovery(unittest.TestCase):
             self.assertTrue(result['narrative'].endswith('\n## Review\n/approve\n'))
             self.assertEqual(pm.publish_records(result, self.root), result)
             request.assert_called_once()
+
+    def test_metadata_only_legacy_packet_still_reads_markdown_steps(self):
+        import plan_records
+        plan = self.root / 'PLAN.md'
+        plan.write_text('## Implementation order\n1. Core Owns: `core.py`\n')
+        packet = plan.with_suffix('.json')
+        packet.write_text(json.dumps(dict(protected_verification_paths='core.py')))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(plan_records.main(['owns', str(plan)]), 0)
+        self.assertEqual(output.getvalue(), '1\tcore.py\n')
+        packet.write_text(json.dumps(dict(narrative='', protected_verification_paths='core.py')))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(plan_records.main(['owns', str(plan)]), 0)
+        self.assertEqual(output.getvalue(), '')
 
     def test_canonical_records_cannot_be_replaced_by_a_stale_narrative(self):
         plan = dict(title='Plan', intro='', sections=[], narrative=self.text)

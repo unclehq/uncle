@@ -110,3 +110,29 @@ python3 -I scripts/tests/updated-plan-slicing-test.py
 python3 -I scripts/tests/updated-plan-ops-test.py
 bash scripts/run-shell-tests.sh
 ```
+
+Exhausted finding attempts use the existing `Deferred` disposition by default.
+The reason names the failed edit or runner and asks for review by hand; the
+canonical JSON, rendered dispositions table, stage log and console all retain
+it. Successful packets still merge. Resolver and structural failures remove the
+implicated packets' edits before recording Deferred; inseparable findings in a
+packet, or packets connected by a resolver conflict, are deferred together.
+The existing approval and preflight gates are unchanged. The disposition gate
+already accepts Deferred for CRITICAL findings; it does not mean the edit was
+implemented or that the plan was approved.
+
+`updated-plan.defer-unapplied on|off|non-critical` controls this fallback (default
+`on`). `off` retains terminal exhaustion; `non-critical` refuses automatic
+deferral of CRITICAL findings. `updated-plan.finding-seconds` defaults to 360
+seconds from a finding's first admitted runner call, shared by private retries,
+split retries, alternate delivery, resolvers and structural repair. Expired
+findings cannot start another model call. The runner watchdog kills the active
+call and its descendants; the normal per-call self-hosted progress limits also
+remain in force. Model-free validation and publication follow the deadline.
+
+Environment overrides are `WORKFLOW_UPDATED_PLAN_DEFER_UNAPPLIED` and
+`WORKFLOW_UPDATED_PLAN_FINDING_SECONDS`. Change plans also accept the more
+specific `updated-change-plan.*` config keys and
+`WORKFLOW_UPDATED_CHANGE_PLAN_*` environment variables. Worker-specific config
+and environment suffixes follow the existing stage mapping; environment values
+win over config. No Git commit or clean working tree is required.

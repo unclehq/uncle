@@ -112,13 +112,26 @@ workflow_model_cancel() {
 # Bound the whole runner call, including streaming, retries and child processes.
 workflow_model_writer() {
     local stage="$1"; shift
-    if ! stage_uses_self_hosted "$stage" AGENT; then "$@"; return $?; fi
-    local limit pid guard heartbeat status=0
-    limit="$(UNCLE_STATUS_STAGE="$3" python3 -B "$ROOT/scripts/lib/writer_deadline.py" seconds)" || return 1
+    local limit=3600 pid guard heartbeat status=0 finding_limit="" idle_mode=""
+    if declare -F stage_uses_self_hosted >/dev/null && stage_uses_self_hosted "$stage" AGENT; then
+        limit="$(UNCLE_STATUS_STAGE="$3" python3 -B "$ROOT/scripts/lib/writer_deadline.py" seconds)" || return 1
+    else
+        idle_mode=ceiling-only
+    fi
+    if [[ -n "${UNCLE_UPDATED_PLAN_ATTEMPTS_DIR:-}" && -n "${UNCLE_UPDATED_PLAN_FINDINGS:-}" ]]; then
+        finding_limit="$(python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" remaining "$UNCLE_UPDATED_PLAN_ATTEMPTS_DIR" "$UNCLE_UPDATED_PLAN_FINDINGS" "$3")" || return 1
+        if [[ "$finding_limit" == 0 || "$finding_limit" == 0.0 ]]; then
+            echo 'finding wall-time deadline: attempt chain exhausted' >&2
+            return 124
+        fi
+        limit="$(python3 -c 'import sys; print(min(map(float, sys.argv[1:])))' "$limit" "$finding_limit")"
+    elif [[ -n "$idle_mode" ]]; then
+        "$@"; return $?
+    fi
     heartbeat="$(mktemp "${TMPDIR:-/tmp}/uncle-writer-progress.XXXXXX")" || return 1
     ( export UNCLE_WRITER_PROGRESS_FILE="$heartbeat"; "$@" ) &
     pid=$!
-    UNCLE_STATUS_STAGE="$3" python3 -B "$ROOT/scripts/lib/writer_deadline.py" watch "$pid" "$limit" "$3" "$heartbeat" "${LOG_DIR:-/tmp}/$3.jsonl" &
+    UNCLE_STATUS_STAGE="$3" python3 -B "$ROOT/scripts/lib/writer_deadline.py" watch "$pid" "$limit" "$3" "$heartbeat" "${LOG_DIR:-/tmp}/$3.jsonl" "$idle_mode" &
     guard=$!
     wait "$pid" || status=$?
     kill "$guard" 2>/dev/null || true
@@ -186,8 +199,25 @@ workflow_archive_stage() {
 }
 
 workflow_writer_exhausted() {
-    stage_uses_self_hosted "$1" AGENT || return 0
     : > "$STATE_DIR/updated-plan-writers-exhausted"
     printf '%s: writer attempts exhausted\n' "$1" > "$STATE_DIR/stop-reason"
     echo 'Updated-plan writer attempts exhausted; completed packets retained for diagnosis.' >&2
+}
+
+workflow_deferred_report() {
+    python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" report "$1" | tee -a "$LOG_DIR/UPDATED_PLAN.log" "$LOG_DIR/UPDATED_PLAN.speculative.log"
+}
+
+workflow_publish_updated_plan() {
+    local stage="$1" directory="$2" status=0
+    python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" prepare-publication "$directory" "$stage" || status=$?
+    if [[ "$status" == 3 ]]; then
+        . "$ROOT/scripts/lib/updated-plan-repair.sh"
+        run_updated_plan_structure_repair "$directory/publication-candidate.json" "$(cat "$directory/publication-error.log")" "$stage" || return 1
+    elif [[ "$status" != 0 ]]; then
+        return "$status"
+    else
+        python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$stage" "$LOG_DIR/$stage.jsonl" . "$directory/merged.json" || return 1
+    fi
+    workflow_deferred_report "$directory"
 }

@@ -52,5 +52,5 @@ run_adversarial_review_slices() {
         done > "$LOG_DIR/adversarial-review-worker-$lens.log"
     done
     [[ "$failed" == 0 ]] || return 1
-    python3 -B "$ROOT/scripts/lib/adversarial_slices.py" merge "$directory" "$count"
+    python3 -B "$ROOT/scripts/lib/adversarial_slices.py" merge "$directory" "$count" --runner "$(workflow_model_runner adversarial-review REVIEWER)"
 }

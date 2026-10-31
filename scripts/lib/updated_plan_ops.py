@@ -34,18 +34,19 @@ Conflict, NeedsResolution, CHANGE = base.Conflict, base.NeedsResolution, base.CH
 
 OPS_RULES = '''`ops` is an array of edits to the plan model in the last section of this prompt. The plan is JSON: sections
 hold blocks, blocks hold rows, list items or steps, and every section, block, row, item and step has an `id`.
-You name an id that exists. You never quote text and never name a heading. Every value in an op is a string;
-a field that holds a list (requirements, files, owns, depends_on) is written as one string, items separated by commas.
+You name an id that exists. You never quote text and never name a heading. Follow the supplied schema's field types;
+list fields (requirements, files, owns) use string arrays and a step's depends_on uses an integer array.
+Legacy schemas may instead request comma-separated strings for these lists.
 
 - `{"op":"set_fields","id":"B-1","fields":{"failure":"..."}}` changes only the named fields of the row `id`. The
   field names are the keys of that row in the model.
 - `{"op":"set_text","id":"s1.2","text":"..."}` replaces the text of a `prose` block or a list item.
-- `{"op":"set_step","id":"step-3","fields":{"title":"...","text":"...","owns":"a.js, b.js","depends_on":"1, 2"}}`
+- `{"op":"set_step","id":"step-3","fields":{"title":"...","text":"...","owns":["a.js", "b.js"],"depends_on":[1, 2]}}`
   changes only the fields named.
 - `{"op":"insert_row","target":"<id of a rows block>","after":"B-3","new":{"id":"B-9", ...fields}}` adds a row after
   the row `after` ("" for first). The new row's id is new and unused.
 - `{"op":"insert_item","target":"<id of a list or steps block>","after":"<item id or empty>","new":{...}}` adds a list item
-  (`{"text":"..."}`) or a step (`{"id":"step-N","number":"N","title":"...","text":"...","owns":"...","depends_on":"..."}`).
+  (`{"text":"..."}`) or a step (`{"id":"step-3","number":3,"title":"...","text":"...","owns":["a.js"],"depends_on":[1]}`).
 - `{"op":"insert_block","target":"<section id>","after":"<block id or empty>","block":{"kind":"prose","text":"..."}}`; block
   kinds are prose, heading (level, text), code (lang, text) and list (items: an array of strings).
 - `{"op":"delete","id":"..."}` removes a row, list item, step or block.
@@ -189,7 +190,7 @@ def write_prompt(base_path, ids, output, owns_fields=False, note=None):
     text = text.replace('reconstructs the plan\'s full text from `patch`', 'reconstructs the plan\'s full text from `ops`')
     text = text.replace('must be reflected by some `patch` entry', 'must be reflected by some `ops` entry')
     text = SECTIONS_ONLY.sub('', text)
-    text = PLAN_JSON.sub(lambda _: '## Plan model (JSON)\n\nEvery `id` below is one you may name.\n```json\n%s\n```\n'
+    text = PLAN_JSON.sub(lambda _: '## Plan model (JSON)\n\nUse existing ids below; your assigned scope limits which ones you may edit.\n```json\n%s\n```\n'
                          % json.dumps({k: v for k, v in model.items()}, ensure_ascii=False, separators=(',', ':')), text)
     assigned_context = []
     if ids:
@@ -211,6 +212,12 @@ def write_prompt(base_path, ids, output, owns_fields=False, note=None):
             text += DECIDE_NOTE
     if assigned_context:
         note += '\n\n## Assigned findings and corrections\n```json\n' + json.dumps(assigned_context, ensure_ascii=False) + '\n```\n'
+    from worker_schemas import scoped_ids
+    context = json.dumps(assigned_context, ensure_ascii=False)
+    targets = [key for key in pm.index(model) if re.search(r'(?<![\w.-])' + re.escape(key) + r'(?![\w.-])', context)]
+    scope = scoped_ids(model, targets) if targets else list(pm.index(model))
+    Path(output).with_suffix('.scope.json').write_text(json.dumps(scope) + '\n', encoding='utf-8')
+    note += '\n\nAssigned edit scope (ids): ' + ', '.join(scope) + '.\n'
     Path(output).write_text(base.defer_reply_example(text) + note, encoding='utf-8')
 
 
@@ -314,8 +321,14 @@ def op_group(writer_ops, model):
             value = flat.get(key)
             if isinstance(value, str) and value in where and value not in touched:
                 touched.append(value)
+    from worker_schemas import scoped_ids
+    scope = scoped_ids(model, touched)
+    context = {}
+    for key in scope:
+        node = where[key][0]
+        context[key] = {field: value for field, value in node.items() if field not in ('blocks', 'rows', 'items')}
     return {'kind': 'ops', 'heading': ', '.join(touched[:4]) or '(the plan)',
-            'context': json.dumps({k: where[k][0] for k in touched}, ensure_ascii=False, indent=1),
+            'context': json.dumps(context, ensure_ascii=False, indent=1),
             'edits': [{'writer': w, 'op': op.get('flat', op), **({'problem': op['why']} if op.get('op') == 'invalid' else {})}
                       for w, op in writer_ops],
             'refs': [op for _, op in writer_ops]}
@@ -518,6 +531,8 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
             Path(directory, 'prompts').mkdir(exist_ok=True)
             for group in groups:
                 Path(directory, 'prompts', 'resolve-%s.md' % group['id']).write_text(resolver_prompt(group, plan_changes), encoding='utf-8')
+                scope = list(json.loads(group['context'])) if group['kind'] == 'ops' else []
+                Path(directory, 'prompts', 'resolve-%s.scope.json' % group['id']).write_text(json.dumps(scope) + '\n', encoding='utf-8')
             raise NeedsResolution(groups)
         answers = read_answers(resolutions, groups)
         missing = [g['id'] for g in groups if g['id'] not in answers]

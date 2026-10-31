@@ -87,12 +87,12 @@ class UpdatedPlanFastPath(unittest.TestCase):
 
     def test_driver_attempts_fast_path_before_worker_fanout(self):
         source = (ROOT / 'scripts/stagegate.sh').read_text()
-        state = source[source.index('        UPDATED_PLAN)'):source.index('        IMPLEMENT)', source.index('        UPDATED_PLAN)'))]
+        state = source[source.index('        UPDATED_PLAN)\n'):source.index('        IMPLEMENT)\n', source.index('        UPDATED_PLAN)\n'))]
         self.assertLess(state.index('run_updated_plan_fast_path'), state.index('run_updated_plan_panel'))
 
     def test_change_driver_attempts_fast_path_before_worker_fanout(self):
         source = (ROOT / 'scripts/change-workflow.sh').read_text()
-        state = source[source.index('        UPDATED_PLAN)'):source.index('        VALIDATE_UPDATED_PLAN)', source.index('        UPDATED_PLAN)'))]
+        state = source[source.index('        UPDATED_PLAN)\n'):source.index('        VALIDATE_UPDATED_PLAN)\n', source.index('        UPDATED_PLAN)\n'))]
         self.assertLess(state.index('run_updated_change_plan_fast_path'), state.index('run_updated_change_plan_panel'))
 
 

@@ -325,6 +325,17 @@ class Prompt(unittest.TestCase):
 
 
 class Schemas(unittest.TestCase):
+    def properties(self, schema):
+        properties = {}
+        for variant in schema['anyOf']:
+            for key, value in variant['properties'].items():
+                target = properties.setdefault(key, {})
+                if 'enum' in value:
+                    target.setdefault('enum', []).extend(value['enum'])
+                if 'properties' in value:
+                    target.setdefault('properties', {}).update(value['properties'])
+        return properties
+
     def test_the_writer_schema_lists_the_ids_and_has_no_text_patch(self):
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp, 'plan.json')
@@ -334,7 +345,7 @@ class Schemas(unittest.TestCase):
             schema = json.loads(out.read_text())
         self.assertEqual(schema['properties']['kind'], {'const': WS.EDIT_OPS_KIND})
         self.assertNotIn('patch', schema['properties'])
-        item = schema['properties']['ops']['items']['properties']
+        item = self.properties(schema['properties']['ops']['items'])
         self.assertIn('B-1', item['id']['enum'])
         self.assertIn('step-2', item['id']['enum'])
         self.assertNotIn('B-9', item['id']['enum'])
@@ -354,7 +365,8 @@ class Schemas(unittest.TestCase):
             out = Path(tmp, 'schema.json')
             self.assertEqual(WS.main(['resolve-ops', str(plan), str(out)]), 0)
             schema = json.loads(out.read_text())
-        self.assertIn('B-2', schema['properties']['resolutions']['items']['properties']['ops']['items']['properties']['id']['enum'])
+        item = self.properties(schema['properties']['resolutions']['items']['properties']['ops']['items'])
+        self.assertIn('B-2', item['id']['enum'])
 
 
 class Reconcile(Base):

@@ -3,10 +3,11 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import sys
 
-from unit_scheduler import group_size, option
+from unit_scheduler import granularity, group_size, option
 from worker_packets import PacketError, SCHEMA, SEVERITIES, _norm, load
 
 KIND = 'adversarial-review-worker-packet'
@@ -74,6 +75,9 @@ def prepare(directory, plan, context, count):
             prompt = common + '\n\n## Assigned review lens\n\nFocus only on **%s**.\n' % lens
             prompt += '\n## Assigned checklist areas\n\n' + '\n'.join('- ' + area for area in assigned)
             prompt += scope + '\nReport only findings in these assigned areas. Other units cover the remaining areas.\n'
+            prompt += ('Gather and rank candidate issues for this lens, strongest evidence first. Cite the affected plan ids '
+                       'and the specific defect category; combine near-duplicates. Omit speculative issues. '
+                       'The lens publishes one ranked selection from all its units.\n')
             (prompts / ('%s-%d.md' % (lens, index + 1))).write_text(prompt, encoding='utf-8')
 
 
@@ -85,27 +89,84 @@ def validate(packet):
     return load(packet, KIND)
 
 
-def merge(directory, count):
+def finding_limit(runner='self-hosted', config=None):
+    default = 6 if granularity(runner, 'adversarial-review', config) == 'small' else 0
+    value = os.environ.get('WORKFLOW_ADVERSARIAL_REVIEW_MAX_FINDINGS_PER_LENS',
+                           option(runner, 'adversarial-review', 'max-findings-per-lens', default, config)).strip()
+    if not value.isdecimal():
+        raise ValueError('adversarial-review.max-findings-per-lens must be a nonnegative integer')
+    return int(value)
+
+
+def issue_key(item):
+    text = item['summary'] + ' ' + item['evidence']
+    targets = set(re.findall(r'\b(?:[A-Z]{1,4}-\d+[A-Za-z]?|step-\d+|s\d+(?:\.[a-z]?\d+)+)\b', text))
+    categories = set()
+    for category, words in (
+            ('validation', r'validat|malformed|invalid|reject|out.of.range|bounds'),
+            ('authorization', r'authoriz|permission|access control|tenant isolation'),
+            ('injection', r'inject|escap|saniti|unsafe render'),
+            ('recovery', r'rollback|recover|retry|retries'),
+            ('concurrency', r'concurren|race|atomic|lock|simultaneous'),
+            ('ownership', r'owner|owns|unowned'),
+            ('determinism', r'determinis|flak|random|clock'),
+            ('accessibility', r'accessib|keyboard|screen.reader|aria')):
+        if re.search(words, text, re.I):
+            categories.add(category)
+    return targets, categories
+
+
+def same_issue(left, right):
+    if _norm(left['summary']) == _norm(right['summary']):
+        return True
+    a, ac = issue_key(left)
+    b, bc = issue_key(right)
+    # Even the same category on one row can describe two independent defects.
+    if not (a & b and ac and ac == bc):
+        return False
+    stop = set('a an the and or of to in on for is are be has have no not missing omitted omits lacks lack'.split())
+    def words(item):
+        text = item['summary'] + ' ' + item['evidence']
+        for target in a | b:
+            text = text.replace(target, '')
+        return set(_norm(text).split()) - stop - set(AREAS)
+    first, second = words(left), words(right)
+    return bool(first and second and len(first & second) / len(first | second) >= .6)
+
+
+def rank(item):
+    severity = SEVERITIES.index(item['severity']) if item['severity'] in SEVERITIES else len(SEVERITIES)
+    return severity, -len(issue_key(item)[0]), -len(item['evidence'])
+
+
+def merge(directory, count, runner='self-hosted'):
     directory = Path(directory)
     packets = {}
+    small = count > 1 and granularity(runner, 'adversarial-review') == 'small'
     for lens in AREAS:
         findings = []
-        by_summary = {}
+        limit = finding_limit(runner) if small else 0
         for index in range(1, count + 1):
             for item in validate(directory / 'slices' / ('%s-%d.json' % (lens, index))):
-                key = _norm(item['summary'])
-                if key not in by_summary:
+                target = next((f for f in findings if same_issue(f, item)), None) if small else next(
+                    (f for f in findings if _norm(f['summary']) == _norm(item['summary'])), None)
+                if target is None:
                     target = dict(item)
                     target['_evidence'] = [item['evidence']] if item['evidence'] else []
-                    by_summary[key] = target
                     findings.append(target)
                 else:
-                    target = by_summary[key]
+                    if small and rank(item) < rank(target):
+                        target['summary'] = item['summary']
+                        target['evidence'] = item['evidence']
+                        target['_evidence'] = [item['evidence']] + [e for e in target['_evidence'] if e != item['evidence']]
                     if item['evidence'] and item['evidence'] not in target['_evidence']:
                         target['_evidence'].append(item['evidence'])
                     if item['severity'] in SEVERITIES and (target['severity'] not in SEVERITIES or
                             SEVERITIES.index(item['severity']) < SEVERITIES.index(target['severity'])):
                         target['severity'] = item['severity']
+        if limit and len(findings) > limit:
+            selected = {id(item) for item in sorted(findings, key=rank)[:limit]}
+            findings = [item for item in findings if id(item) in selected]
         # Slice-local AR-001 IDs must never fuse unrelated observations in the
         # existing lens collator. Preserve unique IDs, allocate collisions in order.
         reserved = {item['id'] for item in findings}
@@ -134,6 +195,7 @@ def main():
     prep.add_argument('directory'); prep.add_argument('plan'); prep.add_argument('context'); prep.add_argument('count', type=int)
     check = sub.add_parser('validate'); check.add_argument('packet')
     join = sub.add_parser('merge'); join.add_argument('directory'); join.add_argument('count', type=int)
+    join.add_argument('--runner', default='self-hosted')
     args = vars(parser.parse_args()); command = args.pop('command')
     try:
         result = {'count': slice_count, 'prepare': prepare, 'validate': validate, 'merge': merge}[command](**args)

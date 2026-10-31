@@ -18,8 +18,8 @@ what it receives for runners with no schema support.
     worker_schemas.py section-model NAME OUTPUT   project-plan section worker, writing typed blocks (NAME outline: the outline)
     worker_schemas.py edit PLAN.json OUTPUT [owner]   updated-plan edit writer
     worker_schemas.py resolve PLAN.json OUTPUT        updated-plan resolver
-    worker_schemas.py edit-ops PLAN.json OUTPUT [owner]   the same writer, editing the plan model by id
-    worker_schemas.py resolve-ops PLAN.json OUTPUT        the same resolver, for ops
+    worker_schemas.py edit-ops PLAN.json OUTPUT [owner] [--scope IDS.json]   the same writer, editing the plan model by id
+    worker_schemas.py resolve-ops PLAN.json OUTPUT [--scope IDS.json]        the same resolver, for ops
     worker_schemas.py requirements OUTPUT                     the requirements interpretation
     worker_schemas.py synthesis KIND protected|plain OUTPUT   the single-call updated plan (KIND plan or change-plan)
 """
@@ -200,13 +200,116 @@ def _op(ids=None):
     }, ('op',))
 
 
-def edit_ops_packet(ids=None, owner=False):
+def scoped_ids(model, targets):
+    """Explicit containers include their contents; ancestors supply insertion targets only."""
+    from plan_model import index, parent_of
+    where, parents = index(model), parent_of(model)
+    selected = set(targets) & set(where)
+    for key in where:
+        parent = parents.get(key)
+        while parent:
+            if parent in targets:
+                selected.add(key)
+                break
+            parent = parents.get(parent)
+    for key in list(selected):
+        parent = parents.get(key)
+        while parent:
+            selected.add(parent)
+            parent = parents.get(parent)
+    return sorted(selected)
+
+
+def model_op(model, ids=None):
+    """Closed operation variants, grouped by actual row kind instead of by individual id."""
+    from plan_model import ROW_KINDS, index
+    allowed = set(index(model))
+    if ids is not None:
+        allowed.intersection_update(ids)
+    variants, rows, texts, steps = [], {}, [], []
+    strings = {'type': 'array', 'maxItems': 150, 'items': _text(4000)}
+    step_fields = {'title': _text(EDIT_MAX, 0), 'text': _text(EDIT_MAX, 0), 'owns': strings,
+                   'depends_on': {'type': 'array', 'maxItems': 150, 'items': {'type': 'integer', 'minimum': 0}}}
+
+    def fields(kind, new=False):
+        properties = {name: strings if is_list else _text(EDIT_MAX, 0)
+                      for name, _, is_list, _ in ROW_KINDS[kind] if new or name != 'id'}
+        if new:
+            properties['id'] = _text(120)
+        return _object(properties, ('id',) if new else ())
+
+    def add(op, properties, required):
+        variants.append(_object(dict(op={'const': op}, **properties), ['op'] + list(required)))
+
+    def pick(values):
+        return {'type': 'string', 'enum': sorted(values)}
+
+    block = {'anyOf': [
+        _object({'kind': {'const': 'prose'}, 'text': _text(EDIT_MAX, 0)}, ('kind', 'text')),
+        _object({'kind': {'const': 'heading'}, 'text': _text(EDIT_MAX, 0),
+                 'level': {'type': 'string', 'enum': ['3', '4', '5', '6']}}, ('kind', 'text')),
+        _object({'kind': {'const': 'code'}, 'text': _text(EDIT_MAX, 0), 'lang': _text(30, 0)}, ('kind', 'text')),
+        _object({'kind': {'const': 'list'}, 'items': strings}, ('kind', 'items'))]}
+    sections = []
+    for section in model['sections']:
+        if section['id'] in allowed:
+            sections.append(section['id'])
+            add('insert_block', {'target': pick([section['id']]),
+                                'after': pick([''] + [b['id'] for b in section['blocks'] if b['id'] in allowed]),
+                                'block': block}, ('target', 'block'))
+        for node in section['blocks']:
+            members = node.get('rows') or node.get('items') or []
+            member_ids = [r['id'] for r in members if r['id'] in allowed]
+            kind = node['kind']
+            if kind == 'rows':
+                rows.setdefault(node['row_kind'], []).extend(member_ids)
+            elif kind == 'steps':
+                steps.extend(member_ids)
+            elif kind == 'list':
+                texts.extend(member_ids)
+            if node['id'] not in allowed:
+                continue
+            if kind in ('prose', 'heading', 'code'):
+                texts.append(node['id'])
+            if kind in ('rows', 'steps', 'list'):
+                new = (fields(node['row_kind'], new=True) if kind == 'rows' else
+                       _object(dict(id=_text(120), number={'type': 'integer', 'minimum': 1}, **step_fields),
+                               ('id', 'number', 'owns')) if kind == 'steps' else
+                       _object({'id': _text(120), 'text': _text(EDIT_MAX, 0)}, ('text',)))
+                add('insert_row' if kind == 'rows' else 'insert_item',
+                    {'target': pick([node['id']]), 'after': pick([''] + member_ids), 'new': new}, ('target', 'new'))
+    for kind, keys in rows.items():
+        if keys:
+            add('set_fields', {'id': pick(keys), 'fields': fields(kind)}, ('id', 'fields'))
+    if steps:
+        add('set_step', {'id': pick(steps), 'fields': _object(step_fields, ())}, ('id', 'fields'))
+    if texts:
+        add('set_text', {'id': pick(texts), 'text': _text(EDIT_MAX, 0)}, ('id', 'text'))
+    deletable = []
+    for key, (node, _, _) in index(model).items():
+        if key in allowed and 'blocks' not in node and all(
+                child['id'] in allowed for child in node.get('rows') or node.get('items') or []):
+            deletable.append(key)
+    if deletable:
+        add('delete', {'id': pick(deletable)}, ('id',))
+    if sections:
+        add('insert_section', {'after': pick(sections), 'heading': _text(300),
+                               'blocks': {'type': 'array', 'maxItems': 20, 'items': block}}, ('after', 'heading', 'blocks'))
+    return {'anyOf': variants} if variants else {}
+
+
+def _ops(ids, model, maximum):
+    item = model_op(model, ids) if model is not None else _op(ids)
+    return {'type': 'array', 'maxItems': maximum if item else 0, 'items': item}
+
+
+def edit_ops_packet(ids=None, owner=False, model=None):
     owner = owner and os.environ.get('UNCLE_PLAN_KIND') != 'change-plan'
     properties = {
         'dispositions': {'type': 'array', 'maxItems': 40, 'items': _object({
             'finding': _text(80), 'disposition': {'type': 'string', 'enum': list(DISPOSITIONS)},
             'reason': _text(300), 'plan_change': _text(300)}, ('finding', 'disposition', 'reason', 'plan_change'))},
-        'ops': {'type': 'array', 'maxItems': 120, 'items': _op(ids)},
+        'ops': _ops(ids, model, 120),
         'commands_replace': _commands(),
     }
     if owner or os.environ.get('UNCLE_UPDATED_PLAN_STRUCTURE_REPAIR') == '1':
@@ -214,9 +317,9 @@ def edit_ops_packet(ids=None, owner=False):
     return envelope(EDIT_OPS_KIND, properties, ['dispositions', 'ops'] + (['protected_verification_paths'] if owner else []))
 
 
-def resolution_ops_packet(ids=None):
+def resolution_ops_packet(ids=None, model=None):
     return envelope(RESOLUTION_OPS_KIND, {'resolutions': {'type': 'array', 'minItems': 1, 'maxItems': 40, 'items': _object({
-        'group': _text(40), 'ops': {'type': 'array', 'maxItems': 60, 'items': _op(ids)}, 'commands_replace': _commands()},
+        'group': _text(40), 'ops': _ops(ids, model, 60), 'commands_replace': _commands()},
         ('group',))}}, ['resolutions'])
 
 
@@ -239,6 +342,13 @@ def plan_ids(plan_json):
 
 
 def main(argv):
+    argv = list(argv)
+    scope = None
+    if '--scope' in argv:
+        at = argv.index('--scope')
+        scope = json.loads(Path(argv[at + 1]).read_text(encoding='utf-8'))
+        scope = scope['ids'] if isinstance(scope, dict) else scope
+        del argv[at:at + 2]
     output = argv[2] if len(argv) > 2 else None
     try:
         if len(argv) == 3 and argv[0] == 'section':
@@ -267,9 +377,15 @@ def main(argv):
                 schema = section_model_packet([h[3:] for h in sections.expected_headings(argv[1])], sections.trace_letters(argv[1]),
                                               sections.row_kinds_of(argv[1]), sections.allows_steps(argv[1]))
         elif len(argv) in (3, 4) and argv[0] == 'edit-ops':
-            schema = edit_ops_packet(plan_ids(argv[1]), owner=len(argv) == 4)
+            from plan_model import load_model
+            from updated_plan_ops import option
+            model = load_model(argv[1]) if option('strict-op-schemas', 1) else None
+            schema = edit_ops_packet(scope if scope is not None else plan_ids(argv[1]), owner=len(argv) == 4, model=model)
         elif len(argv) == 3 and argv[0] == 'resolve-ops':
-            schema = resolution_ops_packet(plan_ids(argv[1]))
+            from plan_model import load_model
+            from updated_plan_ops import option
+            model = load_model(argv[1]) if option('strict-op-schemas', 1) else None
+            schema = resolution_ops_packet(scope if scope is not None else plan_ids(argv[1]), model=model)
         elif len(argv) == 3 and argv[0] == 'resolve':
             schema = resolution_packet(plan_headings(argv[1]))
         else:

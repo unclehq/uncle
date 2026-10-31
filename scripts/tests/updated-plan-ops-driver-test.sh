@@ -11,7 +11,7 @@ awk '/^(updated_plan_launch_writer|updated_plan_warm_prefix|run_updated_plan_edi
 check "function extracted" test -s "$TMP/fn.sh"
 
 run_case() {   # name mode [hosted|local]
-    local name="$1" mode="$2" runner="${3:-hosted}" dir="$TMP/$1"
+    local name="$1" mode="$2" runner="${3:-hosted}" dir="$TMP/$1" ops_fixture_case="$1"
     mkdir -p "$dir/.uncle/workflow/documents" "$dir/.uncle/workflow/logs" "$dir/.uncle/docs"
     python3 -B - "$dir" "$ROOT" "$mode" <<'PY'
 import json, sys
@@ -47,9 +47,22 @@ PY
             trap 'printf "end\n" >> "$STATE_DIR/concurrency"' EXIT
             local n="${2#updated-plan-worker-edits-}"; [[ "$2" != updated-plan-worker-resolve-* ]] || n=resolve
             printf '%s\n' "$n" >> "$STATE_DIR/starts"
-            echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
+            echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} grammar=${UNCLE_WORKER_SCHEMA_FILE:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
             printf '%s %s %s\n' "$n" "${UNCLE_WORKER_MAX_TURNS:-}" "${UNCLE_UPDATED_PLAN_ANSWER_TOKENS:-}" >> "$STATE_DIR/budgets"
             if [[ "$mode:$n" == cap:2 ]]; then echo 'answer_cap' >&2; return 1; fi
+            if [[ "$ops_fixture_case:$n" == adaptive:1 || "$ops_fixture_case:$n" == bounded-2:1 ]]; then
+                # Schema preparation may outlast the stub; hold one writer until its sibling starts.
+                python3 -B - "$STATE_DIR/starts" <<'PYOVERLAP'
+from pathlib import Path
+import sys, time
+path = Path(sys.argv[1])
+deadline = time.monotonic() + 10
+while '2' not in path.read_text().splitlines():
+    if time.monotonic() >= deadline:
+        raise AssertionError('second adaptive writer never started while first was active')
+    time.sleep(.01)
+PYOVERLAP
+            fi
             sleep 0.2
             [[ "$mode:$n" != fail:2 && "$mode:$n" != fail:2-* && "$mode:$n" != failonce:2 ]] || return 1
             if [[ "$2" == updated-plan-worker-resolve-* ]]; then
@@ -294,6 +307,7 @@ run_case local ok local
 w="$TMP/local/.uncle/workflow"
 check "local model: fan-out runs, returns 0"     test "$(cat "$w/rc")" == 0
 check "local model: no schema flag, packet path" bash -c '! grep -q "schema=/\|schema=\.uncle" "$1" && grep -q "out=none" "$1" && ! grep -q "packet=none" "$1"' _ "$w/calls"
+check "local model: scoped grammar reaches adapter" bash -c 'grep -q "grammar=.*/schemas/" "$1" && ! grep -q "grammar=none" "$1"' _ "$w/calls"
 
 run_case hosted ok hosted
 w="$TMP/hosted/.uncle/workflow"
@@ -302,7 +316,7 @@ check "hosted: writer 1 owns the protected paths, and every schema lists the ids
 import json, sys
 one = json.load(open(sys.argv[1] + '/1.json'))['properties']
 two = json.load(open(sys.argv[1] + '/2.json'))['properties']
-ids = one['ops']['items']['properties']['id']['enum']
+ids = [identifier for v in one['ops']['items']['anyOf'] for identifier in v['properties'].get('id', {}).get('enum', [])]
 sys.exit(0 if 'protected_verification_paths' in one and 'protected_verification_paths' not in two and 'B-2' in ids and 'patch' not in one else 1)
 PY
 check "each prompt names one packet kind"        bash -c 'for f in "$1"/*.md; do test "$(grep -o "\"kind\":\"updated-plan-[a-z-]*\"" "$f" | sort -u | wc -l | tr -d " ")" == 1 || exit 1; done' _ "$w/updated-plan-edits/prompts"
@@ -320,10 +334,10 @@ PY
 WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file run_case hostedfile ok hosted
 w="$TMP/hostedfile/.uncle/workflow"
 check "forced file delivery: hosted writer returns 0" test "$(cat "$w/rc")" == 0
-check "forced file delivery: no schema, private packet path" bash -c '! grep -q "schema=.*schemas/" "$1" && grep -q "out=none" "$1" && ! grep -q "packet=none" "$1"' _ "$w/calls"
+check "forced file delivery: no schema, private packet path" bash -c '! grep -q "schema=[^ ]*schemas/" "$1" && grep -q "out=none" "$1" && ! grep -q "packet=none" "$1"' _ "$w/calls"
 
 run_case hostedresolve resolve hosted
-check "hosted resolver: schema and answer path"  bash -c 'grep -q "resolve-G1 schema=.*schemas/resolve-G1.json out=.*/resolutions-G1.json" "$1"' _ "$TMP/hostedresolve/.uncle/workflow/calls"
+check "hosted resolver: schema and answer path"  bash -c 'grep -q "resolve-G1 schema=[^ ]*schemas/resolve-G1.json out=.*/resolutions-G1.json" "$1"' _ "$TMP/hostedresolve/.uncle/workflow/calls"
 check "ops mode is the default"                  grep -qF 'WORKFLOW_UPDATED_PLAN_OPS:-1' "$ROOT/scripts/stagegate.sh"
 check "non-owner batches are set-e safe"         bash -c '! grep -q '\''owner_of\[index\]="\$(\[\['\'' "$1" && ! grep -q '\''"\$(\[\[ "\$name" == 1 || "\$name" == 1-1 \]\] && echo owner)"'\'' "$1"' _ "$ROOT/scripts/stagegate.sh"
 

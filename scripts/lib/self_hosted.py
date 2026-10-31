@@ -782,7 +782,8 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
             policy.writable.add(policy.root / relative)
     if schema_kind in ('project-plan-section-worker-packet', 'project-plan-section-model-packet', 'project-plan-outline-packet',
                        'updated-plan-edit-ops-packet', 'updated-plan-resolution-ops-packet',
-                       'plan', 'change-plan', 'change-planning-bundle'):
+                       'plan', 'change-plan', 'change-planning-bundle') or (
+            schema_kind == 'adversarial-review-worker-packet' and os.environ.get('UNCLE_ADVERSARIAL_SLICE') == '1'):
         # Plans and packets are final answers. Whole-stage writes have one owner;
         # offering Write/Bash here invites drafting the packet through tools and
         # then generating it again as the final answer. Reads remain available.

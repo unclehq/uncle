@@ -826,8 +826,12 @@ def run_http_stage(stage, directory, values, root, allow_shell=True):
                                                           reviewer_artifact_kind(stage.prompt))
     stage.model = values['model']
     stage.ready(directory)
-    run_agent(values, request, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
-              final_name=name, stage=stage, seconds=seconds)
+    from contextlib import nullcontext
+    from writer_deadline import deadline
+    writer = '-worker-edits-' in stage.stage or '-worker-resolve-' in stage.stage
+    with deadline(seconds) if writer else nullcontext():
+        run_agent(values, request, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
+                  final_name=name, stage=stage, seconds=seconds)
 
 
 def run_http_agent(side, values, prompt, root, allow_shell=True, usage=None, schema_kind=None, read_cache=None,
@@ -1778,12 +1782,18 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                 child = start_check(launch_command(command), cwd=root, env=env,
                                     stdout=log, stderr=subprocess.STDOUT)
                 deadline = time.monotonic() + seconds
+                output_size = 0
                 try:
                     while True:
                         try:
                             status = child.wait(timeout=.1)
                             break
                         except subprocess.TimeoutExpired:
+                            size = os.fstat(log.fileno()).st_size
+                            if size > output_size:
+                                from writer_deadline import progress
+                                progress()
+                                output_size = size
                             if time.monotonic() >= deadline:
                                 raise ValueError(f'OpenCode exceeded its {seconds}-second time limit')
                 finally:

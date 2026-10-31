@@ -254,6 +254,8 @@ class TriageRequest:
             # and this class has no notion of mode to tell those apart. Let
             # it through as an ordinary (possibly empty) reply and leave that
             # judgment to the caller, which knows what turn this was.
+            if streamed and reply != streamed:
+                self.events.put(('delta', reply))
             self.events.put(('reply', reply))
         except (OSError, ValueError) as exc:
             self.events.put(('error', str(exc)))

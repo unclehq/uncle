@@ -174,6 +174,8 @@ def assemble(lines):
                     if done:
                         break
             elif line.startswith('data:'):
+                from writer_deadline import progress
+                progress()
                 fields.append(line[5:].removeprefix(' '))
         if fields and not done:
             event('\n'.join(fields))

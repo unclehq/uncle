@@ -313,4 +313,17 @@ if __name__ == '__main__':
         export_json(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '.',
                     sys.argv[4] if len(sys.argv) > 4 else None)
         sys.exit(0)
-    sys.exit(0 if main(sys.argv[1]) else 1)
+    if len(sys.argv) == 3 and sys.argv[1] == '--is-raw-json':
+        # A rendered view is Markdown, never a JSON object: raw JSON in the view is a reviewer's answer nobody has ingested.
+        import importlib.util as _spec_util
+        from pathlib import Path
+        _spec = _spec_util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+        _module = _spec_util.module_from_spec(_spec); _spec.loader.exec_module(_module)
+        try:
+            sys.exit(0 if _module.unfence_json(Path(sys.argv[2]).read_text(encoding='utf-8')).startswith('{') else 1)
+        except OSError:
+            sys.exit(1)
+    # The second argument is the project the canonical artifact is written under. It used to be ignored, so a caller that
+    # passed a scratch directory still wrote .uncle/workflow/documents/ into the current directory -- and a test run
+    # inside a live worktree overwrote that run's canonical TEST_REVIEW.json.
+    sys.exit(0 if main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else '.') else 1)

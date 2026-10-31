@@ -521,7 +521,9 @@ def next_id(model, prefix):
 
 def op_keys(op):
     if op.get('op') == 'insert_step':
-        return {(op['list'], 'insert:' + op.get('_step_key', 'new'))}
+        references = [op.get('after'), op.get('before')] + op['new']['depends_on']
+        return ({(op['list'], 'insert:' + op.get('_step_key', 'new'))}
+                | {(key, 'reference') for key in references if key and key != 'end'})
     """What an op touches, for conflict detection: (id, field) pairs; field '*' means all of it."""
     name = op.get('op')
     if name == 'set_fields':
@@ -589,9 +591,16 @@ def conflicts(model, ops_by_writer):
                 entries.append((writer, op))
     groups = []
     for writer, op in entries:
-        hit = [g for g in groups if any(clash(op, other) and writer != w for w, other in g)]
+        hit = [g for g in groups if any((clash(op, other) and writer != w)
+                                       or (writer == w and new_step_packets(op) & new_step_packets(other))
+                                       for w, other in g)]
         groups = [g for g in groups if g not in hit] + [[item for g in hit for item in g] + [(writer, op)]]
     return [g for g in groups if len({w for w, _ in g}) > 1]
+
+
+def new_step_packets(op):
+    references = [op.get('_step_key')] + op.get('depends_on', [])
+    return {ref.rsplit(':', 1)[0] for ref in references if isinstance(ref, str) and ref.startswith('new:')}
 
 
 def fresh_ids(model, section_id, block):

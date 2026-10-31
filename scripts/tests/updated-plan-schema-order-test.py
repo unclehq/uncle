@@ -187,13 +187,19 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
                 self.assertEqual([row['strict'] for row in group2], [False])
                 self.assertTrue(all(not row['strict'] for row in rows if '-edits-' in row['stage']))
 
-    def test_transport_failures_do_not_enable_strict_schema(self):
+    def test_transport_failures_use_strict_single_finding_writer_retry(self):
         for change in (False, True):
             for mode in ('writer-transport', 'resolver-transport', 'writer-malformed', 'resolver-malformed'):
                 with self.subTest(change=change, mode=mode):
                     rows = self.run_driver(mode=mode, change=change)
                     self.assertGreater(len(rows), 2)
-                    self.assertTrue(all(not row['strict'] for row in rows), rows)
+                    if mode.startswith('writer-'):
+                        suffixes = {row['stage'].split('-edits-')[1]: row['strict'] for row in rows}
+                        self.assertEqual(len(rows), 5, rows)
+                        self.assertEqual(suffixes, {'1': False, '2': False,
+                                                    '1-1': True, '1-2': True, '1-3': True})
+                    else:
+                        self.assertTrue(all(not row['strict'] for row in rows), rows)
 
     def test_hosted_runners_keep_scoped_schema(self):
         for change in (False, True):

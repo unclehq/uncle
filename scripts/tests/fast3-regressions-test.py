@@ -313,13 +313,18 @@ class WriterDeadline(unittest.TestCase):
 class WriterFallback(unittest.TestCase):
     run_driver = order.AttemptOrder.run_driver
 
-    def run_attempts(self, change=False):
+    def run_attempts(self, change=False, timed=False):
         stub = order.STUB.replace("'strict': strict,", "'strict': strict, 'cheap': os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY'), 'schema_first': os.environ.get('WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST'),")
         stub = stub.replace("if mode == 'writer-transport' and n == '1' and not prior:",
                             "if mode == 'writer-transport' and n.startswith('1') and not prior:")
+        if timed:
+            stub = stub.replace("    if mode == 'writer-transport' and n.startswith('1') and not prior:",
+                "    if mode == 'writer-transport' and n == '1' and not prior:\n        time.sleep(10)\n"
+                "    if mode == 'writer-transport' and n.startswith('1') and not prior:")
         with patch.object(order, 'STUB', stub):
             return self.run_driver(mode='writer-transport', change=change,
-                                   config='self-hosted.writer-schema-first off\n')
+                                   config='self-hosted.writer-schema-first off\n',
+                                   overrides={'WORKFLOW_SELF_HOSTED_WRITER_SECONDS': '1'} if timed else None)
 
     def test_failed_writer_uses_strict_cheap_single_finding_before_tool_fallback(self):
         for change in (False, True):
@@ -335,6 +340,20 @@ class WriterFallback(unittest.TestCase):
                     self.assertEqual(attempts[-1]['schema_first'], 'off', attempts)
                 sibling = [r for r in rows if r['stage'].endswith('-edits-2')]
                 self.assertEqual(len(sibling), 1)
+
+    def test_driver_timeout_enters_cheap_retry_before_last_tool_attempt(self):
+        for change in (False, True):
+            with self.subTest(change=change):
+                rows = self.run_attempts(change, timed=True)
+                original = next(row for row in rows if row['stage'].endswith('-edits-1'))
+                retry = [row for row in rows if row['stage'].endswith('-edits-1-1')]
+                self.assertEqual([row['cheap'] for row in retry], ['1', None])
+                self.assertTrue(retry[0]['strict'])
+                self.assertEqual(retry[1]['schema_first'], 'off')
+                delay = (retry[0]['started'] - original['started']) / 1e9
+                self.assertGreaterEqual(delay, .8)
+                self.assertLess(delay, 8, 'driver waited for the ten-second stub instead of enforcing budget')
+                self.assertEqual(sum(row['stage'].endswith('-edits-2') for row in rows), 1)
 
     def test_cheap_retry_forces_constrained_delivery_and_thinking_off(self):
         packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',

@@ -28,9 +28,31 @@ Path(os.environ['STUB_ARGV']).write_text(json.dumps(args))
 if '--output-schema' in args:
     Path(os.environ['STUB_SCHEMA']).write_text(Path(args[args.index('--output-schema') + 1]).read_text())
 answer = os.environ.get('STUB_ANSWER', '{"answer":"ok"}')
+def emit(value): print(json.dumps(value), flush=True)
+if 'app-server' in args:
+    for line in sys.stdin:
+        request = json.loads(line)
+        with Path(os.environ['STUB_RPC']).open('a') as log:
+            log.write(json.dumps(request) + '\n')
+        method, params = request.get('method'), request.get('params', {})
+        result = {}
+        if method == 'thread/start':
+            result = {'thread': {'id': 'stub-thread'}}
+        elif method == 'turn/start':
+            if 'outputSchema' in params:
+                Path(os.environ['STUB_SCHEMA']).write_text(json.dumps(params['outputSchema']))
+            result = {'turn': {'id': 'stub-turn'}}
+        if 'id' in request:
+            emit({'id': request['id'], 'result': result})
+        if method == 'turn/start':
+            emit({'method': 'item/completed', 'params': {'item': {
+                'type': 'agentMessage', 'id': 'note', 'phase': 'commentary', 'text': 'Working.'}}})
+            emit({'method': 'item/completed', 'params': {'item': {
+                'type': 'agentMessage', 'id': 'final', 'phase': 'final_answer', 'text': answer}}})
+            emit({'method': 'turn/completed', 'params': {'turn': {'id': 'stub-turn', 'status': 'completed'}}})
+    raise SystemExit(0)
 if '--output-last-message' in args and os.environ.get('STUB_WRITE', '1') == '1':
     Path(args[args.index('--output-last-message') + 1]).write_text(answer)
-def emit(value): print(json.dumps(value), flush=True)
 if Path(sys.argv[0]).name == 'cline':
     emit({'type': 'agent_event', 'event': {'type': 'content_end', 'contentType': 'text', 'text': answer}})
     emit({'type': 'run_result', 'finishReason': 'completed', 'iterations': 1})
@@ -67,7 +89,7 @@ class RunnerSchema(unittest.TestCase):
         self.delivery = self.directory / 'artifact delivery.json'
         self.log = self.directory / 'events.jsonl'
 
-    def run_runner(self, schema=SIMPLE, answer=None, runner='codex', config='', **extra):
+    def run_runner(self, schema=SIMPLE, answer=None, runner='codex', config='', native=False, **extra):
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(('UNCLE_', 'WORKFLOW_', 'STAGEGATE_', 'STUB_'))}
         env.update(WORKFLOW_CODEX_CMD=str(self.directory / 'codex'),
@@ -76,6 +98,7 @@ class RunnerSchema(unittest.TestCase):
                    UNCLE_CONFIG=str(self.directory / 'config'),
                    UNCLE_STATUS_STAGE='updated-plan-worker-edits-1',
                    STUB_ARGV=str(self.directory / 'argv.json'),
+                   STUB_RPC=str(self.directory / 'rpc.jsonl'),
                    STUB_SCHEMA=str(self.directory / 'strict.json'))
         (self.directory / 'config').write_text(config)
         if schema is not None:
@@ -85,8 +108,12 @@ class RunnerSchema(unittest.TestCase):
         if answer is not None:
             env['STUB_ANSWER'] = answer if isinstance(answer, str) else json.dumps(answer)
         env.update(extra)
-        done = subprocess.run(['bash', str(ROOT / 'scripts' / ('agent-' + runner + '.sh')),
-                               '-p', '--output-format', 'stream-json'],
+        command = ['bash', str(ROOT / 'scripts' / ('agent-' + runner + '.sh'))]
+        if native:
+            env.update(UNCLE_RUNNER_REUSE='0', UNCLE_STEERING='1', WORKFLOW_NATIVE_STAGE_SECONDS='10')
+            command = [sys.executable, '-B', str(ROOT / 'scripts/lib/native_stage.py'),
+                       '--runner', runner, '--side', 'agent', '--stage', env['UNCLE_STATUS_STAGE'], '--']
+        done = subprocess.run(command + ['-p', '--output-format', 'stream-json'],
                               input='Deliver the requested packet.', text=True, capture_output=True,
                               cwd=self.directory, env=env, timeout=30)
         self.log.write_text(done.stdout)
@@ -247,6 +274,56 @@ class RunnerSchema(unittest.TestCase):
         done = self.run_runner(schema, {'answer': 'x'})
         self.assertNotEqual(done.returncode, 0, done.stdout)
         self.assertFalse(self.delivery.exists())
+
+    def test_native_tui_schema_uses_rpc_and_same_delivery_contract(self):
+        schema = object_schema({'answer': {'type': 'string'}, 'optional': {'type': 'string'}}, ['answer'])
+        done = self.run_runner(schema, {'answer': 'ok', 'optional': None}, native=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('app-server', self.argv)
+        self.assert_strict_objects(json.loads((self.directory / 'strict.json').read_text()))
+        self.assert_delivered({'answer': 'ok'})
+        requests = [json.loads(line) for line in (self.directory / 'rpc.jsonl').read_text().splitlines()]
+        turn = next(request for request in requests if request.get('method') == 'turn/start')
+        self.assertIn('outputSchema', turn['params'])
+
+    def test_native_tui_opt_out_preserves_rpc_without_output_schema(self):
+        done = self.run_runner(native=True, WORKFLOW_RUNNER_SCHEMA_ENFORCE='0')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        requests = [json.loads(line) for line in (self.directory / 'rpc.jsonl').read_text().splitlines()]
+        turn = next(request for request in requests if request.get('method') == 'turn/start')
+        self.assertNotIn('outputSchema', turn['params'])
+        self.assertNotIn('structured_output', self.result)
+        self.assertFalse(self.delivery.exists())
+
+    def test_native_tui_invalid_final_cannot_deliver(self):
+        done = self.run_runner(answer={'answer': 4}, native=True)
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn('structured_output', self.result)
+        self.assertFalse(self.delivery.exists())
+
+    def test_both_driver_capability_gates_advertise_codex_and_preserve_other_runners(self):
+        script = '''
+source "$ROOT/scripts/lib/stage-runtime.sh"
+stage_runner_config_name() { printf '%s\\n' "$1"; }
+uncle_resolve_stage_runner() { UNCLE_RESOLVED_RUNNER="$TEST_RUNNER"; }
+stage_agent_cmd() { printf '%s\\n' "$TEST_COMMAND"; }
+"$TEST_GATE" updated-plan-worker-edits-1
+'''
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(('UNCLE_', 'WORKFLOW_', 'STAGEGATE_'))}
+        env.update(ROOT=str(ROOT), UNCLE_PROJECT_ROOT=str(self.directory),
+                   UNCLE_CONFIG=str(self.directory / 'config'), WORKFLOW_CODEX_CMD=str(self.directory / 'codex'))
+        (self.directory / 'config').write_text('')
+        for gate in ('app_stage_supports_structured_output', 'change_stage_supports_structured_output'):
+            for runner, command, supported in (
+                    ('codex', str(ROOT / 'scripts/agent-codex.sh'), True),
+                    ('claude', '/stub/claude', True), ('cline', str(ROOT / 'scripts/agent-cline.sh'), False),
+                    ('self-hosted', '/stub/self-hosted', False), ('codex', '/stub/custom', False)):
+                with self.subTest(gate=gate, runner=runner, command=command):
+                    done = subprocess.run(['bash', '-c', script], cwd=self.directory,
+                                          env=dict(env, TEST_GATE=gate, TEST_RUNNER=runner, TEST_COMMAND=command),
+                                          text=True, capture_output=True, timeout=30)
+                    self.assertEqual(done.returncode == 0, supported, done.stderr)
 
 
 if __name__ == '__main__':

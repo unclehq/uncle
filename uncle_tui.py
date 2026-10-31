@@ -4512,6 +4512,19 @@ class UncleTUI:
             self.chat_error = ''
         self._auto_resume_after_do(proposal, summary, False)
 
+    def _bounded_stage_stop(self):
+        try:
+            state = Path(self._workflow_dir())
+            reason = (state / 'stop-reason').read_text()
+        except (OSError, AttributeError, TypeError):
+            return False
+        if 'writer attempts exhausted' not in reason and 'read-only preflight violation' not in reason:
+            return False
+        line = ('system', 'Not resuming: ' + sanitize(reason.strip()) + '. Type /resume when ready.')
+        if not self.triage_history or self.triage_history[-1] != line:
+            self.triage_history.append(line)
+        return True
+
     def _auto_resume_after_do(self, proposal, summary, failed):
         """After /do N completes, resume the build the ordinary way unless the
         execute failed, the guard refused anything, or the proposal holds.
@@ -4520,6 +4533,9 @@ class UncleTUI:
         to the transcript and screen. Returns True: the outcome is handled and
         the unattended diagnosis resume must not run on top of it.
         """
+        if self._bounded_stage_stop():
+            self.triage_offer_resume = True
+            return True
         number = proposal[0] if proposal else 0
         unattended = getattr(self, 'workflow_unattended', False)
         problem = ('runner error' if failed else 'guard refused' if summary.get('refused')
@@ -4650,6 +4666,8 @@ class UncleTUI:
         reviewed the diagnosis.
         """
         if not getattr(self, 'workflow_unattended', False):
+            return
+        if self._bounded_stage_stop():
             return
         if not self.triage_offer_resume or self.triage_tainted:
             return

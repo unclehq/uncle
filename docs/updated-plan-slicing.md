@@ -41,11 +41,28 @@ is `WORKFLOW_UPDATED_PLAN_STRICT_SCHEMA`, with the same change-stage inheritance
 and precedence above. `updated-plan.strict-op-schemas 0` disables strict schemas
 on both attempts. Claude and Codex retain their existing schema selection.
 
-Each self-hosted writer attempt has a 150-second wall-clock budget, including
-streaming, tool calls and protocol retries. Set `self-hosted.writer-seconds` in
-`.uncle/config`, or override it with `WORKFLOW_SELF_HOSTED_WRITER_SECONDS` (a
-positive integer). The driver terminates the attempt's descendants on timeout;
-successful sibling packets remain available. Claude and Codex are unchanged.
+Self-hosted writers stop after 45 seconds without streamed progress. Set
+`self-hosted.writer-no-progress-seconds` or
+`WORKFLOW_SELF_HOSTED_WRITER_NO_PROGRESS_SECONDS` to change this window.
+The absolute ceiling defaults to `max(600, 60 * writer-jobs)` seconds (720 at
+the default 12 concurrent writers); `self-hosted.writer-seconds` or
+`WORKFLOW_SELF_HOSTED_WRITER_SECONDS` overrides it. The ceiling covers streaming,
+tool calls and protocol retries in one runner invocation. Continuous progress
+cannot extend it. A silent or expired runner and its descendants are stopped;
+its completed siblings remain available.
+
+`self-hosted.writer-jobs` / `WORKFLOW_SELF_HOSTED_WRITER_JOBS` bounds updated-plan
+writers separately from the provider-wide pool; the smaller limit wins. These
+positive-integer options also accept stage-specific config keys and environment
+suffixes, using the same worker-to-stage mapping as model configuration. Specific
+environment overrides precede global environment values, then stage config and
+self-hosted config. Claude and Codex scheduling is unchanged.
+
+Previous attempt logs, JSONL and packets are retained with `-rN` suffixes before
+canonical paths are reused. Failed writers record their exit status and error
+detail in the stage and speculative logs. Exhausted writer attempts and read-only
+preflight violations stop automatic speculation/fallback/triage restarts. Explicit
+operator recovery remains available through the existing commands.
 
 New implementation steps use `insert_step` with `after` or `before` naming an
 existing step (`after: "end"` appends). The `new` object contains `title`, `text`,

@@ -99,8 +99,8 @@ workflow_model_enter() {
 
 workflow_model_leave() {
     local status=$?
-    rm -f "$UNCLE_MODEL_UNIT_FILE"
-    [[ -z "$UNCLE_MODEL_UNIT_PID" ]] || python3 -B "$ROOT/scripts/lib/unit_scheduler.py" release "$UNCLE_MODEL_UNIT_POOL" "$UNCLE_MODEL_UNIT_PID" || true
+    rm -f "${UNCLE_MODEL_UNIT_FILE:-}"
+    [[ -z "${UNCLE_MODEL_UNIT_PID:-}" ]] || python3 -B "$ROOT/scripts/lib/unit_scheduler.py" release "$UNCLE_MODEL_UNIT_POOL" "$UNCLE_MODEL_UNIT_PID" || true
     return "$status"
 }
 
@@ -113,14 +113,53 @@ workflow_model_cancel() {
 workflow_model_writer() {
     local stage="$1"; shift
     if ! stage_uses_self_hosted "$stage" AGENT; then "$@"; return $?; fi
-    local limit pid guard status=0
+    local limit pid guard heartbeat status=0
     limit="$(UNCLE_STATUS_STAGE="$stage-worker-edits" python3 -B "$ROOT/scripts/lib/writer_deadline.py" seconds)" || return 1
-    ( "$@" ) &
+    heartbeat="$(mktemp "${TMPDIR:-/tmp}/uncle-writer-progress.XXXXXX")" || return 1
+    ( export UNCLE_WRITER_PROGRESS_FILE="$heartbeat"; "$@" ) &
     pid=$!
-    python3 -B "$ROOT/scripts/lib/writer_deadline.py" watch "$pid" "$limit" "$3" &
+    UNCLE_STATUS_STAGE="$stage-worker-edits" python3 -B "$ROOT/scripts/lib/writer_deadline.py" watch "$pid" "$limit" "$3" "$heartbeat" "${LOG_DIR:-/tmp}/$3.jsonl" &
     guard=$!
     wait "$pid" || status=$?
     kill "$guard" 2>/dev/null || true
     wait "$guard" 2>/dev/null || true
+    rm -f "$heartbeat"
     return "$status"
+}
+
+# Bound writer fan-out separately from the provider-wide lease pool.
+workflow_writer_jobs() {
+    local stage="$1" capacity limit
+    capacity="$(workflow_model_capacity "$stage")" || return 1
+    if ! stage_uses_self_hosted "$stage" AGENT; then printf '%s\n' "$capacity"; return; fi
+    limit="$(UNCLE_STATUS_STAGE="$stage" python3 -B "$ROOT/scripts/lib/writer_deadline.py" jobs)" || return 1
+    if [[ "$capacity" != 0 && "$capacity" -lt "$limit" ]]; then limit="$capacity"; fi
+    printf '%s\n' "$limit"
+}
+
+# Preserve evidence before a canonical attempt path is reused. The canonical
+# path remains the latest attempt for existing status readers and recovery.
+workflow_archive_attempt() {
+    local path round candidate stem suffix
+    for path in "$@"; do
+        [[ -e "$path" ]] || continue
+        round=1; stem="$path"; suffix=""
+        if [[ "${path##*/}" == *.* ]]; then stem="${path%.*}"; suffix=".${path##*.}"; fi
+        candidate="$stem-r$round$suffix"
+        while [[ -e "$candidate" ]]; do
+            round=$((round + 1)); candidate="$stem-r$round$suffix"
+        done
+        cp -Rp "$path" "$candidate" || return 1
+    done
+}
+
+workflow_terminal_failure() {
+    [[ -e "$STATE_DIR/updated-plan-writers-exhausted" || -e "$STATE_DIR/preflight-readonly-violation" ]] ||
+        grep -qE 'writer attempts exhausted|read-only preflight violation' "$STATE_DIR/stop-reason" 2>/dev/null
+}
+
+workflow_writer_failure() {
+    local worker="$1" status="$2" detail
+    detail="$(tail -n 12 "$LOG_DIR/$worker.log" 2>/dev/null | tr '\n' ' ')"
+    printf 'Updated-plan writer %s failed: runner exit code %s; %s\n' "$worker" "$status" "$detail" | tee -a "$LOG_DIR/UPDATED_PLAN.log" >> "$LOG_DIR/UPDATED_PLAN.speculative.log"
 }

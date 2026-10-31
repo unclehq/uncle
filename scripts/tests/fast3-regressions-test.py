@@ -409,7 +409,7 @@ class WriterFallback(unittest.TestCase):
                                                      'updated-plan-edit-ops-packet')
                     self.addCleanup(setup[1].cleanup)
                     return setup[-1]
-                self.assertEqual(seconds(), 150)
+                self.assertEqual(seconds(), 720)
                 config.write_text('self-hosted.writer-seconds 7\n')
                 self.assertEqual(seconds(), 7)
                 with patch.dict(os.environ, WORKFLOW_SELF_HOSTED_WRITER_SECONDS='2'):

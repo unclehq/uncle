@@ -16,6 +16,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
 import http_agent as agent
+import preflight_readonly
 import self_hosted
 import self_hosted_http as transport
 import worker_schemas
@@ -133,6 +134,50 @@ run_preflight_investigation_panel
             self.assertIn('preflight-worker-tooling', result.stderr)
             self.assertEqual((project / 'tests/app.spec.js').read_text(), 'protected')
             self.assertFalse(list(scratch.glob('uncle-preflight-*')), 'cancelled workers leaked project snapshots')
+
+
+class PreflightSnapshotMetadata(unittest.TestCase):
+    def test_project_local_tmpdir_cannot_contain_snapshot_or_probe(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            local = root / 'tmp'
+            local.mkdir()
+            (root / 'input').write_text('untracked')
+            copy = preflight_readonly.copy_project
+            def guarded_copy(source, target):
+                self.assertFalse(Path(target).is_relative_to(root), 'scratch allocation is inside live project')
+                return copy(source, target)
+            with patch.object(tempfile, 'tempdir', str(local)), \
+                    patch.dict(os.environ, TMPDIR=str(local), UNCLE_STATUS_STAGE='preflight-worker-tooling'), \
+                    patch.object(preflight_readonly, 'copy_project', side_effect=guarded_copy):
+                staged = preflight_readonly.prepare(root)
+                try:
+                    self.assertEqual((staged / 'input').read_text(), 'untracked')
+                finally:
+                    preflight_readonly.main(['remove', str(staged)])
+                _, policy, _, _, _, _ = self_hosted._http_setup('agent', {}, '', root, True, 'preflight-worker-packet')
+                try:
+                    self.assertIn('untracked', agent.run_tool(policy, 'bash', {'command': 'cat input'}))
+                finally:
+                    policy.cleanup()
+                self.assertEqual(list(local.iterdir()), [])
+
+    def test_worker_directory_and_mode_changes_are_detected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'input').write_text('untracked')
+            for mutation in ('directory', 'mode'):
+                with self.subTest(mutation=mutation):
+                    staged = preflight_readonly.prepare(root)
+                    try:
+                        if mutation == 'directory':
+                            (staged / 'new-empty-directory').mkdir()
+                        else:
+                            (staged / 'input').chmod(0o700)
+                        with self.assertRaisesRegex(preflight_readonly.Violation, 'preflight-worker-data'):
+                            preflight_readonly.check(staged, 'preflight-worker-data')
+                    finally:
+                        preflight_readonly.main(['remove', str(staged)])
 
 
 class GenericFields(unittest.TestCase):

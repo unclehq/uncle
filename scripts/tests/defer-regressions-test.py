@@ -56,8 +56,8 @@ if 'AR-022' in ids:
     if mode in ('transport', 'slow'):
         print('s3.1 is not a typed rows block', flush=True)
         sys.exit(2)
-    if mode == 'structure':
-        ops = []
+    if mode in ('structure', 'publication-structure'):
+        ops = [] if mode == 'structure' else [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/core.js']}}]
     elif mode == 'semantic':
         ops = [{'op': 'insert_row', 'target': 's3.1', 'after': '', 'new': {'id': 'T-022', 'text': 'Add defect injection'}}]
     else:
@@ -79,7 +79,7 @@ Path(os.environ['UNCLE_WORKER_PACKET_PATH']).write_text(json.dumps(body))
 
 
 class DeferredDrivers(unittest.TestCase):
-    def run_driver(self, change=False, mode='transport', runner='local', severity='High', config='', overrides=None):
+    def run_driver(self, change=False, mode='transport', runner='local', severity='High', config='', overrides=None, reconcile=False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -115,6 +115,13 @@ stage_uses_self_hosted() { [[ "$DEFER_TEST_RUNNER" == local ]]; }
 stage_supports_structured_output() { [[ "$DEFER_TEST_RUNNER" == hosted ]]; }
 run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
 ''' + 'run_' + prefix + '_edit_writers || exit $?\n'
+        if reconcile:
+            script = script.replace('UPDATED_PLAN_ADVISOR_PIDS=()', '''UPDATED_PLAN_ADVISOR_PIDS=(123)
+updated_plan_start_reconcile() {
+    printf '%s\\n' '{"ops":[{"op":"set_fields","id":"B-2","fields":{"trigger":"LATE-KEPT"}}]}' > "$3"
+    ( : ) &
+    UPDATED_PLAN_RECONCILE_PID=$!
+}''')
         if mode == 'structure':
             name = 'CHANGE_PLAN' if change else 'UPDATED_PROJECT_PLAN'
             stage = 'updated-change-plan' if change else 'updated-plan'
@@ -225,6 +232,13 @@ packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/cor
                 self.assertEqual(sum('AR-001' in c['ids'] for c in calls), 1)
                 self.assertEqual(sum('-resolve-' in c['stage'] for c in calls), 3)
 
+    def test_resolver_deferral_preserves_successful_reconciler_edits(self):
+        for change in (False, True):
+            with self.subTest(change=change):
+                root, result, _, _ = self.run_driver(change=change, mode='resolver', reconcile=True)
+                _, markdown = self.assert_published(root, result, change, cause='resolver', deferred=('AR-022', 'AR-023'))
+                self.assertIn('LATE-KEPT', markdown)
+
     def test_exhausted_structural_repair_rolls_back_only_the_causal_packet(self):
         for change in (False, True):
             with self.subTest(change=change):
@@ -235,6 +249,15 @@ packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/cor
                 self.assertEqual(sum(c['stage'].endswith('-structure') for c in calls), 2)
                 self.assertEqual(sum('AR-001' in c['ids'] for c in calls), 1)
                 self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 1)
+
+    def test_publication_structural_failure_reports_each_deferral_once(self):
+        root, result, calls, _ = self.run_driver(mode='publication-structure')
+        _, markdown = self.assert_published(root, result, cause='structur')
+        lines = (result.stdout + result.stderr).splitlines()
+        self.assertEqual(sum(line.startswith('Updated-plan finding AR-022:') for line in lines), 1)
+        self.assertEqual(sum('finding(s) Deferred' in line for line in lines), 1)
+        self.assertEqual(sum(c['stage'].endswith('-structure') for c in calls), 2)
+        self.assertIn('tests/a.test.js', markdown)
 
     def test_critical_deferred_rows_pass_the_existing_disposition_gate(self):
         for change in (False, True):

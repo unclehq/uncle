@@ -250,6 +250,27 @@ class ProgressDeadline(unittest.TestCase):
             self.run_stream(events)
         self.assertLess(time.monotonic() - started, 3)
 
+    def test_opencode_streaming_output_resets_no_progress_deadline(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            child = root / 'opencode-stub.py'
+            child.write_text("import json, time\nfor n in range(12):\n"
+                             "    print(json.dumps({'type': 'text', 'part': {'text': 'token%d' % n}}), flush=True)\n"
+                             "    time.sleep(.2)\n"
+                             "print(json.dumps({'type': 'step_finish', 'part': {'reason': 'stop', 'tokens': {'output': 24}}}), flush=True)\n")
+            env = environment(root, UNCLE_STATUS_STAGE='updated-plan-worker-edits-1',
+                              WORKFLOW_SELF_HOSTED_WRITER_NO_PROGRESS_SECONDS='1',
+                              WORKFLOW_SELF_HOSTED_WRITER_SECONDS='8')
+            def invoke(side, values, prompt, project, stage, usage):
+                return self_hosted._run_opencode(side, values, prompt, project, usage=usage)
+            with patch.dict(os.environ, env, clear=True), \
+                    patch.object(self_hosted, 'opencode_invocation', return_value=([sys.executable, str(child)], env)), \
+                    patch.object(self_hosted, '_run_stage', side_effect=invoke):
+                text, turns = self_hosted.run_opencode('agent', {'model': 'stub'}, 'Deliver.', root,
+                                                      stage='updated-plan-worker-edits-1')
+            self.assertIn('token11', text)
+            self.assertGreaterEqual(turns, 1)
+
     def test_nested_runner_deadlines_cannot_extend_aggregate_allowance(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
                 'UNCLE_CONFIG': str(Path(temp) / 'config'),

@@ -42,11 +42,12 @@ class Evidence(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
 
-    def scope(self, **fields):
+    def scope(self, model=None, **fields):
+        model = MODEL if model is None else model
         finding = dict(id='AR-001', severity='HIGH', title='Missing contract',
                        failure='The operation has no defined contract.', fix='Specify the contract.')
         finding.update(fields)
-        plan = dict(MODEL, schema=ws.ENVELOPE, kind='plan', narrative=pm.render(MODEL))
+        plan = dict(model, schema=ws.ENVELOPE, kind='plan', narrative=pm.render(model))
         review = {'schema': ws.ENVELOPE, 'kind': 'adversarial-review', 'findings': [finding]}
         base, output = self.root / 'base.md', self.root / 'writer.md'
         base.write_text(synthesis.prompt(plan, review, None))
@@ -102,6 +103,19 @@ class Evidence(unittest.TestCase):
         self.assertIn('s3.1', context)
         self.assertNotIn('B-8', context)
         self.assertNotIn('s5.1', context)
+
+    def test_numbered_typed_step_citation_does_not_include_sibling_steps(self):
+        model = {'title': 'Plan', 'intro': '', 'sections': [
+            {'id': 's1', 'heading': 'Implementation order', 'blocks': [
+                {'id': 's1.1', 'kind': 'steps', 'items': [
+                    {'id': 'step-1', 'number': 1, 'title': 'Core', 'text': 'Create core.',
+                     'owns': ['src/core.py'], 'depends_on': []},
+                    {'id': 'step-2', 'number': 2, 'title': 'UI', 'text': 'Create UI.',
+                     'owns': ['src/ui.py'], 'depends_on': [1]}]}]}]}
+        scope = self.scope(model=model, references='Step 2 has no dependency declared.')
+        self.assertIn('step-2', scope)
+        self.assertIn('s1.1', scope)
+        self.assertNotIn('step-1', scope)
 
     def test_keyword_fallback_does_not_unlock_every_section(self):
         scope = self.scope(failure='A timeout leaves pending work stuck forever; recovery must retry.')

@@ -29,9 +29,10 @@ def validate(payload):
             or payload.get('kind') != 'module-interfaces':
         raise ValueError('Invalid module-interfaces JSON: wrong schema/kind')
     modules = payload.get('modules')
+    # Sanitized in place: an unusable ui_contract entry is dropped, it does not invalidate the exports beside it.
+    if 'ui_contract' in payload:
+        payload['ui_contract'] = clean_ui_contract(payload['ui_contract'])
     contract = payload.get('ui_contract')
-    if contract is not None:
-        validate_ui_contract(contract)
     # A plan whose only shared surface is the page (no JS export crosses a file boundary) has an empty module list.
     if not isinstance(modules, list) or (not modules and not contract):
         raise ValueError('module-interfaces: "modules" must be a non-empty list')
@@ -66,27 +67,40 @@ def validate(payload):
 
 
 UI_KINDS = ('class', 'data-attribute', 'test-id', 'id', 'aria', 'key')
+# What a model writes for the same thing. `aria-label` once made a whole contract invalid, and with it the exports the
+# parallel steps needed: the contract is a help to the workers, and a spelling must never cost them the rest of it.
+UI_KIND_ALIASES = {'css-class': 'class', 'classname': 'class', 'class-name': 'class', 'css': 'class',
+                   'data': 'data-attribute', 'data-attr': 'data-attribute', 'dataattribute': 'data-attribute',
+                   'data_attribute': 'data-attribute', 'attribute': 'data-attribute',
+                   'testid': 'test-id', 'data-testid': 'test-id', 'test_id': 'test-id', 'data-test-id': 'test-id',
+                   'element-id': 'id', 'dom-id': 'id',
+                   'aria-label': 'aria', 'aria-attribute': 'aria', 'label': 'aria', 'role': 'aria',
+                   'keyboard': 'key', 'keyboard-key': 'key', 'keycode': 'key', 'key-value': 'key'}
 
 
-def validate_ui_contract(contract):
-    """Names the page's files share by string: set in a component, styled in a stylesheet, selected in a test."""
+def clean_ui_contract(contract):
+    """The usable entries of a ui_contract, spelled canonically; whatever cannot be understood is dropped, never fatal."""
     if not isinstance(contract, list):
-        raise ValueError('module-interfaces: "ui_contract" must be a list')
-    seen = set()
+        return []
+    usable, seen = [], set()
     for item in contract:
         if not isinstance(item, dict):
-            raise ValueError('module-interfaces: each ui_contract entry must be an object')
-        kind, name = item.get('kind'), item.get('name')
-        if kind not in UI_KINDS:
-            raise ValueError('module-interfaces: ui_contract kind must be one of %s, not %r' % (', '.join(UI_KINDS), kind))
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError('module-interfaces: a ui_contract entry is missing "name"')
+            continue
+        kind = str(item.get('kind') or '').strip().lower()
+        kind = UI_KIND_ALIASES.get(kind, kind)
+        name = item.get('name')
         used_by = item.get('used_by')
+        if isinstance(used_by, str) and used_by.strip():
+            used_by = [part.strip() for part in used_by.split(',') if part.strip()]
+        if kind not in UI_KINDS or not isinstance(name, str) or not name.strip():
+            continue
         if not isinstance(used_by, list) or not used_by or not all(isinstance(f, str) and f.strip() for f in used_by):
-            raise ValueError('module-interfaces: ui_contract %s %r needs a non-empty "used_by" list of files' % (kind, name))
-        if (kind, name) in seen:
-            raise ValueError('module-interfaces: duplicate ui_contract entry: %s %s' % (kind, name))
-        seen.add((kind, name))
+            continue
+        if (kind, name.strip()) in seen:
+            continue
+        seen.add((kind, name.strip()))
+        usable.append(dict(item, kind=kind, name=name.strip(), used_by=[f.strip() for f in used_by]))
+    return usable
 
 
 def render_ui_contract(contract):

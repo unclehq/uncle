@@ -111,6 +111,12 @@ if [[ "$WORKFLOW_REPAIR" != 1 ]]; then
     WORKFLOW_AUTO_REPAIR_ATTEMPTS=0
 fi
 
+# The shared module-interfaces stage (derive an exact export and UI-name contract before the isolated workers start) is
+# off for a new application build. It was added days ago, nothing shows it helped, it runs serially on the critical path
+# (9 to 26 s), and it can fail: one unrecognised kind in its UI contract once discarded the whole thing. The change-request
+# driver keeps it. WORKFLOW_MODULE_INTERFACES=1 turns it back on here.
+WORKFLOW_MODULE_INTERFACES="${WORKFLOW_MODULE_INTERFACES:-0}"
+
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
     driver_args=(bash "${BASH_SOURCE[0]}")

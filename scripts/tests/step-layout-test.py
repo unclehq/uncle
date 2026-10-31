@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Independent regressions for the step layouts that stopped DS4 runs 11, 19 and 20."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,10 @@ import plan_model as pm
 import plan_records
 import plan_ownership_gap as gap
 import step_groups
+
+spec = importlib.util.spec_from_file_location('plan_executability', LIB / 'plan-executability.py')
+executability = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(executability)
 
 FIXTURES = Path(__file__).resolve().parent / 'fixtures/step-layout'
 EXPECTED = {
@@ -229,6 +234,18 @@ Owns: `also-not-owned.py`
     def test_missing_label_never_crashes_the_step_reader(self):
         text = '## Implementation order\n\n### Step : Scaffold\nOwns: `package.json`\n'
         self.assert_readers(text, [['package.json']])
+
+    def test_executability_uses_the_same_step_boundaries(self):
+        for run, owners in EXPECTED.items():
+            with self.subTest(run=run):
+                text = (FIXTURES / ('run-%d.md' % run)).read_text()
+                self.assertEqual(len(executability._implementation_step_blocks(text)), len(owners))
+        self.plan.write_text('# Implementation order\n\n**Step 0: Scaffold** — Owns: `package.json`\n'
+                             'Run `npx create-vite@latest . --overwrite`.\n')
+        findings = executability.scaffold_generator_findings(str(self.plan))
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]['step'], 1)
+        self.assertEqual(findings[0]['owns'], ['package.json'])
 
 
 if __name__ == '__main__':

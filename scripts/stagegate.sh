@@ -2753,6 +2753,8 @@ run_updated_plan_edit_writers() {
         # Only the overlapping edits go to a model, with the text around them; the rest stays mechanical.
         echo "Updated-plan edits overlap; one small resolver call per overlapping group, all at once."
         local group_prompt group_id resolver_failed=0
+        local resolver_granularity
+        resolver_granularity="$(. "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_granularity updated-plan)" || return 1
         pids=(); names=()
         for group_prompt in "$directory"/prompts/resolve-*.md; do
             group_id="${group_prompt##*/resolve-}"; group_id="${group_id%.md}"
@@ -2764,15 +2766,27 @@ run_updated_plan_edit_writers() {
             fi
             workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
             ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+              if [[ "$resolver_granularity" == small ]]; then
+                  local resolver_turns answer_tokens
+                  read -r resolver_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-budget "$directory" "$group_id")
+                  [[ -n "$resolver_turns" && -n "$answer_tokens" ]] || exit 1
+                  (( resolver_turns > 0 )) || resolver_turns=""
+                  export UNCLE_WORKER_MAX_TURNS="$resolver_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
+              fi
               UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                 run_claude "$group_prompt" "updated-plan-worker-resolve-$group_id" ) \
                 > "$LOG_DIR/updated-plan-worker-resolve-$group_id.log" 2>&1 &
             pids+=("$!"); names+=("$group_id")
         done
         for pid in "${!pids[@]}"; do
-            wait "${pids[$pid]}" || { echo "Updated-plan resolver ${names[$pid]} did not complete." >&2; resolver_failed=1; }
+            wait "${pids[$pid]}" || {
+                echo "Updated-plan resolver ${names[$pid]} did not complete." >&2
+                resolver_failed=1
+                if [[ "$resolver_granularity" == small ]]; then rm -f "$directory/resolutions-${names[$pid]}.json"; fi
+            }
         done
-        [[ "$resolver_failed" == 0 ]] || return 1
+        [[ "$resolver_failed" == 0 || "$resolver_granularity" == small ]] || return 1
+        resolver_failed=0
         # A resolver answer that cannot be applied (text quoted from the wrong place) gets one more try, for that
         # group only, with the reason -- a few seconds, against the full single call.
         local bad_groups
@@ -2784,6 +2798,13 @@ run_updated_plan_edit_writers() {
                 [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
                 workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
                 ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+                  if [[ "$resolver_granularity" == small ]]; then
+                      local resolver_turns answer_tokens
+                      read -r resolver_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-budget "$directory" "$group_id")
+                      [[ -n "$resolver_turns" && -n "$answer_tokens" ]] || exit 1
+                      (( resolver_turns > 0 )) || resolver_turns=""
+                      export UNCLE_WORKER_MAX_TURNS="$resolver_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
+                  fi
                   UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                     run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
                     > "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" 2>&1 &

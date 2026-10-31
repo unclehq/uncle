@@ -89,6 +89,20 @@ class Slicing(unittest.TestCase):
         (self.root / 'config').write_text('updated-plan.writer-turns 2\nupdated-plan.ops-per-finding 8\n')
         self.assertEqual(ops.writer_budget(['a', 'b']), (2, 10240))
 
+    def test_resolver_budget_scales_with_only_its_group_and_honors_config(self):
+        groups = [{'id': 'G1', 'edits': [{}]}, {'id': 'G2', 'edits': [{}] * 4}]
+        self.directory.mkdir()
+        (self.directory / 'conflicts.json').write_text(json.dumps(groups))
+        self.assertEqual(ops.resolver_budget(self.directory, 'G1'), (3, 4096))
+        self.assertEqual(ops.resolver_budget(self.directory, 'G2'), (3, 11264))
+        (self.root / 'config').write_text('updated-plan.writer-turns 2\nupdated-plan.ops-per-finding 2\n'
+                                         'updated-plan.tokens-per-op 256\n')
+        self.assertEqual(ops.resolver_budget(self.directory, 'G2'), (2, 5120))
+        with patch.dict(os.environ, {'WORKFLOW_UPDATED_PLAN_WRITER_TURNS': '1'}):
+            self.assertEqual(ops.resolver_budget(self.directory, 'G2'), (1, 5120))
+        with self.assertRaisesRegex(ops.Conflict, 'unknown resolver group G3'):
+            ops.resolver_budget(self.directory, 'G3')
+
     def test_large_unit_runners_keep_their_usual_turns(self):
         # Claude/Codex default to large units: no driver turn limit unless configured.
         self.assertEqual(ops.writer_budget(['a'], 'large'), (0, 4096))

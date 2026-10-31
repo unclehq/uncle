@@ -130,6 +130,14 @@ def writer_budget(ids, granularity='small'):
     return turns, max(4096, 1024 + len(ids) * (512 + expected_ops * per_op))
 
 
+def resolver_budget(directory, group_id):
+    groups = json.loads(Path(directory, 'conflicts.json').read_text(encoding='utf-8'))
+    for group in groups:
+        if group['id'] == group_id:
+            return writer_budget(group['edits'])
+    raise Conflict('unknown resolver group %s' % group_id)
+
+
 def first_packet(text):
     """Decode the first complete packet, leaving validation to the existing consumer.
 
@@ -792,6 +800,8 @@ def main(argv):
             return base.main(argv)
         elif command == 'budget' and len(rest) in (1, 2):
             print('%s %s' % writer_budget([i for i in rest[0].split(',') if i], *rest[1:]))
+        elif command == 'resolver-budget' and len(rest) == 2:
+            print('%s %s' % resolver_budget(*rest))
         elif command == 'capture' and len(rest) == 1:
             capture_packet(rest[0])
         elif command == 'prompt' and len(rest) in (3, 4):

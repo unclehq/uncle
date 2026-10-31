@@ -114,16 +114,17 @@ workflow_model_writer() {
     local stage="$1"; shift
     if ! stage_uses_self_hosted "$stage" AGENT; then "$@"; return $?; fi
     local limit pid guard heartbeat status=0
-    limit="$(UNCLE_STATUS_STAGE="$stage-worker-edits" python3 -B "$ROOT/scripts/lib/writer_deadline.py" seconds)" || return 1
+    limit="$(UNCLE_STATUS_STAGE="$3" python3 -B "$ROOT/scripts/lib/writer_deadline.py" seconds)" || return 1
     heartbeat="$(mktemp "${TMPDIR:-/tmp}/uncle-writer-progress.XXXXXX")" || return 1
     ( export UNCLE_WRITER_PROGRESS_FILE="$heartbeat"; "$@" ) &
     pid=$!
-    UNCLE_STATUS_STAGE="$stage-worker-edits" python3 -B "$ROOT/scripts/lib/writer_deadline.py" watch "$pid" "$limit" "$3" "$heartbeat" "${LOG_DIR:-/tmp}/$3.jsonl" &
+    UNCLE_STATUS_STAGE="$3" python3 -B "$ROOT/scripts/lib/writer_deadline.py" watch "$pid" "$limit" "$3" "$heartbeat" "${LOG_DIR:-/tmp}/$3.jsonl" &
     guard=$!
     wait "$pid" || status=$?
     kill "$guard" 2>/dev/null || true
     wait "$guard" 2>/dev/null || true
-    rm -f "$heartbeat"
+    if [[ -e "$heartbeat.failed" ]]; then cat "$heartbeat.failed" >&2; status=124; fi
+    rm -f "$heartbeat" "$heartbeat.failed"
     return "$status"
 }
 
@@ -145,6 +146,12 @@ workflow_archive_attempt() {
         [[ -e "$path" ]] || continue
         round=1; stem="$path"; suffix=""
         if [[ "${path##*/}" == *.* ]]; then stem="${path%.*}"; suffix=".${path##*.}"; fi
+        if [[ "$suffix" == .json ]]; then
+            local archive_dir
+            archive_dir="$(dirname "$path")/attempts"
+            mkdir -p "$archive_dir" || return 1
+            stem="$archive_dir/${stem##*/}"
+        fi
         candidate="$stem-r$round$suffix"
         while [[ -e "$candidate" ]]; do
             round=$((round + 1)); candidate="$stem-r$round$suffix"
@@ -171,7 +178,9 @@ workflow_archive_stage() {
         [[ "${path##*/}" =~ -r[0-9]+\.(log|jsonl)$ ]] && continue
         workflow_archive_attempt "$path" || return 1
     done
-    if [[ "$stage" == updated-* ]]; then
+    if [[ "$stage" == updated-change-plan ]]; then
+        workflow_archive_stage updated-plan || return 1
+    elif [[ "$stage" == updated-* ]]; then
         workflow_archive_attempt "$LOG_DIR/UPDATED_PLAN.log" || return 1
     fi
 }

@@ -59,7 +59,9 @@ environment overrides precede global environment values, then stage config and
 self-hosted config. Claude and Codex scheduling is unchanged.
 
 Previous attempt logs, JSONL and packets are retained with `-rN` suffixes before
-canonical paths are reused. Failed writers record their exit status and error
+canonical paths are reused. Packet archives live under `attempts/`, outside the
+resolver input glob; legacy `-rN` resolution files are also ignored. Failed
+writers record their exit status and error
 detail in the stage and speculative logs. Exhausted writer attempts and read-only
 preflight violations stop automatic speculation/fallback/triage restarts. Explicit
 operator recovery remains available through the existing commands.

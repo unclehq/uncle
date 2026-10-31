@@ -2455,6 +2455,10 @@ run_codex() {
     local start="$SECONDS" empty_retried=""
     local status=0
     while true; do
+        case "$log_name" in
+            updated-change-plan*|preflight*)
+                (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/${log_name}.log") || return 1 ;;
+        esac
         start="$SECONDS"
         # stdin is the operator's gate-answer channel, not stage input: codex
         # appends a non-TTY stdin to the prompt and would block on it forever.
@@ -2569,6 +2573,7 @@ run_adversarial_review_panel() {
 }
 
 run_updated_change_plan_panel() {
+    (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_stage updated-change-plan) || return 1
     local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
     local -a pids=()
     # Keep the older knob as a fallback, while allowing the change workflow to
@@ -2633,7 +2638,7 @@ updated_change_plan_launch_writer() {
       trap 'writer_status=$?; if [[ "$writer_status" != 0 ]]; then workflow_writer_failure "updated-change-plan-worker-edits-$name" "$writer_status"; fi; workflow_model_leave; exit "$writer_status"' EXIT
       ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
         workflow_model_writer updated-change-plan run_claude "$directory/prompts/$name.md" "updated-change-plan-worker-edits-$name" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) || writer_status=$?
-      if [[ "$writer_status" != 0 ]] && stage_uses_self_hosted updated-change-plan AGENT; then exit "$writer_status"; fi
+      if [[ "$writer_status" == 124 || "$writer_status" == 137 ]] && stage_uses_self_hosted updated-change-plan AGENT; then exit "$writer_status"; fi
       if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then
           if [[ ! -s "$directory/$name.json" ]]; then
               python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-change-plan-worker-edits-$name.jsonl" "$directory/$name.json" 2>/dev/null || true
@@ -2656,7 +2661,7 @@ updated_change_plan_launch_writer() {
               writer_status=0
               ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                 UNCLE_UPDATED_PLAN_CHEAP_RETRY=1 workflow_model_writer updated-change-plan run_claude "$directory/prompts/$name.retry.md" "updated-change-plan-worker-edits-$name-retry" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) || writer_status=$?
-              if [[ "$writer_status" != 0 ]] && stage_uses_self_hosted updated-change-plan AGENT; then exit "$writer_status"; fi
+              if [[ "$writer_status" == 124 || "$writer_status" == 137 ]] && stage_uses_self_hosted updated-change-plan AGENT; then exit "$writer_status"; fi
               if [[ ! -s "$directory/$name.json" ]]; then
                   python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-change-plan-worker-edits-$name-retry.jsonl" "$directory/$name.json" 2>/dev/null || true
               fi
@@ -2922,11 +2927,26 @@ run_updated_change_plan_edit_writers() {
                     break
                 fi
                 if bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory")"; then break; fi
-                [[ "$resolver_attempt" != alternate ]] || { workflow_writer_exhausted updated-change-plan; return 1; }
+                if [[ "$resolver_attempt" == alternate ]]; then
+                    for group_id in $bad_groups; do
+                        workflow_writer_failure "updated-change-plan-worker-resolve-$group_id-retry" 5 "schema rejection" "$directory/prompts/resolve-$group_id.retry.md"
+                    done
+                    workflow_writer_exhausted updated-change-plan
+                    return 1
+                fi
             done
         fi
+        if [[ "$resolver_granularity" != small ]] && stage_uses_self_hosted updated-change-plan AGENT; then
+            if ! bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory")"; then
+                for group_id in $bad_groups; do
+                    workflow_writer_failure "updated-change-plan-worker-resolve-$group_id-retry" 5 "schema rejection" "$directory/prompts/resolve-$group_id.retry.md"
+                done
+                workflow_writer_exhausted updated-change-plan
+                return 1
+            fi
+        fi
         [[ -z "$reconcile_pid" ]] || wait "$reconcile_pid" 2>/dev/null || true
-        UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || return 1
+        UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || { workflow_writer_exhausted updated-change-plan; return 1; }
     elif [[ "$merge_status" != 0 ]]; then
         return 1
     fi
@@ -2987,8 +3007,8 @@ run_updated_change_plan_decide() {
     done
     run_updated_change_plan_edit_writers || status=$?
     for pid in ${UPDATED_PLAN_ADVISOR_PIDS[@]+"${UPDATED_PLAN_ADVISOR_PIDS[@]}"}; do
-        pkill -P "$pid" 2>/dev/null || true
-        kill "$pid" 2>/dev/null || true
+        python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
     done
     UPDATED_PLAN_ADVISOR_PIDS=()
     return "$status"

@@ -631,6 +631,8 @@ def read_answers(directory, groups):
     """{group id: resolution row} from the resolutions-<group>.json files."""
     answers = {}
     for answer in sorted(Path(directory).glob('resolutions-*.json')):
+        if re.search(r'-r[0-9]+\.json$', answer.name):
+            continue  # Retained attempts are evidence, never current resolutions.
         try:
             for row in read_packet(answer).get('resolutions') or []:
                 if isinstance(row, dict) and isinstance(row.get('group'), str):

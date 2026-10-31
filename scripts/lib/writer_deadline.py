@@ -56,6 +56,13 @@ def progress():
         _last_saved = _last_progress
 
 
+def failed(reason, path=None):
+    path = path or os.environ.get('UNCLE_WRITER_PROGRESS_FILE')
+    if path:
+        with open(path + '.failed', 'w') as handle:
+            handle.write(reason + '\n')
+
+
 @contextmanager
 def deadline(limit):
     # One timer covers all transport, schema and tool retries in this invocation.
@@ -75,8 +82,12 @@ def deadline(limit):
     def expired(*_):
         now = time.monotonic()
         if now >= _deadline_end:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            failed('deadline: ceiling (%gs wall-clock budget)' % effective_limit)
             raise ValueError('Self hosted writer deadline: ceiling (%gs wall-clock budget)' % effective_limit)
         if now - _last_progress >= idle:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            failed('deadline: no-progress (%gs)' % idle)
             raise ValueError('Self hosted writer deadline: no-progress (%gs)' % idle)
     signal.signal(signal.SIGALRM, expired)
     signal.setitimer(signal.ITIMER_REAL, min(.1, limit, idle), .1)
@@ -114,6 +125,7 @@ def watch(pid, limit, worker, heartbeat='', logs=()):
                   'no-progress (%gs)' % idle if now - changed >= idle else '')
         if reason:
             print('%s: self-hosted writer deadline: %s' % (worker, reason), file=sys.stderr, flush=True)
+            failed('deadline: ' + reason, heartbeat)
             terminate(pid)
             return
         time.sleep(.1)

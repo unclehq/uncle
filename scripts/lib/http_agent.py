@@ -1146,7 +1146,12 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # Stream guards interrupt whitespace/repetition without spending the whole
     # allowance. Grammar fallback must not reintroduce a small mixed-token cap.
     attempts = [((), final_limit), (transport.GRAMMAR_MODES, final_limit)]
-    if worker_packet and health.get('whitespace_runaways', 0) >= 2:
+    bounded_writer = schema_first and bool(os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'))
+    if bounded_writer:
+        # The driver retries failed finding groups and owns the delivery-path fallback.
+        # A bounded writer must never grow a prompt-mode or tool-repair tail.
+        attempts = attempts[:1]
+    elif worker_packet and health.get('whitespace_runaways', 0) >= 2:
         attempts = attempts[1:]
     regrammar = schema_first
     for attempt, (skip, cap) in enumerate(attempts):
@@ -1161,9 +1166,10 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             if unbudgeted is not None:
                 ACTIVE.reset(unbudgeted)
                 unbudgeted = None
-            if regrammar and not skip and error.reason in ('repetition', 'whitespace'):
-                # A looping grammar answer gets one more grammar attempt before the
-                # unconstrained fallback, which had no shape to hold (run 14 writer 2).
+            if regrammar and not skip and (error.reason in ('repetition', 'whitespace') or
+                                           (bounded_writer and error.reason == 'answer_cap')):
+                # A runaway gets one more grammar attempt. Bounded writers then fail
+                # back to the driver instead of trying an unconstrained answer.
                 regrammar = False
                 requests += 1
                 record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason, 'final')
@@ -1174,6 +1180,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             requests += 1
             record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason, 'final')
             add_usage(usage, error.usage)
+            if bounded_writer:
+                raise
             if error.reason == 'learned_budget':
                 learned.intervene(error.reason)
                 partial = getattr(error, 'message', {})
@@ -1204,6 +1212,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         else:
             publish_usage(values, usage, side)
         usage['constraint_mode'] = mode
+        if bounded_writer and reason not in ('stop', 'length'):
+            raise ValueError('Updated-plan writer ended without success (%s constraint): finish_reason=%s' % (mode, reason))
         if reason != 'length':
             break
         tail = ' '.join(final[-300:].split()) or '(only whitespace)'
@@ -1212,7 +1222,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         if not final.strip() or (len(final) > 2000 and not final[-2000:].strip()):
             record_whitespace_runaway(values)
         saved = save_truncated('final-%s' % mode, cap, final, None, final_usage)
-        if learned.soft or attempt >= len(attempts) - 1 or mode == 'prompt':
+        if bounded_writer or learned.soft or attempt >= len(attempts) - 1 or mode == 'prompt':
             raise OutputTruncated('Model output reached the limit of %d tokens; the response is incomplete. '
                                   'It ended with: %s.%s' % (cap, tail, truncation_note(saved)))
         print('Self hosted: the %s-constrained answer hit the %d-token limit (it ended with: %s); asking once more '
@@ -1222,11 +1232,11 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     try:
         validate(final)
     except json.JSONDecodeError as error:
-        if final.startswith('{'):
+        if final.startswith('{') and not bounded_writer:
             return repair_answer(final, 'Model response is not valid JSON (%s constraint): %s' % (mode, error))
         raise ValueError('Model response is not valid JSON (%s constraint): %s' % (mode, error)) from None
     except ValueError as error:
-        if final.startswith('{'):
+        if final.startswith('{') and not bounded_writer:
             return repair_answer(final, 'Model response violates the artifact schema (%s constraint): %s' % (mode, error))
         raise ValueError('Model response violates the artifact schema (%s constraint): %s' % (mode, error)) from None
     if stage is not None:

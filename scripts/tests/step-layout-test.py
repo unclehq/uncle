@@ -70,8 +70,10 @@ class StepLayouts(unittest.TestCase):
         config = self.root / '.uncle/config'
         config.parent.mkdir()
         config.write_text('runner claude\n')
-        env = patch.dict(os.environ, {'PATH': os.environ['PATH'], 'HOME': str(self.root),
-                                     'UNCLE_CONFIG': str(config)}, clear=True)
+        values = {'PATH': os.environ['PATH'], 'HOME': str(self.root), 'UNCLE_CONFIG': str(config)}
+        values.update({'WORKFLOW_' + runner + '_PLAN_STEP_RECOVERY': 'off'
+                       for runner in ('CLAUDE', 'CODEX', 'SELF_HOSTED')})
+        env = patch.dict(os.environ, values, clear=True)
         env.start()
         self.addCleanup(env.stop)
 

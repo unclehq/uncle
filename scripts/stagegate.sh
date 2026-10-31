@@ -2563,7 +2563,7 @@ updated_plan_launch_writer() {
     [[ -n "$writer_turns" && -n "$answer_tokens" ]] || return 1
     (( writer_turns > 0 )) || writer_turns=""
     rm -f "$directory/$name.json"
-    ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
+    ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$schema_file" ]] || export UNCLE_WORKER_SCHEMA_FILE="$schema_file"; [[ "$delivery" != hosted || -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
       export UNCLE_WORKER_MAX_TURNS="$writer_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
       local writer_status=0
       ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
@@ -2778,7 +2778,7 @@ run_updated_plan_edit_writers() {
                 python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" ${scope_args[@]+"${scope_args[@]}"} || return 1
             fi
             workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
-            ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+            ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$resolver_schema" ]] || export UNCLE_WORKER_SCHEMA_FILE="$resolver_schema"; [[ "$delivery" != hosted || -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
               if [[ "$resolver_granularity" == small ]]; then
                   local resolver_turns answer_tokens
                   read -r resolver_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-budget "$directory" "$group_id")
@@ -2814,7 +2814,7 @@ run_updated_plan_edit_writers() {
                     local retry_schema=""
                     [[ "$delivery" != hosted && "$resolve_command" != resolve-ops ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
                     workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
-                    ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+                    ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_WORKER_SCHEMA_FILE="$retry_schema"; [[ "$delivery" != hosted || -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
                       if [[ "$resolver_granularity" == small ]]; then
                           local resolver_turns answer_tokens
                           read -r resolver_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-budget "$directory" "$group_id")
@@ -2873,12 +2873,10 @@ updated_plan_start_reconcile() {
             "$UPDATED_PLAN_PROMPT" "$directory/slices.tsv" "$directory" "$STATE_DIR/documents/UPDATED_PLAN_WORKERS.json" \
             "$directory/prompts/reconcile.md" || exit 0
         local schema_file=""
-        if [[ "$delivery" == hosted ]]; then
-            mkdir -p "$directory/schemas"
-            schema_file="$directory/schemas/reconcile.json"
-            python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" || exit 0
-        fi
-        [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$late"
+        mkdir -p "$directory/schemas"
+        schema_file="$directory/schemas/reconcile.json"
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" --scope "$directory/prompts/reconcile.scope.json" || exit 0
+        [[ -z "$schema_file" ]] || export UNCLE_WORKER_SCHEMA_FILE="$schema_file"; [[ "$delivery" != hosted || -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$late"
         . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan || exit 1
         UNCLE_WORKER_PACKET_PATH="$late" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
             run_claude "$directory/prompts/reconcile.md" updated-plan-worker-reconcile

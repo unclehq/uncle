@@ -24,12 +24,13 @@ class Wiring(unittest.TestCase):
             schema = ws.edit_ops_packet(['s1.1'], model=model)
             source = root / 'schema.json'
             source.write_text(json.dumps(schema))
-            with patch.dict(os.environ, {'UNCLE_OUTPUT_SCHEMA_FILE': str(source),
-                                         'UNCLE_CONFIG': str(root / 'config')}, clear=True):
-                result = self_hosted._http_setup('agent', {}, 'Edit the supplied text.', root, False, ws.EDIT_OPS_KIND)
-                self.assertEqual(result[2], schema)
-                with self.assertRaisesRegex(ValueError, 'packet kind'):
-                    self_hosted._http_setup('agent', {}, 'Resolve.', root, False, ws.RESOLUTION_OPS_KIND)
+            for variable in ('UNCLE_OUTPUT_SCHEMA_FILE', 'UNCLE_WORKER_SCHEMA_FILE'):
+                with self.subTest(variable=variable), patch.dict(os.environ, {variable: str(source),
+                        'UNCLE_CONFIG': str(root / 'config')}, clear=True):
+                    result = self_hosted._http_setup('agent', {}, 'Edit the supplied text.', root, False, ws.EDIT_OPS_KIND)
+                    self.assertEqual(result[2], schema)
+                    with self.assertRaisesRegex(ValueError, 'packet kind'):
+                        self_hosted._http_setup('agent', {}, 'Resolve.', root, False, ws.RESOLUTION_OPS_KIND)
 
     def test_empty_and_unknown_scopes_have_a_valid_empty_ops_array(self):
         model = {'sections': [{'id': 's1', 'heading': 'Notes', 'blocks': []}]}

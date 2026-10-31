@@ -47,7 +47,7 @@ PY
             trap 'printf "end\n" >> "$STATE_DIR/concurrency"' EXIT
             local n="${2#updated-plan-worker-edits-}"; [[ "$2" != updated-plan-worker-resolve-* ]] || n=resolve
             printf '%s\n' "$n" >> "$STATE_DIR/starts"
-            echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
+            echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} grammar=${UNCLE_WORKER_SCHEMA_FILE:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
             printf '%s %s %s\n' "$n" "${UNCLE_WORKER_MAX_TURNS:-}" "${UNCLE_UPDATED_PLAN_ANSWER_TOKENS:-}" >> "$STATE_DIR/budgets"
             if [[ "$mode:$n" == cap:2 ]]; then echo 'answer_cap' >&2; return 1; fi
             sleep 0.2
@@ -294,6 +294,7 @@ run_case local ok local
 w="$TMP/local/.uncle/workflow"
 check "local model: fan-out runs, returns 0"     test "$(cat "$w/rc")" == 0
 check "local model: no schema flag, packet path" bash -c '! grep -q "schema=/\|schema=\.uncle" "$1" && grep -q "out=none" "$1" && ! grep -q "packet=none" "$1"' _ "$w/calls"
+check "local model: scoped grammar reaches adapter" bash -c 'grep -q "grammar=.*/schemas/" "$1" && ! grep -q "grammar=none" "$1"' _ "$w/calls"
 
 run_case hosted ok hosted
 w="$TMP/hosted/.uncle/workflow"
@@ -302,7 +303,7 @@ check "hosted: writer 1 owns the protected paths, and every schema lists the ids
 import json, sys
 one = json.load(open(sys.argv[1] + '/1.json'))['properties']
 two = json.load(open(sys.argv[1] + '/2.json'))['properties']
-ids = one['ops']['items']['properties']['id']['enum']
+ids = [identifier for v in one['ops']['items']['anyOf'] for identifier in v['properties'].get('id', {}).get('enum', [])]
 sys.exit(0 if 'protected_verification_paths' in one and 'protected_verification_paths' not in two and 'B-2' in ids and 'patch' not in one else 1)
 PY
 check "each prompt names one packet kind"        bash -c 'for f in "$1"/*.md; do test "$(grep -o "\"kind\":\"updated-plan-[a-z-]*\"" "$f" | sort -u | wc -l | tr -d " ")" == 1 || exit 1; done' _ "$w/updated-plan-edits/prompts"

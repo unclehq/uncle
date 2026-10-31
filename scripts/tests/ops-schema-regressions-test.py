@@ -14,6 +14,7 @@ sys.path.insert(0, str(LIB))
 import adversarial_packets
 import adversarial_slices
 import plan_model as pm
+import plan_records
 import self_hosted
 from self_hosted_http import conforms as local_conforms
 import worker_packets
@@ -276,6 +277,29 @@ class EditGrammarTests(unittest.TestCase):
             self.assert_rejected(operation)
         self.assert_accepted({'op': 'insert_section', 'after': 's4', 'heading': 'New',
                               'blocks': [{'kind': 'prose', 'text': 'New note.'}]})
+
+
+class OwnershipLabelTests(unittest.TestCase):
+    LABELS = ('Owns:', '**Owns:**', '**Owns**:', '- Owns:', 'Owns (additional):', '- **Owns**:')
+
+    def assert_label(self, heading, label):
+        narrative = '# Project plan\n\n## Implementation order\n\n' + heading + '\n   ' + label + ' `package.json`\n'
+        model = pm.import_markdown(narrative)
+        self.assertEqual(len(pm.steps_of(model)), 1)
+        self.assertEqual(pm.steps_of(model)[0]['owns'], ['package.json'])
+        self.assertEqual(pm.validate(model)[0], [])
+        self.assertEqual(plan_records.lines(model, 'owns'), ['1\tpackage.json'])
+        self.assertEqual(pm.steps_of(pm.import_markdown(pm.render(model)))[0]['owns'], ['package.json'])
+
+    def test_numbered_steps_strip_every_supported_owns_label(self):
+        for label in self.LABELS:
+            with self.subTest(label=label):
+                self.assert_label('1. **Scaffold** — Create package.', label)
+
+    def test_heading_steps_strip_every_supported_owns_label(self):
+        for label in self.LABELS:
+            with self.subTest(label=label):
+                self.assert_label('### Step 1: Scaffold', label)
 
 
 class LensJudgmentTests(unittest.TestCase):

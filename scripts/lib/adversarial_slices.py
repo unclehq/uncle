@@ -121,8 +121,19 @@ def same_issue(left, right):
         return True
     a, ac = issue_key(left)
     b, bc = issue_key(right)
-    # A shared target alone is not a duplicate: one row can have several defects.
-    return bool(a & b and ac and ac == bc)
+    # Even the same category on one row can describe two independent defects.
+    if not (a & b and ac and ac == bc):
+        return False
+    if left['evidence'] and _norm(left['evidence']) == _norm(right['evidence']):
+        return True
+    stop = set('a an the and or of to in on for is are be has have no not missing omitted omits lacks lack'.split())
+    def words(item):
+        text = item['summary'] + ' ' + item['evidence']
+        for target in a | b:
+            text = text.replace(target, '')
+        return set(_norm(text).split()) - stop - set(AREAS)
+    first, second = words(left), words(right)
+    return bool(first and second and len(first & second) / len(first | second) >= .6)
 
 
 def rank(item):
@@ -146,7 +157,7 @@ def merge(directory, count, runner='self-hosted'):
                     target['_evidence'] = [item['evidence']] if item['evidence'] else []
                     findings.append(target)
                 else:
-                    if rank(item) < rank(target):
+                    if small and rank(item) < rank(target):
                         target['summary'] = item['summary']
                         target['evidence'] = item['evidence']
                         target['_evidence'] = [item['evidence']] + [e for e in target['_evidence'] if e != item['evidence']]

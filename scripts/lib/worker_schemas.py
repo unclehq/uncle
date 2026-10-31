@@ -285,11 +285,16 @@ def model_op(model, ids=None):
         add('set_step', {'id': pick(steps), 'fields': _object(step_fields, ())}, ('id', 'fields'))
     if texts:
         add('set_text', {'id': pick(texts), 'text': _text(EDIT_MAX, 0)}, ('id', 'text'))
-    if allowed:
-        add('delete', {'id': pick(allowed)}, ('id',))
+    deletable = []
+    for key, (node, _, _) in index(model).items():
+        if key in allowed and 'blocks' not in node and all(
+                child['id'] in allowed for child in node.get('rows') or node.get('items') or []):
+            deletable.append(key)
+    if deletable:
+        add('delete', {'id': pick(deletable)}, ('id',))
     if sections:
-        add('insert_section', {'after': pick([''] + sections), 'heading': _text(300),
-                               'blocks': {'type': 'array', 'maxItems': 20, 'items': block}}, ('heading', 'blocks'))
+        add('insert_section', {'after': pick(sections), 'heading': _text(300),
+                               'blocks': {'type': 'array', 'maxItems': 20, 'items': block}}, ('after', 'heading', 'blocks'))
     return {'anyOf': variants} if variants else {}
 
 

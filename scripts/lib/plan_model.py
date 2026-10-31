@@ -91,9 +91,9 @@ ID_VALUE = re.compile(r'^[A-Z]{1,4}-?\d+[A-Za-z]?$')
 TABLE_SEPARATOR = re.compile(r'^\|?[\s:|-]+\|[\s:|-]*$')
 LIST_ITEM = re.compile(r'^(\s*)([-*+]|\d+\.)\s+(.*)$')
 STEP_HEAD = re.compile(r'^\*\*(.+?)\*\*\s*(?:[—–:-]+\s*)?(.*)$', re.S)
-OWNS = re.compile(r'^\s*(?:[-*+]\s*)?\**Owns(?:\s*\([^)]*\))?:?\**\s*(.*)$', re.I)
-DEPENDS = re.compile(r'^\s*(?:[-*]\s*)?\**Depends on:?\**\s*(.*)$', re.I)
-INLINE_OWNS = re.compile(r'(?:^|\s)\**Owns:\**\s+((?:`[^`]+`(?:,\s*)?)+)(?:\s*\**Depends on:\**\s*([\w ,]*?))?\s*\.?$')     # a step on one line: "... Owns: `a`, `b` Depends on: 2"
+OWNS = re.compile(r'^\s*(?:[-*+]\s*)?\**Owns\**(?:\s*\([^)]*\))?\**\s*:?\**\s*(.*)$', re.I)
+DEPENDS = re.compile(r'^\s*(?:[-*]\s*)?\**Depends on\**\s*:?\**\s*(.*)$', re.I)
+INLINE_OWNS = re.compile(r'(?:^|\s)\**Owns\**(?:\s*\([^)]*\))?\**\s*:\**\s+((?:`[^`]+`(?:,\s*)?)+)(?:\s*\**Depends on\**\s*:\**\s*([\w ,]*?))?\s*\.?$')     # a step on one line: "... Owns: `a`, `b` Depends on: 2"
 
 
 class PlanError(ValueError):

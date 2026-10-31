@@ -37,3 +37,6 @@ DEFECTS.md
 IMPLEMENTATION_NOTES.md
 MANUAL_CHECKLIST.md
 VERIFICATION_REPORT.md
+
+# A test run from this directory once left a whole .uncle/workflow here (and committed it).
+scripts/tests/.uncle/

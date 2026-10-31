@@ -1600,6 +1600,15 @@ run_stepwise_implementation() {
     local total
     total="$(grep -c . "$steps_file" || true)"
 
+    # A step that only runs the test suites is skipped: the driver runs the approved verification commands itself after this
+    # function, and a model session running the same regression block first cost 991 s of a 1,923 s implementation (issue 117).
+    # The last step that actually runs is the "final code step" below, not the skipped one.
+    local skip_steps last_kept=0 n
+    skip_steps=" $(python3 -B "$ROOT/scripts/lib/verification_steps.py" skip-set "$steps_file" 2>/dev/null || true) "
+    for ((n = 1; n <= ${total:-0}; n++)); do
+        [[ "$skip_steps" == *" $n "* ]] || last_kept="$n"
+    done
+
     # Derivation itself now runs once in the dedicated MODULE_INTERFACES state
     # (scripts/lib/module-interfaces-stage.sh), always before IMPLEMENT is
     # reached on the path that starts this function fresh from plan approval.
@@ -1676,6 +1685,12 @@ run_stepwise_implementation() {
         [[ -n "$step" ]] || continue
         i=$(( i + 1 ))
         [[ "$i" -le "$completed" ]] && continue
+        if [[ "$skip_steps" == *" $i "* ]]; then
+            echo
+            echo "Implementation step $i/$total skipped: it only runs the test suites, which the driver runs itself after implementation."
+            printf '%s\n' "$i" > "$done_file"
+            continue
+        fi
 
         prompt="$STATE_DIR/implement-step-$i.md"
         compose_implementation_prompt "$base" "$prompt"
@@ -1711,7 +1726,7 @@ run_stepwise_implementation() {
             echo "probes, review earlier steps, or broaden the test run. If a narrow"
             echo "check exposes an unrelated pre-existing issue, record it in the"
             echo "fragment and finish this step rather than diagnosing it."
-            if [[ "$i" -ne "$total" ]]; then
+            if [[ "$i" -ne "$last_kept" ]]; then
                 echo
                 echo "Do not run the full suite; the final step does that once."
             else
@@ -1729,7 +1744,7 @@ run_stepwise_implementation() {
         echo "Implementation step $i/$total: ${step:0:70}"
         plan_assess || return $?
         step_turns="$turns"
-        [[ "$i" -eq "$total" ]] && step_turns="$final_turns"
+        [[ "$i" -eq "$last_kept" ]] && step_turns="$final_turns"
         run_claude "$prompt" "implementation-step-$i" \
             "$MODEL_IMPLEMENT" "" "$step_turns" "$BUDGET_IMPLEMENT"
 
@@ -3920,6 +3935,9 @@ REPAIR
                     cat "$STATE_DIR/test-review-format-retry.md"
                 } > "$test_review_prompt"
             fi
+            # Whatever canonical review exists now predates the one about to be written, so it must not stand in for it
+            # (a leftover from an earlier attempt, or a file another process put there).
+            rm -f "$STATE_DIR/documents/TEST_REVIEW.json"
             run_codex \
                 "$test_review_prompt" \
                 "$PROJECT_ROOT/.uncle/docs/TEST_REVIEW.md" \

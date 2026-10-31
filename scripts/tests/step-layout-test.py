@@ -17,6 +17,8 @@ import plan_model as pm
 import plan_records
 import plan_ownership_gap as gap
 import step_groups
+import artifact_json
+import publish_agent_artifact as publisher
 
 spec = importlib.util.spec_from_file_location('plan_executability', LIB / 'plan-executability.py')
 executability = importlib.util.module_from_spec(spec)
@@ -275,6 +277,27 @@ Owns: `also-not-owned.py`
     def test_explicit_extensionless_owners(self):
         self.assert_readers('## Implementation order\n### Step 1: Scaffold\n'
                             'Owns: Makefile, Dockerfile\n', [['Makefile', 'Dockerfile']])
+
+    def test_published_documents_and_canonical_packets_share_the_same_steps(self):
+        for run in (19, 20):
+            for stage, (name, kind) in publisher.ARTIFACT.items():
+                if stage == 'requirements':
+                    continue
+                with self.subTest(run=run, stage=stage):
+                    payload = dict(schema='uncle.artifact/v1', kind=kind,
+                                   narrative=(FIXTURES / ('run-%d.md' % run)).read_text(),
+                                   verification_commands='true', protected_verification_paths='\n'.join(PROTECTED[run]))
+                    if stage.startswith('updated'):
+                        payload['dispositions'] = [dict(finding='AR-001', disposition='Accepted',
+                                                       reason='Preserve ownership.', plan_change='Implementation steps.')]
+                    delivery = self.root / 'delivery.json'
+                    delivery.write_text(json.dumps(payload))
+                    self.assertTrue(publisher.publish(stage, 'unused', self.root, delivery))
+                    canonical = artifact_json.read(self.root, name)
+                    self.assertEqual([s['owns'] for s in pm.steps_of(canonical)], EXPECTED[run])
+                    view = self.root / '.uncle/docs' / name
+                    self.assertEqual([s['owns'] for s in pm.steps_of(pm.import_markdown(view.read_text()))], EXPECTED[run])
+                    self.assertEqual(gap.unowned_protected_paths(view, self.root, PROTECTED[run]), [])
 
 
 if __name__ == '__main__':

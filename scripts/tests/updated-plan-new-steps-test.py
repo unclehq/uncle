@@ -184,6 +184,23 @@ class NewSteps(unittest.TestCase):
         with self.assertRaises(ValueError):
             conforms(packet, schema)
 
+    def test_deleted_insertion_anchor_is_resolved_as_a_group(self):
+        self.packet('1', [{'op': 'delete', 'id': 'step-3'},
+                          {'op': 'set_step', 'id': 'step-4', 'fields': {'depends_on': [2]}}])
+        self.packet('2', [self.insert(depends=['step-1'])])
+        with self.assertRaises(ops.NeedsResolution) as caught:
+            self.merge()
+        self.assertTrue(any({e['writer'] for e in group['edits']} == {'1', '2'}
+                            for group in caught.exception.groups))
+
+    def test_deleted_new_step_dependency_is_resolved_as_a_group(self):
+        self.packet('1', [{'op': 'delete', 'id': 'step-6'}])
+        self.packet('2', [self.insert(depends=['step-6'])])
+        with self.assertRaises(ops.NeedsResolution) as caught:
+            self.merge()
+        self.assertTrue(any({e['writer'] for e in group['edits']} == {'1', '2'}
+                            for group in caught.exception.groups))
+
 
 if __name__ == '__main__':
     unittest.main()

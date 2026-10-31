@@ -22,6 +22,15 @@ NARRATIVE = '''# Project plan
 | B-1 | click | appended | unchanged | UB-1 |
 | B-2 | key | same | same | UB-2 |
 
+## Implementation order
+
+1. **Scaffold** — Create package.json.
+   Owns: `package.json`
+
+2. **Core** — Create core.js.
+   Owns: `src/core.js`, `tests/a.test.js`
+   Depends on: 1
+
 ## Notes
 
 Kept.
@@ -63,6 +72,16 @@ else:
         edits = [{'op': 'set_fields', 'id': 'B-' + str(i), 'fields': {'failure': n}} for i in (1, 2)]
     body = {'dispositions': [{'finding': i, 'disposition': 'Accepted', 'reason': 'r', 'plan_change': 'c'} for i in ids],
             'ops': edits, 'protected_verification_paths': 'tests/a.test.js'}
+    if mode == 'writer-insert':
+        (root / ('started-' + n)).touch()
+        deadline = time.monotonic() + 20
+        while len(list(root.glob('started-*'))) < 2:
+            if time.monotonic() > deadline:
+                raise AssertionError('both writers must be active together')
+            time.sleep(.01)
+        body['ops'] = [{'op': 'insert_step', 'after': 'step-1', 'new': {
+            'title': 'Added ' + n, 'text': 'Implement the finding.', 'owns': ['src/added-' + n + '.js'],
+            'depends_on': ['step-2']}}]
 Path(os.environ['UNCLE_WORKER_PACKET_PATH']).write_text(json.dumps(body))
 '''
 
@@ -118,7 +137,19 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr + logs)
             name = 'CHANGE_PLAN.md' if change else 'UPDATED_PROJECT_PLAN.md'
             self.assertTrue((directory / '.uncle/docs' / name).exists(), run.stdout + run.stderr)
+            self.document = (directory / '.uncle/docs' / name).read_text()
             return records
+
+    def test_concurrent_writer_insertions_publish_rewritten_dependencies(self):
+        import plan_model
+        for change in (False, True):
+            with self.subTest(change=change):
+                rows = self.run_driver(mode='writer-insert', change=change)
+                self.assertEqual(len(rows), 2)
+                steps = plan_model.steps_of(plan_model.import_markdown(self.document))
+                self.assertEqual([s['title'] for s in steps], ['Scaffold', 'Added 1', 'Added 2', 'Core'])
+                self.assertEqual([s['depends_on'] for s in steps], [[], [4], [4], [1]])
+                self.assertEqual([s['id'] for s in steps], ['step-1', 'step-2', 'step-3', 'step-4'])
 
     def test_default_writers_use_generic_on_both_drivers(self):
         for change in (False, True):

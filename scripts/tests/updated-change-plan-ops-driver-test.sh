@@ -13,13 +13,21 @@ check "function extracted" test -s "$TMP/fn.sh"
 run_case() {   # name mode [hosted|local]
     local name="$1" mode="$2" runner="${3:-hosted}" dir="$TMP/$1"
     mkdir -p "$dir/.uncle/workflow/documents" "$dir/.uncle/workflow/logs" "$dir/.uncle/docs"
-    python3 -B - "$dir" "$ROOT" <<'PY'
+    python3 -B - "$dir" "$ROOT" "$mode" <<'PY'
 import json, sys
 sys.path.insert(0, sys.argv[2] + '/scripts/lib')
 import updated_plan_synthesis_prompt as P
 d = sys.argv[1] + '/.uncle/workflow/documents/'
+if sys.argv[3] == 'resolver-last-config':
+    open(sys.argv[1] + '/.uncle/config', 'w').write('self-hosted.writer-schema-first off\n')
 narrative = ('# Project plan\n\n## 1. Observable behaviors\n\n| ID | Trigger | Observable result | Failure behavior | Requirement IDs |\n'
              '|---|---|---|---|---|\n| B-1 | click | appended | unchanged | UB-1 |\n| B-2 | key | same | same | UB-2 |\n\n## 2. Notes\n\nKept.\n')
+if sys.argv[3] == 'resolver-last':
+    narrative = ('# Project plan\n\n## 1. Observable behaviors\n\n'
+                 '| ID | Trigger | Observable result | Failure behavior | Requirement IDs |\n'
+                 '|---|---|---|---|---|\n' +
+                 ''.join('| B-%d | click | appended | unchanged | UB-%d |\n' % (i, i) for i in range(1, 36)) +
+                 '\n## 2. Notes\n\nKept.\n')
 plan = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': narrative}
 review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': [{'id': 'AR-%d' % n} for n in range(1, 7)]}
 workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
@@ -42,6 +50,31 @@ PY
             [[ "$mode:$n" != fail:2 && "$mode:$n" != fail:2-* && "$mode:$n" != failonce:2 ]] || return 1
             if [[ "$2" == updated-change-plan-worker-resolve-* ]]; then
                 echo resolver >> "$STATE_DIR/resolver-calls"
+                printf '%s %s %s\n' "$2" "${UNCLE_WORKER_MAX_TURNS:-none}" "${UNCLE_UPDATED_PLAN_ANSWER_TOKENS:-none}" >> "$STATE_DIR/resolver-budgets"
+                if [[ "$mode" == resolver-last || "$mode" == resolver-last-config || "$mode" == resolver-last-invalid ]]; then
+                    local group="$(awk '/^## Group / {print $3; exit}' "$1")" failed_group=G30 initial_mode=on
+                    [[ "$mode" != resolver-last-config ]] || { failed_group=G1; initial_mode=off; }
+                    [[ "$mode" != resolver-last-invalid ]] || failed_group=G1
+                    local effective_mode="${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST:-$initial_mode}"
+                    printf '%s %s\n' "$group" "$effective_mode" >> "$STATE_DIR/resolver-paths"
+                    if [[ "$group" == "$failed_group" && "$effective_mode" == "$initial_mode" ]]; then
+                        if [[ "$mode" == resolver-last-invalid ]]; then
+                            printf '{"resolutions":[{"group":"%s","ops":[{"op":"set_fields","id":"B-9","fields":{"failure":"INVALID"}}]}]}' "$group" > "$UNCLE_WORKER_PACKET_PATH"
+                            return 0
+                        fi
+                        echo 'Unrepaired draft: Extra data' >&2; return 1
+                    fi
+                    printf '{"resolutions":[{"group":"%s","ops":[{"op":"set_fields","id":"B-%s","fields":{"failure":"MERGED"}}]}]}' "$group" "${group#G}" > "$UNCLE_WORKER_PACKET_PATH"
+                    return 0
+                fi
+                if [[ "$mode" == resolver-cap || "$mode" == resolver-dead ]]; then
+                    local group="${2##*-resolve-}"; group="${group%-retry}"
+                    if [[ "$group" == G1 && ( "$2" != *-retry || "$mode" == resolver-dead ) ]]; then
+                        echo 'answer_cap' >&2; return 1
+                    fi
+                    printf '{"resolutions":[{"group":"%s","ops":[{"op":"set_fields","id":"B-%s","fields":{"failure":"MERGED"}}]}]}' "$group" "${group#G}" > "$UNCLE_WORKER_PACKET_PATH"
+                    return 0
+                fi
                 [[ "$mode" == resolve || "$mode" == resolve-retry ]] || return 1
                 local id="B-1"
                 if [[ "$mode" == resolve-retry && "$2" != *-retry ]]; then id="B-9"; fi
@@ -56,11 +89,19 @@ ids = re.search(r'You own exactly these findings: ([^.]*)\.', text).group(1).spl
 row = 'B-1' if (n.startswith('1') or mode in ('resolve', 'resolve-retry', 'resolve-fail')) else 'B-2'
 body = {'dispositions': [{'finding': i, 'disposition': 'Accepted', 'reason': 'r', 'plan_change': 'c'} for i in ids],
         'ops': [{'op': 'set_fields', 'id': row, 'fields': {'failure': 'X%s' % re.sub(r'[^0-9].*', '', n)}}]}
+if mode == 'resolver-last':
+    body['ops'] = [{'op': 'set_fields', 'id': 'B-%d' % i, 'fields': {'failure': 'X' + n}} for i in range(1, 36)]
+if mode in ('resolver-cap', 'resolver-dead', 'resolver-last-config', 'resolver-last-invalid'):
+    body['ops'] = [{'op': 'set_fields', 'id': row, 'fields': {'failure': 'X' + n}} for row in ('B-1', 'B-2')]
 json.dump(body, open(target, 'w'))
 PY2
         }
         . "$TMP/fn.sh"
-        run_updated_change_plan_edit_writers > "$STATE_DIR/out" 2>&1; echo $? > "$STATE_DIR/rc"
+        local status=0
+        run_updated_change_plan_edit_writers > "$STATE_DIR/out" 2>&1 || status=$?
+        echo "$status" > "$STATE_DIR/rc"
+        if [[ "$mode" == resolver-last* && "$status" != 0 ]]; then echo panel > "$STATE_DIR/fallback"; fi
+        printf '%s\n' "${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST:-unset}" > "$STATE_DIR/returned-mode"
     )
 }
 
@@ -92,6 +133,85 @@ w="$TMP/retry/.uncle/workflow"
 check "bad resolver answer: retried once, then merged" bash -c 'test "$(cat "$1/rc")" == 0 && test "$(wc -l < "$1/resolver-calls")" -eq 2' _ "$w"
 check "bad resolver answer: the retry names the missing id" grep -q "B-9" "$w/updated-change-plan-edits/prompts/resolve-G1.retry.md"
 check "bad resolver answer: the retry is published" grep -q 'MERGED' "$TMP/retry/.uncle/docs/CHANGE_PLAN.md"
+
+run_case localretry resolve-retry local
+w="$TMP/localretry/.uncle/workflow"
+check "local resolver: existing retry publishes" test "$(cat "$w/rc")" == 0
+check "local resolver: initial and retry are bounded" python3 - "$w/resolver-budgets" <<'PYRESOLVE'
+import sys
+rows = [line.split() for line in open(sys.argv[1])]
+assert len(rows) == 2, rows
+assert rows[1][0] == rows[0][0] + '-retry', rows
+assert all(int(row[1]) > 0 and int(row[2]) >= 4096 for row in rows), rows
+assert rows[0][1:] == rows[1][1:], rows
+PYRESOLVE
+check "hosted resolver: no bounded marker" grep -qx 'updated-change-plan-worker-resolve-G1 none none' "$TMP/resolve/.uncle/workflow/resolver-budgets"
+
+run_case resolvercap resolver-cap local
+w="$TMP/resolvercap/.uncle/workflow"
+check "capped resolver: retried group publishes" test "$(cat "$w/rc")" == 0
+check "capped resolver: only failing group retries" python3 - "$w/resolver-budgets" <<'PYRESOLVE'
+import sys
+rows = [line.split() for line in open(sys.argv[1])]
+names = [row[0] for row in rows]
+assert sorted(names) == sorted(['updated-change-plan-worker-resolve-G1', 'updated-change-plan-worker-resolve-G2', 'updated-change-plan-worker-resolve-G1-retry']), names
+assert all(int(row[1]) > 0 and int(row[2]) >= 4096 for row in rows), rows
+PYRESOLVE
+check "capped resolver: successful writers retained" test "$(grep -cx 1 "$w/starts")" == 1
+check "capped resolver: retry uses original visible message" grep -q 'Updated-plan resolver answer(s) could not be applied; asking again: G1' "$w/out"
+check "capped resolver: both edits published" bash -c 'test "$(grep -c MERGED "$1")" == 2' _ "$TMP/resolvercap/.uncle/docs/CHANGE_PLAN.md"
+
+run_case resolverdead resolver-dead local
+w="$TMP/resolverdead/.uncle/workflow"
+check "persistent resolver failure: both group retries exhausted" test "$(wc -l < "$w/resolver-budgets")" -eq 4
+check "persistent resolver failure: no publication" bash -c 'test "$(cat "$1/rc")" != 0 && test ! -e "$2"' _ "$w" "$TMP/resolverdead/.uncle/docs/CHANGE_PLAN.md"
+
+WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=on run_case resolverlast resolver-last local
+w="$TMP/resolverlast/.uncle/workflow"
+check "34 good resolvers: failed group last path publishes" test "$(cat "$w/rc")" == 0
+check "34 good resolvers: no compact or panel fallback" test ! -e "$w/fallback"
+check "34 good resolvers: configured path restored" grep -qx on "$w/returned-mode"
+check "34 good resolvers: only G30 gets other delivery path" python3 - "$w/resolver-paths" "$w/starts" <<'PYLAST'
+from collections import Counter
+import sys
+rows = [line.split() for line in open(sys.argv[1])]
+counts = Counter(row[0] for row in rows)
+assert counts == Counter({**{'G%d' % i: 1 for i in range(1, 36)}, 'G30': 3}), counts
+assert [row[1] for row in rows if row[0] == 'G30'] == ['on', 'on', 'off'], rows
+writers = Counter(line.strip() for line in open(sys.argv[2]) if line.strip() != 'resolve')
+assert writers == Counter({'1': 1, '2': 1}), writers
+PYLAST
+check "34 good resolvers: every finding and merged row retained" python3 - "$w/documents/CHANGE_PLAN.json" "$TMP/resolverlast/.uncle/docs/CHANGE_PLAN.md" <<'PYLAST'
+import json, sys
+packet = json.load(open(sys.argv[1]))
+assert sorted(row['finding'] for row in packet['dispositions']) == ['AR-%d' % i for i in range(1, 7)]
+assert open(sys.argv[2]).read().count('MERGED') == 35
+PYLAST
+
+run_case resolverconfig resolver-last-config local
+w="$TMP/resolverconfig/.uncle/workflow"
+check "resolver config off: alternate schema-first path publishes" test "$(cat "$w/rc")" == 0
+check "resolver config off: no stage fallback" test ! -e "$w/fallback"
+check "resolver config off: environment override remains unset" grep -qx unset "$w/returned-mode"
+check "resolver config off: failed group uses other configured path" python3 - "$w/resolver-paths" <<'PYLAST'
+from collections import Counter
+import sys
+rows = [line.split() for line in open(sys.argv[1])]
+assert Counter(row[0] for row in rows) == Counter({'G1': 3, 'G2': 1}), rows
+assert [row[1] for row in rows if row[0] == 'G1'] == ['off', 'off', 'on'], rows
+PYLAST
+
+run_case resolverinvalid resolver-last-invalid local
+w="$TMP/resolverinvalid/.uncle/workflow"
+check "invalid resolver retry: alternate path publishes" test "$(cat "$w/rc")" == 0
+check "invalid resolver retry: only rejected group gets alternate" python3 - "$w/resolver-paths" <<'PYLAST'
+from collections import Counter
+import sys
+rows = [line.split() for line in open(sys.argv[1])]
+assert Counter(row[0] for row in rows) == Counter({'G1': 3, 'G2': 1}), rows
+assert [row[1] for row in rows if row[0] == 'G1'] == ['on', 'on', 'off'], rows
+PYLAST
+check "invalid resolver retry: both rows retained" bash -c 'test "$(grep -c MERGED "$1")" == 2' _ "$TMP/resolverinvalid/.uncle/docs/CHANGE_PLAN.md"
 
 run_case clash resolve-fail
 check "resolver failure: nonzero, nothing published" bash -c 'test "$(cat "$1/.uncle/workflow/rc")" != 0 && test ! -e "$1/.uncle/docs/CHANGE_PLAN.md"' _ "$TMP/clash"

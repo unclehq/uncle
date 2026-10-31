@@ -89,6 +89,20 @@ class Slicing(unittest.TestCase):
         (self.root / 'config').write_text('updated-plan.writer-turns 2\nupdated-plan.ops-per-finding 8\n')
         self.assertEqual(ops.writer_budget(['a', 'b']), (2, 10240))
 
+    def test_resolver_budget_scales_with_only_its_group_and_honors_config(self):
+        groups = [{'id': 'G1', 'edits': [{}]}, {'id': 'G2', 'edits': [{}] * 4}]
+        self.directory.mkdir()
+        (self.directory / 'conflicts.json').write_text(json.dumps(groups))
+        self.assertEqual(ops.resolver_budget(self.directory, 'G1'), (3, 4096))
+        self.assertEqual(ops.resolver_budget(self.directory, 'G2'), (3, 11264))
+        (self.root / 'config').write_text('updated-plan.writer-turns 2\nupdated-plan.ops-per-finding 2\n'
+                                         'updated-plan.tokens-per-op 256\n')
+        self.assertEqual(ops.resolver_budget(self.directory, 'G2'), (2, 5120))
+        with patch.dict(os.environ, {'WORKFLOW_UPDATED_PLAN_WRITER_TURNS': '1'}):
+            self.assertEqual(ops.resolver_budget(self.directory, 'G2'), (1, 5120))
+        with self.assertRaisesRegex(ops.Conflict, 'unknown resolver group G3'):
+            ops.resolver_budget(self.directory, 'G3')
+
     def test_large_unit_runners_keep_their_usual_turns(self):
         # Claude/Codex default to large units: no driver turn limit unless configured.
         self.assertEqual(ops.writer_budget(['a'], 'large'), (0, 4096))
@@ -278,6 +292,32 @@ class Slicing(unittest.TestCase):
                                                turns=3, final_schema=edit_ops_packet())
             self.assertEqual(json.loads(text), self.packet())
             self.assertEqual((chat.call_count, constrained.call_count), (1, 0))
+
+    def test_bounded_writer_ignores_cached_prompt_fallback(self):
+        values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
+        with patch.dict(os.environ, {'UNCLE_UPDATED_PLAN_ANSWER_TOKENS': '4096'}), \
+                patch.object(http_agent, 'constraint_health', return_value={'whitespace_runaways': 2}), \
+                patch.object(http_agent, 'chat', side_effect=AssertionError('unexpected tool loop')), \
+                patch.object(http_agent, 'constrained_completion',
+                             return_value=(json.dumps(self.packet()), 'stop', {}, 'json_schema')) as constrained:
+            text, turns = http_agent.run_agent(values, 'Deliver', http_agent.Policy(self.root), 32768,
+                                               turns=3, final_schema=edit_ops_packet(), final_name='edit_worker_packet')
+        self.assertEqual(json.loads(text), self.packet())
+        self.assertEqual(turns, 1)
+        self.assertEqual(constrained.call_args.kwargs['skip'], ())
+
+    def test_bounded_writer_rejects_non_success_finish_reason(self):
+        values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
+        for reason in ('content_filter', 'tool_calls', None):
+            with self.subTest(reason=reason), \
+                    patch.dict(os.environ, {'UNCLE_UPDATED_PLAN_ANSWER_TOKENS': '4096'}), \
+                    patch.object(http_agent, 'chat', side_effect=AssertionError('unexpected tool loop')), \
+                    patch.object(http_agent, 'constrained_completion',
+                                 return_value=(json.dumps(self.packet()), reason, {}, 'json_schema')) as constrained:
+                with self.assertRaisesRegex(ValueError, 'finish_reason=' + str(reason)):
+                    http_agent.run_agent(values, 'Deliver', http_agent.Policy(self.root), 32768,
+                                         turns=3, final_schema=edit_ops_packet())
+                self.assertEqual(constrained.call_count, 1)
 
     def test_disposition_assignment_beats_source_pair_and_preserves_contract(self):
         self.assertEqual(self.prepare(), 0)

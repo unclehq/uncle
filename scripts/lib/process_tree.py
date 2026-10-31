@@ -5,7 +5,10 @@ import shutil
 import subprocess
 import sys
 import time
+import stat
 from pathlib import Path
+
+from execution_options import option, seconds
 
 
 def check_timeout(name='WORKFLOW_CHECK_TIMEOUT_SECONDS', default=900):
@@ -15,16 +18,86 @@ def check_timeout(name='WORKFLOW_CHECK_TIMEOUT_SECONDS', default=900):
     return value
 
 
-def wait_check(child, timeout, output):
-    """Bound a check's lifetime, including its owned descendants."""
+def tree_cpu(child):
+    """Cumulative CPU and membership of the owned tree; unknown is never idle."""
     try:
-        return child.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        kill_tree(child)
-        child.wait()
-        output.write(('\nTIMEOUT after %gs; check process tree terminated.\n' % timeout).encode())
-        output.flush()
-        return 124
+        job = getattr(child, '_uncle_job', None)
+        if job is not None:
+            import ctypes
+            from windows_job import Accounting
+            info = Accounting()
+            if not job.api.QueryInformationJobObject(job.handle, 1, ctypes.byref(info),
+                                                     ctypes.sizeof(info), None):
+                return None
+            return (info.TotalUserTime + info.TotalKernelTime) / 10000000, info.TotalProcesses
+        rows = subprocess.run(['ps', '-axo', 'pid=,ppid=,pgid=,time='],
+                              capture_output=True, text=True, timeout=2, check=True).stdout
+        processes = {}
+        for row in rows.splitlines():
+            pid, parent, group, elapsed = row.split()
+            days, _, elapsed = elapsed.rpartition('-')
+            parts = [float(p) for p in elapsed.split(':')]
+            cpu = sum(p * 60 ** i for i, p in enumerate(reversed(parts)))
+            processes[int(pid)] = (int(parent), int(group), cpu + int(days or 0) * 86400)
+        owned = {pid for pid, (_, group, _) in processes.items() if group == child.pid}
+        owned.add(child.pid)
+        while True:
+            descendants = {pid for pid, (parent, _, _) in processes.items() if parent in owned}
+            if descendants <= owned:
+                break
+            owned.update(descendants)
+        return sum(processes[pid][2] for pid in owned if pid in processes), frozenset(owned)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def wait_check(child, timeout, output, idle=None, cancelled=None):
+    """Bound a check's lifetime, including its owned descendants."""
+    idle = seconds('check-idle-seconds', 90, allow_zero=True) if idle is None else idle
+    cpu_percent = float(option('check-idle-cpu-percent', '1'))
+    if not 0 <= cpu_percent <= 100:
+        raise ValueError('execution.check-idle-cpu-percent must be from 0 to 100')
+    started = active = time.monotonic()
+    previous_cpu = None
+    previous_size = None
+    while child.poll() is None:
+        now = time.monotonic()
+        if cancelled is not None and cancelled.is_set():
+            label, limit, status = 'CANCELLED', now - started, 130
+            break
+        if now - started >= timeout:
+            label, limit, status = 'TIMEOUT', timeout, 124
+            break
+        if idle:
+            output.flush()
+            try:
+                info = os.fstat(output.fileno())
+                size = info.st_size if stat.S_ISREG(info.st_mode) else None
+            except (OSError, ValueError):
+                size = None
+            cpu = tree_cpu(child)
+            if (size is None or cpu is None or previous_cpu is None
+                    or size != previous_size or cpu[1] != previous_cpu[1]
+                    or abs(cpu[0] - previous_cpu[0]) >= max(.05, (now - active) * cpu_percent / 100)):
+                active = now
+                previous_cpu = cpu
+            previous_size = size
+            if now - active >= idle:
+                label, limit, status = 'STALLED', idle, 123
+                break
+        try:
+            return child.wait(timeout=min(1, max(.02, idle / 4) if idle else 1,
+                                          max(.01, timeout - (now - started))))
+        except subprocess.TimeoutExpired:
+            pass
+    else:
+        return child.returncode
+    kill_tree(child)
+    child.wait()
+    output.write(('\n%s after %gs; check process tree terminated; preceding output retained.\n' %
+                  (label, limit)).encode())
+    output.flush()
+    return status
 
 
 def cleanup_directory(directory, timeout=30):
@@ -204,6 +277,8 @@ def finish_check(process):
 
 
 def kill_tree(process):
+    if getattr(process, '_uncle_tree_killed', False) is True:
+        return
     job = getattr(process, '_uncle_job', None)
     if job is not None:
         job.terminate()
@@ -224,3 +299,7 @@ def kill_tree(process):
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            if process.poll() is None:
+                raise
+        process._uncle_tree_killed = True

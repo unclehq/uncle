@@ -57,8 +57,8 @@ for g in groups:
 }
 
 # parallel_run_group <lib> <log-dir> <plan> <group steps...> — run one group
-# concurrently and merge it. Nonzero means the caller must stop: either a step
-# failed or the plan's partition was wrong, and both leave the tree untouched.
+# concurrently and merge it. Execution or ownership failures leave the tree
+# untouched. A failed fast check stops advancement but preserves the merged files.
 parallel_run_group() {
     local lib="$1" logdir="$2" plan="$3"; shift 3
     local request steps_json owned_json allowlist_json rc=0
@@ -113,6 +113,9 @@ print(json.dumps(steps))' "$logdir" "$plan" "$lib" "$@")"
         "$PWD" "$owned_json" "$steps_json" "${allowlist_json:-[]}" > "$request"
     python3 -B "$lib/parallel_steps.py" "$request" || rc=$?
     rm -f "$request"
+    if [[ "$rc" == 0 ]]; then
+        implementation_fast_check "group-$*" >&2 || return 1
+    fi
     return "$rc"
 }
 
@@ -136,4 +139,28 @@ parallel_prewarm_wait() {
     [[ -n "${PARALLEL_PREWARM_PID:-}" ]] || return 0
     wait "$PARALLEL_PREWARM_PID" 2>/dev/null || true
     PARALLEL_PREWARM_PID=""
+}
+
+# A landed group is a stable snapshot; tests must finish before checkpointing it.
+implementation_fast_check() {
+    local runner="claude"
+    if declare -f stage_uses_self_hosted > /dev/null && stage_uses_self_hosted implementation AGENT; then
+        runner="self-hosted"
+    elif declare -f uncle_stage_runner > /dev/null; then
+        runner="$(uncle_stage_runner implementation)"
+    fi
+    python3 -B "$ROOT/scripts/lib/implementation_fast_check.py" "$1" "$runner"
+}
+
+# Only the first approved step's paths may receive opt-in deterministic boilerplate.
+implementation_scaffold_template() {
+    local selected="${WORKFLOW_SCAFFOLD_TEMPLATE:-}"
+    if [[ -z "${WORKFLOW_SCAFFOLD_TEMPLATE+x}" ]] && declare -f uncle_config_get > /dev/null; then
+        selected="$(uncle_config_get execution.scaffold-template)"
+    fi
+    [[ -n "$selected" ]] || return 0
+    mkdir -p "$STATE_DIR"
+    plan_step_owns "$1" > "$STATE_DIR/scaffold-owns.tsv" || return 1
+    WORKFLOW_SCAFFOLD_TEMPLATE="$selected" python3 -B "$ROOT/scripts/lib/scaffold_templates.py" \
+        --ownership-file "$STATE_DIR/scaffold-owns.tsv"
 }

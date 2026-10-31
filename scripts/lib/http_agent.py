@@ -632,7 +632,7 @@ def record_turn(identity, number, message, usage, finish_reason, phase='tools'):
     """
     from self_hosted_performance import ACTIVE
     if ACTIVE.get() is not None:
-        ACTIVE.get().observe(usage, finish_reason)
+        ACTIVE.get().observe(usage, finish_reason, message)
     calls = []
     for call in message.get('tool_calls') or []:
         function = call.get('function') or {}
@@ -1103,9 +1103,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # starts pretty-printing (newline, indent, newline...) can keep going until the token
     # limit without ever writing a character of JSON.
     messages.append({'role': 'user', 'content': COMPACT_JSON_REQUEST})
-    # The closing answer is one artifact, never the size of a whole session's
-    # budget; a runaway generation should fail at this cap, not at 64k tokens.
-    # A worker packet is a few findings: it gets a much smaller one.
+    # The closing answer has the same deliverable-only cap semantics as a tool
+    # turn. Mechanical packets are small; judgment workers use the normal cap.
     final_limit = transport.output_cap(limit, 'final-output-tokens', final_name)
     # Grammar-constrained decoding has a known failure: the grammar allows
     # whitespace anywhere between tokens, and a model can emit newlines until the
@@ -1114,15 +1113,13 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # constrained answer is cut off, ask once more without the grammar and rely on
     # the local schema check; the mode actually used is recorded.
     worker_packet = final_name.endswith('worker_packet')
-    # A packet is a few findings (about 1-2k tokens in practice), so the grammar-constrained
-    # try gets at most 4k; the unconstrained retry honors the configured final cap. A server
+    # Mechanical packets get a small answer allowance; judgment workers retain
+    # their normal answer cap. Both requests reserve reasoning separately. A server
     # that has already looped on whitespace twice in this project starts without the grammar.
     health = constraint_health(values)
-    # Any answer, not only a packet, gets a first try sized to what real answers need: the largest
-    # model-written JSON seen is about 10k tokens, so 16k covers it with room.  A grammar that has
-    # slipped into whitespace costs the whole first cap before the retry even starts (calculator-local:
-    # 32,768 tokens of "\n  \t" after 4,900 real characters, then the retry, 22 minutes in all).
-    attempts = [((), min(final_limit, 4096 if worker_packet else 16384)), (transport.GRAMMAR_MODES, final_limit)]
+    # Stream guards interrupt whitespace/repetition without spending the whole
+    # allowance. Grammar fallback must not reintroduce a small mixed-token cap.
+    attempts = [((), final_limit), (transport.GRAMMAR_MODES, final_limit)]
     if worker_packet and health.get('whitespace_runaways', 0) >= 2:
         attempts = attempts[1:]
     for attempt, (skip, cap) in enumerate(attempts):
@@ -1153,7 +1150,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             messages.append({'role': 'user', 'content': 'Generation stopped for ' + error.reason + '. ' + COMPACT_JSON_REQUEST})
             continue
         requests += 1
-        record_turn(request_group, requests, {}, final_usage, reason, 'final')
+        record_turn(request_group, requests, {'content': final}, final_usage, reason, 'final')
         add_usage(usage, final_usage)
         if stage is not None:
             stage.tokens(usage, inclusive=True)

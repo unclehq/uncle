@@ -2,6 +2,45 @@
 import json
 import math
 import os
+import contextvars
+
+
+ANSWER_CAP = contextvars.ContextVar('self_hosted_answer_cap', default=None)
+
+
+def output_accounting(message, usage):
+    """Keep measured channel tokens distinct from byte-based estimates.
+
+    A total-only completion counter is not an answer counter when reasoning
+    was observed. Unknown measured counts stay null, never become estimates.
+    """
+    def size(value):
+        return len(value.encode('utf-8')) if isinstance(value, str) else 0
+    from self_hosted_http import strip_reasoning
+    content = message.get('content') or ''
+    answer = strip_reasoning(content)
+    answer_bytes = size(answer) + sum(
+        size((call.get('function') or {}).get('arguments')) for call in message.get('tool_calls') or [])
+    reasoning_bytes = size(message.get('reasoning')) + size(message.get('reasoning_content')) + size(content) - size(answer)
+    return token_accounting(answer_bytes, reasoning_bytes, usage)
+
+
+def token_accounting(answer_bytes, reasoning_bytes, usage):
+    usage = usage or {}
+    total = usage.get('completion_tokens')
+    reasoning = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens')
+    if isinstance(reasoning, int) and reasoning >= 0 and isinstance(total, int) and total >= reasoning:
+        answer = total - reasoning
+    else:
+        reasoning = None
+        answer = total if not reasoning_bytes else None
+    return dict(answer_tokens=answer, reasoning_tokens=reasoning,
+                estimated_answer_tokens=math.ceil(answer_bytes / 4),
+                estimated_reasoning_tokens=math.ceil(reasoning_bytes / 4))
+
+
+def answer_signal(accounting):
+    return max(accounting['estimated_answer_tokens'], accounting.get('answer_tokens') or 0)
 
 
 class StreamStopped(ValueError):
@@ -60,15 +99,24 @@ def assemble(lines):
     done = False
     from self_hosted_performance import ACTIVE
     budget = ACTIVE.get()
-    generated_bytes = 0
+
+    def accounting():
+        # Guards already count UTF-8 bytes incrementally. Do not rescan a long
+        # reasoning buffer on every token; only inline thinking needs parsing.
+        content = message['content']
+        if content.lstrip().startswith('<think>'):
+            return output_accounting(dict(message, tool_calls=list(calls.values())), usage)
+        answer_bytes = sum(g.byte_count for channel, g in guards.items()
+                           if channel == 'content' or isinstance(channel, tuple) and channel[2] == 'arguments')
+        reasoning_bytes = sum(g.byte_count for channel, g in guards.items()
+                              if channel in ('reasoning', 'reasoning_content'))
+        return token_accounting(answer_bytes, reasoning_bytes, usage)
 
     def append(channel, fragment):
-        nonlocal generated_bytes
         if not isinstance(fragment, str):
             raise ValueError('Invalid streamed text delta')
         if channel not in guards:
             guards[channel] = Guard()
-        generated_bytes += len(fragment.encode('utf-8'))
         guards[channel].feed(fragment)
         return fragment
 
@@ -103,16 +151,17 @@ def assemble(lines):
                         call['function'][key] += append(('tool', index, key), fragment)
             if choice.get('finish_reason') is not None:
                 reason = choice['finish_reason']
-        # Servers usually report tokens only after completion. Bytes / 4 is an
-        # explicitly approximate, model-agnostic early signal across ALL output
-        # channels, not a tokenizer or a count of SSE packets.
+        estimate = answer_signal(accounting())
+        # Only chat and tool arguments consume the deliverable allowance.
+        # Reasoning retains its whitespace/repetition guards and server reserve.
         if budget is not None and budget.enabled and not budget.soft:
-            estimate = max(generated_bytes / 4, usage.get('completion_tokens') or 0)
             if estimate > budget.threshold:
                 budget.estimates.append(math.ceil(estimate))
                 error = StreamStopped('learned_budget')
                 error.message = dict(message, tool_calls=[calls[i] for i in sorted(calls)])
                 raise error
+        if ANSWER_CAP.get() is not None and estimate > ANSWER_CAP.get():
+            raise StreamStopped('answer_cap')
 
     try:
         for raw in lines:
@@ -131,7 +180,7 @@ def assemble(lines):
         if reason is None:
             raise StreamStopped('incomplete_stream')
     except StreamStopped as error:
-        error.usage = usage
+        error.usage = dict(usage, **accounting())
         error.characters = sum(g.characters for g in guards.values())
         error.byte_count = sum(g.byte_count for g in guards.values())
         print(json.dumps({'type': 'self_hosted_stream_stop', 'stage': os.environ.get('UNCLE_STATUS_STAGE', ''),
@@ -140,4 +189,5 @@ def assemble(lines):
         raise
     if calls:
         message['tool_calls'] = [calls[index] for index in sorted(calls)]
-    return {'choices': [{'index': 0, 'message': message, 'finish_reason': reason}], 'usage': usage}
+    return {'choices': [{'index': 0, 'message': message, 'finish_reason': reason}],
+            'usage': dict(usage, **output_accounting(message, usage))}

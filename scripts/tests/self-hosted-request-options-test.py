@@ -230,7 +230,7 @@ class RequestOptions(unittest.TestCase):
                         transport._final_call(self.values, [], {}, 'fixture', mode, 123, 'medium', 30)
                     body = self.bodies[-1]
                     self.assertEqual(body['chat_template_kwargs'], EXTRA['chat_template_kwargs'])
-                    self.assertEqual(body.get('max_tokens', body.get('options', {}).get('num_predict')), 123)
+                    self.assertEqual(body.get('max_tokens', body.get('options', {}).get('num_predict')), 123 + 32768)
 
     def test_stage_snapshot_and_names_only_observability(self):
         self.configure({'custom': 'private-value', 'temperature': 2})

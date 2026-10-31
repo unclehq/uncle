@@ -14,6 +14,7 @@ true/false or 1/0; numeric options must be positive integers.
 | --- | --- | --- |
 | `self-hosted.learned-budgets` | `on` | Learn and intervene on excessive generation and repeated tools |
 | `self-hosted.budget-max-tokens` | `16384` | Ceiling for expected and soft-intervention budgets |
+| `self-hosted.reasoning-output-tokens` | `32768` | Separate reasoning reserve added to the server completion limit; stage/parent/global overrides follow output-cap precedence |
 | `self-hosted.budget-repeat-turns` | `3` | Consecutive identical small read/search/list batches and results before intervention; minimum 2 |
 | `self-hosted.result-reuse` | `on` | Reuse validated answers for eligible read-only schema steps |
 | `self-hosted.reuse-nonzero-temperature` | `off` | Explicitly allow reuse when effective temperature is above zero |
@@ -22,9 +23,12 @@ true/false or 1/0; numeric options must be positive integers.
 ## Budgets
 
 `.uncle/self-hosted-performance/history.json` keeps the most recent 256 step
-observations: stage family, deliverable kind and bytes, output tokens per turn
-(null when the server does not report them), turns and valid/invalid/retried
-outcome. It also retains separately labeled streaming estimates. Retried and
+observations: stage family, deliverable kind and bytes, total completion tokens,
+answer tokens and reasoning tokens per turn (null when not independently
+reported), turns and valid/invalid/retried outcome. Byte-based answer and
+reasoning estimates are stored separately. Predictions use answer tokens, or
+answer-byte estimates when measured answer tokens are unavailable. Older
+history containing only mixed completion totals is ignored for prediction. Retried and
 invalid observations do not inflate the learned successful-output budget.
 
 The estimate is the nearest-rank 90th percentile of successful turns in the
@@ -34,13 +38,29 @@ resolution operations, 2,048 for review/worker packets, 4,096 for outlines and
 the existing turn cap and `budget-max-tokens`. Streaming intervention starts
 above twice the expected budget, also bounded by those caps.
 
-During SSE reception, all text, reasoning and tool argument bytes count. Most
-servers report tokens only at the end, so the early signal is UTF-8 bytes / 4,
-or reported completion tokens when larger. This is an approximate heuristic,
-not a tokenizer and not a count of SSE packets. It may overestimate or
-underestimate tokens for a particular language/model. Non-streaming fallback
-retains the existing server caps and tool-loop detection but cannot interrupt
-generation using this byte signal.
+During SSE reception, only chat content and tool-call arguments consume the
+answer cap and learned budget. Reasoning fields and leading `<think>` blocks
+are excluded. The early signal is UTF-8 answer bytes / 4, or independently
+reported answer tokens when larger. When the server provides completion-token
+details, answer tokens are total completion tokens minus reasoning tokens.
+A total-only completion count is never treated as answer tokens when reasoning
+has been observed. Estimates are approximate and model/language dependent.
+
+`turn-output-tokens` and `final-output-tokens` now cap deliverable output.
+The 4,096-token default applies only to mechanical edit/resolution operations,
+outlines and section packets. Review/audit lenses and other judgment workers
+use the normal 32,768-token default. Stage, parent and global config/environment
+overrides retain their precedence.
+
+OpenAI `max_tokens` and native Ollama `num_predict` count reasoning too, so the
+server receives the answer cap **plus** `reasoning-output-tokens` (default
+32,768). The reserve is added even if a server omits or rejects `reasoning_effort`;
+that field does not reliably disable thinking. Reasoning retains the existing
+whitespace/repetition guards and request timeout, without a small streaming
+budget intervention. APIs with only a combined limit cannot enforce an exact
+independent reasoning ceiling: their final backstop is the combined allowance.
+Non-streaming fallback uses that same allowance and checks the answer before
+capture or tool execution, but cannot interrupt generation mid-response.
 
 The first budget intervention stops the response and asks once for only the
 final deliverable. Complete, independently validated text already received
@@ -48,7 +68,7 @@ uses the normal capture path; partial tool calls never execute. After that,
 existing output, whitespace, repetition and time caps apply. Three identical
 small read/search/list batches with identical results also ask for the final
 answer without tools; continued tool calls fail rather than loop. Changed
-results reset the repeated-tool count. No intervention raises a configured cap.
+results reset the repeated-tool count. The final-deliverable retry does not raise either configured allowance.
 
 `self_hosted_budget_intervention` events describe soft/hard actions and their
 reason, without content or tool arguments. `self_hosted_stream_stop` and

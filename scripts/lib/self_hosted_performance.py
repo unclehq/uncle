@@ -104,6 +104,8 @@ class Budget:
         self.soft = False
         self.retried = False
         self.tokens, self.estimates = [], []
+        self.answers, self.reasoning = [], []
+        self.answer_estimates, self.reasoning_estimates = [], []
         self.last_tools, self.repeats = None, 0
         self.repeat_limit = positive_option('budget-repeat-turns', 3, minimum=2)
         history = read_json(location(self.root) / 'history.json', []) if self.enabled else []
@@ -111,8 +113,8 @@ class Budget:
             history = []
         samples = sorted(t for row in history if isinstance(row, dict) and row.get('family') == self.family
                          and row.get('kind') == self.kind and row.get('outcome') == 'valid'
-                         and isinstance(row.get('output_tokens'), list)
-                         for t in row['output_tokens'] if isinstance(t, int) and t > 0)
+                         and isinstance(row.get('answer_samples'), list)
+                         for t in row.get('answer_samples', []) if isinstance(t, int) and t > 0)
         expected = samples[math.ceil(len(samples) * .9) - 1] if samples else self.DEFAULTS[self.kind]
         self.expected = min(cap, positive_option('budget-max-tokens', 16384), max(128, expected))
         self.threshold = min(cap, positive_option('budget-max-tokens', 16384), self.expected * 2)
@@ -125,8 +127,16 @@ class Budget:
         event('budget_intervention', action='soft', reason=reason, expected_tokens=self.expected,
               threshold_tokens=self.threshold)
 
-    def observe(self, usage, reason):
-        self.tokens.append((usage or {}).get('completion_tokens'))
+    def observe(self, usage, reason, message=None):
+        from self_hosted_stream import output_accounting
+        usage = usage or {}
+        accounting = output_accounting(message or {}, usage)
+        accounting.update({key: usage[key] for key in accounting if key in usage})
+        self.tokens.append(usage.get('completion_tokens'))
+        self.answers.append(accounting['answer_tokens'])
+        self.reasoning.append(accounting['reasoning_tokens'])
+        self.answer_estimates.append(accounting['estimated_answer_tokens'])
+        self.reasoning_estimates.append(accounting['estimated_reasoning_tokens'])
         if str(reason).startswith('early_stop:') or reason == 'length':
             self.retried = True
             if self.enabled and self.soft:
@@ -146,6 +156,11 @@ class Budget:
             return
         row = dict(family=self.family, kind=self.kind, deliverable_bytes=len(text.encode('utf-8')),
                    output_tokens=self.tokens[-256:], estimated_output_tokens=self.estimates[-256:], turns=len(self.tokens),
+                   answer_tokens=self.answers[-256:], reasoning_tokens=self.reasoning[-256:],
+                   estimated_answer_tokens=self.answer_estimates[-256:],
+                   estimated_reasoning_tokens=self.reasoning_estimates[-256:],
+                   answer_samples=[a if a is not None else e for a, e in
+                                   zip(self.answers[-256:], self.answer_estimates[-256:])],
                    outcome=('retried' if (self.soft or self.retried) and outcome == 'valid' else outcome))
         try:
             with locked(self.root) as path:

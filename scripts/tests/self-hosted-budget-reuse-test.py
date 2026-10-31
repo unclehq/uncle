@@ -56,12 +56,137 @@ class BudgetReuse(unittest.TestCase):
         self.assertEqual(rows[-1]['deliverable_bytes'], 6)
         self.assertEqual(rows[-2]['outcome'], 'invalid')
 
-    def runaway(self, content=False):
+    def runaway(self, content=True):
         # Unique text avoids the independent repetition/whitespace hard guards.
         for i in range(1000):
             fragment = ('word%04d ' % i) * 2
             item = delta(fragment) if content else {'choices': [{'delta': {'reasoning_content': fragment}}]}
             yield item
+
+    def test_review_reasoning_12000_tokens_then_packet_is_captured(self):
+        reasoning = ''.join('%07d ' % i for i in range(6000))
+        self.assertEqual(len(reasoning), 12000 * 4)
+        for stage, channel, detailed, final_only in [
+                ('adversarial-review-worker-1', 'reasoning_content', False, False),
+                ('test-review-worker-2', 'reasoning', True, False),
+                ('final-audit-worker-3', 'reasoning_content', False, True),
+                ('custom-worker-lens-4', 'content', False, False)]:
+            with self.subTest(stage=stage), patch.dict(os.environ, UNCLE_STATUS_STAGE=stage):
+                def script(body):
+                    # Emulate a server whose max_tokens includes thinking.
+                    if body['max_tokens'] < 12004:
+                        return [delta(reason='length'), '[DONE]']
+                    chunks = ([delta('<think>')] if channel == 'content' else [])
+                    chunks += [{'choices': [{'delta': {channel: reasoning[i:i + 800]}}]}
+                               for i in range(0, len(reasoning), 800)]
+                    if channel == 'content':
+                        chunks.append(delta('</think>'))
+                    usage = {'completion_tokens': 12004}
+                    if detailed:
+                        usage['completion_tokens_details'] = {'reasoning_tokens': 12000}
+                    return chunks + [delta('{"ok":true}', reason='stop'), {'usage': usage}, '[DONE]']
+                server = self.serve(script)
+                text, turns = agent.run_document(server.values, 'Review', self.root, SCHEMA,
+                                                 'review_worker_packet', 32768, explore_first=not final_only)
+                self.assertEqual((json.loads(text), turns, len(server.requests)), ({'ok': True}, 1, 1))
+                self.assertEqual(server.requests[0]['max_tokens'], 65536)
+                self.assertFalse(self.events('budget_intervention'))
+                self.assertFalse(self.events('stream_stop'))
+                row = perf.read_json(perf.location(self.root) / 'history.json', [])[-1]
+                self.assertEqual(row['output_tokens'], [12004])
+                self.assertEqual(row['answer_tokens'], [4 if detailed else None])
+                self.assertEqual(row['reasoning_tokens'], [12000 if detailed else None])
+                self.assertLess(row['answer_samples'][0], 10)
+                self.assertGreaterEqual(row['estimated_reasoning_tokens'][0], 12000)
+        self.assertTrue(self.events('capture'))
+
+    def test_mechanical_6000_answer_tokens_soft_intervenes(self):
+        answer = ''.join('%07d ' % i for i in range(3000))
+        self.assertEqual(len(answer), 6000 * 4)
+        def script(body):
+            if len(server.requests) > 1:
+                return [delta('{"ok":true}', reason='stop'), '[DONE]']
+            return [delta(answer[i:i + 240]) for i in range(0, len(answer), 240)]
+        server = self.serve(script)
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE='updated-plan-worker-edits-1'):
+            text, turns = self.run_packet(server.values)
+        self.assertEqual((json.loads(text), turns), ({'ok': True}, 2))
+        self.assertEqual([e['reason'] for e in self.events('budget_intervention')], ['learned_budget'])
+        self.assertTrue(server.disconnected.wait(1))
+
+    def test_reasoning_whitespace_still_stops_without_soft_budget(self):
+        server = self.serve([{'choices': [{'delta': {'reasoning_content': ' ' * 2100}}]}])
+        with self.assertRaisesRegex(transport.StreamStopped, 'whitespace'):
+            self.run_packet(server.values)
+        self.assertEqual(len(server.requests), 2)
+        self.assertFalse(self.events('budget_intervention'))
+
+    def test_answer_hard_cap_after_reasoning_with_budgets_disabled(self):
+        reasoning = ''.join('%07d ' % i for i in range(6000))
+        arguments = ''.join('%07d ' % i for i in range(2200))
+        server = self.serve([
+            {'choices': [{'delta': {'reasoning': reasoning}}]},
+            delta(calls=[{'index': 0, 'function': {'name': 'read_file', 'arguments': arguments}}])])
+        with patch.dict(os.environ, WORKFLOW_SELF_HOSTED_LEARNED_BUDGETS='off'):
+            with self.assertRaisesRegex(transport.StreamStopped, 'answer_cap'):
+                self.run_packet(server.values)
+        self.assertFalse(self.events('budget_intervention'))
+        self.assertEqual([e['reason'] for e in self.events('stream_stop')], ['answer_cap', 'answer_cap'])
+
+    def test_history_ignores_old_mixed_totals_and_predicts_answer_only(self):
+        budget = perf.Budget(self.root, 'review_worker_packet', 32768)
+        with perf.locked(self.root) as path:
+            perf.atomic(path / 'history.json', [dict(family=budget.family, kind=budget.kind,
+                        outcome='valid', output_tokens=[30000])])
+        self.assertEqual(perf.Budget(self.root, 'review_worker_packet', 32768).expected, 2048)
+        budget.observe({'completion_tokens': 12300, 'completion_tokens_details': {'reasoning_tokens': 12000}}, 'stop')
+        budget.finish('packet', 'valid')
+        self.assertEqual(perf.Budget(self.root, 'review_worker_packet', 32768).expected, 300)
+
+    def test_reasoning_allowance_config_and_stage_environment(self):
+        (self.root / 'config').write_text('self-hosted.reasoning-output-tokens 40000\n')
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE='adversarial-review-worker-1',
+                        WORKFLOW_SELF_HOSTED_REASONING_OUTPUT_TOKENS_ADVERSARIAL_REVIEW='50000',
+                        WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS='2000'):
+            server = self.serve()
+            agent.run_document(server.values, 'Go', self.root, SCHEMA, 'review_worker_packet', 32768)
+            self.assertEqual(server.requests[0]['max_tokens'], 52000)
+        server = self.serve()
+        transport.chat(server.values, [], None, 1000)
+        self.assertEqual(server.requests[0]['max_tokens'], 41000)
+
+    def test_only_mechanical_packets_get_the_small_default(self):
+        for stage in ('adversarial-review-worker-1', 'test-review-worker-1', 'final-audit-worker-1',
+                      'preflight-worker-1', 'manual-checklist-worker-1', 'custom-worker-lens-1'):
+            with self.subTest(stage=stage), patch.dict(os.environ, UNCLE_STATUS_STAGE=stage):
+                for cap in ('turn-output-tokens', 'final-output-tokens'):
+                    self.assertEqual(transport.output_cap(64512, cap, stage.replace('-', '_') + '_worker_packet'), 32768)
+        for name in ('updated_plan_edit_ops_packet', 'updated_plan_resolution_ops_packet',
+                     'project_plan_outline_packet', 'project_plan_section_worker_packet'):
+            self.assertEqual(transport.turn_output_tokens(64512, name), 4096)
+        self.assertEqual(transport.turn_output_tokens(64512, 'generic_worker_packet'), 32768)
+
+    def test_nonstream_and_native_fallback_keep_reasoning_separate(self):
+        reasoning = ''.join('%07d ' % i for i in range(6000))
+        for native in (False, True):
+            with self.subTest(native=native):
+                response = ({'message': {'content': '{"ok":true}', 'thinking': reasoning}, 'eval_count': 12004}
+                            if native else {'choices': [{'message': {'content': '{"ok":true}', 'reasoning': reasoning},
+                                                         'finish_reason': 'stop'}], 'usage': {'completion_tokens': 12004}})
+                with patch.object(transport, 'post', return_value=response) as post:
+                    text, reason, usage = transport._final_call(self.values, [], SCHEMA, 'packet',
+                                                               'ollama_format' if native else 'prompt', 1024, 'high', 30)
+                self.assertEqual((json.loads(text), reason), ({'ok': True}, 'stop'))
+                self.assertIsNone(usage['answer_tokens'])
+                self.assertEqual(usage['estimated_reasoning_tokens'], 12000)
+                body = post.call_args.args[2]
+                self.assertEqual(body.get('max_tokens', body.get('options', {}).get('num_predict')), 33792)
+
+    def test_nonstream_answer_cap_is_checked_before_tool_execution(self):
+        response = reply(calls=[call('read_file', path=''.join('%07d ' % i for i in range(3000)))])
+        with patch.object(transport, 'post', return_value=response), \
+                self.assertRaisesRegex(transport.StreamStopped, 'answer_cap'):
+            transport.chat(self.values, [], agent.READ_TOOLS, 4096)
 
     def test_stream_budget_soft_then_success_no_tools(self):
         server = self.serve(lambda body: list(self.runaway()) if len(server.requests) == 1 else
@@ -92,18 +217,20 @@ class BudgetReuse(unittest.TestCase):
         self.assertEqual([e['action'] for e in self.events('budget_intervention')], ['soft', 'hard'])
 
     def test_complete_packet_before_budget_stop_is_captured_once(self):
-        server = self.serve([delta('{"ok":true}')] + list(self.runaway()))
+        packet = json.dumps({'ok': True, 'detail': ' '.join('word%04d' % i for i in range(1600))})
+        server = self.serve([delta(packet)])
         text, turns = self.run_packet(server.values)
-        self.assertEqual(json.loads(text), {'ok': True})
+        self.assertEqual(json.loads(text), json.loads(packet))
         self.assertEqual(len(server.requests), 1)
         self.assertEqual(turns, 1)
         self.assertTrue(self.events('capture'))
 
     def test_final_only_budget_and_capture(self):
-        server = self.serve([delta('{"ok":true}')] + list(self.runaway()))
+        packet = json.dumps({'ok': True, 'detail': ' '.join('word%04d' % i for i in range(1600))})
+        server = self.serve([delta(packet)])
         text, count = agent.run_document(server.values, 'Go', self.root, SCHEMA,
                                          'edit_ops', 32768, explore_first=False)
-        self.assertEqual((json.loads(text), count), ({'ok': True}, 1))
+        self.assertEqual((json.loads(text), count), (json.loads(packet), 1))
 
     def test_final_budget_gets_one_retry_even_after_grammar_health_fallback(self):
         server = self.serve(lambda body: list(self.runaway()) if len(server.requests) == 1 else
@@ -120,7 +247,9 @@ class BudgetReuse(unittest.TestCase):
         policy = fixture.CaptureStream.policy(self)
         with patch.dict(os.environ, WORKFLOW_SELF_HOSTED_BUDGET_MAX_TOKENS='512'):
             agent.run_agent(server.values, 'Plan', policy, 32768)
-        self.assertEqual((self.root / fixture.PATH).read_text(), fixture.PLAN)
+        captured = (self.root / fixture.PATH).read_text()
+        self.assertTrue(captured.startswith(fixture.PLAN))
+        fixture.hosted.validate_plan(captured, False)
         self.assertEqual(len(server.requests), 1)
 
     def test_prior_valid_delivery_is_not_regenerated_after_soft_stop(self):

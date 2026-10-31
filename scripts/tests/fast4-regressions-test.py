@@ -271,6 +271,43 @@ class ProgressDeadline(unittest.TestCase):
             self.assertIn('token11', text)
             self.assertGreaterEqual(turns, 1)
 
+    def test_native_opencode_repeated_polls_do_not_count_as_new_progress(self):
+        import native_opencode as native
+        stage = Mock(stage='updated-plan-worker-edits-1', side='agent', prompt='Deliver.')
+        stage.option.return_value = None
+        child = Mock()
+        child.poll.return_value = None
+        polls, observed = [], []
+        def urlopen(request, **kwargs):
+            url = request.full_url
+            if url.endswith('/global/health') or url.endswith('/session/status'):
+                value = {}
+            elif url.endswith('/session'):
+                value = {'id': 's'}
+            elif url.endswith('/prompt_async'):
+                value = None
+            else:
+                self.assertTrue(url.endswith('/session/s/message'), url)
+                polls.append(len(polls) + 1)
+                complete = len(polls) == 3
+                value = [{'info': {'id': 'u', 'role': 'user'}},
+                         {'info': {'id': 'a', 'role': 'assistant', 'parentID': 'u',
+                                   'time': {'completed': 1} if complete else {}, 'tokens': {'output': 2}},
+                          'parts': [{'id': 'p', 'type': 'text', 'text': 'ab' if complete else 'a'}]}]
+            response = Mock()
+            response.read.return_value = json.dumps(value).encode()
+            return contextlib.nullcontext(response)
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, environment(Path(temp)), clear=True), \
+                patch.object(native, 'opencode_invocation', return_value=([], {})), \
+                patch.object(native, 'timed_popen', return_value=child), \
+                patch.object(native, 'launch_command', side_effect=lambda command: command), \
+                patch.object(native.urllib.request, 'urlopen', side_effect=urlopen), \
+                patch.object(native.time, 'sleep'), \
+                patch.object(writer_deadline, 'progress', side_effect=lambda: observed.append(len(polls))):
+            native.run(stage, temp, values={'model': 'stub'}, root=temp)
+        self.assertEqual(observed, [1, 3])
+        self.assertEqual(stage.final_answer, 'ab')
+
     def test_shell_watchdog_uses_actual_worker_stage_override(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

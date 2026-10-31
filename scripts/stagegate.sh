@@ -1786,14 +1786,16 @@ run_claude() {
 
     # Forced JSON: the driver names a JSON Schema, Claude must answer through a schema-validated
     # StructuredOutput call, and the validated object is what the driver reads -- never chat text,
-    # never a file the model may forget to write.  Only the direct Claude CLI can do this; a driver asks
-    # `stage_supports_structured_output` first and keeps its file contract for every other runner.
+    # never a file the model may forget to write. Codex adapters enforce their final-answer schema and
+    # deliver the restored object themselves, retaining the file contract when enforcement is unavailable.
     local -a schema_args=()
     if [[ -n "${UNCLE_OUTPUT_SCHEMA_FILE:-}" ]]; then
         # Direct, or through native_stage.py (steering sessions, i.e. every run under the TUI): the flag
         # reaches the same Claude process, and native_stage reports its validated object on the result event.
         if [[ "${cmd##*/}" == claude && "$UNCLE_RESOLVED_RUNNER" == claude && -n "${UNCLE_STRUCTURED_OUTPUT_PATH:-}" ]]; then
             schema_args=(--json-schema "$(cat "$UNCLE_OUTPUT_SCHEMA_FILE")")
+        elif [[ "$UNCLE_RESOLVED_RUNNER" == codex && "${cmd##*/}" == agent-codex.sh ]]; then
+            : # Codex adapters constrain the final answer and deliver the restored object.
         else
             echo "Stage $log_name asked for schema-checked output, which this runner cannot give." >&2
             return 1

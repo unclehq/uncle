@@ -1334,6 +1334,16 @@ route_unrunnable_application() {
     fi
     local marker="$STATE_DIR/runtime-readiness-repair-attempted"
     if [[ "$WORKFLOW_REPAIR" != 1 ]]; then
+        # Once per run. One caller sits inside FINAL_AUDIT itself and treats a return of 2 as "the state changed, go round
+        # again": without this, setting FINAL_AUDIT from FINAL_AUDIT re-entered it, re-read the same log, recorded the same
+        # failure and returned 2 again, forever (calculator: 426 ledger lines in four minutes, the audit never started).
+        # The marker is keyed on the run, not on the log, because the log is rewritten on every pass.
+        local recorded="$STATE_DIR/runtime-unrunnable-recorded" run_id
+        run_id="$(cat "$STATE_DIR/run-started-at" 2>/dev/null)"; run_id="${run_id:-no-run-id}"
+        if [[ "$(cat "$recorded" 2>/dev/null)" == "$run_id" ]]; then
+            return 0    # already carried to the audit; let the audit run
+        fi
+        printf '%s\n' "$run_id" > "$recorded"
         # There is nothing for the checklist to drive, so it is skipped, not failed: the audit reads the ledger.
         record_nonblocking_failure green-check 'the application cannot render or its test runner did not execute tests; repair is disabled, so browser and checklist work was not started'
         record_test_failure_disposition || true

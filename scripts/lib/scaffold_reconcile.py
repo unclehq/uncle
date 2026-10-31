@@ -2,7 +2,7 @@
 """Mechanical fixes for a scaffold that disagrees with the code it scaffolds.
 
 The implementation is written by isolated parallel workers; the scaffold
-(vitest.config.js, package.json, test file extensions) is written by one of
+(the Vitest config, package.json, test file extensions) is written by one of
 them too, in the same isolated pass, and routinely ends up pointing at the
 wrong place: an include glob that does not match where the tests actually
 landed, or a CommonJS require() in a file package.json declares an ES
@@ -63,17 +63,96 @@ def glob_matches(pattern, relpath):
     return re.fullmatch(regex, relpath.replace(os.sep, '/')) is not None
 
 
+# Where Vitest's `test.include` lives. A dedicated vitest config wins over a vite config, as it does in Vitest itself. Most
+# generated projects put it in vite.config.js (`test: { include: [...] }`); this fixer used to read only vitest.config.js, so
+# there it changed nothing, the driver called the project "not runnable", and a repair was spent on a one-line glob.
+VITEST_CONFIGS = tuple('vitest.config.' + ext for ext in ('js', 'mjs', 'cjs', 'ts', 'mts'))
+VITE_CONFIGS = tuple('vite.config.' + ext for ext in ('js', 'mjs', 'cjs', 'ts', 'mts'))
+INCLUDE_LIST = re.compile(r'include\s*:\s*\[([^\]]*)\]', re.S)
+
+
+def vitest_config(root):
+    """(path, dedicated): the config file Vitest reads for `test.include`, or (None, False)."""
+    root = Path(root)
+    for names, dedicated in ((VITEST_CONFIGS, True), (VITE_CONFIGS, False)):
+        for name in names:
+            if (root / name).is_file():
+                return root / name, dedicated
+    return None, False
+
+
+def _skip_string(text, i, quote):
+    """Index of the closing quote of the string opened at text[i], or len(text)."""
+    i += 1
+    while i < len(text):
+        if text[i] == '\\':
+            i += 2
+            continue
+        if text[i] == quote:
+            return i
+        i += 1
+    return len(text)
+
+
+def test_block_span(text):
+    """(start, end) of the body of the first `test: { ... }` object, or None. Braces inside strings do not count."""
+    match = re.search(r'\btest\s*:\s*\{', text)
+    if not match:
+        return None
+    depth, i = 1, match.end()
+    while i < len(text):
+        c = text[i]
+        if c in '\'"`':
+            i = _skip_string(text, i, c)
+        elif c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                return match.end(), i
+        i += 1
+    return None
+
+
+def find_include_list(text, dedicated):
+    """The `include: [...]` that belongs to Vitest's own `test` block, as a regex match on `text`, or None.
+
+    Only an `include` at the top level of that block counts: `test.coverage.include`, `optimizeDeps.include` and the like are
+    other lists and must never be widened with test globs."""
+    span = test_block_span(text)
+    if span is None:
+        # A dedicated vitest config may state its include bare; a vite config's include elsewhere is not Vitest's.
+        return INCLUDE_LIST.search(text) if dedicated else None
+    start, end = span
+    depth, i = 0, start
+    while i < end:
+        c = text[i]
+        if c in '\'"`':
+            i = _skip_string(text, i, c)
+        elif c in '{[(':
+            depth += 1
+        elif c in '}])':
+            depth -= 1
+        elif depth == 0 and text.startswith('include', i) and not (i > 0 and (text[i - 1].isalnum() or text[i - 1] in '_$.')):
+            found = INCLUDE_LIST.match(text, i)
+            if found:
+                return found
+        i += 1
+    return None
+
+
 def fix_vitest_discovery(root):
-    """Widen vitest.config.js's include list if it matches none of the
-    project's actual *.test.* files. Only ever adds a pattern; an existing
-    pattern, and therefore whatever it already covered, is never removed or
-    narrowed."""
-    config_path = Path(root) / 'vitest.config.js'
+    """Widen the Vitest include list (vitest.config.* or the `test` block of vite.config.*) if it matches none of the
+    project's actual *.test.* files. Only ever adds a pattern; an existing pattern, and therefore whatever it already
+    covered, is never removed or narrowed."""
+    config_path, dedicated = vitest_config(root)
+    if config_path is None:
+        return None
     try:
         text = config_path.read_text(encoding='utf-8')
     except OSError:
         return None
-    match = re.search(r'include\s*:\s*\[([^\]]*)\]', text, re.S)
+    match = find_include_list(text, dedicated)
     if not match:
         return None
     existing = re.findall(r"""['"]([^'"]+)['"]""", match.group(1))
@@ -104,7 +183,7 @@ def fix_vitest_discovery(root):
     new_text = text[:match.start(1)] + new_include_block + text[match.end(1):]
     config_path.write_text(new_text, encoding='utf-8')
     return {
-        'file': 'vitest.config.js',
+        'file': config_path.name,
         'reason': "include matched none of the project's *.test.* files (%s); "
                    'widened it to also cover %s. Nothing already covered was removed.'
                    % (', '.join(existing) or '(none)', ', '.join(new_patterns)),

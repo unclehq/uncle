@@ -78,6 +78,9 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
             info=msg.get('info',{})
             fingerprint=json.dumps(msg,sort_keys=True)
             if timing_seen.get(info.get('id')) != fingerprint:
+                if info.get('role') == 'assistant':
+                    from writer_deadline import progress
+                    progress()
                 stage.timing.observe({'method':'http/message','params':msg})
                 stage.read_cache.observe({'method':'http/message','params':msg})
                 timing_seen[info.get('id')]=fingerprint

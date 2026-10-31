@@ -2479,7 +2479,7 @@ updated_plan_launch_writer() {
           [[ "$validation_status" == 0 || "$validation_status" == 5 ]] || exit "$validation_status"
           if [[ "$validation_status" == 5 ]]; then
               cat "$directory/prompts/$name.rejection" >&2
-              workflow_writer_failure "updated-plan-worker-edits-$name" "$validation_status"
+              workflow_writer_failure "updated-plan-worker-edits-$name" "$validation_status" "schema rejection"
               workflow_archive_attempt "$directory/$name.json" "$LOG_DIR/updated-plan-worker-edits-$name-retry.jsonl" || exit 1
               cp "$directory/prompts/$name.md" "$directory/prompts/$name.retry.md"
               printf '\n\n## Your previous answer was rejected\n\n' >> "$directory/prompts/$name.retry.md"
@@ -2723,18 +2723,20 @@ run_updated_plan_edit_writers() {
                   export UNCLE_WORKER_MAX_TURNS="$resolver_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
               fi
               UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                run_claude "$group_prompt" "updated-plan-worker-resolve-$group_id" ) \
+                workflow_model_writer updated-plan run_claude "$group_prompt" "updated-plan-worker-resolve-$group_id" ) \
                 > "$LOG_DIR/updated-plan-worker-resolve-$group_id.log" 2>&1 &
             pids+=("$!"); names+=("$group_id")
         done
         for pid in "${!pids[@]}"; do
             wait "${pids[$pid]}" || {
+                local resolver_status=$?
+                workflow_writer_failure "updated-plan-worker-resolve-${names[$pid]}" "$resolver_status"
                 echo "Updated-plan resolver ${names[$pid]} did not complete." >&2
                 resolver_failed=1
                 if [[ "$resolver_granularity" == small ]]; then rm -f "$directory/resolutions-${names[$pid]}.json"; fi
             }
         done
-        [[ "$resolver_failed" == 0 || "$resolver_granularity" == small ]] || return 1
+        [[ "$resolver_failed" == 0 || "$resolver_granularity" == small ]] || { workflow_writer_exhausted updated-plan; return 1; }
         resolver_failed=0
         # A resolver answer that cannot be applied (text quoted from the wrong place) gets one more try, for that
         # group only, with the reason -- a few seconds, against the full single call.
@@ -2755,6 +2757,10 @@ run_updated_plan_edit_writers() {
                         python3 -B "$ROOT/scripts/lib/worker_schemas.py" resolve-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$retry_schema" --scope "$directory/prompts/resolve-$group_id.scope.json" --attempt "$schema_attempt" || return 1
                     fi
                     workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
+                    if [[ -s "$directory/prompts/resolve-$group_id.validator-rejected" ]]; then
+                        workflow_writer_failure "updated-plan-worker-resolve-$group_id" 5 "schema rejection" "$directory/prompts/resolve-$group_id.validator-rejected"
+                    fi
+                    workflow_archive_attempt "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.jsonl" "$directory/resolutions-$group_id.json" || return 1
                     ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_WORKER_SCHEMA_FILE="$retry_schema"; [[ "$delivery" != hosted || -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
                       if [[ "$resolver_granularity" == small ]]; then
                           local resolver_turns answer_tokens
@@ -2769,23 +2775,25 @@ run_updated_plan_edit_writers() {
                           fi
                       fi
                       UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                        run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
+                        workflow_model_writer updated-plan run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
                         > "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" 2>&1 &
                     pids+=("$!"); names+=("$group_id")
                 done
                 for pid in "${!pids[@]}"; do
                     wait "${pids[$pid]}" || {
+                        local resolver_status=$?
+                        workflow_writer_failure "updated-plan-worker-resolve-${names[$pid]}-retry" "$resolver_status"
                         echo "Updated-plan resolver retry ${names[$pid]} did not complete." >&2
                         resolver_failed=1
                         if [[ "$resolver_granularity" == small ]]; then rm -f "$directory/resolutions-${names[$pid]}.json"; fi
                     }
                 done
                 if [[ "$resolver_granularity" != small ]]; then
-                    [[ "$resolver_failed" == 0 ]] || return 1
+                    [[ "$resolver_failed" == 0 ]] || { workflow_writer_exhausted updated-plan; return 1; }
                     break
                 fi
                 if bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then break; fi
-                [[ "$resolver_attempt" != alternate ]] || return 1
+                [[ "$resolver_attempt" != alternate ]] || { workflow_writer_exhausted updated-plan; return 1; }
             done
         fi
         [[ -z "$reconcile_pid" ]] || wait "$reconcile_pid" 2>/dev/null || true
@@ -4062,6 +4070,10 @@ run_stage() {
         cat "$STATE_DIR/stop-reason" >&2
         return 1
     fi
+    case "$1" in
+        UPDATED_PLAN) (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_stage updated-plan) || return 1 ;;
+        PREFLIGHT) (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_stage preflight) || return 1 ;;
+    esac
     case "$1" in
         DERIVE_BRIEF)
             run_claude prompts/derive-brief.md derive-brief

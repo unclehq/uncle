@@ -67,6 +67,25 @@ printf third > edits/packet.json
             self.assertEqual((root / 'edits-r2/packet.json').read_text(), 'second')
             self.assertEqual((root / 'edits/packet.json').read_text(), 'third')
 
+    def test_stage_archive_retains_advisor_resolver_and_prior_rounds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            names = ['updated-plan-worker-review.log', 'updated-plan-worker-resolve-G1.jsonl', 'UPDATED_PLAN.log']
+            for name in names:
+                (root / name).write_text('first')
+            script = '''
+. "$ROOT/scripts/lib/model-jobs.sh"
+workflow_archive_stage updated-plan
+printf second > "$LOG_DIR/updated-plan-worker-review.log"
+workflow_archive_stage updated-plan
+'''
+            subprocess.run(['bash', '-ec', script], cwd=root, env=dict(os.environ,
+                ROOT=str(ROOT), LOG_DIR=str(root)), check=True)
+            self.assertEqual((root / 'updated-plan-worker-review-r1.log').read_text(), 'first')
+            self.assertEqual((root / 'updated-plan-worker-review-r2.log').read_text(), 'second')
+            self.assertEqual((root / 'updated-plan-worker-resolve-G1-r1.jsonl').read_text(), 'first')
+            self.assertFalse(list(root.glob('*-r1-r*')))
+
     def test_writer_jobs_respects_smaller_provider_pool_and_hosted_defaults(self):
         with tempfile.TemporaryDirectory() as temp:
             script = '''

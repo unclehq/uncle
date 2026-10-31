@@ -159,7 +159,26 @@ workflow_terminal_failure() {
 }
 
 workflow_writer_failure() {
-    local worker="$1" status="$2" detail
-    detail="$(tail -n 12 "$LOG_DIR/$worker.log" 2>/dev/null | tr '\n' ' ')"
-    printf 'Updated-plan writer %s failed: runner exit code %s; %s\n' "$worker" "$status" "$detail" | tee -a "$LOG_DIR/UPDATED_PLAN.log" >> "$LOG_DIR/UPDATED_PLAN.speculative.log"
+    local worker="$1" status="$2" reason="${3:-runner exit code}" detail
+    detail="$(tail -n 12 "${4:-$LOG_DIR/$worker.log}" 2>/dev/null | tr '\n' ' ')"
+    printf 'Updated-plan writer %s failed: %s %s; %s\n' "$worker" "$reason" "$status" "$detail" | tee -a "$LOG_DIR/UPDATED_PLAN.log" >> "$LOG_DIR/UPDATED_PLAN.speculative.log"
+}
+
+workflow_archive_stage() {
+    local stage="$1" path
+    for path in "$LOG_DIR/$stage"*.log "$LOG_DIR/$stage"*.jsonl; do
+        [[ -e "$path" ]] || continue
+        [[ "${path##*/}" =~ -r[0-9]+\.(log|jsonl)$ ]] && continue
+        workflow_archive_attempt "$path" || return 1
+    done
+    if [[ "$stage" == updated-* ]]; then
+        workflow_archive_attempt "$LOG_DIR/UPDATED_PLAN.log" || return 1
+    fi
+}
+
+workflow_writer_exhausted() {
+    stage_uses_self_hosted "$1" AGENT || return 0
+    : > "$STATE_DIR/updated-plan-writers-exhausted"
+    printf '%s: writer attempts exhausted\n' "$1" > "$STATE_DIR/stop-reason"
+    echo 'Updated-plan writer attempts exhausted; completed packets retained for diagnosis.' >&2
 }

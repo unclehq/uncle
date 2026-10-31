@@ -41,6 +41,7 @@ def seconds(default=3600):
 
 _last_progress = 0.0
 _last_saved = 0.0
+_deadline_end = None
 
 
 def progress():
@@ -58,18 +59,23 @@ def progress():
 @contextmanager
 def deadline(limit):
     # One timer covers all transport, schema and tool retries in this invocation.
-    global _last_progress
+    global _last_progress, _deadline_end
     if not hasattr(signal, 'setitimer') or threading.current_thread() is not threading.main_thread():
         yield
         return
     idle = option('writer-no-progress-seconds', 45)
     previous = signal.getsignal(signal.SIGALRM)
     timer = signal.getitimer(signal.ITIMER_REAL)
-    started = _last_progress = time.monotonic()
+    started = time.monotonic()
+    outer_end = _deadline_end
+    _deadline_end = min(started + limit, outer_end) if outer_end is not None else started + limit
+    effective_limit = _deadline_end - started
+    if outer_end is None:
+        _last_progress = started
     def expired(*_):
         now = time.monotonic()
-        if now - started >= limit:
-            raise ValueError('Self hosted writer deadline: ceiling (%gs wall-clock budget)' % limit)
+        if now >= _deadline_end:
+            raise ValueError('Self hosted writer deadline: ceiling (%gs wall-clock budget)' % effective_limit)
         if now - _last_progress >= idle:
             raise ValueError('Self hosted writer deadline: no-progress (%gs)' % idle)
     signal.signal(signal.SIGALRM, expired)
@@ -77,6 +83,7 @@ def deadline(limit):
     try:
         yield
     finally:
+        _deadline_end = outer_end
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
         if timer[0]:

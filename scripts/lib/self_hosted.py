@@ -1782,12 +1782,18 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                 child = start_check(launch_command(command), cwd=root, env=env,
                                     stdout=log, stderr=subprocess.STDOUT)
                 deadline = time.monotonic() + seconds
+                output_size = 0
                 try:
                     while True:
                         try:
                             status = child.wait(timeout=.1)
                             break
                         except subprocess.TimeoutExpired:
+                            size = os.fstat(log.fileno()).st_size
+                            if size > output_size:
+                                from writer_deadline import progress
+                                progress()
+                                output_size = size
                             if time.monotonic() >= deadline:
                                 raise ValueError(f'OpenCode exceeded its {seconds}-second time limit')
                 finally:

@@ -28,7 +28,9 @@ class Efficiency(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
         self.config = self.root / 'config'
-        env = patch.dict(os.environ, {'UNCLE_CONFIG': str(self.config), 'UNCLE_PROJECT_ROOT': str(self.root)}, clear=True)
+        env = patch.dict(os.environ, {'UNCLE_CONFIG': str(self.config), 'UNCLE_PROJECT_ROOT': str(self.root),
+                                       # These tests exercise the opt-in effort hint.
+                                       'WORKFLOW_SELF_HOSTED_REASONING_EFFORT': 'on'}, clear=True)
         env.start()
         self.addCleanup(env.stop)
         transport._request_features.clear()
@@ -49,6 +51,13 @@ class Efficiency(unittest.TestCase):
     def response(self, content='done', **fields):
         return {'choices': [{'message': {'role': 'assistant', 'content': content, **fields}, 'finish_reason': 'stop'}]}
 
+    def test_effort_hint_is_off_by_default(self):
+        # On DeepSeek V4 any reasoning_effort value re-enables thinking that a
+        # stage's request options turned off, so the hint is opt-in.
+        with patch.dict(os.environ, {'UNCLE_STATUS_STAGE': 'project-plan'}):
+            os.environ.pop('WORKFLOW_SELF_HOSTED_REASONING_EFFORT', None)
+            self.assertIsNone(transport.reasoning_effort())
+
     def test_effort_defaults_mapping_and_parent_config(self):
         self.assertEqual(transport.reasoning_effort(), 'low')
         for source, expected in [('none', 'low'), ('minimal', 'low'), ('low', 'low'),
@@ -65,6 +74,7 @@ class Efficiency(unittest.TestCase):
             transport.reasoning_effort({'effort': 'huge'})
 
     def test_effort_precedence_and_off_switch(self):
+        os.environ.pop('WORKFLOW_SELF_HOSTED_REASONING_EFFORT', None)   # test the config switch itself
         self.config.write_text('repair.effort high\nself-hosted.reasoning-effort off\n')
         with patch.dict(os.environ, {'UNCLE_STATUS_STAGE': 'repair', 'WORKFLOW_EFFORT_REPAIR': 'medium'}):
             self.assertIsNone(transport.reasoning_effort({'effort': 'high'}))
@@ -73,9 +83,12 @@ class Efficiency(unittest.TestCase):
             with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_REASONING_EFFORT': 'bad'}):
                 with self.assertRaisesRegex(ValueError, 'on or off'):
                     transport.reasoning_effort()
-        self.config.write_text('repair.effort high\n')
+        self.config.write_text('repair.effort high\nself-hosted.reasoning-effort on\n')
         with patch.dict(os.environ, {'UNCLE_STATUS_STAGE': 'repair'}):
             self.assertEqual(transport.reasoning_effort({'effort': 'low'}), 'low')
+        self.config.write_text('repair.effort high\n')   # default: no hint unless opted in
+        with patch.dict(os.environ, {'UNCLE_STATUS_STAGE': 'repair'}):
+            self.assertIsNone(transport.reasoning_effort({'effort': 'low'}))
 
     def test_tool_and_final_requests_send_effort(self):
         server = self.server(tool_script=[{'role': 'assistant', 'content': 'ready'}])

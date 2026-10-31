@@ -260,6 +260,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+. "$ROOT/scripts/lib/model-jobs.sh"
 . "$ROOT/scripts/lib/acceptance.sh"
 . "$ROOT/scripts/lib/repair-limit.sh"
 . "$ROOT/scripts/lib/repair-judge.sh"
@@ -280,6 +281,7 @@ declare -f finished_extras > /dev/null || finished_extras() { :; }
 # bundled too; cancel_speculation is defined further down.
 on_exit() {
     local rc=$?
+    if declare -f workflow_model_cancel > /dev/null; then workflow_model_cancel; fi
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
     if declare -f early_checklist_cancel > /dev/null; then early_checklist_cancel; fi
     if declare -f early_execute_cancel > /dev/null; then early_execute_cancel; fi
@@ -2451,7 +2453,7 @@ run_adversarial_review_panel() {
         output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
         printf '\n## Canonical inputs (binding)\n\nRead only `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json` and `%s`.%s\n\n## Assigned review lens\n\nFocus only on **%s**.\n' "$plan_input" "$plan_input_note" "$lens" >> "$prompt"
-        ( run_adversarial_review_lens "$directory" "$lens" ) \
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter adversarial-review REVIEWER || exit 1; run_adversarial_review_lens "$directory" "$lens" ) \
             > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
@@ -2488,7 +2490,7 @@ run_updated_plan_panel() {
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "${lens%%-*}" >> "$prompt"
         [[ -z "$ids" ]] || printf '\nYour findings: %s. Report only these finding IDs.\n' "${ids//,/, }" >> "$prompt"
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan REVIEWER || exit 1; UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done < <(python3 -B "$ROOT/scripts/lib/updated_plan_slices.py" "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json")
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan worker failed; canonical packet validation will stop the panel.' >&2; done
@@ -2546,7 +2548,7 @@ updated_plan_launch_writer() {
         python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner || return 1
     fi
     rm -f "$directory/$name.json"
-    ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
+    ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
       UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
         run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) \
         > "$LOG_DIR/updated-plan-worker-edits-$name.log" 2>&1 &
@@ -2558,7 +2560,7 @@ run_updated_plan_edit_writers() {
     local -a pids=() names=()
     . "$ROOT/scripts/lib/model-jobs.sh"
     local jobs
-    jobs="$(workflow_model_jobs updated-plan)"
+    jobs="$(workflow_model_capacity updated-plan)"
     [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; resolve_command=resolve-ops; fi
     # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
@@ -2727,7 +2729,7 @@ run_updated_plan_edit_writers() {
                 python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" || return 1
             fi
             workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
-            ( [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+            ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
               UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                 run_claude "$group_prompt" "updated-plan-worker-resolve-$group_id" ) \
                 > "$LOG_DIR/updated-plan-worker-resolve-$group_id.log" 2>&1 &
@@ -2747,7 +2749,7 @@ run_updated_plan_edit_writers() {
                 local retry_schema=""
                 [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
                 workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
-                ( [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+                ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
                   UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                     run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
                     > "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" 2>&1 &
@@ -2790,6 +2792,7 @@ updated_plan_start_reconcile() {
             python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" || exit 0
         fi
         [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$late"
+        . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan || exit 1
         UNCLE_WORKER_PACKET_PATH="$late" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
             run_claude "$directory/prompts/reconcile.md" updated-plan-worker-reconcile
     ) > "$LOG_DIR/updated-plan-worker-reconcile.log" 2>&1 &
@@ -2816,7 +2819,7 @@ run_updated_plan_decide() {
         prompt="$directory/prompts/$lens.md"
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$directory/$lens.json" "updated-plan-review-worker-$lens" < /dev/null ) \
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan REVIEWER || exit 1; UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$directory/$lens.json" "updated-plan-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         UPDATED_PLAN_ADVISOR_PIDS+=("$!")
     done
@@ -2952,7 +2955,7 @@ run_updated_plan_compact() {
 run_updated_plan_adaptive() {
     local count threshold slice directory fast_merge=1 jobs=0 writer_status=0
     . "$ROOT/scripts/lib/model-jobs.sh"
-    jobs="$(workflow_model_jobs updated-plan)"
+    jobs="$(workflow_model_capacity updated-plan)"
     if [[ "$jobs" != 0 ]]; then fast_merge=0; fi
     [[ "${WORKFLOW_UPDATED_PLAN_COMPACT:-1}" == 1 ]] || return 1
     count="$(python3 -B - "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" <<'PY'
@@ -2969,7 +2972,7 @@ PY
     # response (rather than the sum), without the 20-way request burst of a
     # one-finding fan-out.
     threshold="${WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD:-5}"
-    slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-2}"
+    slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-$(workflow_model_group_size updated-plan)}"
     if [[ "$count" =~ ^[0-9]+$ && "$threshold" =~ ^[0-9]+$ && "$slice" =~ ^[0-9]+$ ]] \
         && (( count >= threshold && slice > 0 && jobs != 1 )); then
         ensure_project_plan_json || return 1
@@ -3024,6 +3027,9 @@ run_test_review_investigate() {
     : > "$directory/investigate-started"
     : > "$directory/investigate.pids"
     printf '%s' "$current" > "$directory/investigate.fingerprint"
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    local jobs
+    jobs="$(workflow_model_capacity test-review REVIEWER)" || return 1
     for lens in coverage assertions oracle; do
         prompt="$directory/prompts/investigate-$lens.md"
         cp "$ROOT/prompts/change/test-review-worker-investigate.md" "$prompt"
@@ -3032,7 +3038,7 @@ run_test_review_investigate() {
         else
             printf 'Focus only on **%s**.\n' "$(upper "$lens")" >> "$prompt"
         fi
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$directory/investigate-$lens.md" "test-review-worker-$lens-investigate" < /dev/null ) \
+        ( workflow_model_enter test-review REVIEWER "$jobs" || exit 1; UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$directory/investigate-$lens.md" "test-review-worker-$lens-investigate" < /dev/null ) \
             > "$LOG_DIR/test-review-worker-$lens-investigate.log" 2>&1 &
         echo "$!" >> "$directory/investigate.pids"
     done
@@ -3078,7 +3084,7 @@ run_test_review_panel() {
         else
             printf '\n## Assigned acceptance-gate row\n\nFocus only on **%s**. Use exactly this id, "%s", in your JSON output -- never substitute a different row name from the investigation above.\n' "$(upper "$lens")" "$(upper "$lens")" >> "$prompt"
         fi
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens" < /dev/null ) \
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter test-review REVIEWER || exit 1; UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/test-review-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
@@ -3092,7 +3098,8 @@ run_test_review_panel() {
         if ! python3 -B "$ROOT/scripts/lib/test_review_packets.py" validate "$output" "$lens"; then
             echo "Test-review worker $lens returned an invalid packet; retrying that worker once."
             rm -f "$output"
-            UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens-retry" < /dev/null || true
+            ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter test-review REVIEWER || exit 1
+              UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens-retry" < /dev/null ) || true
         fi
     done
     python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || return 1
@@ -3867,6 +3874,7 @@ run_project_plan_sections_bounded() {
             name="${pending[$next]}"
             echo "Project plan section worker: $name"
             (
+                . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter project-plan || exit 1
                 project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || exit 1
                 project_plan_section_settle "$name" "$directory" "$delivery"
             ) &
@@ -3886,7 +3894,7 @@ run_project_plan_sections() {
     local -a pids=() names=()
     . "$ROOT/scripts/lib/model-jobs.sh"
     local jobs
-    jobs="$(workflow_model_jobs project-plan)"
+    jobs="$(workflow_model_capacity project-plan)"
     # Forced, schema-checked JSON wherever the runner can enforce it.
     if stage_supports_structured_output project-plan-section-outline; then
         delivery=hosted
@@ -3902,7 +3910,7 @@ run_project_plan_sections() {
         while IFS= read -r phase; do
             for name in $phase; do
                 echo "Project plan section worker: $name"
-                ( project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
+                ( workflow_model_enter project-plan AGENT "$jobs" || exit 1; project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
                 pids+=("$!"); names+=("$name")
             done
             if [[ "$gate" == 1 ]]; then

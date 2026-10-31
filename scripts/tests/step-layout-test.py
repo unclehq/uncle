@@ -249,6 +249,24 @@ Owns: `also-not-owned.py`
         self.assertEqual(findings[0]['step'], 1)
         self.assertEqual(findings[0]['owns'], ['package.json'])
 
+    def test_step_headings_at_the_section_level_are_not_section_ends(self):
+        for heading in ('0. Scaffold', '**0. Scaffold**', 'Step : Scaffold'):
+            with self.subTest(heading=heading):
+                text = '## Implementation order\n\n## ' + heading + '\nOwns: `package.json`\n\n## Review\nKeep this.\n'
+                self.assert_readers(text, [['package.json']])
+
+    def test_fenced_examples_cannot_set_the_real_step_indentation(self):
+        text = ('## Implementation order\n\n```markdown\nStep 9: example\n```\n\n'
+                '  1. **Scaffold**\n     Owns: `package.json`\n')
+        self.assert_readers(text, [['package.json']])
+
+    def test_normalization_keeps_ownership_annotations(self):
+        text = ('## Implementation order\n\n### Step 1: Scaffold\n'
+                'Owns: `package.json` (preserve existing dependency versions)\n')
+        published = pm.publish_records(dict(narrative=text), self.root)
+        self.assertIn('preserve existing dependency versions', published['narrative'])
+        self.assertEqual(pm.steps_of(published)[0]['owns'], ['package.json'])
+
 
 if __name__ == '__main__':
     unittest.main()

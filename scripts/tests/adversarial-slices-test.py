@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Hermetic review panels: unchanged public artifacts, bounded private slices."""
 import collections
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -67,6 +68,13 @@ stage_uses_self_hosted() { [[ "$FIXTURE_RUNNER" == self-hosted ]]; }
 uncle_stage_runner() { printf '%s\n' "$FIXTURE_RUNNER"; }
 run_codex_review() { python3 "$FIXTURE_STUB" "$@"; }
 run_codex() { python3 "$FIXTURE_STUB" "$@"; }
+python3() {
+    if [[ "${2:-}" == "$ROOT/scripts/lib/plan_model.py" && "${3:-}" == view ]]; then
+        printf '{"sections":[{"id":"VIEW-ROW-1","text":"Canonical plan view"}]}' > "$5"
+    else
+        command python3 "$@"
+    fi
+}
 run_adversarial_review_panel
 '''
 
@@ -224,6 +232,13 @@ class PanelTests(unittest.TestCase):
         self.assertEqual((state.parent / 'docs/ADVERSARIAL_REVIEW.md').read_text(),
                          '## Overall assessment\n\nNo findings.\n')
 
+    def test_plan_view_opt_in_remains_the_slice_input(self):
+        result, state, calls = self.run_panel(config='adversarial-review.slices 3\n',
+                                               env={'WORKFLOW_AGENT_PLAN_VIEW': '1'})
+        self.assert_ok(result, state)
+        self.assertEqual(len(calls), 12)
+        self.assertTrue(all('VIEW-ROW-1' in call['prompt'] for call in calls))
+
 
 class SchemaTests(unittest.TestCase):
     def setUp(self):
@@ -273,7 +288,7 @@ class MergeTests(unittest.TestCase):
         self.env['UNCLE_CONFIG'] = str(self.root / 'config')
 
     def command(self, *args):
-        return subprocess.run([sys.executable, '-I', str(ROOT / 'scripts/lib/adversarial_slices.py'), *map(str, args)],
+        return subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/lib/adversarial_slices.py'), *map(str, args)],
                               env=self.env, capture_output=True, text=True, timeout=10)
 
     def packet(self, lens, number, findings, kind=KIND):
@@ -326,6 +341,49 @@ class MergeTests(unittest.TestCase):
         result = self.command('merge', self.root, 2)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(any((self.root / (lens + '.json')).exists() for lens in LENSES))
+
+
+class TuiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('slice_tui', ROOT / 'uncle_tui.py')
+        cls.tui = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.tui)
+
+    def panel(self, sliced=False, active=False, candidates=False, mixed=False):
+        app = self.tui.UncleTUI.__new__(self.tui.UncleTUI)
+        records, live = [], {}
+        for lens in LENSES:
+            for number in (range(1, 5) if sliced else (0,)):
+                name = 'adversarial-review-worker-' + lens + (f'-slice-{number}' if number else '')
+                for candidate in ((1, 2) if candidates else (0,)):
+                    stage = name + (f'-candidate-{candidate}' if candidate else '')
+                    if active or (mixed and lens == 'security' and number in (0, 4)):
+                        live[stage] = 1000
+                    else:
+                        records.append({'stage': stage, 'started_at': 1000, 'ended_at': 1100,
+                                        'elapsed_seconds': 100, 'process_exit': 0,
+                                        'total_tokens': 25 if sliced else 100})
+        app.session_stats = {'records': records, 'active': live,
+                             'live': {name: {'total_tokens': 25 if sliced else 100}
+                                      for name in live} if mixed else {}}
+        with patch.object(self.tui.time, 'time', return_value=1100):
+            lines = app._session_panel_lines()
+        return lines, app._panel_indicator_styles
+
+    def test_slices_keep_four_visible_lens_indicators(self):
+        for active in (False, True):
+            with self.subTest(active=active):
+                self.assertEqual(self.panel(sliced=True, active=active), self.panel(active=active))
+
+    def test_candidate_slices_keep_existing_lens_rows(self):
+        for active in (False, True):
+            with self.subTest(active=active):
+                self.assertEqual(self.panel(sliced=True, active=active, candidates=True),
+                                 self.panel(active=active, candidates=True))
+
+    def test_lens_stays_active_until_last_slice_completes(self):
+        self.assertEqual(self.panel(sliced=True, mixed=True), self.panel(mixed=True))
 
 
 if __name__ == '__main__':

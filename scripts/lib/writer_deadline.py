@@ -103,7 +103,8 @@ def deadline(limit):
 
 def watch(pid, limit, worker, heartbeat='', logs=()):
     import sys
-    idle = option('writer-no-progress-seconds', 45)
+    idle = float('inf') if 'ceiling-only' in logs else option('writer-no-progress-seconds', 45)
+    logs = [path for path in logs if path and path != 'ceiling-only']
     started = changed = time.monotonic()
     previous = None
     while True:

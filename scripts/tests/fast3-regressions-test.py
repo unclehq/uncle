@@ -86,12 +86,11 @@ class PreflightIsolation(unittest.TestCase):
 
 
     def test_probe_subprocess_cannot_write_through_symlink_to_project(self):
-        (self.root / 'project-link').symlink_to(self.root / 'tests', target_is_directory=True)
         policy = self.policy('tooling')
         before = self.snapshot()
         code = "from pathlib import Path; Path('project-link/app.spec.js').write_text('changed')"
         try:
-            result = agent.run_tool(policy, 'bash', {'command': shlex.quote(sys.executable) + ' -c ' + shlex.quote(code)})
+            result = agent.run_tool(policy, 'bash', {'command': 'ln -s ' + shlex.quote(str(self.root / 'tests')) + ' project-link; ' + shlex.quote(sys.executable) + ' -c ' + shlex.quote(code)})
         except ValueError as error:
             result = str(error)
         self.assertEqual(before, self.snapshot())
@@ -175,6 +174,28 @@ class WriterFallback(unittest.TestCase):
                     self.assertEqual(attempts[-1]['schema_first'], 'off', attempts)
                 sibling = [r for r in rows if r['stage'].endswith('-edits-2')]
                 self.assertEqual(len(sibling), 1)
+
+    def test_cheap_retry_forces_constrained_delivery_and_thinking_off(self):
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
+                  'dispositions': [], 'ops': []}
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+                'UNCLE_CONFIG': str(Path(temp) / 'config'), 'UNCLE_PROJECT_ROOT': temp,
+                'UNCLE_STATUS_STAGE': 'updated-plan-worker-edits-3-1',
+                'UNCLE_UPDATED_PLAN_ANSWER_TOKENS': '4096', 'UNCLE_UPDATED_PLAN_CHEAP_RETRY': '1',
+                'WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST': 'off',
+                'WORKFLOW_SELF_HOSTED_REASONING_EFFORT': 'on',
+                'WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS': '{"chat_template_kwargs":{"enable_thinking":true}}',
+                'WORKFLOW_SELF_HOSTED_RESULT_REUSE': 'off'}, clear=True), \
+                patch.object(agent, 'chat', side_effect=AssertionError('cheap retry opened tool loop')) as chat, \
+                patch.object(agent, 'constrained_completion', return_value=(json.dumps(packet), 'stop', {}, 'json_schema')) as complete:
+            result, count = self_hosted.run_http_agent('agent', {'base_url': 'http://unused.invalid/v1',
+                'api_key': 'stub', 'model': 'stub'}, 'Deliver.', Path(temp), schema_kind=packet['kind'])
+            self.assertEqual((json.loads(result), count), (packet, 1))
+            chat.assert_not_called()
+            args = complete.call_args.args
+            self.assertIsNone(args[5], 'reasoning_effort must not switch thinking back on')
+            self.assertFalse(args[0]['_request_options']['chat_template_kwargs']['enable_thinking'])
+            self.assertEqual(complete.call_args.kwargs.get('skip', ()), ())
 
     def test_writer_budget_defaults_and_config_precedence(self):
         with tempfile.TemporaryDirectory() as temp:

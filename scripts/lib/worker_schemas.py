@@ -18,8 +18,8 @@ what it receives for runners with no schema support.
     worker_schemas.py section-model NAME OUTPUT   project-plan section worker, writing typed blocks (NAME outline: the outline)
     worker_schemas.py edit PLAN.json OUTPUT [owner]   updated-plan edit writer
     worker_schemas.py resolve PLAN.json OUTPUT        updated-plan resolver
-    worker_schemas.py edit-ops PLAN.json OUTPUT [owner]   the same writer, editing the plan model by id
-    worker_schemas.py resolve-ops PLAN.json OUTPUT        the same resolver, for ops
+    worker_schemas.py edit-ops PLAN.json OUTPUT [owner] [--scope IDS.json]   the same writer, editing the plan model by id
+    worker_schemas.py resolve-ops PLAN.json OUTPUT [--scope IDS.json]        the same resolver, for ops
     worker_schemas.py requirements OUTPUT                     the requirements interpretation
     worker_schemas.py synthesis KIND protected|plain OUTPUT   the single-call updated plan (KIND plan or change-plan)
 """

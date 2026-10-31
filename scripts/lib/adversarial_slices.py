@@ -124,8 +124,6 @@ def same_issue(left, right):
     # Even the same category on one row can describe two independent defects.
     if not (a & b and ac and ac == bc):
         return False
-    if left['evidence'] and _norm(left['evidence']) == _norm(right['evidence']):
-        return True
     stop = set('a an the and or of to in on for is are be has have no not missing omitted omits lacks lack'.split())
     def words(item):
         text = item['summary'] + ' ' + item['evidence']

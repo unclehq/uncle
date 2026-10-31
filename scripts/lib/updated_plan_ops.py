@@ -46,7 +46,7 @@ Legacy schemas may instead request comma-separated strings for these lists.
 - `{"op":"insert_row","target":"<id of a rows block>","after":"B-3","new":{"id":"B-9", ...fields}}` adds a row after
   the row `after` ("" for first). The new row's id is new and unused.
 - `{"op":"insert_item","target":"<id of a list or steps block>","after":"<item id or empty>","new":{...}}` adds a list item
-  (`{"text":"..."}`) or a step (`{"id":"step-N","number":"N","title":"...","text":"...","owns":"...","depends_on":"..."}`).
+  (`{"text":"..."}`) or a step (`{"id":"step-3","number":3,"title":"...","text":"...","owns":["a.js"],"depends_on":[1]}`).
 - `{"op":"insert_block","target":"<section id>","after":"<block id or empty>","block":{"kind":"prose","text":"..."}}`; block
   kinds are prose, heading (level, text), code (lang, text) and list (items: an array of strings).
 - `{"op":"delete","id":"..."}` removes a row, list item, step or block.
@@ -190,7 +190,7 @@ def write_prompt(base_path, ids, output, owns_fields=False, note=None):
     text = text.replace('reconstructs the plan\'s full text from `patch`', 'reconstructs the plan\'s full text from `ops`')
     text = text.replace('must be reflected by some `patch` entry', 'must be reflected by some `ops` entry')
     text = SECTIONS_ONLY.sub('', text)
-    text = PLAN_JSON.sub(lambda _: '## Plan model (JSON)\n\nEvery `id` below is one you may name.\n```json\n%s\n```\n'
+    text = PLAN_JSON.sub(lambda _: '## Plan model (JSON)\n\nUse existing ids below; your assigned scope limits which ones you may edit.\n```json\n%s\n```\n'
                          % json.dumps({k: v for k, v in model.items()}, ensure_ascii=False, separators=(',', ':')), text)
     assigned_context = []
     if ids:
@@ -217,6 +217,7 @@ def write_prompt(base_path, ids, output, owns_fields=False, note=None):
     targets = [key for key in pm.index(model) if re.search(r'(?<![\w.-])' + re.escape(key) + r'(?![\w.-])', context)]
     scope = scoped_ids(model, targets) if targets else list(pm.index(model))
     Path(output).with_suffix('.scope.json').write_text(json.dumps(scope) + '\n', encoding='utf-8')
+    note += '\n\nAssigned edit scope (ids): ' + ', '.join(scope) + '.\n'
     Path(output).write_text(base.defer_reply_example(text) + note, encoding='utf-8')
 
 

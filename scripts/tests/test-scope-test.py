@@ -30,7 +30,7 @@ class Project:
             self.suite(f'other{n}', 'sh', 'true\n')
         (self.root / 'README.md').write_text('docs\n')
         for cmd in (['git', 'init', '-q'], ['git', 'add', '-A'],
-                    ['git', '-c', 'user.name=t', '-c', 'user.email=t@e.t', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base']):
+                    ['git', '-c', 'user.name=t', '-c', 'user.email=t@e.t', '-c', 'commit.gpgsign=false', 'commit', '--no-gpg-sign', '-qm', 'base']):
             subprocess.run(cmd, cwd=self.root, check=True, capture_output=True)
 
     def suite(self, name, ext, text):

@@ -162,8 +162,12 @@ def prepare(path=None, stage=None):
 
 def supported():
     try:
+        env = os.environ.copy()
+        for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG', 'STAGEGATE_RUN_ID',
+                    'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'DOCUMENT_BUDGET_SOURCE'):
+            env.pop(key, None)
         done = subprocess.run([os.environ.get('WORKFLOW_CODEX_CMD', 'codex'), 'exec', '--help'],
-                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10, env=env)
         return done.returncode == 0 and '--output-schema' in done.stdout and '--output-last-message' in done.stdout
     except (OSError, subprocess.TimeoutExpired):
         return False

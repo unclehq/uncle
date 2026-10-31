@@ -173,8 +173,8 @@ del t.stage_models["requirements"]
 t.stage_runners["requirements"] = "kimi"
 check("kimi shows a model row", ["runner", "effort", "model"],
       t.stage_fields("requirements"))
-t.stage_models["requirements"] = "moonshot-ai/kimi-k2.6"
-check("kimi stage_model returns the raw stored id", "moonshot-ai/kimi-k2.6",
+t.stage_models["requirements"] = "moonshotai/kimi-k2.6"
+check("kimi stage_model returns the raw stored id", "moonshotai/kimi-k2.6",
       t.stage_model("requirements"))
 del t.stage_models["requirements"]
 
@@ -255,9 +255,9 @@ for runner, stage, catalog in vendor_cases:
     check("the %s picker filters by label" % runner, True,
           all(k != "header" for k, _ in t._picker_filtered()))
     t.pick_filter = ""
-t.stage_models["requirements"] = "moonshot-ai/kimi-k2.6"
+t.stage_models["requirements"] = "moonshotai/kimi-k2.6"
 t.picker_target = "requirements"
-check("the kimi picker knows the stored id", "moonshot-ai/kimi-k2.6",
+check("the kimi picker knows the stored id", "moonshotai/kimi-k2.6",
       t._picker_current())
 del t.stage_models["requirements"]
 
@@ -285,8 +285,8 @@ vendor_displays = [
     ("claude", "claude-opus-5", "claude-opus-5  Claude Opus 5",
      "claude-sonnet-5  (default)  Claude Sonnet 5"),
     ("codex", "gpt-5.1-codex", "gpt-5.1-codex  GPT-5.1 Codex", "codex default  (default)"),
-    ("kimi", "moonshot-ai/kimi-k2.6", "moonshot-ai/kimi-k2.6  Kimi K2.6",
-     "moonshot-ai/kimi-k2.7-code-highspeed  (default)  Kimi K2.7 Code Highspeed"),
+    ("kimi", "moonshotai/kimi-k2.6", "moonshotai/kimi-k2.6  Kimi K2.6",
+     "moonshotai/kimi-k2.7-code-highspeed  (default)  Kimi K2.7 Code Highspeed"),
 ]
 for runner, stored, stored_text, default_text in vendor_displays:
     t.stage_runners.pop("requirements", None)
@@ -305,7 +305,7 @@ check("a slash-free id is a claude model", True, m.valid_model_id("opus", "claud
 check("a slash-free id is a codex model", True,
       m.valid_model_id("gpt-5.1-codex", "codex"))
 check("a raw moonshot id is a kimi model", True,
-      m.valid_model_id("moonshot-ai/kimi-k2.6", "kimi"))
+      m.valid_model_id("moonshotai/kimi-k2.6", "kimi"))
 check("an empty id is rejected for claude", False, m.valid_model_id("", "claude"))
 check("an empty id is rejected for codex", False, m.valid_model_id("", "codex"))
 check("an empty id is rejected for kimi", False, m.valid_model_id("", "kimi"))
@@ -337,12 +337,12 @@ t.notice = ""
 # AC-8: switching the runner keeps a stored model dormant, and the row comes
 # back when the runner does (I-6).
 t.stage_runners["requirements"] = "kimi"
-t.stage_models["requirements"] = "moonshot-ai/kimi-k2.6"
+t.stage_models["requirements"] = "moonshotai/kimi-k2.6"
 t.stage_runners["requirements"] = "claude"
-check("a kimi model is dormant under claude", "moonshot-ai/kimi-k2.6",
+check("a kimi model is dormant under claude", "moonshotai/kimi-k2.6",
       t.stage_models["requirements"])
 check("dormant or not, the stored value is kept",
-      "moonshot-ai/kimi-k2.6", t.stage_model("requirements"))
+      "moonshotai/kimi-k2.6", t.stage_model("requirements"))
 t.stage_runners["requirements"] = "mystery"
 check("no model row appears for an unknown runner", False,
       "model" in t.stage_fields("requirements"))
@@ -350,7 +350,7 @@ t.stage_runners["requirements"] = "kimi"
 check("the model row is back with the runner",
       ["runner", "effort", "model"], t.stage_fields("requirements"))
 check("and the stored id is back on it",
-      "moonshot-ai/kimi-k2.6  Kimi K2.6",
+      "moonshotai/kimi-k2.6  Kimi K2.6",
       t._field_display("requirements", "model"))
 del t.stage_models["requirements"]
 
@@ -627,17 +627,17 @@ t._set_field("implementation", "model", "claude-opus-5")
 t._set_field("execute-checklist", "runner", "codex")
 t._set_field("execute-checklist", "model", "gpt-5.1-codex")
 t._set_field("final-audit", "runner", "kimi")
-t._set_field("final-audit", "model", "moonshot-ai/kimi-k2.6")
+t._set_field("final-audit", "model", "moonshotai/kimi-k2.6")
 back = fresh()
 back.load_config()
 check("a claude stage model round-trips", "claude-opus-5",
       back.stage_model("implementation"))
 check("a codex stage model round-trips", "gpt-5.1-codex",
       back.stage_model("execute-checklist"))
-check("a kimi stage raw model id round-trips", "moonshot-ai/kimi-k2.6",
+check("a kimi stage raw model id round-trips", "moonshotai/kimi-k2.6",
       back.stage_model("final-audit"))
 check("the file carries the kimi raw id", True,
-      "final-audit.model moonshot-ai/kimi-k2.6\n"
+      "final-audit.model moonshotai/kimi-k2.6\n"
       in open(os.environ["UNCLE_CONFIG"]).read())
 
 if failed:
@@ -655,8 +655,8 @@ kimi_shell="$(UNCLE_CONFIG="$TMP/proj/.uncle/config" ROOT="$ROOT" TMPOUT="$TMP/k
     uncle_stage_model final-audit > "$TMPOUT"
     printf "%s|%s" "$(< "$TMPOUT")" "${WORKFLOW_KIMI_MODEL-}"''')"
 COUNT=$((COUNT + 1))
-if [[ "$kimi_shell" != "kimi|moonshot-ai/kimi-k2.6" ]]; then
-    fail "kimi shell: expected kimi|moonshot-ai/kimi-k2.6, got $kimi_shell"
+if [[ "$kimi_shell" != "kimi|moonshotai/kimi-k2.6" ]]; then
+    fail "kimi shell: expected kimi|moonshotai/kimi-k2.6, got $kimi_shell"
 fi
 
 # A6: runnerless legacy selections survive Claude saves and a Cline rollback.

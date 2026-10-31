@@ -26,6 +26,21 @@ trap 'rm -rf "$work"' EXIT
 note() { echo "  ok: $1"; }
 fail() { echo "  FAIL: $1" >&2; FAILED=1; }
 
+# Neither `timeout` nor `gtimeout` ships on a default macOS install; a bare
+# `timeout 6 ...` then fails with "command not found" (127), which verdict()
+# below would misread as "ran" instead of recognizing the guard's exit 77 --
+# falsifying every skip assertion. Matches the fallback already used in
+# scripts/lib/issue-close.sh and scripts/tests/unattended-test.sh.
+TIMEOUT_CMD="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+run_timeout() {
+    local secs="$1"; shift
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        "$TIMEOUT_CMD" "$secs" "$@"
+    else
+        "$@"
+    fi
+}
+
 # The guard exits before the suite does any work, so proving it let something
 # through needs only a couple of seconds -- not a full battery run, which would
 # call a loaded machine a failure.

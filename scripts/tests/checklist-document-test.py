@@ -200,4 +200,48 @@ class Document(unittest.TestCase):
         stage.stage='manual-checklist'
         stage.side='agent'
         self.assertEqual(checklist_correction(stage,0),'')
+    def test_export_json_preserves_undeclared_vs_explicitly_empty_resources(self):
+        # Restored by explicit user decision: a check with no "Exclusive
+        # resources" line at all (undeclared, Check.resources is None) must
+        # round-trip through the canonical JSON differently from a check
+        # that explicitly declares none (Check.resources == set()) -- both
+        # used to collapse to the same "exclusive_resources": [] shape,
+        # silently turning every "never declared" check into "declared
+        # empty" the moment it passed through export_json, which defeated
+        # checklist_groups.py's conservative "run it alone" fallback for
+        # anything that went through canonical JSON.
+        import json
+        from checklist_groups import parse_json
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'checklist'
+            p.write_text(
+                '## MC-1\n'
+                'Exact action: Open page\n'
+                'Expected result: Greeting\n'
+                '## MC-2\n'
+                '- Exclusive resources: none\n'
+                'Exact action: Open page\n'
+                'Expected result: Greeting\n')
+            checks = validate(p, d)
+            by_id = {c.id: c for c in checks}
+            self.assertIsNone(by_id['MC-1'].resources, 'MC-1 never declared resources')
+            self.assertEqual(by_id['MC-2'].resources, set(), 'MC-2 explicitly declared none')
+
+            from checklist_document import export_json
+            export_json(p, d)
+            target = Path(d) / '.uncle/workflow/documents/MANUAL_CHECKLIST.json'
+            stored = json.loads(target.read_text())
+            by_json_id = {c['id']: c for c in stored['checks']}
+            self.assertNotIn('exclusive_resources', by_json_id['MC-1'],
+                              'undeclared must omit the key, not write []')
+            self.assertEqual(by_json_id['MC-2']['exclusive_resources'], [])
+
+            # Round-trip back through the scheduler's own reader.
+            round_tripped, by_round_id, _ = parse_json(target)
+            self.assertIsNone(by_round_id['MC-1'].resources)
+            self.assertFalse(by_round_id['MC-1'].declared)
+            self.assertEqual(by_round_id['MC-2'].resources, set())
+            self.assertTrue(by_round_id['MC-2'].declared)
+
+
 if __name__=='__main__':unittest.main()

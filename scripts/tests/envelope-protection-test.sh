@@ -65,9 +65,17 @@ check "$(grep -c 'envelopes/' "$STATE/envelope-tamper.log")" 6 "log appended, ne
 python3 - "$ROOT/scripts/change-workflow.sh" <<'PY' || FAILED=$((FAILED + 1))
 import re, sys
 text = open(sys.argv[1], encoding='utf-8').read()
-# State names also occur in runner configuration helpers before the loop.
-text = text[text.index('\nwhile true; do\n'):]
-branch = text[text.index('        IMPLEMENT)'):text.index('        WAIT_IMPLEMENT_APPROVAL)')]
+# Anchor the search to the main state-machine dispatch (`case "$state" in`,
+# the driver's `while true` loop), not merely the first literal
+# "        IMPLEMENT)" anywhere in the file: unattended_prewarm_change_stage_
+# for_state's own `case "$target" in ... IMPLEMENT) ...` block (added since
+# this test was last verified) happens to use the identical 8-space-indented
+# label far earlier in the file, which silently pulled in everything between
+# the two blocks -- 19 run_claude/run_stepwise_implementation calls and both
+# envelope_guard_begin/end function *definitions* (not just their 3 real call
+# sites) -- as "the IMPLEMENT branch".
+dispatch_start = text.index('case "$state" in')
+branch = text[text.index('        IMPLEMENT)', dispatch_start):text.index('        WAIT_IMPLEMENT_APPROVAL)', dispatch_start)]
 runs = [m.start() for m in re.finditer(r'run_(?:claude|stepwise_implementation) ', branch)]
 begins = [m.start() for m in re.finditer(r'envelope_guard_begin', branch)]
 ends = [m.start() for m in re.finditer(r'envelope_guard_end', branch)]
@@ -87,6 +95,10 @@ text = open(sys.argv[1], encoding='utf-8').read()
 body = text[text.index('adopt_speculation() {'):]
 body = body[:body.index('\n}\n')]
 discard = body.index('Discarding speculative $stage')
+# This exact rm line also appears earlier in the function, in the unrelated
+# "speculation failed" branch (status != 0) -- search from the discard
+# message onward so the match is the discard path's own cleanup, not that
+# earlier branch's.
 rm = body.index('rm -f "$STATE_DIR/envelopes/${stage}.json"', discard)
 if not discard < rm < body.index('return 1', discard) + 20:
     print('FAIL: the discarded speculative stage keeps its envelope')

@@ -15,6 +15,19 @@ FAIL=0
 
 ok()   { PASS=$((PASS + 1)); }
 bad()  { FAIL=$((FAIL + 1)); echo "FAIL [$1] $2" >&2; }
+
+# Neither `timeout` nor `gtimeout` ships on a default macOS install; fall back
+# to running unbounded rather than failing with "command not found" (127).
+# Matches the fallback already used in scripts/lib/issue-close.sh.
+TIMEOUT_CMD="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+run_timeout() {
+    local secs="$1"; shift
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        "$TIMEOUT_CMD" "$secs" "$@"
+    else
+        "$@"
+    fi
+}
 check() { # check <name> <expected> <actual>
     if [[ "$2" == "$3" ]]; then ok; else bad "$1" "expected '$2', got '$3'"; fi
 }
@@ -318,6 +331,11 @@ GREEN_MD=GREEN
 UNATTENDED=\${UNATTENDED:-0}
 triage_print_actions() { :; }
 change_pr_complete() { echo "change_pr_complete CALLED"; git commit --no-gpg-sign; }
+# completed_verdict reads VERDICT_FILE through verdict_file_field, a shared
+# helper that lives in lib/audit-verdict.sh rather than in the driver script
+# itself; extract_fns only pulls functions out of the driver, so it has to be
+# sourced separately here or completed_verdict silently returns empty.
+. "$ROOT/scripts/lib/audit-verdict.sh"
 . "\$(dirname "\$0")/fns.sh"
 $(cat "$arm")
 HARNESS
@@ -353,10 +371,11 @@ HARNESS
 done
 
 # Source-level guard: the unattended audit branch passes the flag and closes stdin.
-for driver in stagegate change-workflow; do
-    if grep -q 'audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --unattended --ledger "$UNATTENDED_FILE" </dev/null' "$ROOT/scripts/$driver.sh"; then ok
-    else bad "$driver-audit-flag" "unattended audit branch missing"; fi
-done
+# Both drivers call through the shared lib/audit-verdict.sh helper now (the
+# stagegate/change-workflow consolidation moved this out of each driver), so
+# the guard lives there once rather than being duplicated per driver.
+if grep -q 'audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --unattended --ledger "$UNATTENDED_FILE" </dev/null' "$ROOT/scripts/lib/audit-verdict.sh"; then ok
+else bad "audit-verdict-lib-audit-flag" "unattended audit branch missing"; fi
 
 # An attended run with nobody setting WORKFLOW_AUTO_REPAIR_ATTEMPTS stays at
 # 0 (stop and let the person decide); unattended has nobody to ask, so the

@@ -13,16 +13,17 @@ set -euo pipefail
 
 CLAUDE_CMD="${WORKFLOW_CLAUDE_CMD:-claude}"
 KIMI_CMD="${WORKFLOW_KIMI_CMD:-kimi}"
-KIMI_MODEL="${WORKFLOW_KIMI_MODEL:-moonshot-ai/kimi-k2.7-code-highspeed}"
+KIMI_MODEL="${WORKFLOW_KIMI_MODEL:-moonshotai/kimi-k2.7-code-highspeed}"
 
-# Find --model without disturbing the argument list.
+# Find --model and --effort without disturbing the argument list.
 model="kimi"
+effort=""
 prev=""
 for arg in "$@"; do
-    if [[ "$prev" == "--model" ]]; then
-        model="$arg"
-        break
-    fi
+    case "$prev" in
+        --model)  model="$arg" ;;
+        --effort) effort="$arg" ;;
+    esac
     prev="$arg"
 done
 
@@ -62,6 +63,28 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# The `kimi` CLI's `-p` mode has no `--effort`/`--thinking` flag at all (see
+# `kimi --help`): the shim used to capture --effort above and then silently
+# drop it here, so every prompt-mode stage ran at whatever `[thinking].effort`
+# happens to be set in ~/.kimi-code/config.toml (observed: "high"), no matter
+# how trivial the stage. The one per-invocation override kimi's CLI honors is
+# the KIMI_MODEL_THINKING_EFFORT environment variable, read directly by the
+# CLI's config resolution (not the model catalog's declared support_efforts),
+# so it is set here instead of being passed as an argument.
+#
+# Uncle's effort scale (none/low/medium/high/xhigh) does not match every
+# model's declared `support_efforts` (e.g. kimi-k3 only accepts low/high/max).
+# Reuse the same alias mapping native_kimi.py already applies for its REST
+# `/profile` call, so a CLI-mode stage and a server-mode stage asked for the
+# same effort get the same translated value.
+case "$effort" in
+    none)   kimi_effort="off" ;;
+    medium) kimi_effort="high" ;;
+    xhigh)  kimi_effort="max" ;;
+    *)      kimi_effort="$effort" ;;
+esac
+[[ -z "$kimi_effort" ]] || export KIMI_MODEL_THINKING_EFFORT="$kimi_effort"
 
 # The drivers feed the prompt on stdin; kimi needs it as a -p value.
 prompt="$(cat)"

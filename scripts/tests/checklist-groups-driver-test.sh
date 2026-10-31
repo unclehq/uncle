@@ -32,6 +32,10 @@ checks = []
 for row in rows:
     ident, resources, deps = row.split(':', 2)
     check = {'id': ident, 'depends_on': [] if deps == 'none' else deps.split(',')}
+    # "none" means explicitly declared empty (the key is present, []);
+    # "undeclared" means the key is omitted entirely -- a reviewer never
+    # wrote an Exclusive resources line at all. Collapsing both into the
+    # same JSON shape was the exact regression restored this round.
     if resources != 'undeclared':
         check['exclusive_resources'] = [] if resources == 'none' else resources.split(',')
     checks.append(check)

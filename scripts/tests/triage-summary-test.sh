@@ -50,6 +50,9 @@ for driver in change-workflow.sh stagegate.sh; do
     complete_run "$driver" "$TMP/with" yes
     out="$TMP/with/out.txt"
     check_contains "$driver: complete banner" "complete" "$out"
+    # STATE_DIR is "$PROJECT_ROOT/.uncle/workflow" and this fixture sets
+    # UNCLE_PROJECT_ROOT to an absolute mktemp path, so the real heading
+    # names the tsv by its absolute path, not a bare relative one.
     check_contains "$driver: heading" "Triage actions ($TMP/with/.uncle/workflow/triage-actions.tsv):" "$out"
     check_contains "$driver: header row" "ts	turn	proposal	outcome	path	before	after" "$out"
     check_contains "$driver: APPLIED row" "1	Proposal 1: fix	APPLIED	src/x	aaaa	bbbb" "$out"

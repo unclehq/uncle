@@ -32,6 +32,11 @@ def deliver(success):
             change_spec=packet('change-spec', narrative='# Specification',
                                acceptance_criteria=[dict(id='AC-1', criterion='Change it.', verification='true')]),
             change_plan=packet('change-plan', narrative='# Change plan'))
+    elif path.stem in ('change-plan', 'updated-change-plan'):
+        if not success:
+            return
+        payload = packet('change-plan',
+                          narrative='## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n')
     else:
         return  # Later stages intentionally have no fixture delivery.
     path.parent.mkdir(parents=True, exist_ok=True)

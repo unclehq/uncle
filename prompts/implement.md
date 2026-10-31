@@ -79,6 +79,16 @@ tests that defect must break, with `node_modules` and build output linked or cop
 A runner that loops over the injections running the full suite each time takes minutes and runs on every
 verification.
 
+The data file (`tests/mutations/list.mjs` or equivalent) and the runner that reads it are usually the same kind
+of cross-file agreement problem as a shared configuration value: whichever step writes the data decides the
+shape of each entry, and the runner must consume exactly that shape, not a shape it assumes. State the entry
+shape once, in the data file itself (a comment or a type/JSDoc annotation above the export is enough), and have
+the runner consume it exactly as stated -- in particular, a field naming which test(s) an injection must break
+is a plain string or an array of plain strings (a file path, a test name), never an object; joining or
+interpolating an object into a shell command silently produces `[object Object]` and breaks every injection
+that depends on it, which a smoke-run of the runner against one real entry (not just a syntax check) catches
+immediately and a human reading the code often does not.
+
 ## Keep the output small
 
 Generating text is the slow part of this stage; everything below only removes text nobody reads.

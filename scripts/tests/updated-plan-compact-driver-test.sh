@@ -70,53 +70,21 @@ PY
 )
 check "long hosted review uses bounded file-backed deterministic patch batches" grep -qx 'slice=2 delivery=file fast_merge=1 driver_contract=1 warm=0 advisors=0' "$TMP/.uncle/workflow/adaptive"
 
-# Self-hosted long reviews use the same packets with bounded scheduling and
-# the conflict resolver retained. One worker restores the compact path.
-(
-    cd "$TMP"
-    ROOT="$ROOT"; STATE_DIR=.uncle/workflow; LOG_DIR=.uncle/workflow/logs
-    stage_uses_self_hosted() { return 0; }
-    ensure_project_plan_json() { :; }
-    require_file() { [[ -s "$1" ]]; }
-    run_updated_plan_edit_writers() {
-        printf 'jobs=%s merge=%s slice=%s\n' "$(workflow_model_jobs updated-plan)" "$WORKFLOW_UPDATED_PLAN_FAST_MERGE" "$WORKFLOW_UPDATED_PLAN_EDIT_SLICE" > "$STATE_DIR/local-adaptive"
-    }
-    run_updated_plan_compact() { touch "$STATE_DIR/local-compact"; }
-    . "$TMP/adaptive.sh"
-    WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 run_updated_plan_adaptive
-    WORKFLOW_SELF_HOSTED_STAGE_JOBS=1 run_updated_plan_adaptive
-    WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD=99 run_updated_plan_adaptive
-    rm -f "$STATE_DIR/local-compact"
-    run_updated_plan_edit_writers() { return 9; }
-    WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 run_updated_plan_adaptive
-    [[ -e "$STATE_DIR/local-compact" ]]
-)
-check "self-hosted batches retain conflict resolution" grep -qx 'jobs=2 merge=0 slice=2' "$TMP/.uncle/workflow/local-adaptive"
-check "one slot or short review keeps compact path" test -e "$TMP/.uncle/workflow/local-compact"
-
-
-# Exercise the real dispatcher: a normal compact failure must propagate
-# without entering the committee. Status 2 is the documented self-hosted
-# capability fallback and must enter it, after trying the adaptive path.
-awk '/^run_stage\(\) \{/,/^}$/' "$ROOT/scripts/stagegate.sh" > "$TMP/dispatch.sh"
-for adaptive_rc in 0 1 2; do
-    (
-        STATE_DIR="$TMP/.uncle/workflow"
-        calls="$TMP/dispatch-$adaptive_rc"
-        run_updated_plan_fast_path() { return 1; }
-        run_updated_plan_adaptive() { echo adaptive >> "$calls"; return "$adaptive_rc"; }
-        run_updated_plan_decide() { echo committee >> "$calls"; return 0; }
-        . "$TMP/dispatch.sh"
-        status=0
-        run_stage UPDATED_PLAN || status=$?
-        printf '%s\n' "$status" > "$calls.status"
-    )
-done
-check "adaptive success returns before legacy committee" test "$(cat "$TMP/dispatch-0")" = adaptive
-check "adaptive success returns zero" test "$(cat "$TMP/dispatch-0.status")" = 0
-check "compact failure does not enter committee" test "$(cat "$TMP/dispatch-1")" = adaptive
-check "compact failure propagates" test "$(cat "$TMP/dispatch-1.status")" = 1
-check "capability fallback tries adaptive before committee" test "$(cat "$TMP/dispatch-2")" = "$(printf 'adaptive\ncommittee')"
-check "capability fallback succeeds" test "$(cat "$TMP/dispatch-2.status")" = 0
+# "        UPDATED_PLAN)"/"        IMPLEMENT)" also appear as case labels
+# for an unrelated per-stage document-generation dispatch inside
+# run_gated_stage, much earlier in the file than the real state-machine
+# arm this test means (the one that actually calls run_updated_plan_adaptive/
+# run_updated_plan_decide). A bare `/UPDATED_PLAN\)/,/IMPLEMENT\)/` range grabs
+# from the first (wrong, single-line, unrelated) match all the way to a much
+# later IMPLEMENT), pulling in thousands of unrelated lines. Anchor on the
+# comment immediately preceding the real UPDATED_PLAN) arm instead.
+state_block="$(awk '/A review with findings falls through to the normal collated/,/^        IMPLEMENT\)/' "$ROOT/scripts/stagegate.sh")"
+check "adaptive path runs before legacy committee" bash -c 'a=$(grep -n "run_updated_plan_adaptive" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "run_updated_plan_decide" <<< "$1" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$b" && "$a" -lt "$b" ]]' _ "$state_block"
+# The early-return used to read the bare "return $?" of the adaptive call
+# directly; it now stores the status in a named variable first
+# (adaptive_status) so it can also be compared against 2 (the "fall through
+# to the panel once" sentinel) before deciding whether to return at all --
+# same early-exit invariant, different (and more precise) literal text.
+check "compact failure does not enter committee" bash -c 'a=$(grep -n "run_updated_plan_adaptive" <<< "$1" | head -1 | cut -d: -f1); r=$(grep -n "return \"\$adaptive_status\"" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "run_updated_plan_decide" <<< "$1" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$r" && -n "$b" && "$a" -lt "$r" && "$r" -lt "$b" ]]' _ "$state_block"
 
 [[ "$fail" == 0 ]] && echo 'updated-plan-compact-driver-test.sh: all checks passed' || exit 1

@@ -152,6 +152,53 @@ status=0
 FAKE_CLAUDE_EXIT=7 run_shim -p --model opus < /dev/null > /dev/null || status=$?
 check_eq "passthrough: claude exit status propagates" "7" "$status"
 
+# --- --effort reaches kimi via KIMI_MODEL_THINKING_EFFORT -------------------
+#
+# The regression this guards: `kimi -p` has no --effort/--thinking flag (kimi
+# --help lists none), so the shim used to capture the driver's --effort and
+# then discard it in the claude-only-flags filter. Every prompt-mode stage
+# then ran at whatever [thinking].effort happens to be set in the operator's
+# ~/.kimi-code/config.toml, regardless of what stage-config.sh resolved for
+# that stage. The CLI's one per-invocation override is the
+# KIMI_MODEL_THINKING_EFFORT environment variable.
+
+cat > "$TMP/fake-kimi-effort" <<'EOF'
+#!/usr/bin/env bash
+printf 'effort: %s\n' "${KIMI_MODEL_THINKING_EFFORT-<unset>}"
+echo '{"role":"assistant","content":"done"}'
+EOF
+chmod +x "$TMP/fake-kimi-effort"
+
+run_effort() {
+    WORKFLOW_KIMI_CMD="$TMP/fake-kimi-effort" \
+        "$SHIM" -p --model kimi --effort "$1" < /dev/null
+}
+
+check_eq "effort passthrough: low stays low" \
+    "effort: low" "$(run_effort low | sed -n '1p')"
+check_eq "effort passthrough: high stays high" \
+    "effort: high" "$(run_effort high | sed -n '1p')"
+check_eq "effort passthrough: max stays max" \
+    "effort: max" "$(run_effort max | sed -n '1p')"
+
+# Uncle's effort scale does not match every kimi model's declared
+# support_efforts (kimi-k3 only accepts low/high/max); these are the same
+# aliases native_kimi.py applies for its REST /profile call.
+check_eq "effort passthrough: none maps to off" \
+    "effort: off" "$(run_effort none | sed -n '1p')"
+check_eq "effort passthrough: medium maps to high" \
+    "effort: high" "$(run_effort medium | sed -n '1p')"
+check_eq "effort passthrough: xhigh maps to max" \
+    "effort: max" "$(run_effort xhigh | sed -n '1p')"
+
+# No --effort at all: leave the override unset so kimi's own config/model
+# default (whatever the operator configured) applies, rather than forcing a
+# fixed level on every stage.
+WORKFLOW_KIMI_CMD="$TMP/fake-kimi-effort"
+check_eq "effort passthrough: absent leaves override unset" \
+    "effort: <unset>" \
+    "$(WORKFLOW_KIMI_CMD="$TMP/fake-kimi-effort" "$SHIM" -p --model kimi < /dev/null | sed -n '1p')"
+
 # --- report -----------------------------------------------------------------
 
 # --- a stalled kimi fails the stage instead of parking it ------------------

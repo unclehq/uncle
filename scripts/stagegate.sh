@@ -1777,6 +1777,13 @@ STRUCTURED_OUTPUT_CONTRACT
                     continue
                 fi
                 echo "Stage $log_name returned no schema-checked object." >&2
+                # Every other validator failure in this file reports to the
+                # supervision event stream (supervision_validation_failed);
+                # this local retry-then-exit path used to be the one silent
+                # exception, invisible to the out-of-process supervisor
+                # controller. Report it here too -- a real observability gap,
+                # closed per explicit decision, not a guess.
+                supervision_validation_failed no-artifact "${UNCLE_STRUCTURED_OUTPUT_PATH:-}" "Stage $log_name returned no schema-checked object."
                 exit 1
             fi
         fi
@@ -1789,6 +1796,9 @@ STRUCTURED_OUTPUT_CONTRACT
                 fi
                 if [[ -n "$agent_delivery" && ! -s "$agent_delivery" ]]; then
                     echo "Worker $log_name did not write its required canonical JSON packet: $agent_delivery" >&2
+                    # See the schema_args branch above: this path used to exit
+                    # without ever reporting to supervision. Closing the same gap here.
+                    supervision_validation_failed no-artifact "$agent_delivery" "Worker $log_name did not write its required canonical JSON packet"
                     exit 1
                 fi
                 ;;
@@ -1802,6 +1812,12 @@ STRUCTURED_OUTPUT_CONTRACT
                         continue
                     fi
                     printf '%s\n' "$artifact_error" >&2
+                    # Same gap as the two branches above, closed the same way:
+                    # a stage that never produced a valid canonical artifact,
+                    # even after the one deterministic local retry, used to
+                    # exit without the out-of-process supervisor controller
+                    # ever learning about it.
+                    supervision_validation_failed no-artifact "$agent_delivery" "$artifact_error"
                     exit 1
                 fi
                 ;;
@@ -4188,6 +4204,31 @@ run_stage() {
                 repair_notes_investigation=".uncle/workflow/repair-notes-investigation.md"
                 rm -f "$repair_notes_investigation"
                 run_claude "$REPAIR_PROMPT" repair-investigate
+                # Some models answer with the completed notes as their final
+                # message instead of writing the file (the same gap
+                # requirements-investigate already covers for OpenCode
+                # models); recover it deterministically before treating the
+                # pass as having produced nothing.
+                if [[ ! -s "$repair_notes_investigation" ]]; then
+                    python3 "$ROOT/scripts/lib/recover_investigation.py" \
+                        "$LOG_DIR/repair-investigate.jsonl" "$repair_notes_investigation" \
+                        --heading '## Changed files' \
+                        && echo 'Repair-notes investigation recovered from final runner output.'
+                fi
+                # require_file below exits the whole driver immediately on a
+                # real miss here, and its own EXIT-trap triage write is
+                # best-effort (failures are swallowed to stderr, which an
+                # unattended run with no captured driver log never sees). A
+                # repair-investigate pass that returns without the notes --
+                # for any reason, recoverable or not -- otherwise strands the
+                # run with no durable trace of why: no stop-reason, and a
+                # TRIAGE.md that depends on a trap actually completing before
+                # whatever ends the process (signal, crash, host kill) does.
+                # Record the reason here, synchronously, before that happens.
+                if [[ ! -s "$repair_notes_investigation" ]]; then
+                    printf '%s\n' "repair-investigate: $repair_notes_investigation was not produced by the agent call or its recovery fallback; see $LOG_DIR/repair-investigate.jsonl for the transcript." \
+                        > "$STATE_DIR/stop-reason"
+                fi
                 require_file "$repair_notes_investigation"
                 python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
                     "$repair_notes_investigation" \
@@ -5394,7 +5435,8 @@ while true; do
             if [[ "$WORKFLOW_AUTO_REPAIR" != 1 \
                     || ( "$repair_source" != "$GREEN_MD" && "$repair_source" != .uncle/docs/TEST_REVIEW.md \
                          && "$repair_source" != .uncle/docs/FINAL_AUDIT.md \
-                         && "$repair_source" != "$STATE_DIR/runtime-unrunnable-application" ) \
+                         && "$repair_source" != "$STATE_DIR/runtime-unrunnable-application" \
+                         && "$repair_source" != checklist-fail ) \
                     || "$repair_count_existing" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
                 if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
                     && [[ "$repair_source" == "$GREEN_MD" || "$repair_source" == .uncle/docs/TEST_REVIEW.md ]]; then
@@ -5612,11 +5654,130 @@ PY
                 echo 'Checklist reports missing; recording incomplete evidence automatically.'
                 python3 "$ROOT/scripts/lib/checklist_report_fallback.py" --project . --missing-only || exit 1
             fi
-            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.render_from_json('.')" || exit 1
+            # A format defect just recorded as a degenerate placeholder (the
+            # marker checklist_report_fallback.py leaves behind) must not be
+            # rendered back over .uncle/docs/VERIFICATION_REPORT.md -- that
+            # would overwrite the real report a person needs to see and fix
+            # with a blank-id placeholder, destroying the evidence of what
+            # went wrong.
+            if [[ ! -e "$STATE_DIR/documents/.execute-checklist-malformed" ]]; then
+                python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.render_from_json('.')" || exit 1
+            fi
             require_file "$STATE_DIR/documents/EXECUTE_CHECKLIST.json"
             if [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]]; then
+                # Restored by explicit operator decision, consistent with the
+                # FAIL->REPAIR decision above: a real driver-level test
+                # regression is a defect regardless of what the checklist's
+                # own acceptance JSON says, so it is checked first and takes
+                # precedence over the checklist's classification entirely
+                # (an otherwise-PASS checklist does not excuse a failing
+                # driver suite, and neither does a BLOCKED-HUMAN/BLOCKED-
+                # SETUP/BLOCKED-IMPOSSIBLE/UNKNOWN row -- those are about the
+                # checklist's own rows, not about whether the tree actually
+                # works). This is the same GREEN_CHECK==1 && green_regressions>0
+                # condition, and the same exhaustion/waiver handling, the
+                # legacy (non-postflight) branch below already used for this
+                # exact purpose before postflight-only became the default;
+                # postflight mode had never consulted it at all. repair-source
+                # is $GREEN_MD, exactly as the legacy branch uses -- already
+                # safe here (unlike the FAIL case's VERIFICATION_REPORT.md):
+                # it neither matches the REPAIR state's "older installed
+                # drivers" VERIFICATION_REPORT.md-specific demotion shim, nor
+                # needs adding to the ATTEMPTS-gate allowlist, since $GREEN_MD
+                # is already one of its allowed values.
+                green_ids="$(green_failed_ids "$GREEN_CLASS" "$GREEN_CMDS")"
+                if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] \
+                    && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
+                    && ! { [[ -n "${green_ids// /}" ]] && waived_ids $green_ids; }; then
+                    if [[ "$(green_failure_route "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" \
+                            "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" \
+                            "$WORKFLOW_AUTO_REPAIR_ATTEMPTS")" == continue ]]; then
+                        echo 'Driver verification still fails and no automatic repair remains; continuing to final audit with the failure recorded as unresolved evidence.'
+                        record_nonblocking_failure green-check 'driver verification failed after the checklist; automatic repair not available'
+                        record_test_failure_disposition
+                        set_state FINAL_AUDIT
+                        continue
+                    fi
+                    echo 'Driver verification shows a real regression; repairing before final audit, regardless of the checklist acceptance result.'
+                    printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
+                    set_state REPAIR
+                    continue
+                fi
                 checklist_acceptance="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/VERIFICATION_REPORT.json")"
-                if [[ "$checklist_acceptance" != PASS && "$checklist_acceptance" != UNKNOWN ]]; then
+                # UNKNOWN means the report could not even be classified
+                # (missing/duplicate IDs, an unparseable row) -- a format
+                # defect, not a judged outcome. Every other acceptance
+                # document in this file gets a one-shot format-only retry
+                # before failing closed (ensure_acceptance_canonical); a
+                # checklist report in postflight-only mode skipped that
+                # entirely and would otherwise sail on to FINAL_AUDIT with no
+                # record that nobody could classify it. Give it the same
+                # one-shot retry here, then stop for a person.
+                if [[ "$checklist_acceptance" == UNKNOWN ]]; then
+                    # A degenerate placeholder canonical artifact was just
+                    # written for this unclassifiable attempt (the only way
+                    # require_file above had something non-empty to find).
+                    # Left in place, "already have EXECUTE_CHECKLIST.json" at
+                    # the top of this state would keep reading that same
+                    # placeholder forever -- on the retry below, and again on
+                    # a later resume after a person edits
+                    # .uncle/docs/VERIFICATION_REPORT.md by hand -- instead of
+                    # ever re-deriving from what is actually on disk now.
+                    rm -f "$STATE_DIR/documents/EXECUTE_CHECKLIST.json" \
+                          "$STATE_DIR/documents/VERIFICATION_REPORT.json" \
+                          "$STATE_DIR/documents/DEFECTS.json" \
+                          "$STATE_DIR/documents/.execute-checklist-malformed"
+                    checklist_format_retry_marker="$STATE_DIR/execute-checklist-format-retry.md"
+                    if [[ ! -e "$checklist_format_retry_marker" ]]; then
+                        {
+                            echo 'The preceding .uncle/docs/VERIFICATION_REPORT.md was rejected: its rows could not be classified (missing/duplicate IDs, missing evidence, or no parseable required row).'
+                            echo 'Write a new complete VERIFICATION_REPORT.md with exactly one final "## Acceptance gate" section: a header, separator, and one row per plain checklist ID, each with required, status, and evidence.'
+                            echo 'Preserve every substantive finding, status, and evidence. Never change FAIL or BLOCKED merely to make the table parse.'
+                        } > "$checklist_format_retry_marker"
+                        echo 'Checklist acceptance report could not be classified (format defect); retrying execute-checklist once with the format diagnostic.'
+                        set_state EXECUTE_CHECKLIST
+                        continue
+                    fi
+                    supervision_validation_failed acceptance "$STATE_DIR/documents/VERIFICATION_REPORT.json" "Checklist acceptance report remained unclassifiable after one retry"
+                    echo 'Checklist acceptance report could not be classified after one retry; stopping for correction.' >&2
+                    exit 1
+                fi
+                # FAIL is a judged defect, not an ambiguous or merely
+                # unreviewed finding -- unlike BLOCKED-SETUP/BLOCKED-HUMAN/
+                # BLOCKED-IMPOSSIBLE (a real but non-code-fixable outcome) or
+                # UNKNOWN (a format defect, handled above), a required check
+                # someone/something actually ran and marked FAIL means the
+                # tree has a known, repairable problem right now. Postflight-
+                # only mode originally forwarded every non-PASS/non-UNKNOWN
+                # result here uniformly as nonblocking evidence for
+                # FINAL_AUDIT to judge; that silently relaxed "a checklist
+                # defect enters REPAIR" (still true for every other acceptance
+                # document in this file, and true here before postflight-only
+                # became the default) without anyone deciding it should be.
+                # Restored by explicit operator decision, not a judgment call
+                # made in isolation here: a checklist FAIL routes to REPAIR
+                # the same way a green-check regression a few lines below
+                # does. acceptance_json.py's result() already classifies a
+                # FAIL row as the literal string "REPAIR" (not "FAIL") -- the
+                # same vocabulary acceptance_transition's REPAIR) case
+                # switches on.
+                #
+                # Deliberately NOT repair-source=.uncle/docs/VERIFICATION_REPORT.md:
+                # the REPAIR state's own "older installed drivers" compat shim
+                # a little further up this file demotes that exact value back
+                # to nonblocking/FINAL_AUDIT whenever the driver's green check
+                # already passed -- it exists to neutralize exactly the old
+                # pre-postflight behavior this fix is restoring, for runs that
+                # saved a repair-source before postflight-only existed. A
+                # distinct tag routes a freshly-decided FAIL through REPAIR's
+                # ordinary (untagged) path instead of through that shim.
+                if [[ "$checklist_acceptance" == REPAIR ]]; then
+                    echo 'Checklist acceptance report recorded a FAIL; repairing before final audit.'
+                    printf '%s\n' checklist-fail > "$STATE_DIR/repair-source"
+                    set_state REPAIR
+                    continue
+                fi
+                if [[ "$checklist_acceptance" != PASS ]]; then
                     record_nonblocking_failure VERIFICATION_REPORT.json "checklist acceptance $checklist_acceptance after completed driver verification"
                 fi
                 echo 'Checklist evidence recorded against the completed driver verification result.'

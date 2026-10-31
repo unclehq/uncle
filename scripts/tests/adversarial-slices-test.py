@@ -169,6 +169,11 @@ class PanelTests(unittest.TestCase):
                 self.assert_ok(result, state)
                 self.assertEqual(len(calls), 16)
                 self.assertTrue(all('-slice-' in c['name'] and c['marker'] == '1' for c in calls))
+                inputs = ('PROJECT_PLAN', 'REQUIREMENTS_INTERPRETATION') if driver == 'stagegate' else ('CHANGE_PLAN', 'CHANGE_SPEC')
+                expected = [json.loads((state / 'documents' / (name + '.json')).read_text()) for name in inputs]
+                for call in calls:
+                    embedded = [json.loads(block) for block in re.findall(r'```json\n(.*?)\n```', call['prompt'], re.S)]
+                    self.assertEqual(embedded, expected, 'slice needs its full canonical inputs without tool reads')
                 self.assert_document(state)
                 self.assert_lens_logs(state, 4)
 

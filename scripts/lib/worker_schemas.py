@@ -274,7 +274,7 @@ def model_op(model, ids=None):
             if kind in ('rows', 'steps', 'list'):
                 new = (fields(node['row_kind'], new=True) if kind == 'rows' else
                        _object(dict(id=_text(120), number={'type': 'integer', 'minimum': 1}, **step_fields),
-                               ('id', 'number')) if kind == 'steps' else
+                               ('id', 'number', 'owns')) if kind == 'steps' else
                        _object({'id': _text(120), 'text': _text(EDIT_MAX, 0)}, ('text',)))
                 add('insert_row' if kind == 'rows' else 'insert_item',
                     {'target': pick([node['id']]), 'after': pick([''] + member_ids), 'new': new}, ('target', 'new'))

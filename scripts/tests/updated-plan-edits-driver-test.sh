@@ -38,6 +38,8 @@ PY
             sleep 0.4
             if [[ "$mode:$n" == limit:2 ]]; then echo "cause: You've hit your session limit" > "$LOG_DIR/updated-plan-worker-edits-2.log"; return 1; fi
             [[ "$mode:$n" != fail:2 && "$mode:$n" != fail:2-* && "$mode:$n" != failonce:2 ]] || return 1
+            # failtwice: the writer and its one-finding retries fail by the default path only.
+            if [[ "$mode" == failtwice && "$n" == 2* && "${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST:-}" != off ]]; then return 1; fi
             if [[ "$2" == updated-plan-worker-resolve-* ]]; then
                 echo resolver >> "$STATE_DIR/resolver-calls"
                 [[ "$mode" == resolve || "$mode" == resolve-retry ]] || return 1
@@ -60,6 +62,7 @@ PY
         }
         . "$TMP/fn.sh"
         run_updated_plan_edit_writers > "$STATE_DIR/out" 2>&1; echo $? > "$STATE_DIR/rc"
+        env > "$STATE_DIR/env-after"
     )
 }
 
@@ -83,6 +86,14 @@ check "failed writer: one writer per finding"   bash -c 'for s in 2-1 2-2 2-3; d
 check "failed writer: its siblings did not rerun" test "$(grep -c "edits-1 " "$w/calls")" == 1
 check "failed writer: every finding still has a row" bash -c 'for n in 1 2 3 4 5 6; do grep -q "AR-$n" "$1" || exit 1; done' _ "$TMP/failonce/.uncle/docs/UPDATED_PROJECT_PLAN.md"
 check "failed writer: said what it was doing"   grep -q 'asking again, one finding at a time' "$w/out"
+
+run_case failtwice failtwice
+w="$TMP/failtwice/.uncle/workflow"
+check "failed twice: other delivery path finishes, returns 0" test "$(cat "$w/rc")" == 0
+check "failed twice: said what it was doing"   grep -q 'one last try each by the other delivery path' "$w/out"
+check "failed twice: its siblings did not rerun" test "$(grep -c "edits-1 " "$w/calls")" == 1
+check "failed twice: every finding still has a row" bash -c 'for n in 1 2 3 4 5 6; do grep -q "AR-$n" "$1" || exit 1; done' _ "$TMP/failtwice/.uncle/docs/UPDATED_PROJECT_PLAN.md"
+check "failed twice: the setting is restored"  bash -c '! grep -q WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST "$1"' _ "$w/env-after" 
 
 WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS=1 run_case slow slow
 w="$TMP/slow/.uncle/workflow"

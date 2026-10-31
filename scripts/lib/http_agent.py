@@ -1148,11 +1148,29 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     attempts = [((), final_limit), (transport.GRAMMAR_MODES, final_limit)]
     if worker_packet and health.get('whitespace_runaways', 0) >= 2:
         attempts = attempts[1:]
+    regrammar = schema_first
     for attempt, (skip, cap) in enumerate(attempts):
+        # A schema-first writer's packet is shaped by the server and bounded by the
+        # group-sized answer cap; a learned length guess only cut valid packets short
+        # (run 14 writer 1: stopped at ~530 tokens, then failed in prompt mode).
+        unbudgeted = ACTIVE.set(None) if schema_first else None
         try:
             final, reason, final_usage, mode = constrained_completion(values, messages, final_schema, final_name, cap,
                                                                       effort, timeout, skip=skip)
         except transport.StreamStopped as error:
+            if unbudgeted is not None:
+                ACTIVE.reset(unbudgeted)
+                unbudgeted = None
+            if regrammar and not skip and error.reason in ('repetition', 'whitespace'):
+                # A looping grammar answer gets one more grammar attempt before the
+                # unconstrained fallback, which had no shape to hold (run 14 writer 2).
+                regrammar = False
+                requests += 1
+                record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason, 'final')
+                add_usage(usage, error.usage)
+                attempts.insert(attempt + 1, ((), final_limit))
+                messages.append({'role': 'user', 'content': 'Generation stopped for ' + error.reason + '. ' + COMPACT_JSON_REQUEST})
+                continue
             requests += 1
             record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason, 'final')
             add_usage(usage, error.usage)
@@ -1175,6 +1193,9 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 raise
             messages.append({'role': 'user', 'content': 'Generation stopped for ' + error.reason + '. ' + COMPACT_JSON_REQUEST})
             continue
+        finally:
+            if unbudgeted is not None:
+                ACTIVE.reset(unbudgeted)
         requests += 1
         record_turn(request_group, requests, {'content': final}, final_usage, reason, 'final')
         add_usage(usage, final_usage)

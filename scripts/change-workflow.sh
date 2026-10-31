@@ -2719,16 +2719,36 @@ run_updated_change_plan_edit_writers() {
         done
         echo "Updated-plan edit writer(s) ${failed_names[*]} failed; asking again, one finding at a time."
         pids=(); names=()
-        local rows
+        local rows retry_ids=()
         rows="$(python3 -B "$helper" resplit "$directory/slices.tsv" "${failed_names[@]}")" || return 1
         while IFS=$'\t' read -r name ids; do
             [[ -n "$name" ]] || continue
             updated_change_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$([[ "$name" == 1 || "$name" == 1-1 ]] && echo owner)" || return 1
-            pids+=("$!"); names+=("$name")
+            pids+=("$!"); names+=("$name"); retry_ids+=("$ids")
         done <<< "$rows"
+        local again=()
         for pid in "${!pids[@]}"; do
-            wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete again." >&2; failed=1; }
+            wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete again." >&2; again+=("$pid"); }
         done
+        if [[ "${#again[@]}" -gt 0 ]]; then
+            # Every packet that landed is kept. A finding that failed twice gets one last try by the
+            # other delivery path (schema-first <-> tool loop) before the whole stage is redone: in
+            # run 14 two such findings discarded eighteen good packets and restarted the stage twice.
+            local previous="${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST-}" had_previous=0 last_pids=() last_names=() index
+            [[ -n "${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST+x}" ]] && had_previous=1
+            if [[ "${previous:-on}" == off ]]; then export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=on
+            else export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=off; fi
+            echo "Updated-plan edit writer(s) failed again; one last try each by the other delivery path."
+            for index in "${again[@]}"; do
+                updated_change_plan_launch_writer "$directory" "$delivery" "${names[$index]}" "${retry_ids[$index]}" "$([[ "${names[$index]}" == 1 || "${names[$index]}" == 1-1 ]] && echo owner)" || failed=1
+                last_pids+=("$!"); last_names+=("${names[$index]}")
+            done
+            for index in "${!last_pids[@]}"; do
+                wait "${last_pids[$index]}" || { echo "Updated-plan edit writer ${last_names[$index]} did not complete by either path." >&2; failed=1; }
+            done
+            if [[ "$had_previous" == 1 ]]; then export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST="$previous"
+            else unset WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST; fi
+        fi
         [[ "$failed" == 0 ]] || return 1
     fi
     # When the specialists ran beside the writers (run_updated_change_plan_decide), one reconciler checks their corrections

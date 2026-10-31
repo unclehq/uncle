@@ -229,6 +229,43 @@ class Slicing(unittest.TestCase):
         self.assertEqual((turns, chat.call_count, constrained.call_count), (1, 0, 1))
         self.assertEqual(constrained.call_args.kwargs.get('skip', ()), ())  # grammar modes first
 
+    def test_schema_first_writer_ignores_learned_budget(self):
+        # Run 14 writer 1: a learned guess of ~270 tokens cut a valid constrained packet short.
+        from self_hosted_performance import ACTIVE
+        values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
+        seen = []
+        def constrained(*args, **kwargs):
+            seen.append(ACTIVE.get())
+            return json.dumps(self.packet()), 'stop', {}, 'json_schema'
+        from unittest.mock import Mock
+        budget = Mock(soft=False, enabled=True)
+        token = ACTIVE.set(budget)
+        try:
+            with patch.dict(os.environ, {'UNCLE_UPDATED_PLAN_ANSWER_TOKENS': '4096'}), \
+                    patch.object(http_agent, 'constrained_completion', side_effect=constrained):
+                http_agent.run_agent(values, 'Deliver', http_agent.Policy(self.root), 32768,
+                                     turns=3, final_schema=edit_ops_packet())
+            self.assertEqual(seen, [None])
+            self.assertIs(ACTIVE.get(), budget)  # restored for the rest of the stage
+        finally:
+            ACTIVE.reset(token)
+
+    def test_looping_constrained_answer_gets_one_more_grammar_attempt(self):
+        # Run 14 writer 2: a repetition stop fell straight to unconstrained output, which failed.
+        values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
+        skips = []
+        def constrained(*args, **kwargs):
+            skips.append(kwargs.get('skip', ()))
+            if len(skips) == 1:
+                raise StreamStopped('repetition')
+            return json.dumps(self.packet()), 'stop', {}, 'json_schema'
+        with patch.dict(os.environ, {'UNCLE_UPDATED_PLAN_ANSWER_TOKENS': '4096'}), \
+                patch.object(http_agent, 'constrained_completion', side_effect=constrained):
+            text, _ = http_agent.run_agent(values, 'Deliver', http_agent.Policy(self.root), 32768,
+                                           turns=3, final_schema=edit_ops_packet())
+        self.assertEqual(json.loads(text), self.packet())
+        self.assertEqual(skips, [(), ()])  # both attempts under the grammar
+
     def test_schema_first_is_only_for_bounded_writers_and_can_be_turned_off(self):
         values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
         reply = {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(self.packet())},

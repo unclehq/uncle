@@ -6537,6 +6537,8 @@ class UncleTUI:
                 wall_ended.append(max(started, ended))
             group["tokens"].append(self._token_total(row))
             group["attempts"] += 1
+            attempts = group.setdefault("_attempts_by_stage", {})
+            attempts[stage] = attempts.get(stage, 0) + 1
             group["last_result"] = row
             result_exit = row.get("process_exit")
             # issue 103: exit 130 on a `-candidate-` raw stage is
@@ -6568,6 +6570,8 @@ class UncleTUI:
                 wall_ended.append(max(started, ended))
             group["tokens"].append(event.get("total_tokens"))
             group["attempts"] += 1
+            attempts = group.setdefault("_attempts_by_stage", {})
+            attempts[stage] = attempts.get(stage, 0) + 1
             group.setdefault("_worker_statuses", {})[stage] = {
                 "active": True,
                 "failed": False,
@@ -6580,10 +6584,10 @@ class UncleTUI:
         self._panel_indicator_prefix = {}
         for stage, group in sorted(groups.items(), key=lambda item: item[1]["started"]):
             raw_stages = group.get("raw_stages", set())
-            is_rollup = len(raw_stages) > 1
+            is_rollup = len({public_stage_label(raw) for raw in raw_stages}) > 1
             active = any(raw in stats["active"] for raw in raw_stages) if raw_stages else (stage in stats["active"])
             result = group.get("last_result", {})
-            if is_rollup:
+            if len(raw_stages) > 1:
                 # A retried worker can fail once and later succeed. Use the
                 # latest status for each raw stage, not a sticky history.
                 any_failed = any(status.get("failed")
@@ -6591,8 +6595,9 @@ class UncleTUI:
             else:
                 any_failed = result.get("process_exit") not in (None, 0) or result.get("reported_error") in (True, "true")
             title = ("> " if active else "") + stage
-            if not is_rollup and group["attempts"] > 1:
-                title += " (%d attempts)" % group["attempts"]
+            attempts = max(group.get("_attempts_by_stage", {}).values(), default=group["attempts"])
+            if not is_rollup and attempts > 1:
+                title += " (%d attempts)" % attempts
             if is_rollup:
                 statuses = group.get("_worker_statuses", {})
                 indicator_styles = []

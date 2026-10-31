@@ -298,6 +298,24 @@ def model_op(model, ids=None):
     return {'anyOf': variants} if variants else {}
 
 
+def _minimal(schema):
+    """Omit redundant keywords while retaining the inline subset accepted by every runner."""
+    if isinstance(schema, list):
+        return [_minimal(value) for value in schema]
+    if not isinstance(schema, dict):
+        return schema
+    result = {key: _minimal(value) for key, value in schema.items()}
+    if result.get('minLength') == 0:
+        del result['minLength']
+    if result.get('required') == []:
+        del result['required']
+    if result.get('type') == 'string' and result.get('enum') and all(isinstance(v, str) for v in result['enum']):
+        del result['type']
+        if len(result['enum']) == 1:
+            result['const'] = result.pop('enum')[0]
+    return result
+
+
 def _ops(ids, model, maximum):
     item = model_op(model, ids) if model is not None else _op(ids)
     return {'type': 'array', 'maxItems': maximum if item else 0, 'items': item}
@@ -314,13 +332,15 @@ def edit_ops_packet(ids=None, owner=False, model=None):
     }
     if owner or os.environ.get('UNCLE_UPDATED_PLAN_STRUCTURE_REPAIR') == '1':
         properties['protected_verification_paths'] = _text(4000)
-    return envelope(EDIT_OPS_KIND, properties, ['dispositions', 'ops'] + (['protected_verification_paths'] if owner else []))
+    packet = envelope(EDIT_OPS_KIND, properties, ['dispositions', 'ops'] + (['protected_verification_paths'] if owner else []))
+    return _minimal(packet) if model is not None else packet
 
 
 def resolution_ops_packet(ids=None, model=None):
-    return envelope(RESOLUTION_OPS_KIND, {'resolutions': {'type': 'array', 'minItems': 1, 'maxItems': 40, 'items': _object({
+    packet = envelope(RESOLUTION_OPS_KIND, {'resolutions': {'type': 'array', 'minItems': 1, 'maxItems': 40, 'items': _object({
         'group': _text(40), 'ops': _ops(ids, model, 60), 'commands_replace': _commands()},
         ('group',))}}, ['resolutions'])
+    return _minimal(packet) if model is not None else packet
 
 
 # What a self-hosted adapter enforces when it knows only the kind named in the prompt.
@@ -390,7 +410,8 @@ def main(argv):
             schema = resolution_packet(plan_headings(argv[1]))
         else:
             raise SystemExit(__doc__)
-        Path(output).write_text(json.dumps(schema, indent=2) + '\n', encoding='utf-8')
+        formatting = {'separators': (',', ':')} if argv[0] in ('edit-ops', 'resolve-ops') else {'indent': 2}
+        Path(output).write_text(json.dumps(schema, **formatting) + '\n', encoding='utf-8')
     except (OSError, ValueError, KeyError) as error:
         print('worker schemas: %s' % error, file=sys.stderr)
         return 1

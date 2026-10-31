@@ -3,6 +3,8 @@
 import importlib.util
 import json
 import os
+import re
+import subprocess
 from pathlib import Path
 import shlex
 import sys
@@ -95,6 +97,42 @@ class PreflightIsolation(unittest.TestCase):
             result = str(error)
         self.assertEqual(before, self.snapshot())
         self.assertIn('preflight-worker-tooling', result)
+
+
+class PreflightCancellation(unittest.TestCase):
+    def test_failed_worker_cleans_cancelled_sibling_snapshots(self):
+        source = (ROOT / 'scripts/stagegate.sh').read_text()
+        functions = '\n'.join(re.search(r'^' + name + r'\(\) \{\n.*?^}', source, re.M | re.S)[0]
+                              for name in ('run_preflight_readonly_worker', 'run_preflight_investigation_panel'))
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            project, scratch = base / 'project', base / 'scratch'
+            (project / 'tests').mkdir(parents=True)
+            (project / 'tests/app.spec.js').write_text('protected')
+            state = project / '.uncle/workflow'
+            (state / 'logs').mkdir(parents=True)
+            scratch.mkdir()
+            script = functions + r"""
+stage_tools() { echo Read,Glob,Grep,Bash; }
+run_claude() {
+    touch "$STATE_DIR/$2-started"
+    if [[ "$2" == preflight-worker-tooling ]]; then
+        while [[ ! -f "$STATE_DIR/preflight-worker-data-started" || ! -f "$STATE_DIR/preflight-worker-reviewers-started" ]]; do sleep .01; done
+        printf changed > tests/app.spec.js
+    else
+        sleep 10
+    fi
+}
+run_preflight_investigation_panel
+"""
+            env = {k: v for k, v in os.environ.items() if not k.startswith(('UNCLE_', 'WORKFLOW_'))}
+            env.update(ROOT=str(ROOT), STATE_DIR=str(state), LOG_DIR=str(state / 'logs'), TMPDIR=str(scratch))
+            result = subprocess.run(['bash', '-c', script], cwd=project, env=env,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('preflight-worker-tooling', result.stderr)
+            self.assertEqual((project / 'tests/app.spec.js').read_text(), 'protected')
+            self.assertFalse(list(scratch.glob('uncle-preflight-*')), 'cancelled workers leaked project snapshots')
 
 
 class GenericFields(unittest.TestCase):

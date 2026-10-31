@@ -39,6 +39,10 @@ if 'app-server' in args:
         if method == 'thread/start':
             result = {'thread': {'id': 'stub-thread'}}
         elif method == 'turn/start':
+            rejection = os.environ.get('STUB_REJECT_NATIVE')
+            if rejection and 'outputSchema' in params:
+                emit({'id': request['id'], 'error': {'code': -32602, 'message': rejection}})
+                continue
             if 'outputSchema' in params:
                 Path(os.environ['STUB_SCHEMA']).write_text(json.dumps(params['outputSchema']))
             result = {'turn': {'id': 'stub-turn'}}
@@ -176,6 +180,18 @@ class RunnerSchema(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assert_delivered({'answer': None})
 
+    def test_original_optional_nullable_field_keeps_explicit_null(self):
+        schema = object_schema({'answer': {'type': ['string', 'null']}})
+        done = self.run_runner(schema, {'answer': None})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assert_delivered({'answer': None})
+
+    def test_large_final_packet_is_delivered_without_truncation(self):
+        answer = {'answer': 'x' * 20000}
+        done = self.run_runner(answer=answer)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assert_delivered(answer)
+
     def test_false_zero_and_empty_values_are_not_deleted(self):
         schema = object_schema({'flag': {'type': 'boolean'}, 'count': {'type': 'integer'},
                                 'text': {'type': 'string'}, 'rows': {'type': 'array', 'items': {'type': 'string'}}})
@@ -275,6 +291,14 @@ class RunnerSchema(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0, done.stdout)
         self.assertFalse(self.delivery.exists())
 
+    def test_failed_validation_preserves_existing_delivery(self):
+        original = '{"answer":"previous valid delivery"}\n'
+        self.delivery.write_text(original)
+        done = self.run_runner(answer={'answer': 4})
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.delivery.read_text(), original)
+        self.assertNotIn('structured_output', self.result)
+
     def test_native_tui_schema_uses_rpc_and_same_delivery_contract(self):
         schema = object_schema({'answer': {'type': 'string'}, 'optional': {'type': 'string'}}, ['answer'])
         done = self.run_runner(schema, {'answer': 'ok', 'optional': None}, native=True)
@@ -300,6 +324,28 @@ class RunnerSchema(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0, done.stdout)
         self.assertNotIn('structured_output', self.result)
         self.assertFalse(self.delivery.exists())
+
+    def test_native_unsupported_schema_field_falls_back_without_losing_the_turn(self):
+        done = self.run_runner(native=True, STUB_REJECT_NATIVE='Unknown field outputSchema')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        requests = [json.loads(line) for line in (self.directory / 'rpc.jsonl').read_text().splitlines()]
+        turns = [request for request in requests if request.get('method') == 'turn/start']
+        self.assertEqual(len(turns), 2)
+        self.assertIn('outputSchema', turns[0]['params'])
+        self.assertNotIn('outputSchema', turns[1]['params'])
+        self.assertIn('Deliver the requested packet.', turns[1]['params']['input'][0]['text'])
+        self.assertNotIn('structured_output', self.result)
+        self.assertFalse(self.delivery.exists())
+        self.assertEqual(len(done.stderr.strip().splitlines()), 1)
+
+    def test_native_unrelated_error_is_not_retried_without_schema(self):
+        done = self.run_runner(native=True, STUB_REJECT_NATIVE='Model unavailable')
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        requests = [json.loads(line) for line in (self.directory / 'rpc.jsonl').read_text().splitlines()]
+        turns = [request for request in requests if request.get('method') == 'turn/start']
+        self.assertEqual(len(turns), 1)
+        self.assertIn('outputSchema', turns[0]['params'])
+        self.assertNotIn('structured_output', self.result)
 
     def test_both_driver_capability_gates_advertise_codex_and_preserve_other_runners(self):
         script = '''

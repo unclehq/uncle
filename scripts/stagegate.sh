@@ -1665,6 +1665,10 @@ run_claude() {
     status_stage_context "$log_name" "${model:-}" act
 
     while true; do
+        case "$log_name" in
+            updated-plan*|updated-change-plan*|preflight*)
+                (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/${log_name}.jsonl") || return 1 ;;
+        esac
         echo
         echo "Launching agent ($cmd): $log_name"
         echo "Model: ${model:-(runner default)} (effort: $effort, max turns: $turns)"
@@ -2436,6 +2440,8 @@ updated_plan_warm_prefix() {
 
 updated_plan_launch_writer() {
     local directory="$1" delivery="$2" name="$3" ids="$4" owner="$5" schema_file=""
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    workflow_archive_attempt "$LOG_DIR/updated-plan-worker-edits-$name.log" "$LOG_DIR/updated-plan-worker-edits-$name.jsonl" "$directory/$name.json" || return 1
     # The plan model (docs/plan-model.md): writers edit it by id.  WORKFLOW_UPDATED_PLAN_OPS=0 keeps the text patches.
     local helper="$ROOT/scripts/lib/updated_plan_edits.py" schema_command=edit
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; schema_command=edit-ops; fi
@@ -2457,8 +2463,10 @@ updated_plan_launch_writer() {
     ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$schema_file" ]] || export UNCLE_WORKER_SCHEMA_FILE="$schema_file"; [[ "$delivery" != hosted || -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
       export UNCLE_WORKER_MAX_TURNS="$writer_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
       local writer_status=0
+      trap 'writer_status=$?; if [[ "$writer_status" != 0 ]]; then workflow_writer_failure "updated-plan-worker-edits-$name" "$writer_status"; fi; workflow_model_leave; exit "$writer_status"' EXIT
       ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
         workflow_model_writer updated-plan run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) || writer_status=$?
+      if [[ "$writer_status" != 0 ]] && stage_uses_self_hosted updated-plan AGENT; then exit "$writer_status"; fi
       if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then
           if [[ ! -s "$directory/$name.json" ]]; then
               python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name.jsonl" "$directory/$name.json" 2>/dev/null || true
@@ -2470,6 +2478,9 @@ updated_plan_launch_writer() {
           fi
           [[ "$validation_status" == 0 || "$validation_status" == 5 ]] || exit "$validation_status"
           if [[ "$validation_status" == 5 ]]; then
+              cat "$directory/prompts/$name.rejection" >&2
+              workflow_writer_failure "updated-plan-worker-edits-$name" "$validation_status"
+              workflow_archive_attempt "$directory/$name.json" "$LOG_DIR/updated-plan-worker-edits-$name-retry.jsonl" || exit 1
               cp "$directory/prompts/$name.md" "$directory/prompts/$name.retry.md"
               printf '\n\n## Your previous answer was rejected\n\n' >> "$directory/prompts/$name.retry.md"
               cat "$directory/prompts/$name.rejection" >> "$directory/prompts/$name.retry.md"
@@ -2478,6 +2489,7 @@ updated_plan_launch_writer() {
               writer_status=0
               ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                 UNCLE_UPDATED_PLAN_CHEAP_RETRY=1 workflow_model_writer updated-plan run_claude "$directory/prompts/$name.retry.md" "updated-plan-worker-edits-$name-retry" ) || writer_status=$?
+              if [[ "$writer_status" != 0 ]] && stage_uses_self_hosted updated-plan AGENT; then exit "$writer_status"; fi
               if [[ ! -s "$directory/$name.json" ]]; then
                   python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name-retry.jsonl" "$directory/$name.json" 2>/dev/null || true
               fi
@@ -2495,7 +2507,7 @@ run_updated_plan_edit_writers() {
     local -a pids=() names=()
     . "$ROOT/scripts/lib/model-jobs.sh"
     local jobs
-    jobs="$(workflow_model_capacity updated-plan)"
+    jobs="$(workflow_writer_jobs updated-plan)"
     [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; resolve_command=resolve-ops; fi
     # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
@@ -2522,7 +2534,9 @@ run_updated_plan_edit_writers() {
             return 1
             ;;
     esac
-    rm -f "$STATE_DIR/updated-plan-writers-exhausted"
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    workflow_terminal_failure && return 1
+    workflow_archive_attempt "$directory" || return 1
     [[ -f "${UPDATED_PLAN_PROMPT:-}" ]] || return 1
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
@@ -2646,6 +2660,7 @@ run_updated_plan_edit_writers() {
             else export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=off; fi
             echo "Updated-plan edit writer(s) failed again; one last try each by the other delivery path."
             for index in "${again[@]}"; do
+                workflow_model_slot "$jobs" ${last_pids[@]+"${last_pids[@]}"}
                 updated_plan_launch_writer "$directory" "$delivery" "${names[$index]}" "${retry_ids[$index]}" "$([[ "${names[$index]}" == 1 || "${names[$index]}" == 1-1 ]] && echo owner)" || failed=1
                 last_pids+=("$!"); last_names+=("${names[$index]}")
             done
@@ -2881,7 +2896,7 @@ run_preflight_investigation_panel() {
     local directory="$STATE_DIR/preflight-panel" lens prompt output pid scratch
     local -a pids=() names=() done_workers=() scratches=()
     [[ "${WORKFLOW_PREFLIGHT_PANEL:-1}" == 1 ]] || return 1
-    rm -f "$STATE_DIR/preflight-readonly-violation"
+    (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure) && return 1
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     echo "Preflight investigation panel: launching 3 workers in parallel (tooling, data, reviewers); browser follows serially."
     for lens in tooling data reviewers; do
@@ -2983,6 +2998,7 @@ run_updated_plan_compact() {
         ( run_claude "$UPDATED_PLAN_PROMPT" updated-plan ) || compact_status=$?
     fi
     [[ "$compact_status" == 0 ]] && return 0
+    if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then return "$compact_status"; fi
     # A self-hosted model can fail the compact path's strict patch contract
     # (replace_text only matches text already in the base plan) the same way
     # on every retry and every resumed process -- nothing about restarting
@@ -3045,7 +3061,7 @@ PY
         # path exists and this function parses/merges it before publication.
         WORKFLOW_UPDATED_PLAN_EDIT_SLICE="$slice" WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file WORKFLOW_UPDATED_PLAN_FAST_MERGE="$fast_merge" WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT=1 WORKFLOW_PREFIX_WARM_SECONDS=0 \
             run_updated_plan_edit_writers || writer_status=$?
-        [[ ! -e "$STATE_DIR/updated-plan-writers-exhausted" ]] || return "$writer_status"
+        if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then cat "$STATE_DIR/stop-reason" >&2; return 1; fi
         if [[ "$writer_status" != 0 && "$jobs" != 0 ]]; then
             echo 'Updated-plan batches failed validation or delivery; falling back to the compact writer.'
             run_updated_plan_compact
@@ -4042,6 +4058,10 @@ project_plan_sections_enabled() {
 # Every stage's actual work, with no state transitions and no approval checks,
 # so a stage can be run either in the foreground or speculatively.
 run_stage() {
+    if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then
+        cat "$STATE_DIR/stop-reason" >&2
+        return 1
+    fi
     case "$1" in
         DERIVE_BRIEF)
             run_claude prompts/derive-brief.md derive-brief
@@ -4245,7 +4265,7 @@ run_stage() {
                 echo 'Updated plan: written by deciding writers and checked by the specialists.'
                 return 0
             fi
-            [[ ! -e "$STATE_DIR/updated-plan-writers-exhausted" ]] || return 1
+            if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then cat "$STATE_DIR/stop-reason" >&2; return 1; fi
             run_updated_plan_panel || return 1
             # The panel has already collated every specialist finding into
             # canonical JSON. Every runner gets the sealed compact prompt;
@@ -4257,7 +4277,7 @@ run_stage() {
                 single_call=1   # a rejected plan is repaired by one call that sees the whole problem
             fi
             if [[ "$single_call" == 1 ]] || ! run_updated_plan_edit_writers; then
-                [[ ! -e "$STATE_DIR/updated-plan-writers-exhausted" ]] || return 1
+                if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then cat "$STATE_DIR/stop-reason" >&2; return 1; fi
                 # Forced JSON here too: the whole-plan call answers through a schema-checked StructuredOutput
                 # call (hosted Claude) or the local grammar, never free text the driver has to dig a plan out of.
                 if stage_supports_structured_output updated-plan; then
@@ -4368,7 +4388,7 @@ run_stage() {
                     if run_preflight_investigation_panel; then
                         echo 'Preflight investigation panel: canonical JSON collated from parallel worker packets.'
                     else
-                        [[ ! -e "$STATE_DIR/preflight-readonly-violation" ]] || exit 1
+                        (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure) && exit 1
                         preflight_investigation=".uncle/workflow/preflight-investigation.md"
                         rm -f "$preflight_investigation"
                         run_claude prompts/preflight-investigate.md preflight-investigate
@@ -4804,6 +4824,10 @@ speculate() {
     gate_file="$(canonical_artifact_path "$view")"
 
     [[ "$WORKFLOW_SPECULATE" == "1" ]] || return 0
+    if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then
+        cat "$STATE_DIR/stop-reason" >&2
+        return 1
+    fi
     [[ -z "$spec_pid" ]] || return 0
     [[ -s "$gate_file" ]] || return 0
 
@@ -4819,7 +4843,9 @@ speculate() {
 
     # Fully detached from this terminal: the gate prompt owns stdin, and stage
     # output would otherwise interleave with it.
-    UNCLE_SPECULATIVE=true run_stage "$stage" > "$LOG_DIR/${stage}.speculative.log" 2>&1 < /dev/null &
+    (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/${stage}.speculative.log") || return 1
+    : > "$LOG_DIR/${stage}.speculative.log"
+    UNCLE_SPECULATIVE=true run_stage "$stage" >> "$LOG_DIR/${stage}.speculative.log" 2>&1 < /dev/null &
     spec_pid=$!
     spec_stage="$stage"
 }
@@ -4860,6 +4886,10 @@ adopt_speculation() {
     fi
 
     if [[ "$status" -ne 0 ]]; then
+        if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then
+            cat "$STATE_DIR/stop-reason" >&2
+            exit "$status"
+        fi
         echo "Speculative $stage failed (status $status). Running it again."
         echo "Log: $LOG_DIR/${stage}.speculative.log"
         # A reviewer that exits nonzero can still have written an invalid
@@ -4949,6 +4979,10 @@ run_gated_stage() {
     if [[ "$stage" != UPDATED_PLAN || ! -s "$STATE_DIR/updated-plan-structure-feedback.md" ]]; then
         adopt_speculation "$stage" "$gate_file" "$artifact" && return 0
     fi
+    if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then
+        cat "$STATE_DIR/stop-reason" >&2
+        return 1
+    fi
     run_stage "$stage"
 }
 
@@ -4957,7 +4991,7 @@ python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" "$DOCUMENT_BUDGET_SOU
 
 # A stop reason belongs to the run that recorded it. Left in place, a
 # previous "human" stop would silence the triage bundle on this run's failure.
-rm -f "$STATE_DIR/stop-reason"
+rm -f "$STATE_DIR/stop-reason" "$STATE_DIR/updated-plan-writers-exhausted" "$STATE_DIR/preflight-readonly-violation"
 
 # A fresh run (no state file yet) drops any stale start stamp; a resume keeps it.
 [[ -e "$STATE_FILE" ]] || finished_extras reset

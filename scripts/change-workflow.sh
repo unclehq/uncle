@@ -1990,6 +1990,10 @@ run_claude() {
         rm -f "$agent_delivery"
     fi
     while true; do
+        case "$log_name" in
+            updated-plan*|updated-change-plan*|preflight*)
+                (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/${log_name}.jsonl") || return 1 ;;
+        esac
         status_stage_context "$log_name" "$max_turns" "${model:-}" act
         local -a flags=(
             -p
@@ -2603,6 +2607,8 @@ run_updated_change_plan_panel() {
 # per-group resolvers; any problem returns nonzero with nothing published and the caller runs the single call.
 updated_change_plan_launch_writer() {
     local directory="$1" delivery="$2" name="$3" ids="$4" owner="$5" schema_file=""
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    workflow_archive_attempt "$LOG_DIR/updated-change-plan-worker-edits-$name.log" "$LOG_DIR/updated-change-plan-worker-edits-$name.jsonl" "$directory/$name.json" || return 1
     # The plan model (docs/plan-model.md): writers edit it by id.  WORKFLOW_UPDATED_PLAN_OPS=0 keeps the text patches.
     local helper="$ROOT/scripts/lib/updated_plan_edits.py" schema_command=edit
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; schema_command=edit-ops; fi
@@ -2624,8 +2630,10 @@ updated_change_plan_launch_writer() {
     ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-change-plan AGENT || exit 1; [[ -z "$schema_file" ]] || export UNCLE_WORKER_SCHEMA_FILE="$schema_file"; [[ "$delivery" != hosted || -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
       export UNCLE_WORKER_MAX_TURNS="$writer_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
       local writer_status=0
+      trap 'writer_status=$?; if [[ "$writer_status" != 0 ]]; then workflow_writer_failure "updated-change-plan-worker-edits-$name" "$writer_status"; fi; workflow_model_leave; exit "$writer_status"' EXIT
       ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
         workflow_model_writer updated-change-plan run_claude "$directory/prompts/$name.md" "updated-change-plan-worker-edits-$name" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) || writer_status=$?
+      if [[ "$writer_status" != 0 ]] && stage_uses_self_hosted updated-change-plan AGENT; then exit "$writer_status"; fi
       if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then
           if [[ ! -s "$directory/$name.json" ]]; then
               python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-change-plan-worker-edits-$name.jsonl" "$directory/$name.json" 2>/dev/null || true
@@ -2637,6 +2645,9 @@ updated_change_plan_launch_writer() {
           fi
           [[ "$validation_status" == 0 || "$validation_status" == 5 ]] || exit "$validation_status"
           if [[ "$validation_status" == 5 ]]; then
+              cat "$directory/prompts/$name.rejection" >&2
+              workflow_writer_failure "updated-change-plan-worker-edits-$name" "$validation_status"
+              workflow_archive_attempt "$directory/$name.json" "$LOG_DIR/updated-change-plan-worker-edits-$name-retry.jsonl" || exit 1
               cp "$directory/prompts/$name.md" "$directory/prompts/$name.retry.md"
               printf '\n\n## Your previous answer was rejected\n\n' >> "$directory/prompts/$name.retry.md"
               cat "$directory/prompts/$name.rejection" >> "$directory/prompts/$name.retry.md"
@@ -2645,6 +2656,7 @@ updated_change_plan_launch_writer() {
               writer_status=0
               ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                 UNCLE_UPDATED_PLAN_CHEAP_RETRY=1 workflow_model_writer updated-change-plan run_claude "$directory/prompts/$name.retry.md" "updated-change-plan-worker-edits-$name-retry" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) || writer_status=$?
+              if [[ "$writer_status" != 0 ]] && stage_uses_self_hosted updated-change-plan AGENT; then exit "$writer_status"; fi
               if [[ ! -s "$directory/$name.json" ]]; then
                   python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-change-plan-worker-edits-$name-retry.jsonl" "$directory/$name.json" 2>/dev/null || true
               fi
@@ -2660,6 +2672,9 @@ UPDATED_PLAN_ADVISOR_PIDS=()
 run_updated_change_plan_edit_writers() {
     local directory="$STATE_DIR/updated-change-plan-edits" helper="$ROOT/scripts/lib/updated_plan_edits.py" name ids pid failed=0 resolve_command=resolve
     local -a pids=() names=()
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    local jobs
+    jobs="$(workflow_writer_jobs updated-change-plan)" || return 1
     [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; resolve_command=resolve-ops; fi
     export UNCLE_PLAN_KIND=change-plan     # the helpers write and merge a change-plan, with no commands or protected paths
@@ -2671,7 +2686,9 @@ run_updated_change_plan_edit_writers() {
     elif stage_uses_self_hosted updated-change-plan AGENT; then
         delivery=local
     fi
-    rm -f "$STATE_DIR/updated-plan-writers-exhausted"
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    workflow_terminal_failure && return 1
+    workflow_archive_attempt "$directory" || return 1
     [[ -f "${UPDATED_PLAN_PROMPT:-}" ]] || return 1
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
@@ -2681,6 +2698,7 @@ run_updated_change_plan_edit_writers() {
     while IFS=$'\t' read -r name ids; do
         owner_of[index]="$([[ "$name" == 1 ]] && echo owner)"
         ids_of[index]="$ids"
+        workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
         updated_change_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "${owner_of[index]}" || return 1
         pids+=("$!"); names+=("$name"); started[index]="$SECONDS"; hedge[index]=""; finished[index]=0
         index=$((index + 1))
@@ -2751,6 +2769,7 @@ run_updated_change_plan_edit_writers() {
         rows="$(python3 -B "$helper" resplit "$directory/slices.tsv" "${failed_names[@]}")" || return 1
         while IFS=$'\t' read -r name ids; do
             [[ -n "$name" ]] || continue
+            workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
             UNCLE_UPDATED_PLAN_CHEAP_RETRY="$(stage_uses_self_hosted updated-change-plan AGENT && echo 1)" \
             UNCLE_UPDATED_PLAN_SCHEMA_ATTEMPT=retry updated_change_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$([[ "$name" == 1 || "$name" == 1-1 ]] && echo owner)" || return 1
             pids+=("$!"); names+=("$name"); retry_ids+=("$ids")
@@ -2770,6 +2789,7 @@ run_updated_change_plan_edit_writers() {
             else export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=off; fi
             echo "Updated-plan edit writer(s) failed again; one last try each by the other delivery path."
             for index in "${again[@]}"; do
+                workflow_model_slot "$jobs" ${last_pids[@]+"${last_pids[@]}"}
                 updated_change_plan_launch_writer "$directory" "$delivery" "${names[$index]}" "${retry_ids[$index]}" "$([[ "${names[$index]}" == 1 || "${names[$index]}" == 1-1 ]] && echo owner)" || failed=1
                 last_pids+=("$!"); last_names+=("${names[$index]}")
             done
@@ -3286,7 +3306,7 @@ origin_preflight
 
 # A stop reason belongs to the run that recorded it. Left in place, a
 # previous "human" stop would silence the triage bundle on this run's failure.
-rm -f "$STATE_DIR/stop-reason"
+rm -f "$STATE_DIR/stop-reason" "$STATE_DIR/updated-plan-writers-exhausted" "$STATE_DIR/preflight-readonly-violation"
 
 # Whether this invocation can prove it owns .uncle/workflow/origin, rather than having
 # found a leftover one on disk. Computed once here, before this run performs any
@@ -3757,11 +3777,11 @@ while true; do
                 set_state VALIDATE_UPDATED_PLAN
                 continue
             fi
-            [[ ! -e "$STATE_DIR/updated-plan-writers-exhausted" ]] || exit 1
+            if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then cat "$STATE_DIR/stop-reason" >&2; exit 1; fi
             run_updated_change_plan_panel || exit 1
             # One writer per finding, merged mechanically; the single call below is the fallback.
             if ! run_updated_change_plan_edit_writers; then
-                [[ ! -e "$STATE_DIR/updated-plan-writers-exhausted" ]] || exit 1
+                if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then cat "$STATE_DIR/stop-reason" >&2; exit 1; fi
                 # Forced JSON here too, as for the edit writers: a schema-checked answer, not free text.
                 synthesis_schema="$STATE_DIR/updated-plan-edits/schemas/synthesis.json"
                 if stage_supports_structured_output updated-change-plan \

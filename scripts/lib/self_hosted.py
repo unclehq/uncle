@@ -826,8 +826,12 @@ def run_http_stage(stage, directory, values, root, allow_shell=True):
                                                           reviewer_artifact_kind(stage.prompt))
     stage.model = values['model']
     stage.ready(directory)
-    run_agent(values, request, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
-              final_name=name, stage=stage, seconds=seconds)
+    from contextlib import nullcontext
+    from writer_deadline import deadline
+    writer = '-worker-edits-' in stage.stage or '-worker-resolve-' in stage.stage
+    with deadline(seconds) if writer else nullcontext():
+        run_agent(values, request, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
+                  final_name=name, stage=stage, seconds=seconds)
 
 
 def run_http_agent(side, values, prompt, root, allow_shell=True, usage=None, schema_kind=None, read_cache=None,

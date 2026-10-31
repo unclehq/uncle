@@ -397,7 +397,12 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
             directory = Path(temp)
             archived = {'group': 'G1', 'ops': [], 'patch': {}}
             live = {'group': 'G2', 'ops': [], 'patch': {}}
-            (directory / 'resolutions-G1-r1.json').write_text(json.dumps({'resolutions': [archived]}))
+            candidate = directory / 'resolutions-G1.json'
+            candidate.write_text(json.dumps({'resolutions': [archived]}))
+            subprocess.run(['bash', '-ec', '. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt resolutions-G1.json'],
+                           cwd=directory, env=environment(directory), check=True)
+            candidate.unlink()
+            self.assertEqual(len(list(directory.rglob('resolutions-G1*.json'))), 1)
             (directory / 'resolutions-G2.json').write_text(json.dumps({'resolutions': [live]}))
             with self.subTest(kind='ops'):
                 self.assertEqual(ops.read_answers(directory, [{'id': 'G1'}, {'id': 'G2'}]), {'G2': live})

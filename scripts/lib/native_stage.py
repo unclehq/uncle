@@ -420,6 +420,8 @@ class Stage:
         raise ValueError('Native stage exceeded its time limit')
 
     def codex(self, directory):
+        from runner_schema import prepare, deliver, note
+        schema = prepare(stage=self.stage)
         command = [os.environ.get('WORKFLOW_CODEX_CMD','codex'), 'app-server', '--listen', 'stdio://']
         for i, arg in enumerate(self.args[:-1]):
             if arg == '-c': command += ['-c', self.args[i+1]]
@@ -433,7 +435,22 @@ class Stage:
         self.session=result['thread']['id']
         self.model=result.get('model',self.model)
         params={'threadId':self.session,'input':[{'type':'text','text':self.prompt}], 'effort':self.effort}
-        result=self.wait(self.rpc('turn/start',params))
+        if schema is not None:
+            params['outputSchema'] = schema[1]
+            params['input'][0]['text'] += ('\n\nDeliver the complete JSON object as your final answer, following the supplied output schema. '
+                'The runner saves it to the required delivery file; this replaces any instruction to Write that file. '
+                'Use null for optional fields that do not apply. Do not wrap the answer in Markdown.')
+        try:
+            result=self.wait(self.rpc('turn/start',params))
+        except ValueError as exc:
+            detail = str(exc).lower()
+            if schema is None or 'outputschema' not in detail or not any(word in detail for word in ('unknown', 'unsupported', 'unrecognized')):
+                raise
+            note('app-server does not support outputSchema')
+            schema = None
+            params.pop('outputSchema')
+            params['input'][0]['text'] = self.prompt
+            result=self.wait(self.rpc('turn/start',params))
         self.turn=result['turn']['id']
         self.ready(directory)
         def steer(text,id):
@@ -456,6 +473,8 @@ class Stage:
             if 'id' in event and method:
                 self.send({'id':event['id'],'error':{'code':-32601,'message':'Unsupported stage request'}})
         self.loop(handle,steer)
+        if schema is not None:
+            self.structured_output = deliver(self.output_answer(), schema[0], os.environ.get('UNCLE_STRUCTURED_OUTPUT_PATH'))
 
     def kimi(self, directory):
         help_text=subprocess.run([os.environ.get('WORKFLOW_KIMI_CMD','kimi'),'--help'],

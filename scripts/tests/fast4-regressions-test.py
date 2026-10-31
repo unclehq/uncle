@@ -390,6 +390,20 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return state, result
 
+    def test_archived_resolver_answers_are_not_live_merge_inputs(self):
+        import updated_plan_edits as edits
+        import updated_plan_ops as ops
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            archived = {'group': 'G1', 'ops': [], 'patch': {}}
+            live = {'group': 'G2', 'ops': [], 'patch': {}}
+            (directory / 'resolutions-G1-r1.json').write_text(json.dumps({'resolutions': [archived]}))
+            (directory / 'resolutions-G2.json').write_text(json.dumps({'resolutions': [live]}))
+            with self.subTest(kind='ops'):
+                self.assertEqual(ops.read_answers(directory, [{'id': 'G1'}, {'id': 'G2'}]), {'G2': live})
+            with self.subTest(kind='text-edits'):
+                self.assertEqual(edits.read_resolutions(directory)['resolutions'], [live])
+
     def test_exhausted_resolvers_record_terminal_failure_and_keep_sibling(self):
         for change in (False, True):
             with self.subTest(change=change):

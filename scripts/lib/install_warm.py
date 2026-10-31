@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -111,11 +112,43 @@ def fingerprint(names):
 
 
 def run(command, cwd, timeout):
+    """Run a command with a bound on how long it may take.
+
+    `subprocess.run(..., timeout=...)` only kills the direct child on a timeout: `npm`/`npx`
+    routinely fork a further process (e.g. the browser download `npx playwright install`
+    launches) that keeps running after its parent is killed, invisible to this script and to
+    anything waiting on it.  A leftover download can hold Playwright's own installer lock in
+    the shared cache indefinitely, so a *later, real* `playwright install` -- the one the
+    actual build depends on -- blocks forever waiting for a lock an orphan from this warm-up
+    never released.  Starting the child in its own process group and killing the whole group
+    on timeout (or on any other exit) means nothing from this script outlives it.
+    """
     try:
-        return subprocess.run(command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, timeout=timeout).returncode
-    except (OSError, subprocess.TimeoutExpired):
+        process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
         return 1
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(process)
+        print('Install warm-up: timed out after %ds running: %s' % (timeout, ' '.join(command)),
+              file=sys.stderr, flush=True)
+        return 1
+    except BaseException:
+        _kill_group(process)
+        raise
+
+
+def _kill_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except Exception:
+        pass
 
 
 def usable(names):

@@ -71,6 +71,12 @@ class Evidence(unittest.TestCase):
         self.assertIn('s4.1', scope)
         self.assertNotIn('B-8', scope)
 
+    def test_relative_file_location_is_not_hidden_by_an_explicit_row(self):
+        scope = self.scope(references='B-7', location={'path': './src/export.py'})
+        self.assertIn('B-7', scope)
+        self.assertIn('s4.1', scope)
+        self.assertNotIn('B-8', scope)
+
     def test_requirement_reference_selects_its_behavior_without_sibling_rows(self):
         scope = self.scope(references='Requirement UB-7 is not fulfilled.')
         self.assertIn('B-7', scope)

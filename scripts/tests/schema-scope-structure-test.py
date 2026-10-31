@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
 import artifact_json
 import plan_model as pm
+import plan_records
 import plan_ownership_gap as ownership
 import updated_plan_ops as ops
 from self_hosted_http import conforms
@@ -64,6 +65,21 @@ class StructureScope(unittest.TestCase):
         self.assertNotIn('step-3', pm.index(fixture['model']))
         self.assertEqual(len(fixture['scope']['gaps']), 4)
 
+    def test_real_heading_steps_reach_scheduler_records_without_rewriting_the_model(self):
+        fixture = self.fixture()
+        model = fixture['model']
+        before = json.dumps(model, sort_keys=True)
+        steps = pm.steps_of(model)
+        self.assertEqual(len(steps), 5)
+        self.assertEqual([step['number'] for step in steps], [1, 2, 3, 4, 5])
+        self.assertEqual(len({step['id'] for step in steps}), 5)
+        self.assertIn('Test suite and injection runner', steps[3]['title'])
+        records, owned, _ = plan_records.step_data(model)
+        self.assertEqual(len(records), 5)
+        self.assertTrue(set(fixture['scope']['gaps']) <= owned[1])
+        self.assertEqual(json.dumps(model, sort_keys=True), before)
+        self.assertIn('Step 3b:', model['sections'][5]['heading'])
+
     def test_real_heading_owned_paths_are_not_reported_as_gaps(self):
         fixture = self.fixture()
         self.write_plan(fixture['plan'], fixture['model'])
@@ -103,6 +119,17 @@ class StructureScope(unittest.TestCase):
                     self.view, self.root, ['tests/unknown.test.js']), [])
                 self.assertIn('`src/ui.js`', repaired['narrative'])
                 self.assertNotIn('./tests/unknown.test.js', repaired['narrative'])
+
+    def test_legacy_ownership_packet_cannot_hide_unrelated_operation_fields(self):
+        self.write_plan(self.typed_plan())
+        self.assertEqual(ops.prepare_structure_repair(self.plan, self.root, self.repair,
+                         'a protected verification path with no owning implementation step'), 3)
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
+                  'dispositions': [], 'ops': [{'op': 'set_step', 'id': 'step-1',
+                  'fields': {'owns': 'src/core.js, tests/unknown.test.js'}, 'text': 'Unrelated replacement'}]}
+        (self.repair / 'packet.json').write_text(json.dumps(packet))
+        with self.assertRaises(ops.Conflict):
+            ops.apply_structure_repair(self.repair, self.root)
 
     def test_only_unowned_protected_paths_can_be_removed_during_repair(self):
         plan = self.typed_plan()

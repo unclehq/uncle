@@ -177,7 +177,7 @@ def make_row(kind, mapping, headers, cells, serial):
     return row
 
 
-def parse_blocks(body, section_id):
+def parse_blocks(body, section_id, allow_steps=True):
     lines = body.split('\n')
     blocks, i, count = [], 0, [0]
 
@@ -229,7 +229,7 @@ def parse_blocks(body, section_id):
                     end += 1     # a blank line between two items of one list
                 else:
                     break
-            blocks.append(parse_list([l for l in lines[i:end] if l.strip()], new_id()))
+            blocks.append(parse_list([l for l in lines[i:end] if l.strip()], new_id(), allow_steps=allow_steps))
             i = end
         else:
             end = i
@@ -242,8 +242,8 @@ def parse_blocks(body, section_id):
     return blocks
 
 
-def parse_list(lines, block_id):
-    steps, _ = plan_steps.extract_body('\n'.join(lines))
+def parse_list(lines, block_id, allow_steps=True):
+    steps = plan_steps.extract_body('\n'.join(lines))[0] if allow_steps else []
     if steps and any(step['owns'] for step in steps):
         for step in steps:
             for key in ('_task', '_line', '_heading', '_heading_line'):
@@ -272,8 +272,8 @@ def parse_list(lines, block_id):
 def implementation_blocks(body, section_id):
     steps, prefix = plan_steps.extract_body(body)
     if not steps:
-        return parse_blocks(body, section_id)
-    blocks = parse_blocks(prefix, section_id)
+        return parse_blocks(body, section_id, allow_steps=False)
+    blocks = parse_blocks(prefix, section_id, allow_steps=False)
     for step in steps:
         for key in ('_task', '_line', '_heading', '_heading_line'):
             step.pop(key, None)
@@ -340,6 +340,7 @@ def valid_path(path):
 def import_markdown(narrative):
     """The model for a plan that exists only as Markdown (legacy plans)."""
     preamble, sections = plan_steps.split_for_model(narrative)
+    has_implementation = bool(plan_steps.sections(narrative))
     title = ''
     match = re.match(r'^#\s+(.*)$', preamble.split('\n', 1)[0]) if preamble else None
     intro = preamble
@@ -348,9 +349,11 @@ def import_markdown(narrative):
     model = {'title': title, 'intro': intro, 'sections': []}
     for number, section in enumerate(sections, 1):
         sid = 's%d' % number
-        parser = implementation_blocks if re.search(r'Implementation (?:order|sequence|steps|plan)', section['heading'], re.I) else parse_blocks
+        implementation = re.search(r'Implementation (?:order|sequence|steps|plan)', section['heading'], re.I)
+        blocks = (implementation_blocks(section['body'], sid) if implementation else
+                  parse_blocks(section['body'], sid, allow_steps=not has_implementation))
         model['sections'].append({'id': sid, 'heading': re.sub(r'^#+\s*', '', section['heading']).strip(),
-                                  'blocks': parser(section['body'], sid)})
+                                  'blocks': blocks})
     return dedupe(model)
 
 

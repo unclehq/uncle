@@ -11,6 +11,8 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 import http_agent as agent
 import self_hosted_http as transport
+import self_hosted
+import updated_plan_ops as ops
 from self_hosted_performance import ACTIVE
 from self_hosted_stream import StreamStopped
 from worker_schemas import edit_ops_packet
@@ -176,6 +178,56 @@ class BoundedWriter(unittest.TestCase):
             with patch.dict(os.environ, WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST='on'):
                 self.assertEqual(json.loads(self.run_writer()[0]), self.packet)
             self.assertEqual((chat.call_count, completion.call_count), (1, 1))
+
+    def resolver_prompt(self):
+        return ops.resolver_prompt({'id': 'G1', 'kind': 'ops',
+            'context': '{"B-1":{"failure":"unchanged"}}',
+            'edits': [{'writer': '1', 'op': {'op': 'set_fields', 'id': 'B-1', 'fields': {'failure': 'first'}}},
+                      {'writer': '2', 'op': {'op': 'set_fields', 'id': 'B-1', 'fields': {'failure': 'second'}}}]},
+            [{'writer': '1', 'plan_change': 'Keep keyboard behavior.'},
+             {'writer': '2', 'plan_change': 'Handle missing input.'}])
+
+    def test_resolver_adapter_uses_prefetched_schema_once_and_preserves_packet(self):
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-resolution-ops-packet',
+                  'resolutions': [{'group': 'G1', 'ops': [
+                      {'op': 'set_fields', 'id': 'B-1', 'fields': {'failure': 'MERGED'}}]}]}
+        for stage in ('updated-plan-worker-resolve-G1', 'updated-change-plan-worker-resolve-G1-retry'):
+            with self.subTest(stage=stage), patch.dict(os.environ, {
+                    'UNCLE_STATUS_STAGE': stage, 'UNCLE_ARTIFACT_DELIVERY': str(self.root / 'delivery.json')}), \
+                    patch.object(agent, 'constrained_completion',
+                                 return_value=(json.dumps(packet), 'stop', {}, 'json_schema')) as completion:
+                text, count = self_hosted.run_opencode('agent', self.values, self.resolver_prompt(), self.root, stage=stage)
+                self.assertEqual((json.loads(text), count), (packet, 1))
+                self.assertEqual((self.root / 'delivery.json').read_text(), text)
+                self.assertEqual(completion.call_count, 1)
+                self.assertEqual(completion.call_args.args[2:4],
+                                 (self_hosted.artifact_schema('updated-plan-resolution-ops-packet'),
+                                  'updated_plan_resolution_ops_packet'))
+                request = json.dumps(completion.call_args.args[1])
+                for expected in ('unchanged', 'first', 'second', 'Keep keyboard behavior.', 'Handle missing input.'):
+                    self.assertIn(expected, request)
+                self.assert_no_repair()
+
+    def test_resolver_failure_never_publishes_or_enters_repair(self):
+        delivery = self.root / 'delivery.json'
+        delivery.write_text('previous packet')
+        failures = [(StreamStopped('answer_cap'), 'answer_cap'),
+                    (('{"resolutions":', 'stop', {}, 'json_schema'), 'not valid JSON'),
+                    (('{"resolutions":"invalid"}', 'stop', {}, 'json_schema'), 'schema')]
+        for stage in ('updated-plan-worker-resolve-G1', 'updated-change-plan-worker-resolve-G1'):
+            for result, cause in failures:
+                def completion(*args, **kwargs):
+                    if isinstance(result, Exception):
+                        raise result
+                    return result
+                with self.subTest(stage=stage, cause=cause), patch.dict(os.environ, {
+                        'UNCLE_STATUS_STAGE': stage, 'UNCLE_ARTIFACT_DELIVERY': str(delivery)}), \
+                        patch.object(agent, 'constrained_completion', side_effect=completion) as request:
+                    with self.assertRaisesRegex(ValueError, cause):
+                        self_hosted.run_opencode('agent', self.values, self.resolver_prompt(), self.root, stage=stage)
+                    self.assertEqual(delivery.read_text(), 'previous packet')
+                    self.assertIn(request.call_count, (1, 2))
+                    self.assert_no_repair()
 
 
 if __name__ == '__main__':

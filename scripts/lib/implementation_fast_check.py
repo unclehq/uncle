@@ -33,7 +33,9 @@ def command(root):
 
 
 def main(label, runner):
-    enabled = option('step-tests', '1' if runner == 'self-hosted' else '0').lower()
+    # Off by default for every runner: plans that land failing tests first (the change
+    # workflow's regression-first steps) would otherwise stop at a correct step.
+    enabled = option('step-tests', '0').lower()
     if enabled not in ('1', 'true'):
         return 0
     selected = command(Path('.'))

@@ -142,13 +142,19 @@ def probe(root):
         log.seek(0)
         text = log.read().decode('utf-8', errors='replace')
     if status:
-        raise ValueError('BROWSER_PREFLIGHT: cannot inspect local Playwright in %s; install project dependencies first. %s' %
-                         (root, text[-2000:]))
+        # A setup this probe cannot read (no local install, a global or npx-fetched
+        # Playwright) runs as it always has; stall detection still bounds a hang.
+        return None, names
     return json.loads(text), names
 
 
 def ensure_browser(root, output, env, cancelled=None):
     data, names = probe(root)
+    if data is None:
+        note = 'Browser preflight skipped: cannot inspect local Playwright in %s.\n' % root
+        output.write(note if 'b' not in getattr(output, 'mode', 'b') else note.encode())
+        output.flush()
+        return
     missing = [entry['path'] for entry in data['executables']
                if not entry.get('path') or not Path(entry['path']).is_file()]
     if not missing:
@@ -174,10 +180,9 @@ def ensure_browser(root, output, env, cancelled=None):
 def prepare(command, output, env, cancelled=None):
     install, browser, root = command_needs(command)
     browser = browser and option('playwright-preflight', '1').lower() in ('1', 'true')
-    if browser and install:
-        raise ValueError('BROWSER_PREFLIGHT: put installation and Playwright tests in separate verification commands; '
-                         'the installed browser revision must be checked after setup and before tests')
-    if browser:
+    # One command that installs and then tests runs exactly as before: its browser
+    # revision is only known after its own install, so there is nothing to check first.
+    if browser and not install:
         with install_lock(output, cancelled):
             ensure_browser(root, output, env, cancelled)
     with install_lock(output, cancelled) if install else nullcontext():

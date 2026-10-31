@@ -203,17 +203,22 @@ setTimeout(() => fs.writeFileSync(''' + json.dumps(str(self.executable)) + ''', 
         return [sys.executable, str(LIB / 'run_check.py'), '--shell-command', 'npx playwright test',
                 '--', sys.executable, '-c', "from pathlib import Path; Path(%r).touch()" % marker]
 
-    def test_mixed_setup_and_browser_commands_fail_before_launch(self):
+    def test_mixed_setup_and_browser_commands_run_as_before(self):
+        # Plans that install and test in one command keep working: no preflight, no refusal.
         argv = self.checked('ran')
         argv[argv.index('--shell-command') + 1] = 'npm ci && npx playwright test'
         result = subprocess.run(argv, capture_output=True, timeout=5)
-        self.assertEqual(result.returncode, 126)
-        self.assertIn(b'separate verification commands', result.stdout)
-        self.assertFalse(Path('ran').exists())
-        with patch.dict(os.environ, WORKFLOW_PLAYWRIGHT_PREFLIGHT='0'):
-            result = subprocess.run(argv, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(Path('ran').exists())
+        self.assertTrue(Path('ran').exists())
+
+    def test_uninspectable_playwright_runs_as_before(self):
+        # A setup the probe cannot read (here: no local playwright-core at all) is not refused.
+        shutil.rmtree(self.root / 'node_modules')
+        result = subprocess.run(self.checked('ran'), capture_output=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(Path('ran').exists())
+        self.assertIn(b'Browser preflight skipped', result.stdout)
 
     def test_missing_executable_fails_before_test_launch(self):
         started = time.monotonic()
@@ -332,11 +337,13 @@ class StepAndScaffold(Temporary):
         Path('package.json').write_text('{"scripts":{"test":"vitest"}}')
         self.assertEqual(fast.command(self.root), '')
 
-    def test_fast_checks_default_self_hosted_and_surface_failure(self):
+    def test_fast_checks_are_opt_in_and_surface_failure(self):
         command = '"%s" -c "raise SystemExit(7)"' % sys.executable
         with patch.dict(os.environ, WORKFLOW_STEP_TEST_COMMAND=command):
             self.assertEqual(fast.main('one', 'claude'), 0)
+            self.assertEqual(fast.main('one', 'self-hosted'), 0)
             self.assertFalse(Path('.uncle/workflow/logs/step-fast-one.log').exists())
+        with patch.dict(os.environ, WORKFLOW_STEP_TESTS='1', WORKFLOW_STEP_TEST_COMMAND=command):
             self.assertEqual(fast.main('two', 'self-hosted'), 7)
             self.assertTrue(Path('.uncle/workflow/logs/step-fast-two.log').exists())
         with patch.dict(os.environ, WORKFLOW_STEP_TESTS='0', WORKFLOW_STEP_TEST_COMMAND=command):

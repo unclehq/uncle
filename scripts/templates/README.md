@@ -12,7 +12,7 @@ wins. Settings are read when the helper runs, with no model-specific dependency.
 | playwright-browsers | chromium | Comma-separated chromium,firefox,webkit. Chromium also checks the headless-shell executable when the installed version declares it. |
 | playwright-auto-install | false | Install missing browser files under the shared lock; otherwise fail before launching browser tests. |
 | browser-install-seconds | 180 | Overall limit for an automatic browser install. |
-| step-tests | true for self-hosted; false otherwise | Run a fast unit target after each serial step or merged independent group, before checkpointing. |
+| step-tests | false | Run a fast unit target after each serial step or merged independent group, before checkpointing. |
 | step-test-command | auto | Explicit fast unit command; otherwise select `test:unit` or `test` only when it invokes `vitest run` or `node --test` and unit files exist. No ready target is recorded as NOT RUN. |
 | step-test-seconds | 120 | Overall fast-check limit. Failures stop advancement and retain a per-step log. |
 | scaffold-template | empty (off) | `vite-react` opts into the deterministic scaffold below. |

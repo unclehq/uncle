@@ -38,11 +38,14 @@ REDUCIBLE = ('docs', 'test-only', 'small')          # the only classes whose len
 SLICE_BY_CLASS = {'docs': 8, 'test-only': 6, 'small': 4, 'standard': 2, 'large': 2, 'risky': 2}
 OUTPUT = Path('.uncle/workflow/change-class.json')
 
+# Matched against what the *request* says and which files the plan touches, never against the plan's own prose: a plan carries
+# boilerplate (test strategy, concurrency notes, CSS design "tokens", Uncle's own "waiver" vocabulary) that mentions these words
+# in a calculator as much as in a signing service, and counting them made every plan "risky" and the classifier a no-op.
 RISK = re.compile(
-    r'(?i)\b(secur\w*|auth(?:entication|orization|orize)?|password\w*|secret\w*|token\w*|credential\w*|encrypt\w*|crypto\w*|'
-    r'signing|signature\w*|gpg|permission\w*|privilege\w*|sandbox\w*|inject\w*|sanitiz\w*|redact\w*|payment\w*|billing|'
-    r'delet\w+|destroy\w*|migrat\w+|concurren\w+|race condition|deadlock|atomic\w*|publish\w*|approval|attest\w*|'
-    r'unattended|waiver\w*|force[- ]push)\b')
+    r'(?i)\b(secur\w*|auth(?:entication|orization|orize)?|password\w*|secret\w*|(?:api|access|auth|bearer|csrf|session|oauth|'
+    r'personal access)[ -]?tokens?|credential\w*|encrypt\w*|crypto\w*|signing|signature\w*|gpg|permission\w*|privilege\w*|'
+    r'sandbox\w*|sql injection|command injection|code injection|prompt injection|sanitiz\w*|redact\w*|payment\w*|billing|'
+    r'delet\w+|destroy\w*|migrat\w+|race condition|deadlock|publish\w*|approval gate|attest\w*|force[- ]push)\b')
 
 TEST_PATH = re.compile(r'(^|/)(tests?|e2e|specs?|__tests__|cypress)(/|$)|\.(test|spec)\.[A-Za-z]+$|[-_]test\.[A-Za-z]+$', re.I)
 DOC_PATH = re.compile(r'(^|/)(docs?|documentation)/|\.(md|markdown|txt|rst)$|(^|/)(README|CHANGELOG|LICENSE)[^/]*$', re.I)
@@ -111,6 +114,17 @@ def criteria_count(project):
         return 0
 
 
+def criteria_text(family, project):
+    if family != 'change':
+        return ''
+    try:
+        spec = json.loads(_read(Path(project) / '.uncle/workflow/documents/CHANGE_SPEC.json'))
+    except ValueError:
+        return ''
+    return '\n'.join('%s %s' % (row.get('criterion', ''), row.get('verification', ''))
+                     for row in spec.get('acceptance_criteria') or [] if isinstance(row, dict))
+
+
 def features(family, project, plan):
     request = request_text(family, project)
     plan_text = _read(plan)
@@ -118,7 +132,7 @@ def features(family, project, plan):
     kinds = {'test': 0, 'docs': 0, 'scaffold': 0, 'app': 0}
     for path in owned:
         kinds[kind_of(path)] += 1
-    hits = sorted({m.group(1).lower() for m in RISK.finditer(request + '\n' + plan_text)})
+    hits = sorted({m.group(1).lower() for m in RISK.finditer(request + '\n' + criteria_text(family, project) + '\n' + '\n'.join(owned))})
     directories = {path.rsplit('/', 1)[0] if '/' in path else '' for path in owned}
     return {
         'family': family, 'request_chars': len(request), 'plan_chars': len(plan_text), 'steps': steps,

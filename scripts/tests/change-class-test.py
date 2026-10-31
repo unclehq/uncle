@@ -49,15 +49,36 @@ class Floor(unittest.TestCase):
         self.assertEqual(Project(self, body=plan(*[['src/m%d.py' % n] for n in range(8)])).build()['floor_class'], 'large')
 
     def test_risk_keywords_force_risky_and_security(self):
-        built = Project(self, request='Sanitize the token before it is published.').build()
+        built = Project(self, request='Sanitize the API token before it is published.').build()
         self.assertEqual(built['floor_class'], 'risky')
         self.assertIn('security', built['adversarial_lenses'])
-        self.assertIn('token', built['features']['risk_hits'])
+        self.assertIn('api token', built['features']['risk_hits'])
 
     def test_an_application_build_is_never_docs_or_small(self):
         built = Project(self, request='A calculator page.', family='app').build()
         self.assertEqual(built['floor_class'], 'standard')
         self.assertIn('testability', built['adversarial_lenses'])
+
+    def test_boilerplate_in_the_plan_does_not_make_a_plan_risky(self):
+        # A calculator's plan mentions concurrency, injection tests, design tokens and Uncle's waiver vocabulary; none of that is
+        # a risk in the request, and counting it made every plan risky (the live calculator build).
+        body = plan(['src/App.jsx'], ['src/App.css']) + ('\n## Notes\n\nTests run concurrently. Add XSS injection tests. '
+                                                       'Design tokens live in :root. Waiver rows are Uncle bookkeeping.\n')
+        built = Project(self, request='A groovy calculator page.', family='app', body=body).build()
+        self.assertEqual(built['features']['risk_hits'], [])
+        self.assertEqual(built['floor_class'], 'standard')
+
+    def test_a_risky_request_is_still_risky(self):
+        for request in ('Store the user password.', 'Delete the account.', 'Add an OAuth token refresh.',
+                        'Sign each commit with gpg.', 'Publish the report to a public repo.', 'Fix the sql injection.'):
+            self.assertEqual(Project(self, request=request).build()['floor_class'], 'risky', request)
+
+    def test_a_risky_file_path_or_criterion_is_risky(self):
+        self.assertEqual(Project(self, body=plan(['src/auth/login.py'])).build()['floor_class'], 'risky')
+        project = Project(self)
+        (project.root / '.uncle/workflow/documents/CHANGE_SPEC.json').write_text(json.dumps(
+            {'acceptance_criteria': [{'id': 'AC-1', 'criterion': 'Secrets are redacted from the draft.', 'verification': 'test'}]}))
+        self.assertEqual(project.build()['floor_class'], 'risky')
 
 
 class Clamp(unittest.TestCase):

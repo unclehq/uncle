@@ -364,10 +364,10 @@ class TuiTests(unittest.TestCase):
         cls.tui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.tui)
 
-    def panel(self, sliced=False, active=False, candidates=False, mixed=False):
+    def panel(self, sliced=False, active=False, candidates=False, mixed=False, lenses=LENSES):
         app = self.tui.UncleTUI.__new__(self.tui.UncleTUI)
         records, live = [], {}
-        for lens in LENSES:
+        for lens in lenses:
             for number in (range(1, 5) if sliced else (0,)):
                 name = 'adversarial-review-worker-' + lens + (f'-slice-{number}' if number else '')
                 for candidate in ((1, 2) if candidates else (0,)):
@@ -398,6 +398,12 @@ class TuiTests(unittest.TestCase):
 
     def test_lens_stays_active_until_last_slice_completes(self):
         self.assertEqual(self.panel(sliced=True, mixed=True), self.panel(mixed=True))
+
+    def test_first_admitted_lens_keeps_existing_row(self):
+        for active in (False, True):
+            with self.subTest(active=active):
+                self.assertEqual(self.panel(sliced=True, active=active, lenses=('security',)),
+                                 self.panel(active=active, lenses=('security',)))
 
     def test_footer_keeps_existing_lens_name(self):
         def draw(stage, root):

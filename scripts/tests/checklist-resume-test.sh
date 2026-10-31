@@ -20,6 +20,8 @@ GREEN_CLASS=.uncle/workflow/green.tsv
 GREEN_CMDS=.uncle/workflow/commands
 GREEN_MD=.uncle/workflow/green.md
 UNATTENDED=0
+# These scenarios exercise the opt-in repair route.
+WORKFLOW_REPAIR=1
 WORKFLOW_AUTO_REPAIR=1
 WORKFLOW_AUTO_REPAIR_ATTEMPTS=1
 WORKFLOW_CONTINUE_ON_TEST_FAILURE=0

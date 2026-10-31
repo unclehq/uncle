@@ -99,6 +99,54 @@ printf '\n2. Add \xe2\x80\x94 Owns: `src/b.py` \xe2\x80\x94 Depends on: 1\n' >> 
 run_stage "$P" file > /dev/null
 check "a changed plan is classified again" test "$(wc -l < "$P/.uncle/workflow/runs" | tr -d ' ')" == 2
 
+# --- the test-scope decision: a standard change asks, nothing else does --------------------------------------------------------
+scope_project() {  # name -- a project whose one planned file is named by one of six suites, so the impact is confident
+    local p; p="$(make_project "$1")"; mkdir -p "$p/scripts/tests"
+    printf 'import app  # src/app.py\n' > "$p/scripts/tests/app-checks-test.py"
+    for n in 1 2 3 4 5; do printf 'true\n' > "$p/scripts/tests/other$n-test.sh"; done
+    echo "$p"
+}
+decide() {  # <project> <env...> -- reads answers from stdin; prints the decision file
+    local p="$1"; shift
+    (
+        cd "$p" || exit 1
+        ROOT="$ROOT_FOR_LIB"; STATE_DIR=.uncle/workflow; LOG_DIR=.uncle/workflow/logs; export ROOT STATE_DIR LOG_DIR
+        for assignment in "$@"; do export "$assignment"; done
+        run_claude() { :; }
+        . "$ROOT/scripts/lib/stage-config.sh"; . "$ROOT/scripts/lib/change-class-stage.sh"
+        WORKFLOW_CHANGE_CLASS=standard classify_change_stage change .uncle/docs/CHANGE_PLAN.md
+    ) 2>&1
+}
+P="$(scope_project askyes)"; out="$(printf 'y\n' | decide "$P" UNCLE_STATUS_FILE=/dev/null)"
+check "standard + attended + yes: impacted" test "$(cat "$P/.uncle/workflow/test-scope-decision")" == impacted
+check "standard: the question names the counts and says the rest are NOT RUN" grep -q 'only the 1 test suites it can affect (of 6).*NOT RUN' <<< "$out"
+check "standard + yes: the stage change-class record asks, the decision file answers" test "$(get "$P" test_scope)" == ask
+check "standard + yes: the driver's scope is impacted" test "$(cd "$P" && STATE_DIR=.uncle/workflow CHANGE_CLASS_PY="$ROOT/scripts/lib/change_class.py" bash -c '. "$1"; change_class_test_scope' _ "$ROOT/scripts/lib/change-class-stage.sh")" == impacted
+
+for answer in 'n' '' 'maybe' 'Yes please'; do
+    P="$(scope_project "askno-$RANDOM")"; printf '%s\n' "$answer" | decide "$P" UNCLE_STATUS_FILE=/dev/null > /dev/null
+    check "standard + attended + '$answer': the full suite" test "$(cat "$P/.uncle/workflow/test-scope-decision")" == full
+done
+P="$(scope_project eof)"; decide "$P" UNCLE_STATUS_FILE=/dev/null < /dev/null > /dev/null
+check "standard + attended + EOF: the full suite" test "$(cat "$P/.uncle/workflow/test-scope-decision")" == full
+
+P="$(scope_project unattended)"; out="$(printf 'y\n' | decide "$P" UNATTENDED=1 UNCLE_STATUS_FILE=/dev/null)"
+check "standard + unattended: never asks, full suite" test "$(cat "$P/.uncle/workflow/test-scope-decision")" == full
+check "standard + unattended: says why" grep -q 'unattended run uses the full suite' <<< "$out"
+check "standard + unattended: no question printed" bash -c '! grep -q "\[Y/N\]" <<< "$1"' _ "$out"
+
+P="$(scope_project headless)"; printf 'y\n' | decide "$P" UNCLE_STATUS_FILE=/dev/null UNCLE_SUPERVISION_HOST=headless > /dev/null
+check "standard + a headless supervisor's status file is not a person: full suite, no question" test "$(cat "$P/.uncle/workflow/test-scope-decision")" == full
+
+P="$(scope_project unsure)"; printf 'x\n' > "$P/scripts/tests/app-checks-test.py"   # nothing names src/app.py any more
+out="$(printf 'y\n' | decide "$P" UNCLE_STATUS_FILE=/dev/null)"
+check "standard + an unmappable plan: full suite without asking" test "$(cat "$P/.uncle/workflow/test-scope-decision")" == full
+check "standard + an unmappable plan: says it could not map the impact" grep -q 'cannot be mapped with confidence' <<< "$out"
+
+P="$(scope_project forcedscope)"; printf 'y\n' | decide "$P" UNCLE_STATUS_FILE=/dev/null WORKFLOW_TEST_SCOPE=full > /dev/null
+check "WORKFLOW_TEST_SCOPE set: no question and no decision file" test ! -e "$P/.uncle/workflow/test-scope-decision"
+check "WORKFLOW_TEST_SCOPE=full wins in the driver" test "$(cd "$P" && WORKFLOW_TEST_SCOPE=full STATE_DIR=.uncle/workflow CHANGE_CLASS_PY="$ROOT/scripts/lib/change_class.py" bash -c '. "$1"; change_class_test_scope' _ "$ROOT/scripts/lib/change-class-stage.sh")" == full
+
 # --- consumers --------------------------------------------------------------------------------------------------------------
 . "$ROOT/scripts/lib/change-class-stage.sh"
 P="$(make_project consumers)"; run_stage "$P" file > /dev/null

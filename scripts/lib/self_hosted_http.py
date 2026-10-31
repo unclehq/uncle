@@ -275,7 +275,10 @@ def streaming_post(url, key, body, timeout, features, send=None):
 
 def reasoning_effort(values=None, effort=None):
     """Resolve Uncle effort to portable OpenAI low/medium/high; off omits the field."""
-    enabled = option('reasoning-effort', 'on')
+    # Off by default: on DeepSeek V4 any reasoning_effort value switches thinking
+    # back on even when a stage's request options turn it off, and the hint showed
+    # no measurable benefit on tool-using requests. Opt in per project.
+    enabled = option('reasoning-effort', 'off')
     if enabled in ('off', '0', 'false'):
         return None
     if enabled not in ('on', '1', 'true'):

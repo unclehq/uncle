@@ -315,6 +315,9 @@ class BudgetReuse(unittest.TestCase):
         self.assertTrue(self.events('reuse'))
 
     def test_identity_sensitive_to_all_contract_fields_but_not_key(self):
+        # Effort reaches the request only when the reasoning hint is on.
+        os.environ['WORKFLOW_SELF_HOSTED_REASONING_EFFORT'] = 'on'
+        self.addCleanup(os.environ.pop, 'WORKFLOW_SELF_HOSTED_REASONING_EFFORT', None)
         base = self.reuse().key
         self.assertIsNotNone(base)
         for change in [dict(prompt='Go\n'), dict(values=dict(self.values, model='other')),

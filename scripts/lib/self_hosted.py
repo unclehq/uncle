@@ -766,6 +766,10 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
     delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
     synthesis = SYNTHESIS_MARKER in prompt and (protected or require_dispositions)
     schema = artifact_schema(schema_kind, protected, require_dispositions, synthesis) if schema_kind else None
+    if schema_kind in ('updated-plan-edit-ops-packet', 'updated-plan-resolution-ops-packet') and os.environ.get('UNCLE_OUTPUT_SCHEMA_FILE'):
+        schema = json.loads(Path(os.environ['UNCLE_OUTPUT_SCHEMA_FILE']).read_text(encoding='utf-8'))
+        if schema.get('properties', {}).get('kind', {}).get('const') != schema_kind:
+            raise ValueError('worker output schema does not match the requested packet kind')
     request = prompt
     if schema_kind:
         request += ('\nYour final message must be exactly one JSON object matching the required schema; the server '

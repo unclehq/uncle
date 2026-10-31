@@ -2612,10 +2612,12 @@ updated_change_plan_launch_writer() {
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; schema_command=edit-ops; fi
     UNCLE_PLAN_JSON="$STATE_DIR/documents/CHANGE_PLAN.json" python3 -B "$helper" prompt "$UPDATED_PLAN_PROMPT" "$ids" "$directory/prompts/$name.md" $owner || return 1
     echo "Updated-plan edit writer $name: ${ids//,/, }"
-    if [[ "$delivery" == hosted ]]; then
+    if [[ "$delivery" == hosted || "$schema_command" == edit-ops ]]; then
         mkdir -p "$directory/schemas"
         schema_file="$directory/schemas/$name.json"
-        python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/CHANGE_PLAN.json" "$schema_file" $owner || return 1
+        local scope_args=()
+        [[ "$schema_command" != edit-ops ]] || scope_args=(--scope "$directory/prompts/$name.scope.json")
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/CHANGE_PLAN.json" "$schema_file" $owner "${scope_args[@]}" || return 1
     fi
     local writer_turns answer_tokens
     read -r writer_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" budget "$ids" "$(. "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_granularity updated-change-plan)")
@@ -2786,10 +2788,12 @@ run_updated_change_plan_edit_writers() {
         for group_prompt in "$directory"/prompts/resolve-*.md; do
             group_id="${group_prompt##*/resolve-}"; group_id="${group_id%.md}"
             local resolver_schema=""
-            if [[ "$delivery" == hosted ]]; then
+            if [[ "$delivery" == hosted || "$resolve_command" == resolve-ops ]]; then
                 resolver_schema="$directory/schemas/resolve-$group_id.json"
                 mkdir -p "$directory/schemas"
-                python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/CHANGE_PLAN.json" "$resolver_schema" || return 1
+                local scope_args=()
+                [[ "$resolve_command" != resolve-ops ]] || scope_args=(--scope "$directory/prompts/resolve-$group_id.scope.json")
+                python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/CHANGE_PLAN.json" "$resolver_schema" "${scope_args[@]}" || return 1
             fi
             ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-change-plan AGENT || exit 1; [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
               if [[ "$resolver_granularity" == small ]]; then
@@ -2825,7 +2829,7 @@ run_updated_change_plan_edit_writers() {
                 pids=(); names=()
                 for group_id in $bad_groups; do
                     local retry_schema=""
-                    [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
+                    [[ "$delivery" != hosted && "$resolve_command" != resolve-ops ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
                     ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-change-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
                       if [[ "$resolver_granularity" == small ]]; then
                           local resolver_turns answer_tokens

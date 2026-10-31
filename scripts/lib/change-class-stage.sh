@@ -35,6 +35,7 @@ classify_change_stage() {
     if [[ -n "${WORKFLOW_CHANGE_CLASS:-}" ]]; then
         python3 -B "$CHANGE_CLASS_PY" force "$family" . "$plan" "$WORKFLOW_CHANGE_CLASS" \
             && echo "Build class forced by WORKFLOW_CHANGE_CLASS." || return 0
+        change_class_decide_test_scope "$family" "$plan" || true
         return 0
     fi
     rm -rf "$directory"; mkdir -p "$directory"
@@ -56,7 +57,56 @@ classify_change_stage() {
     summary="$(python3 -B "$CHANGE_CLASS_PY" finish "$family" . "$plan" "$delivery" "$LOG_DIR/classify-change.jsonl")" \
         || summary="$(python3 -B "$CHANGE_CLASS_PY" fallback "$family" . "$plan" 2>/dev/null)"
     echo "Build class: ${summary:-unavailable; every review lens runs}"
+    change_class_decide_test_scope "$family" "$plan" || true
     return 0
+}
+
+# change_class_decide_test_scope <family> <plan.md> -- settle how much of the suite the final check runs, once, here, while
+# the operator is at the keyboard. docs, test-only and small changes use impacted tests; large and risky changes and every
+# new application use the full suite; a standard change asks. Unattended runs never ask and use the full suite, and so does
+# a plan whose impact cannot be mapped with confidence (test_scope.py explains why). The answer is a file, so a resumed
+# driver does not ask again.
+change_class_decide_test_scope() {
+    local family="$1" plan="$2" scope decision="$STATE_DIR/test-scope-decision" files impacted total sure answer question
+    rm -f "$decision"
+    scope="$(python3 -B "$CHANGE_CLASS_PY" get . test_scope full)"
+    [[ "$scope" == ask ]] || return 0
+    [[ "$family" == change ]] || { echo full > "$decision"; return 0; }
+    if [[ "${WORKFLOW_TEST_SCOPE:-auto}" != auto ]]; then return 0; fi
+    # shellcheck disable=SC2046
+    read -r impacted total sure <<< "$(python3 -B "$ROOT/scripts/lib/test_scope.py" preview . \
+        $(python3 -B "$CHANGE_CLASS_PY" owned "$family" . "$plan" | grep -v '^\.uncle/' | tr '\n' ' ') 2>/dev/null || echo '0 0 unsure')"
+    if [[ "${sure:-unsure}" != confident ]]; then
+        echo "Test scope: the plan's impact on the suites cannot be mapped with confidence; the final check runs the full suite."
+        echo full > "$decision"; return 0
+    fi
+    if [[ "${UNATTENDED:-0}" == 1 ]] \
+        || ! { [[ -t 0 ]] || { [[ -n "${UNCLE_STATUS_FILE:-}" && "${UNCLE_SUPERVISION_HOST:-}" != headless ]]; }; }; then
+        echo "Test scope: standard change; an unattended run uses the full suite for the final check."
+        echo full > "$decision"; return 0
+    fi
+    question="Standard change: verify with only the ${impacted} test suites it can affect (of ${total}) instead of the full suite? The rest are reported NOT RUN. [Y/N] "
+    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$question"; fi
+    printf '%s' "$question" >&2
+    answer=""
+    read -r answer || answer=""
+    case "$answer" in
+        [Yy]|[Yy][Ee][Ss]) echo impacted > "$decision"; echo "Test scope: impacted suites only (${impacted} of ${total}); the rest are reported NOT RUN." ;;
+        *) echo full > "$decision"; echo "Test scope: the full suite." ;;
+    esac
+    return 0
+}
+
+# change_class_test_scope -- impacted | full, for the final check. WORKFLOW_TEST_SCOPE=full|impacted wins; auto follows the class.
+change_class_test_scope() {
+    local forced="${WORKFLOW_TEST_SCOPE:-auto}" scope
+    case "$forced" in full|impacted) printf '%s' "$forced"; return 0 ;; esac
+    scope="$(python3 -B "$CHANGE_CLASS_PY" get . test_scope full 2>/dev/null)" || scope=full
+    case "$scope" in
+        impacted) printf impacted ;;
+        ask) [[ "$(cat "$STATE_DIR/test-scope-decision" 2>/dev/null)" == impacted ]] && printf impacted || printf full ;;
+        *) printf full ;;
+    esac
 }
 
 # change_class_lenses <default list> -- the adversarial review lenses to run; WORKFLOW_ADVERSARIAL_LENSES wins.

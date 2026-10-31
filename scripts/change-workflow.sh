@@ -1112,9 +1112,22 @@ run_green_check() {
     # implementation and again before the checklist, and nothing changes in between.  The fingerprint covers the
     # tree and the commands; a clean result is always reusable, a failing one too unless asked otherwise (any
     # repair or edit changes the fingerprint and runs the commands again).
+    # Impacted-tests scope (scripts/lib/test_scope.py): decided by the build class, and by the operator for a standard
+    # change. Only this final run is scoped; the baseline above ran the full commands. A scoped command is new to the
+    # classifier, so a failure of it is a REGRESSION, never excused by a failing baseline.
+    local green_cmds_run="$GREEN_CMDS" green_scoped=0
+    rm -f "$STATE_DIR/test-scope.json"
+    if [[ "$(change_class_test_scope)" == impacted ]]; then
+        python3 -B "$ROOT/scripts/lib/test_scope.py" rewrite . "$GREEN_CMDS" "$STATE_DIR/green-check.scoped.commands" \
+            "$STATE_DIR/test-scope.json" "$(python3 -B "$ROOT/scripts/lib/change_class.py" get . class standard)" || true
+        if grep -q '"applied": true' "$STATE_DIR/test-scope.json" 2>/dev/null; then
+            green_cmds_run="$STATE_DIR/green-check.scoped.commands"; green_scoped=1
+            echo "Final check scope: impacted tests only (see 'Test scope' in the green check report)."
+        fi
+    fi
     local green_fingerprint="" green_reused=0
     if [[ "${WORKFLOW_GREEN_CHECK_REUSE:-1}" == 1 ]]; then
-        green_fingerprint="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
+        green_fingerprint="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$green_cmds_run" 2>/dev/null || true)"
         local remembered remembered_status
         # A bare `var=$(cmd)` assignment is NOT exempt from this script's
         # `set -e` the way a command substitution used as an argument is --
@@ -1141,11 +1154,18 @@ run_green_check() {
         rm -f "$STATE_DIR/green-check.fingerprint"
         echo
         echo "Re-running this project's checks from the driver:"
-        resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
-        green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" "" "$STATE_DIR/green-check.groups" || exit $?
+        if [[ "$green_scoped" == 1 ]]; then
+            : > "$STATE_DIR/green-check.groups"      # the plan's groups index the full command list; a scoped run is short
+        else
+            resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
+        fi
+        green_run "$green_cmds_run" "$GREEN_CUR" "$LOG_DIR/green-check.log" "" "$STATE_DIR/green-check.groups" || exit $?
         green_classify "$GREEN_BASE" "$GREEN_CUR" > "$GREEN_CLASS"
         green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/BASELINE_REPORT.md \
             "$LOG_DIR/green-check.log"
+        if [[ "$green_scoped" == 1 ]]; then
+            { echo; python3 -B "$ROOT/scripts/lib/test_scope.py" report "$STATE_DIR/test-scope.json"; } >> "$GREEN_MD"
+        fi
     fi
 
     local regressions
@@ -1154,7 +1174,7 @@ run_green_check() {
     if [[ "$green_reused" == 0 && -n "$green_fingerprint" ]]; then
         local green_after green_outcome=clean
         [[ "$regressions" == 0 ]] || green_outcome=failed
-        green_after="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
+        green_after="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$green_cmds_run" 2>/dev/null || true)"
         if [[ -n "$green_after" ]]; then
             printf '%s %s\n' "$green_after" "$green_outcome" > "$STATE_DIR/green-check.fingerprint"
         fi

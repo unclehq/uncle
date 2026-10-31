@@ -21,6 +21,7 @@ text; nothing here depends on one runner's output protocol.
     change_class.py prompt   FAMILY PROJECT PLAN OUT TEMPLATE
     change_class.py finish   FAMILY PROJECT PLAN DELIVERY [LOG]     # validate, clamp, write change-class.json
     change_class.py fallback FAMILY PROJECT PLAN                    # deterministic profile only
+    change_class.py owned    FAMILY PROJECT PLAN                    # the files the plan says it will change
     change_class.py force    FAMILY PROJECT PLAN CLASS               # WORKFLOW_CHANGE_CLASS
     change_class.py current  FAMILY PROJECT PLAN                    # exit 0 when change-class.json matches this plan
     change_class.py get      PROJECT KEY [DEFAULT]                  # class | lenses | edit_slice | source
@@ -36,6 +37,9 @@ LENSES = ('requirements', 'regression', 'security', 'testability')
 CLASSES = ('docs', 'test-only', 'small', 'standard', 'large', 'risky')
 REDUCIBLE = ('docs', 'test-only', 'small')          # the only classes whose lens set the model may trim
 SLICE_BY_CLASS = {'docs': 8, 'test-only': 6, 'small': 4, 'standard': 2, 'large': 2, 'risky': 2}
+# How much of the test suite the final check runs (scripts/lib/test_scope.py): impacted tests only, the full suite, or ask the
+# operator. Never the model's call: it follows from the class, and only a change request has an existing suite to scope.
+TEST_SCOPE = {'docs': 'impacted', 'test-only': 'impacted', 'small': 'impacted', 'standard': 'ask', 'large': 'full', 'risky': 'full'}
 OUTPUT = Path('.uncle/workflow/change-class.json')
 
 # Matched against what the *request* says and which files the plan touches, never against the plan's own prose: a plan carries
@@ -186,7 +190,8 @@ def profile(cls, f, proposed=None):
     size = bound if not isinstance(wanted, int) or isinstance(wanted, bool) else max(1, min(wanted, bound))
     if cls not in REDUCIBLE:
         size = min(size, 2)
-    return {'adversarial_lenses': ordered(chosen), 'edit_slice': size}
+    return {'adversarial_lenses': ordered(chosen), 'edit_slice': size,
+            'test_scope': TEST_SCOPE[cls] if f['family'] == 'change' else 'full'}
 
 
 def merge(cls_floor, cls_model):
@@ -300,6 +305,9 @@ def main(argv):
         write(project, result)
         print('%s (fallback): lenses=%s edit_slice=%s' % (result['class'], ','.join(result['adversarial_lenses']),
                                                         result['edit_slice']))
+    elif command == 'owned' and len(argv) == 5:
+        for path in plan_steps_and_owns(argv[4])[1]:
+            print(path)
     elif command == 'force' and len(argv) == 6:
         family, project, plan, cls = argv[2:6]
         if cls not in CLASSES:

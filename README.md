@@ -320,6 +320,27 @@ badly gets the deterministic profile and the build continues; the stage never bl
 | `WORKFLOW_UPDATED_PLAN_EDIT_SLICE` / `WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE` | Force findings per edit writer. |
 | Stage rerun of `classify-change` | Re-classify the current plan. |
 
+#### Test scope
+
+The class also decides how much of the test suite the **final** check runs. The baseline always runs the full approved commands,
+and the driver's own result is what a change is judged on, so scoping only shortens the final run, and only where it is
+defensible:
+
+| Class | Final check |
+|---|---|
+| `docs`, `test-only`, `small` | Impacted suites only, when the mapping is confident. |
+| `standard` | **Asks you** (attended runs): "verify with only the N suites it can affect (of M)? [Y/N]". Anything but yes runs the full suite. Unattended runs never ask and run the full suite. |
+| `large`, `risky`, and every new application | The full suite. |
+
+Impact is mapped from the files the change touches: a test maps to itself, and any other file maps to the suites that name it. A
+file no suite names, or a hot file named by more than 12 suites, is not "impacted tests", so the full suite runs. Only Uncle's two
+runners (`scripts/run-python-tests.sh`, `scripts/run-shell-tests.sh`) are scoped, by adding `-- suite ...`; every other command
+runs exactly as approved. A runner with no impacted suite is omitted and reported **NOT RUN**, never replaced by something that
+passes. A scoped command is new to the green check, so a failure of it is a regression, never excused by a failing baseline. The
+green check report gains a `Test scope` section naming what ran and what did not.
+
+`WORKFLOW_TEST_SCOPE=full` runs everything; `WORKFLOW_TEST_SCOPE=impacted` forces the scope.
+
 ## Uncle builds Uncle
 
 Uncle is developed using Uncle.

@@ -117,6 +117,26 @@ class Clamp(unittest.TestCase):
         self.assertEqual(built['adversarial_lenses'], ['requirements', 'regression', 'testability'])
 
 
+class TestScope(unittest.TestCase):
+    def scope(self, **kwargs):
+        return Project(self, **kwargs).build()['test_scope']
+
+    def test_the_class_decides_how_much_of_the_suite_the_final_check_runs(self):
+        self.assertEqual(self.scope(body=plan(['README.md', 'docs/guide.md'])), 'impacted')            # docs
+        self.assertEqual(self.scope(body=plan(['scripts/tests/a-test.py'])), 'impacted')                # test-only
+        self.assertEqual(self.scope(), 'impacted')                                                      # small
+        self.assertEqual(self.scope(body=plan(*[['src/m%d.py' % n] for n in range(4)])), 'ask')         # standard
+        self.assertEqual(self.scope(body=plan(*[['src/m%d.py' % n] for n in range(8)])), 'full')        # large
+        self.assertEqual(self.scope(request='Rotate the signing key.'), 'full')                         # risky
+
+    def test_a_new_application_always_uses_the_full_suite(self):
+        self.assertEqual(self.scope(request='A calculator page.', family='app'), 'full')
+
+    def test_the_model_cannot_widen_the_scope(self):
+        built = Project(self, request='Rotate the signing key.').build({'class': 'docs', 'test_scope': 'impacted'})
+        self.assertEqual((built['class'], built['test_scope']), ('risky', 'full'))
+
+
 class Extraction(unittest.TestCase):
     PACKET = {'schema': 'uncle.artifact/v1', 'kind': 'change-class', 'class': 'small', 'rationale': 'tiny'}
 

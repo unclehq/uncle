@@ -11,7 +11,7 @@ awk '/^(updated_plan_launch_writer|updated_plan_warm_prefix|run_updated_plan_edi
 check "function extracted" test -s "$TMP/fn.sh"
 
 run_case() {   # name mode [hosted|local]
-    local name="$1" mode="$2" runner="${3:-hosted}" dir="$TMP/$1"
+    local name="$1" mode="$2" runner="${3:-hosted}" dir="$TMP/$1" ops_fixture_case="$1"
     mkdir -p "$dir/.uncle/workflow/documents" "$dir/.uncle/workflow/logs" "$dir/.uncle/docs"
     python3 -B - "$dir" "$ROOT" "$mode" <<'PY'
 import json, sys
@@ -50,6 +50,19 @@ PY
             echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} grammar=${UNCLE_WORKER_SCHEMA_FILE:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
             printf '%s %s %s\n' "$n" "${UNCLE_WORKER_MAX_TURNS:-}" "${UNCLE_UPDATED_PLAN_ANSWER_TOKENS:-}" >> "$STATE_DIR/budgets"
             if [[ "$mode:$n" == cap:2 ]]; then echo 'answer_cap' >&2; return 1; fi
+            if [[ "$ops_fixture_case:$n" == adaptive:1 || "$ops_fixture_case:$n" == bounded-2:1 ]]; then
+                # Schema preparation may outlast the stub; hold one writer until its sibling starts.
+                python3 -B - "$STATE_DIR/starts" <<'PYOVERLAP'
+from pathlib import Path
+import sys, time
+path = Path(sys.argv[1])
+deadline = time.monotonic() + 10
+while '2' not in path.read_text().splitlines():
+    if time.monotonic() >= deadline:
+        raise AssertionError('second adaptive writer never started while first was active')
+    time.sleep(.01)
+PYOVERLAP
+            fi
             sleep 0.2
             [[ "$mode:$n" != fail:2 && "$mode:$n" != fail:2-* && "$mode:$n" != failonce:2 ]] || return 1
             if [[ "$2" == updated-plan-worker-resolve-* ]]; then

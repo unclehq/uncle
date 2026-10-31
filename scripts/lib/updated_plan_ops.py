@@ -35,7 +35,8 @@ Conflict, NeedsResolution, CHANGE = base.Conflict, base.NeedsResolution, base.CH
 OPS_RULES = '''`ops` is an array of edits to the plan model in the last section of this prompt. The plan is JSON: sections
 hold blocks, blocks hold rows, list items or steps, and every section, block, row, item and step has an `id`.
 You name an id that exists. You never quote text and never name a heading. Follow the supplied schema's field types;
-list fields (requirements, files, owns) use string arrays and a step's depends_on uses an integer array.
+list fields (requirements, files, owns) use string arrays. Existing step dependencies use numbers or step ids;
+`new:N` references the Nth inserted step in this packet when an existing step must depend on it.
 Legacy schemas may instead request comma-separated strings for these lists.
 
 - `{"op":"set_fields","id":"B-1","fields":{"failure":"..."}}` changes only the named fields of the row `id`. The
@@ -45,8 +46,11 @@ Legacy schemas may instead request comma-separated strings for these lists.
   changes only the fields named.
 - `{"op":"insert_row","target":"<id of a rows block>","after":"B-3","new":{"id":"B-9", ...fields}}` adds a row after
   the row `after` ("" for first). The new row's id is new and unused.
-- `{"op":"insert_item","target":"<id of a list or steps block>","after":"<item id or empty>","new":{...}}` adds a list item
-  (`{"text":"..."}`) or a step (`{"id":"step-3","number":3,"title":"...","text":"...","owns":["a.js"],"depends_on":[1]}`).
+- `{"op":"insert_item","target":"<id of a list block>","after":"<item id or empty>","new":{"text":"..."}}` adds a list item.
+- `{"op":"insert_step","after":"step-1","new":{"title":"...","text":"...","owns":["a.js"],"depends_on":["step-1"]}}`
+  adds an implementation step. Use `before` instead of `after` to insert before an existing step, or `after:"end"` to append.
+  Never supply a new step's id or number: the driver assigns both and rewrites dependencies after merging every packet.
+  New-step dependencies name existing step ids, or `new:N` for the Nth new step in this packet (1-based).
 - `{"op":"insert_block","target":"<section id>","after":"<block id or empty>","block":{"kind":"prose","text":"..."}}`; block
   kinds are prose, heading (level, text), code (lang, text) and list (items: an array of strings).
 - `{"op":"delete","id":"..."}` removes a row, list item, step or block.
@@ -95,10 +99,11 @@ def option(name, default):
     stage = os.environ.get('UNCLE_PLAN_KIND', '')
     family = 'updated-change-plan' if stage == 'change-plan' else 'updated-plan'
     names = list(dict.fromkeys([family, 'updated-plan']))
+    convert = int if isinstance(default, int) else str
     for prefix in names:
         key = 'WORKFLOW_' + (prefix + '-' + name).upper().replace('-', '_')
         if os.environ.get(key, '').strip():
-            return int(os.environ[key])
+            return convert(os.environ[key])
     # Retain existing callers' slice controls.
     if name == 'group-size':
         for key in ('WORKFLOW_UPDATED_PLAN_EDIT_SLICE', 'WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE'):
@@ -106,8 +111,35 @@ def option(name, default):
                 return int(os.environ[key])
     for prefix in names:
         if config.get(prefix + '.' + name):
-            return int(config[prefix + '.' + name])
+            return convert(config[prefix + '.' + name])
     return default
+
+
+def strict_schema_attempt(attempt=None):
+    if not option('strict-op-schemas', 1):
+        return False
+    # Only self-hosted callers pass an attempt; other runners keep their schema.
+    if attempt is None:
+        return True
+    mode = option('strict-schema', 'retry').strip().lower()
+    if mode not in ('first', 'retry', 'always') or attempt not in ('first', 'retry'):
+        raise ValueError('updated-plan.strict-schema must be first, retry or always')
+    return mode == 'always' or mode == attempt
+
+
+def check_writer(plan_path, packet_path, ids):
+    plan = base.read_json(plan_path)
+    model = plan_model_of(plan, plan_path)
+    delivery = read_packet(packet_path)
+    findings = {row.get('finding') for row in delivery.get('dispositions') or [] if isinstance(row, dict)}
+    missing = set(ids.split(',')) - findings
+    if missing:
+        raise pm.PlanError('missing dispositions for %s' % ', '.join(sorted(missing)))
+    pm.apply_ops(model, [pm.typed_op(model, flat) for flat in delivery.get('ops') or []])
+    commands = (plan.get('verification_commands') or '').strip()
+    for edit in delivery.get('commands_replace') or []:
+        if not isinstance(edit, dict) or not edit.get('old') or commands.count(edit['old']) != 1:
+            raise pm.PlanError('command text is not in the verification commands exactly once')
 
 
 def slices(ids):
@@ -425,7 +457,7 @@ def late_ops_of(model, path, applied):
             notes.append('dropped %s: an earlier edit already changes it' % json.dumps(flat)[:80])
             continue
         kept.append(op)
-    return kept, notes
+    return pm.namespace_steps(kept, 'reconcile'), notes
 
 
 def ops_of(delivery, model, writer):
@@ -438,7 +470,7 @@ def ops_of(delivery, model, writer):
             typed.append(pm.typed_op(model, flat))
         except (pm.PlanError, ValueError, KeyError) as error:
             typed.append({'op': 'invalid', 'flat': flat, 'why': str(error)})
-    return typed
+    return pm.namespace_steps(typed, writer)
 
 
 def op_group(writer_ops, model):
@@ -457,10 +489,19 @@ def op_group(writer_ops, model):
     for key in scope:
         node = where[key][0]
         context[key] = {field: value for field, value in node.items() if field not in ('blocks', 'rows', 'items')}
+    edits = []
+    for writer, op in writer_ops:
+        shown = copy.deepcopy(op.get('flat', op))
+        shown.pop('_step_key', None)
+        for fields in (shown, shown.get('new', {})):
+            if 'depends_on' in fields and isinstance(fields['depends_on'], list):
+                fields['depends_on'] = ['new:' + dep.rsplit(':', 1)[-1]
+                                        if isinstance(dep, str) and dep.startswith('new:') else dep
+                                        for dep in fields['depends_on']]
+        edits.append({'writer': writer, 'op': shown, **({'problem': op['why']} if op.get('op') == 'invalid' else {})})
     return {'kind': 'ops', 'heading': ', '.join(touched[:4]) or '(the plan)',
             'context': json.dumps(context, ensure_ascii=False, indent=1),
-            'edits': [{'writer': w, 'op': op.get('flat', op), **({'problem': op['why']} if op.get('op') == 'invalid' else {})}
-                      for w, op in writer_ops],
+            'edits': edits,
             'refs': [op for _, op in writer_ops]}
 
 
@@ -503,11 +544,36 @@ def apply_leniently(model, attributed):
     """(model, [(op, why, writers) that could not be applied]) for [(writers, op)]: each op alone, in order, so one
     bad op costs only itself and only the findings of the writers who wrote it."""
     dropped = []
+    additions = []
     for writers, op in attributed:
+        if op.get('op') == 'insert_step' or any(isinstance(dep, str) and dep.startswith('new:')
+                                               for dep in op.get('depends_on', [])):
+            additions.append((writers, op))
+            continue
         try:
             model = pm.apply_ops(model, [op])
         except (pm.PlanError, ValueError, KeyError, TypeError) as error:
             dropped.append((op, str(error), writers))
+    if additions:
+        try:
+            model = pm.apply_ops(model, [op for _, op in additions], normalize_new=False)
+        except (pm.PlanError, ValueError, KeyError, TypeError):
+            # Keep packet-local references atomic; one bad packet must not discard
+            # unrelated new steps. Reapply the accepted prefix to preserve anchors.
+            packets = {}
+            for writers, op in additions:
+                key = op.get('_step_key') or next(dep for dep in op['depends_on']
+                                                 if isinstance(dep, str) and dep.startswith('new:'))
+                packets.setdefault(key.rsplit(':', 1)[0], []).append((writers, op))
+            accepted, revised = [], model
+            for packet in packets.values():
+                candidate = accepted + [op for _, op in packet]
+                try:
+                    revised = pm.apply_ops(model, candidate, normalize_new=False)
+                    accepted = candidate
+                except (pm.PlanError, ValueError, KeyError, TypeError) as error:
+                    dropped.extend((op, str(error), writers) for writers, op in packet)
+            model = revised
     return model, dropped
 
 
@@ -684,12 +750,15 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
     for group in groups:
         row = answers.get(group['id'], {})
         if group['kind'] == 'ops':
+            resolved = []
             for flat in row.get('ops') or []:
                 try:
-                    final_ops.append(({e['writer'] for e in group['edits']}, pm.typed_op(model, flat)))
+                    resolved.append(pm.typed_op(model, flat))
                 except (pm.PlanError, ValueError, KeyError) as error:
                     print('updated-plan ops: group %s: %s' % (group['id'], error), file=sys.stderr)
                     base.leave_out(dispositions, owners, {e['writer'] for e in group['edits']}, 1)
+            final_ops.extend(({e['writer'] for e in group['edits']}, op)
+                             for op in pm.namespace_steps(resolved, 'resolver-' + group['id']))
         for edit in row.get('commands_replace') or []:
             if isinstance(edit, dict) and isinstance(edit.get('old'), str) and isinstance(edit.get('new'), str):
                 command_edits.append(('resolver-' + group['id'], edit['old'], edit['new']))
@@ -709,8 +778,9 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
                 base.leave_out(dispositions, owners, writers, 1)
     else:
         new_model = pm.apply_ops(model, [op for _, op in final_ops])
-    if numbering:
-        new_model = pm.renumber_steps(new_model, Path.cwd())
+    has_new_steps = any(op.get('op') == 'insert_step' for _, op in final_ops)
+    if numbering or has_new_steps:
+        new_model = pm.renumber_steps(new_model, Path.cwd(), assign_ids=has_new_steps)
     errors, _ = pm.validate(new_model)
     if errors:
         raise Conflict('the revised plan does not validate: %s' % '; '.join(errors))
@@ -765,9 +835,11 @@ def check_resolutions(plan_path, directory):
                 pm.apply_ops(model, [pm.typed_op(model, flat) for flat in row.get('ops') or []])
             except (pm.PlanError, ValueError, KeyError, TypeError) as error:
                 bad[group['id']] = str(error)
+                Path(directory, 'prompts', 'resolve-%s.validator-rejected' % group['id']).write_text(str(error))
         for edit in row.get('commands_replace') or []:
             if isinstance(edit, dict) and commands.count(edit.get('old') or '\0') != 1:
                 bad[group['id']] = 'command text %r is not in the verification commands exactly once' % (edit.get('old') or '')[:120]
+                Path(directory, 'prompts', 'resolve-%s.validator-rejected' % group['id']).write_text(bad[group['id']])
     for gid, why in bad.items():
         original = Path(directory, 'prompts', 'resolve-%s.md' % gid).read_text(encoding='utf-8')
         Path(directory, 'prompts', 'resolve-%s.retry.md' % gid).write_text(
@@ -1027,6 +1099,12 @@ def main(argv):
             print('on' if http_option('writer-schema-first', 'on') in ('off', '0', 'false') else 'off')
         elif command == 'capture' and len(rest) == 1:
             capture_packet(rest[0])
+        elif command == 'check-writer' and len(rest) == 3:
+            try:
+                check_writer(*rest)
+            except (pm.PlanError, ValueError, KeyError, TypeError) as error:
+                print(str(error), file=sys.stderr)
+                return 5
         elif command == 'prompt' and len(rest) in (3, 4):
             write_prompt(rest[0], [i for i in rest[1].split(',') if i], rest[2], owns_fields=len(rest) == 4)
         elif command == 'repair-prepare' and len(rest) == 4:

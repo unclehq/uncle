@@ -44,8 +44,9 @@ Goals
   stage config, then family config precedence (`WORKFLOW_UPDATED_CHANGE_PLAN_SCOPE_SECTIONS`,
   `WORKFLOW_UPDATED_PLAN_SCOPE_SECTIONS`, and the corresponding `.finding-scopes` settings).
   Resolver scopes use the conflicting targets and their ancestors, with the same evidence fallback for missing targets.
-  Schemas remain inline for runner compatibility, omit redundant keywords and use compact JSON. Per-kind operations, field
-  types, existing-id constraints and parent-specific insertion anchors remain enforced.
+  Schemas remain inline for runner compatibility, omit redundant keywords and use compact JSON. Self-hosted edit writers
+  and resolvers use the fast generic schema first, escalating to these per-kind scoped schemas only after local plan
+  validation rejects their answer; see [edit-writer settings](updated-plan-slicing.md). Other runners retain scoped schemas.
   Ownership repair reads legacy heading-form assignments without changing their layout and compares `./path` with `path`.
   Heading steps under any level of Implementation order/steps/sequence share the same records across ownership, shell and
   scheduling readers; alphanumeric labels such as `3b` retain their display label and use positional identities internally.
@@ -102,6 +103,8 @@ Ids
 - Everything else gets a generated id, `<section id>.<n>` (`s4.7`), assigned at import in document order and
   stored. New blocks take the next unused number in their section. Ids are never reused after a delete.
 - Steps are addressed by `step-<number>` as written in the plan; `depends_on` holds step numbers.
+  Edit packets add steps with `insert_step`, placement, and unnumbered content. The driver assigns their numbers/ids at
+  merge and rewrites dependencies, including packet-local `new:N` references, in implementation order.
 
 ## Row kinds
 

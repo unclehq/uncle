@@ -520,6 +520,10 @@ def next_id(model, prefix):
 
 
 def op_keys(op):
+    if op.get('op') == 'insert_step':
+        references = [op.get('after'), op.get('before')] + op['new']['depends_on']
+        return ({(op['list'], 'insert:' + op.get('_step_key', 'new'))}
+                | {(key, 'reference') for key in references if key and key != 'end'})
     """What an op touches, for conflict detection: (id, field) pairs; field '*' means all of it."""
     name = op.get('op')
     if name == 'set_fields':
@@ -568,6 +572,8 @@ def conflicts(model, ops_by_writer):
         return False
 
     def clash(a, b):
+        if a.get('op') == b.get('op') == 'insert_step':
+            return False
         for ka, fa in op_keys(a):
             for kb, fb in op_keys(b):
                 if ka == kb and (fa == fb or '*' in (fa, fb)):
@@ -585,9 +591,16 @@ def conflicts(model, ops_by_writer):
                 entries.append((writer, op))
     groups = []
     for writer, op in entries:
-        hit = [g for g in groups if any(clash(op, other) and writer != w for w, other in g)]
+        hit = [g for g in groups if any((clash(op, other) and writer != w)
+                                       or (writer == w and new_step_packets(op) & new_step_packets(other))
+                                       for w, other in g)]
         groups = [g for g in groups if g not in hit] + [[item for g in hit for item in g] + [(writer, op)]]
     return [g for g in groups if len({w for w, _ in g}) > 1]
+
+
+def new_step_packets(op):
+    references = [op.get('_step_key')] + op.get('depends_on', [])
+    return {ref.rsplit(':', 1)[0] for ref in references if isinstance(ref, str) and ref.startswith('new:')}
 
 
 def fresh_ids(model, section_id, block):
@@ -611,16 +624,44 @@ def locate(model, key):
     return where[key]
 
 
-def apply_ops(model, ops, root=None):
+def apply_ops(model, ops, root=None, normalize_new=True):
     """A new model with every op applied; the first op that names something missing raises PlanError."""
     root = Path.cwd() if root is None else root
     # An edit answers for what it changes: a quirk the plan already had (run 12's
     # nested "1." read as a second step 1) must not block an unrelated fix.
     already = set(validate(model, root=root)[0])
     model = copy.deepcopy(model)
+    additions = [op for op in ops if op.get('op') == 'insert_step']
+    step_numbers = {s['id']: s['number'] for s in steps_of(model)}
+    next_number = max(step_numbers.values(), default=0) + 1
+    for offset, op in enumerate(additions):
+        key = op.get('_step_key', 'new:%d' % (offset + 1))
+        if key in step_numbers:
+            raise PlanError('duplicate new step reference %s' % key)
+        step_numbers[key] = next_number + offset
+    tails = {}
+    new_index = 0
     for op in ops:
         name = op.get('op')
-        if name == 'set_fields':
+        if name == 'insert_step':
+            new_index += 1
+            key = op.get('_step_key', 'new:%d' % new_index)
+            rows = locate(model, op['list'])[0]['items']
+            new = copy.deepcopy(op['new'])
+            deps = new.get('depends_on', [])
+            if any(dep not in step_numbers for dep in deps):
+                raise PlanError('new step depends_on must name an existing step id or new:N in this packet')
+            new.update(id=key, number=step_numbers[key], depends_on=[step_numbers[dep] for dep in deps])
+            if op.get('before'):
+                position = rows.index(locate(model, op['before'])[0])
+            elif op.get('after') == 'end':
+                position = len(rows)
+            else:
+                anchor = tails.get((op['list'], op.get('after')), op.get('after'))
+                position = rows.index(locate(model, anchor)[0]) + 1 if anchor else 0
+                tails[(op['list'], op.get('after'))] = key
+            rows.insert(position, new)
+        elif name == 'set_fields':
             row = locate(model, op['id'])[0]
             for field, value in (op.get('fields') or {}).items():
                 if field not in row and field != 'extra':
@@ -637,7 +678,12 @@ def apply_ops(model, ops, root=None):
                 raise PlanError('%s is not a step' % op['id'])
             for field in ('title', 'text', 'owns', 'depends_on'):
                 if field in op:
-                    node[field] = op[field]
+                    value = op[field]
+                    if field == 'depends_on':
+                        if any(isinstance(dep, str) and dep not in step_numbers for dep in value):
+                            raise PlanError('step depends_on must name an existing step or new:N in this packet')
+                        value = [step_numbers[dep] if isinstance(dep, str) else dep for dep in value]
+                    node[field] = value
         elif name == 'delete':
             node, parent, _ = locate(model, op['id'])
             parent.remove(node)
@@ -677,13 +723,15 @@ def apply_ops(model, ops, root=None):
     errors = [e for e in validate(model, root=root)[0] if e not in already]
     if errors:
         raise PlanError(errors[0])
+    if additions and normalize_new:
+        model = renumber_steps(model, root, assign_ids=True)
     return model
 
 
 # ---- flat ops (what a model writes) -------------------------------------------------------------------
 
 FIELD_NAMES = sorted({f[0] for fields in ROW_KINDS.values() for f in fields})
-OP_NAMES = ('set_fields', 'set_text', 'set_step', 'insert_row', 'insert_item', 'insert_block', 'delete', 'insert_section')
+OP_NAMES = ('set_fields', 'set_text', 'set_step', 'insert_row', 'insert_item', 'insert_step', 'insert_block', 'delete', 'insert_section')
 
 
 def split_list(text):
@@ -743,6 +791,8 @@ def typed_op(model, flat):
     name = flat.get('op')
     if name not in OP_NAMES:
         raise PlanError('unknown op %r' % name)
+    if name == 'insert_step':
+        return new_step_op(model, flat)
     if name in ('set_fields', 'set_text', 'set_step', 'delete'):
         node = locate(model, flat.get('id') or '')[0]
         if name == 'delete':
@@ -755,7 +805,16 @@ def typed_op(model, flat):
                 raise PlanError('a step has the fields title, text, owns and depends_on')
             op = {'op': 'set_step', 'id': flat['id']}
             for field, value in fields.items():
-                op[field] = split_list(value) if field == 'owns' else dependency_list(value) if field == 'depends_on' else value
+                if field == 'depends_on' and ((isinstance(value, list) and any(isinstance(v, str) for v in value))
+                                             or (isinstance(value, str) and re.search(r'(?:step-|new:)', value))):
+                    if isinstance(value, list):
+                        if any(type(dep) is not int and not isinstance(dep, str) for dep in value):
+                            raise PlanError('depends_on: use step numbers, existing step ids or new:N')
+                        op[field] = value[:]
+                    else:
+                        op[field] = split_list(value)
+                else:
+                    op[field] = split_list(value) if field == 'owns' else dependency_list(value) if field == 'depends_on' else value
             return op
         block = block_of(model, node)
         if block['kind'] != 'rows':
@@ -778,6 +837,8 @@ def typed_op(model, flat):
                 raise PlanError('%s is not a typed rows block' % flat['target'])
             return {'op': 'insert_row', 'block': flat['target'], 'after': after, 'row': typed_row(block['row_kind'], new)}
         if block.get('kind') == 'steps':
+            if 'id' not in new and 'number' not in new:
+                return new_step_op(model, dict(flat, op='insert_step'))
             number = int(new.get('number') or 0)
             if number < 1 or new.get('id') != 'step-%d' % number:
                 raise PlanError('a new step needs a number and the id step-<number>')
@@ -793,6 +854,51 @@ def typed_op(model, flat):
         return {'op': 'insert_block', 'section': flat['target'], 'after': after, 'block': typed_block(flat.get('block') or {})}
     return {'op': 'insert_section', 'after': flat.get('after') or '', 'heading': flat.get('heading') or '',
             'blocks': [typed_block(b) for b in flat.get('blocks') or []]}
+
+
+def new_step_op(model, flat):
+    new = flat.get('new') or {}
+    if set(new) - {'title', 'text', 'owns', 'depends_on'}:
+        raise PlanError('a new step has title, text, owns and depends_on; the driver assigns its id and number')
+    if 'after' in flat and 'before' in flat:
+        raise PlanError('a new step needs only one placement: after, before, or after end')
+    after, before = flat.get('after'), flat.get('before')
+    if after is None and before is None:
+        raise PlanError('a new step needs after or before (after end appends)')
+    blocks = [b for s in model['sections'] for b in s['blocks'] if b['kind'] == 'steps']
+    if flat.get('target'):
+        blocks = [b for b in blocks if b['id'] == flat['target']]
+    anchor = before or (after if after != 'end' else None)
+    if anchor:
+        blocks = [b for b in blocks if any(s['id'] == anchor for s in b['items'])]
+    if not blocks or (anchor and len(blocks) != 1):
+        raise PlanError('new step placement must name an existing implementation step')
+    block = blocks[-1] if after == 'end' else blocks[0]
+    deps = split_list(new.get('depends_on', []))
+    existing = {s['id'] for s in steps_of(model)}
+    if any(dep not in existing and not re.fullmatch(r'new:[1-9][0-9]*', dep) for dep in deps):
+        raise PlanError('new step depends_on must name an existing step id or new:N in this packet')
+    return dict(op='insert_step', list=block['id'], **({'before': before} if before else {'after': after}),
+                new={'title': new.get('title', ''), 'text': new.get('text', ''),
+                     'owns': split_list(new.get('owns', [])), 'depends_on': deps})
+
+
+def namespace_steps(ops, packet):
+    """Packet-local new:N references stay distinct when parallel packets are combined."""
+    count = 0
+    result = copy.deepcopy(ops)
+    for op in result:
+        if op.get('op') == 'insert_step':
+            count += 1
+            op['_step_key'] = 'new:%s:%d' % (packet, count)
+            op['new']['depends_on'] = ['new:%s:%s' % (packet, dep[4:]) if dep.startswith('new:') else dep
+                                       for dep in op['new']['depends_on']]
+        elif op.get('op') == 'set_step' and 'depends_on' in op:
+            op['depends_on'] = ['new:%s:%s' % (packet, dep[4:]) if isinstance(dep, str) and dep.startswith('new:') else dep
+                                for dep in op['depends_on']]
+        elif op.get('op') == 'invalid' and op.get('flat', {}).get('op') == 'insert_step':
+            count += 1
+    return result
 
 
 # ---- authoring: a worker's flat blocks -> typed sections -----------------------------------------------
@@ -941,10 +1047,10 @@ def records_enabled(root=None):
     return value.strip().lower() in ('1', 'true')
 
 
-def renumber_steps(model, root=None):
+def renumber_steps(model, root=None, assign_ids=False):
     """Repair only numbering, leaving ambiguous references for the normal correction round."""
     steps = steps_of(model)
-    if not steps or all(step.get('number') == n for n, step in enumerate(steps, 1)):
+    if not steps or (not assign_ids and all(step.get('number') == n for n, step in enumerate(steps, 1))):
         return model
     if any(type(step.get('number')) is not int or step['number'] < 0 for step in steps):
         return model
@@ -960,6 +1066,8 @@ def renumber_steps(model, root=None):
                 return model
             mapped.append(targets[0])
         step['number'], step['depends_on'] = position, mapped
+        if assign_ids:
+            step['id'] = 'step-%d' % position
     return model if validate(revised, root=root)[0] else revised
 
 

@@ -104,6 +104,26 @@ class StructureScope(unittest.TestCase):
                 self.assertIn('`src/ui.js`', repaired['narrative'])
                 self.assertNotIn('./tests/unknown.test.js', repaired['narrative'])
 
+    def test_only_unowned_protected_paths_can_be_removed_during_repair(self):
+        plan = self.typed_plan()
+        plan['protected_verification_paths'] = 'src/core.js\ntests/unknown.test.js'
+        self.write_plan(plan)
+        self.assertEqual(ops.prepare_structure_repair(self.plan, self.root, self.repair,
+                         'a protected verification path with no owning implementation step'), 3)
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
+                  'dispositions': [], 'ops': [], 'protected_verification_paths': ''}
+        (self.repair / 'packet.json').write_text(json.dumps(packet))
+        with self.assertRaises(ops.Conflict):
+            ops.apply_structure_repair(self.repair, self.root)
+        packet['protected_verification_paths'] = 'src/core.js'
+        (self.repair / 'packet.json').write_text(json.dumps(packet))
+        ops.apply_structure_repair(self.repair, self.root)
+        repaired = json.loads((self.repair / 'repaired.json').read_text())
+        self.assertEqual(repaired['protected_verification_paths'], 'src/core.js')
+        self.assertEqual(repaired['verification_commands'], plan['verification_commands'])
+        self.assertEqual(repaired['dispositions'], plan['dispositions'])
+        self.assertEqual(repaired['narrative'], plan['narrative'])
+
     def test_out_of_scope_delivery_gets_one_retry_with_the_reason(self):
         self.write_plan(self.typed_plan())
         script = self.root / 'driver.sh'

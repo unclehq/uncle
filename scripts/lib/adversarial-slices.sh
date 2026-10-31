@@ -46,6 +46,11 @@ run_adversarial_review_slices() {
     for pid in "${pids[@]}"; do
         wait "$pid" || failed=1
     done
+    for lens in requirements regression security testability; do
+        for ((index=1; index<=count; index++)); do
+            cat "$LOG_DIR/adversarial-review-worker-$lens-slice-$index.log"
+        done > "$LOG_DIR/adversarial-review-worker-$lens.log"
+    done
     [[ "$failed" == 0 ]] || return 1
     python3 -B "$ROOT/scripts/lib/adversarial_slices.py" merge "$directory" "$count"
 }

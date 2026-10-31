@@ -42,6 +42,15 @@ PY
             [[ "$mode:$n" != fail:2 && "$mode:$n" != fail:2-* && "$mode:$n" != failonce:2 ]] || return 1
             if [[ "$2" == updated-change-plan-worker-resolve-* ]]; then
                 echo resolver >> "$STATE_DIR/resolver-calls"
+                printf '%s %s %s\n' "$2" "${UNCLE_WORKER_MAX_TURNS:-none}" "${UNCLE_UPDATED_PLAN_ANSWER_TOKENS:-none}" >> "$STATE_DIR/resolver-budgets"
+                if [[ "$mode" == resolver-cap || "$mode" == resolver-dead ]]; then
+                    local group="${2##*-resolve-}"; group="${group%-retry}"
+                    if [[ "$group" == G1 && ( "$2" != *-retry || "$mode" == resolver-dead ) ]]; then
+                        echo 'answer_cap' >&2; return 1
+                    fi
+                    printf '{"resolutions":[{"group":"%s","ops":[{"op":"set_fields","id":"B-%s","fields":{"failure":"MERGED"}}]}]}' "$group" "${group#G}" > "$UNCLE_WORKER_PACKET_PATH"
+                    return 0
+                fi
                 [[ "$mode" == resolve || "$mode" == resolve-retry ]] || return 1
                 local id="B-1"
                 if [[ "$mode" == resolve-retry && "$2" != *-retry ]]; then id="B-9"; fi
@@ -56,6 +65,8 @@ ids = re.search(r'You own exactly these findings: ([^.]*)\.', text).group(1).spl
 row = 'B-1' if (n.startswith('1') or mode in ('resolve', 'resolve-retry', 'resolve-fail')) else 'B-2'
 body = {'dispositions': [{'finding': i, 'disposition': 'Accepted', 'reason': 'r', 'plan_change': 'c'} for i in ids],
         'ops': [{'op': 'set_fields', 'id': row, 'fields': {'failure': 'X%s' % re.sub(r'[^0-9].*', '', n)}}]}
+if mode in ('resolver-cap', 'resolver-dead'):
+    body['ops'] = [{'op': 'set_fields', 'id': row, 'fields': {'failure': 'X' + n}} for row in ('B-1', 'B-2')]
 json.dump(body, open(target, 'w'))
 PY2
         }
@@ -92,6 +103,38 @@ w="$TMP/retry/.uncle/workflow"
 check "bad resolver answer: retried once, then merged" bash -c 'test "$(cat "$1/rc")" == 0 && test "$(wc -l < "$1/resolver-calls")" -eq 2' _ "$w"
 check "bad resolver answer: the retry names the missing id" grep -q "B-9" "$w/updated-change-plan-edits/prompts/resolve-G1.retry.md"
 check "bad resolver answer: the retry is published" grep -q 'MERGED' "$TMP/retry/.uncle/docs/CHANGE_PLAN.md"
+
+run_case localretry resolve-retry local
+w="$TMP/localretry/.uncle/workflow"
+check "local resolver: existing retry publishes" test "$(cat "$w/rc")" == 0
+check "local resolver: initial and retry are bounded" python3 - "$w/resolver-budgets" <<'PYRESOLVE'
+import sys
+rows = [line.split() for line in open(sys.argv[1])]
+assert len(rows) == 2, rows
+assert rows[1][0] == rows[0][0] + '-retry', rows
+assert all(int(row[1]) > 0 and int(row[2]) >= 4096 for row in rows), rows
+assert rows[0][1:] == rows[1][1:], rows
+PYRESOLVE
+check "hosted resolver: no bounded marker" grep -qx 'updated-change-plan-worker-resolve-G1 none none' "$TMP/resolve/.uncle/workflow/resolver-budgets"
+
+run_case resolvercap resolver-cap local
+w="$TMP/resolvercap/.uncle/workflow"
+check "capped resolver: retried group publishes" test "$(cat "$w/rc")" == 0
+check "capped resolver: only failing group retries" python3 - "$w/resolver-budgets" <<'PYRESOLVE'
+import sys
+rows = [line.split() for line in open(sys.argv[1])]
+names = [row[0] for row in rows]
+assert sorted(names) == sorted(['updated-change-plan-worker-resolve-G1', 'updated-change-plan-worker-resolve-G2', 'updated-change-plan-worker-resolve-G1-retry']), names
+assert all(int(row[1]) > 0 and int(row[2]) >= 4096 for row in rows), rows
+PYRESOLVE
+check "capped resolver: successful writers retained" test "$(grep -cx 1 "$w/starts")" == 1
+check "capped resolver: retry uses original visible message" grep -q 'Updated-plan resolver answer(s) could not be applied; asking again: G1' "$w/out"
+check "capped resolver: both edits published" bash -c 'test "$(grep -c MERGED "$1")" == 2' _ "$TMP/resolvercap/.uncle/docs/CHANGE_PLAN.md"
+
+run_case resolverdead resolver-dead local
+w="$TMP/resolverdead/.uncle/workflow"
+check "persistent resolver failure: exactly one group retry" test "$(wc -l < "$w/resolver-budgets")" -eq 3
+check "persistent resolver failure: no publication" bash -c 'test "$(cat "$1/rc")" != 0 && test ! -e "$2"' _ "$w" "$TMP/resolverdead/.uncle/docs/CHANGE_PLAN.md"
 
 run_case clash resolve-fail
 check "resolver failure: nonzero, nothing published" bash -c 'test "$(cat "$1/.uncle/workflow/rc")" != 0 && test ! -e "$1/.uncle/docs/CHANGE_PLAN.md"' _ "$TMP/clash"

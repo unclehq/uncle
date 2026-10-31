@@ -87,6 +87,33 @@ class RunnerTiming:
                 self.unpaired += 1
                 self.emit('tool_unpaired', name, now, now, tool_status='start event unavailable')
 
+    def turn(self, message, content, now):
+        """One assistant event's sizes: tool names with argument bytes, text and reasoning bytes.
+
+        The runner-side counterpart of the self-hosted `self_hosted_turn` event, so a CLI runner's
+        planner rewriting a large document shows up as bytes here too. Sizes only; no content.
+        """
+        def size(value):
+            if isinstance(value, str):
+                return len(value.encode('utf-8'))
+            return len(json.dumps(value, ensure_ascii=False).encode('utf-8')) if value is not None else 0
+
+        tools, text, thinking = [], 0, 0
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            kind = part.get('type')
+            if kind == 'tool_use':
+                tools.append(dict(name=str(part.get('name', 'tool'))[:60], argument_bytes=size(part.get('input'))))
+            elif kind == 'text':
+                text += size(part.get('text'))
+            elif kind == 'thinking':
+                thinking += size(part.get('thinking'))
+        usage = message.get('usage') if isinstance(message.get('usage'), dict) else {}
+        if tools or text or thinking:
+            self.emit('runner_turn', self.name, now, now, tools=tools, text_bytes=text,
+                      reasoning_bytes=thinking, output_tokens=usage.get('output_tokens'))
+
     def observe(self, value):
         if not self.enabled:
             return
@@ -155,6 +182,8 @@ class RunnerTiming:
                 self.response()
         # Claude stream messages: pair tool_use and tool_result by invocation id.
         content = (e.get('message') or {}).get('content', [])
+        if e.get('type') == 'assistant' and isinstance(content, list):
+            self.turn(message, content, now)
         if isinstance(content, list):
             for part in content:
                 if part.get('type') == 'tool_use':

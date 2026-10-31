@@ -56,6 +56,15 @@ for g in groups:
 ' || return 1
 }
 
+# parallel_merge_map <plan> <lib-dir> <group> -- JSON {"primary": [absorbed...]} naming the application steps of one group that a
+# single worker writes (WORKFLOW_IMPLEMENT_MERGE_APP=1; see step_groups.py). `{}` when off, when nothing merges, or on any failure.
+parallel_merge_map() {
+    local plan="$1" lib="$2" group="$3" out
+    # shellcheck disable=SC2086
+    out="$(python3 -B "$lib/step_groups.py" merge-map "$plan" $group 2>/dev/null)" || out=""
+    [[ "$out" == \{*\} ]] && printf '%s' "$out" || printf '{}'
+}
+
 # parallel_run_group <lib> <log-dir> <plan> <group steps...> — run one group
 # concurrently and merge it. Nonzero means the caller must stop: either a step
 # failed or the plan's partition was wrong, and both leave the tree untouched.
@@ -73,6 +82,11 @@ for line in rows:
     if "\t" in line:
         n, path = line.split("\t", 1)
         owned.setdefault(n, []).append(path.strip())
+# Application steps merged into one worker (step_groups.py merge-map): the worker owns all their files, and the absorbed
+# steps stop being separate owners, or the same file would be claimed twice.
+for primary, absorbed in json.loads(os.environ.get("UNCLE_STEP_MERGE") or "{}").items():
+    for step in absorbed:
+        owned[primary] = owned.get(primary, []) + owned.pop(str(step), [])
 print(json.dumps(owned))' "$lib")"
     allowlist_json="$(UNCLE_LIB="$lib" python3 -B -c '
 import json, os, sys
@@ -218,16 +232,35 @@ parallel_implement_run_groups() {
             echo "Implementation fan-out group $group is already merged; skipping."
             continue
         fi
-        for step in $group; do
+        # Application steps whose files name one another by string are written by one worker (merge_json), and only a
+        # builder that knows how to carry the absorbed steps' text may be handed that. Absorbed steps leave the group.
+        local merge_json="{}" run_group="$group" absorbed_all="" absorbed_for=""
+        if [[ "${PARALLEL_BUILDER_SUPPORTS_MERGE:-0}" == 1 ]] && declare -F parallel_merge_map > /dev/null; then
+            merge_json="$(parallel_merge_map "$plan_doc" "$ROOT/scripts/lib" "$group")" || merge_json="{}"
+        fi
+        if [[ "$merge_json" != "{}" ]]; then
+            absorbed_all="$(python3 -c 'import json,sys; print(" ".join(str(s) for v in json.loads(sys.argv[1]).values() for s in v))' "$merge_json")"
+            run_group=""
+            for step in $group; do
+                case " $absorbed_all " in *" $step "*) ;; *) run_group="${run_group:+$run_group }$step" ;; esac
+            done
+        fi
+        for step in $run_group; do
             prompt="$STATE_DIR/parallel/prompts/step-$step.md"
-            "$prompt_builder_fn" "$step" "$group" "$prompt" "$module_interfaces_section" || return 1
+            absorbed_for=""
+            [[ "$merge_json" == "{}" ]] || absorbed_for="$(python3 -c 'import json,sys; print(" ".join(str(s) for s in json.loads(sys.argv[1]).get(sys.argv[2], [])))' "$merge_json" "$step")"
+            UNCLE_ABSORBED_STEPS="$absorbed_for" "$prompt_builder_fn" "$step" "$group" "$prompt" "$module_interfaces_section" || return 1
         done
-        echo "Implementation fan-out: isolated parallel steps $group."
+        if [[ "$merge_json" != "{}" ]]; then
+            echo "Implementation fan-out: isolated parallel steps $run_group (application steps $absorbed_all written together with their first)."
+        else
+            echo "Implementation fan-out: isolated parallel steps $group."
+        fi
         # A boundary violation (exit 3) is safe to recover from:
         # parallel_steps.py leaves the project untouched when it returns 3, so
         # abandon only the speculative fan-out and let serial implementation
         # own the whole tree.
-        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" "$plan_doc" $group)" || {
+        result="$(UNCLE_STEP_MERGE="$merge_json" parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" "$plan_doc" $run_group)" || {
             local parallel_status=$?
             if [[ "$parallel_status" == 3 ]]; then
                 touch "$serial_fallback_marker"
@@ -259,7 +292,7 @@ print('Parallel group %s complete: %.1fs wall time; %.1fs worker time; '
       'estimated %.1fs saved; %d files merged; worktrees %s.' %
       (group, elapsed, total, saved, files, data.get('worktrees', 'preserved')))
 PY
-        for step in $group; do
+        for step in $run_group; do
             require_file "$STATE_DIR/parallel/notes/step-$step.json"
             python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
                 "$STATE_DIR/parallel/notes/step-$step.json" .uncle/docs/IMPLEMENTATION_NOTES.md \

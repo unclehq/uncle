@@ -98,6 +98,19 @@ case "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" in
     ''|*[!0-9]*) echo "WORKFLOW_AUTO_REPAIR_ATTEMPTS must be an integer from 0 to 100." >&2; exit 1 ;;
 esac
 
+# A new application build does not repair. Every other stage already records what it finds, and a repair
+# has repeatedly cost more than it returned: it spent a pass on a harness defect the driver should have
+# fixed (a mangled `wait` flag, an include glob in vite.config.js the mechanical fixer did not read), it
+# stopped the run outright on a defect in a protected file it may not touch, and a second pass that changed
+# nothing ends the run. With repair off, a failure is written to the unresolved-evidence ledger
+# (nonblocking-test-failures.tsv), the run goes on to the final audit, and the audit reports it. Nothing is
+# marked PASS. WORKFLOW_REPAIR=1 restores the bounded repair stage.
+WORKFLOW_REPAIR="${WORKFLOW_REPAIR:-0}"
+if [[ "$WORKFLOW_REPAIR" != 1 ]]; then
+    WORKFLOW_AUTO_REPAIR=0
+    WORKFLOW_AUTO_REPAIR_ATTEMPTS=0
+fi
+
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
     driver_args=(bash "${BASH_SOURCE[0]}")
@@ -281,6 +294,8 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/state.sh"
 . "$ROOT/scripts/lib/waivers.sh"
 . "$ROOT/scripts/lib/audit-verdict.sh"
+. "$ROOT/scripts/lib/anchored-repair.sh"
+. "$ROOT/scripts/lib/thinking-off.sh"
 . "$ROOT/scripts/lib/green-check.sh"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
@@ -924,6 +939,9 @@ stage_tools() {
     case "$1" in
         updated-plan|updated-plan-investigate|derive-brief)
             fallback="Read,Glob,Grep,Write,Edit" ;;
+        # Fixes a contradiction in the assembled plan with a targeted edit instead of reporting and stopping.
+        project-plan-stage-duties)
+            fallback="Read,Glob,Grep,Write,Edit" ;;
         # The preview is one hand-written file: with Bash it scaffolds and installs, with Edit and
         # Glob it explores, and each of those is minutes of a stage that exists to be quick.
         preview-build|preview-build-part-*) fallback="Read,Write" ;;
@@ -1309,6 +1327,14 @@ route_unrunnable_application() {
         return 0
     fi
     local marker="$STATE_DIR/runtime-readiness-repair-attempted"
+    if [[ "$WORKFLOW_REPAIR" != 1 ]]; then
+        # There is nothing for the checklist to drive, so it is skipped, not failed: the audit reads the ledger.
+        record_nonblocking_failure green-check 'the application cannot render or its test runner did not execute tests; repair is disabled, so browser and checklist work was not started'
+        record_test_failure_disposition || true
+        echo 'The application cannot render or its configured test runner did not execute tests. Repair is disabled for new application builds: browser/checklist work is skipped and the failure goes to the final audit.'
+        set_state FINAL_AUDIT
+        return 2
+    fi
     if [[ "${UNATTENDED:-0}" == 1 && ! -e "$marker" ]]; then
         touch "$marker"
         # Deliberately not $GREEN_MD: REPAIR's own ineligibility fallback
@@ -1569,10 +1595,18 @@ run_claude() {
     model="$(stage_model "$log_name")"
     effort="$(stage_effort "$log_name")"
     turns="$(stage_turns "$log_name")"
+    local no_thinking=0
+    if uncle_stage_thinking_off "$log_name"; then
+        no_thinking=1
+        case "${UNCLE_RESOLVED_RUNNER:-}" in
+            codex|kimi) if uncle_runner_accepts_no_thinking "$UNCLE_RESOLVED_RUNNER" "$model"; then effort=none; fi ;;
+        esac
+    fi
     local turns_retried=""
     local artifact_retried=""
     local artifact_error=""
     local agent_delivery=""
+    local anchored_repair=""
     # Packet-producing workers get a private, workspace-local delivery file.
     # Never infer this data from streamed chat: local models commonly wrap or
     # truncate otherwise valid JSON there.
@@ -1691,7 +1725,9 @@ CANONICAL_ARTIFACT_CONTRACT
 `. This file is the only authoritative handoff; chat text is diagnostics only.
 Do not write a Markdown view or modify another file.
 CANONICAL_ARTIFACT_CONTRACT
-                    if [[ -n "$artifact_error" ]]; then
+                    if [[ -n "$artifact_error" && -n "$anchored_repair" ]]; then
+                        anchored_repair_note "$artifact_error" "$agent_delivery" >> "$effective_prompt"
+                    elif [[ -n "$artifact_error" ]]; then
                         printf '\nThe previous canonical delivery was rejected: %s\nUse Write to replace the same delivery file with a complete corrected JSON object.\n' "$artifact_error" >> "$effective_prompt"
                     fi
                 fi
@@ -1709,6 +1745,11 @@ STRUCTURED_OUTPUT_CONTRACT
         fi
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
+        # Stages that transcribe decided inputs into a document run without thinking (thinking-off.sh).
+        local -a thinking_env=()
+        if [[ "$no_thinking" == 1 && "${UNCLE_RESOLVED_RUNNER:-}" == claude ]]; then
+            thinking_env=(MAX_THINKING_TOKENS=0)
+        fi
         local started="$SECONDS"
         local candidates
         candidates="$(self_hosted_candidate_count "$log_name")"
@@ -1716,7 +1757,7 @@ STRUCTURED_OUTPUT_CONTRACT
             race_self_hosted_candidates "$log_name" "$candidates" "$effective_prompt" \
                 "$agent_delivery" "$LOG_DIR/${log_name}.jsonl" || status=$?
         else
-            env UNCLE_ARTIFACT_DELIVERY="$agent_delivery" "${client_cmd[@]}" -p \
+            env UNCLE_ARTIFACT_DELIVERY="$agent_delivery" "${thinking_env[@]+"${thinking_env[@]}"}" "${client_cmd[@]}" -p \
                 "${model_args[@]+"${model_args[@]}"}" \
                 "${schema_args[@]+"${schema_args[@]}"}" \
                 --effort "$effort" \
@@ -1806,8 +1847,14 @@ STRUCTURED_OUTPUT_CONTRACT
                 if ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$LOG_DIR/${log_name}.jsonl" . "$agent_delivery" 2>&1)"; then
                     if [[ -z "$artifact_retried" ]]; then
                         artifact_retried=1
-                        rm -f "$agent_delivery"
-                        echo "Canonical artifact rejected; retrying $log_name once with the exact schema error."
+                        if [[ "${UNCLE_RESOLVED_RUNNER:-}" != self-hosted ]] && anchored_repair_keeps "$agent_delivery"; then
+                            anchored_repair=1
+                            tools="$(anchored_repair_tools "$tools")"
+                            echo "Canonical artifact rejected; asking $log_name once to correct it in place with the exact schema error."
+                        else
+                            rm -f "$agent_delivery"
+                            echo "Canonical artifact rejected; retrying $log_name once with the exact schema error."
+                        fi
                         printf '%s\n' "$artifact_error"
                         continue
                     fi
@@ -3131,6 +3178,14 @@ _stagegate_parallel_build_step_prompt() {
         step_line="$(sed -n "${step}p" "$STATE_DIR/implement-steps.txt")"
         printf '%s\n' "$step_line"
         owned_paths="$(awk -F '\t' -v wanted="$step" '$1 == wanted { print "- `" $2 "`" }' "$STATE_DIR/implement-owns.tsv")"
+        # Application steps merged into this worker (parallel-implement.sh): their text and files are this worker's too.
+        local absorbed absorbed_owned
+        for absorbed in ${UNCLE_ABSORBED_STEPS:-}; do
+            echo; echo "## Also assigned step $absorbed (the same agent writes it, so the two agree on every name they share)"
+            sed -n "${absorbed}p" "$STATE_DIR/implement-steps.txt"
+            absorbed_owned="$(awk -F '\t' -v wanted="$absorbed" '$1 == wanted { print "- `" $2 "`" }' "$STATE_DIR/implement-owns.tsv")"
+            [[ -z "$absorbed_owned" ]] || owned_paths="${owned_paths:+$owned_paths$'\n'}$absorbed_owned"
+        done
         echo; echo '## Exact owned paths (binding)'
         if [[ -n "$owned_paths" ]]; then
             printf '%s\n' "$owned_paths"
@@ -3139,6 +3194,18 @@ _stagegate_parallel_build_step_prompt() {
         fi
         echo; echo "Work only on this approved step and its declared owned files."
         echo "Do not edit workflow documents."
+        if [[ "$owned_paths" == *'`package.json`'* ]]; then
+            cat <<'DEPS_EOF'
+
+## Dependencies (binding)
+
+You write `package.json`, so it must declare every package that any file this build writes imports or runs, not only
+the ones your own files use: the test runner and its DOM environment (for example `vitest` and `jsdom`), the testing
+libraries the unit and DOM tests import, `@playwright/test`, the bundler and its framework plugin, and the runtime
+packages the plan's stack names. A package imported anywhere but missing here fails the first test run with
+"Cannot find package", and nothing else will add it.
+DEPS_EOF
+        fi
         if [[ -n "$module_interfaces_section" ]]; then
             printf '%s\n' "$module_interfaces_section"
         fi
@@ -3297,6 +3364,8 @@ run_parallel_application_implementation() {
     fi
 
     local groups_status=0
+    # _stagegate_parallel_build_step_prompt carries the text and files of the steps merged into one worker.
+    PARALLEL_BUILDER_SUPPORTS_MERGE=1
     parallel_implement_run_groups \
         .uncle/docs/UPDATED_PROJECT_PLAN.md \
         _stagegate_parallel_build_step_prompt \
@@ -3644,8 +3713,10 @@ project_plan_section_settle() {
 # second phase. Each slot includes recovery/validation and the existing retry,
 # so a slow or malformed sibling never holds an otherwise ready section back.
 run_project_plan_sections_bounded() {
-    local directory="$1" delivery="$2" jobs="$3" phase name index active failed=0 gate=0 next=0
-    local -a pending=() dependent=() pids=() names=()
+    local directory="$1" delivery="$2" jobs="$3" phase name index active failed=0 gate=0 next=0 gate_left
+    local -a pending=() dependent=() pids=() names=() gate_names=()
+    read -r -a gate_names < <(python3 -B "$ROOT/scripts/lib/project_plan_sections.py" gate)
+    gate_left=${#gate_names[@]}
     while IFS= read -r phase; do
         if [[ "${#pending[@]}" == 0 ]]; then
             for name in $phase; do pending+=("$name"); done
@@ -3661,7 +3732,9 @@ run_project_plan_sections_bounded() {
                 active=$((active + 1))
             else
                 if wait "${pids[$index]}"; then
-                    if [[ "${names[$index]}" == outline ]]; then gate=1; fi
+                    case " ${gate_names[*]} " in
+                        *" ${names[$index]} "*) gate_left=$((gate_left - 1)); [[ "$gate_left" -gt 0 ]] || gate=1 ;;
+                    esac
                 else
                     failed=1
                 fi
@@ -3696,8 +3769,9 @@ run_project_plan_sections_bounded() {
 
 run_project_plan_sections() {
     local output="$1" directory="$STATE_DIR/project-plan-sections"
-    local helper="$ROOT/scripts/lib/project_plan_sections.py" phase name failed delivery=file index gate=1
+    local helper="$ROOT/scripts/lib/project_plan_sections.py" phase name failed delivery=file index gate=1 gated
     local -a pids=() names=()
+    gated=" $(python3 -B "$helper" gate) "
     . "$ROOT/scripts/lib/model-jobs.sh"
     local jobs
     jobs="$(workflow_model_jobs project-plan)"
@@ -3712,7 +3786,8 @@ run_project_plan_sections() {
         run_project_plan_sections_bounded "$directory" "$delivery" "$jobs" || return 1
     else
         # The first phase holds the outline and the workers that need only the requirements. The next phase starts when the
-        # outline is done, whether or not those are; everything still running is collected at the end.
+        # outline and the decision record (the gate) are done, whether or not the rest are; everything still running is
+        # collected at the end.
         while IFS= read -r phase; do
             for name in $phase; do
                 echo "Project plan section worker: $name"
@@ -3722,8 +3797,8 @@ run_project_plan_sections() {
             if [[ "$gate" == 1 ]]; then
                 gate=0
                 for index in "${!names[@]}"; do
-                    [[ "${names[$index]}" == outline ]] || continue
-                    if ! project_plan_section_settle outline "$directory" "$delivery" "${pids[$index]}"; then
+                    [[ "$gated" == *" ${names[$index]} "* ]] || continue
+                    if ! project_plan_section_settle "${names[$index]}" "$directory" "$delivery" "${pids[$index]}"; then
                         kill "${pids[@]}" 2>/dev/null || true
                         wait 2>/dev/null || true
                         return 1
@@ -5454,6 +5529,13 @@ while true; do
                     fi
                     continue
                 fi
+                if [[ "$WORKFLOW_REPAIR" != 1 && "$repair_source" != .uncle/docs/FINAL_AUDIT.md ]]; then
+                    echo "Repair is disabled for new application builds; $(basename "$repair_source") is carried to the final audit as unresolved evidence."
+                    record_nonblocking_failure "$(basename "$repair_source")" 'repair is disabled; the failure remains unresolved'
+                    record_test_failure_disposition || true
+                    set_state FINAL_AUDIT
+                    continue
+                fi
                 echo 'Automatic repair is not eligible for this failure.'
                 echo "Only $WORKFLOW_AUTO_REPAIR_ATTEMPTS driver green-check source/test repair(s) are automatic (WORKFLOW_AUTO_REPAIR_ATTEMPTS). Checklist, test-review, and other canonical report failures remain stopped for an explicit owner decision."
                 exit 1
@@ -5771,6 +5853,12 @@ PY
                 # saved a repair-source before postflight-only existed. A
                 # distinct tag routes a freshly-decided FAIL through REPAIR's
                 # ordinary (untagged) path instead of through that shim.
+                if [[ "$checklist_acceptance" == REPAIR && "$WORKFLOW_REPAIR" != 1 ]]; then
+                    echo 'Checklist acceptance report recorded a FAIL. Repair is disabled for new application builds; the failing rows go to the final audit as unresolved evidence.'
+                    record_nonblocking_failure checklist-fail 'checklist acceptance recorded a FAIL; repair is disabled'
+                    set_state FINAL_AUDIT
+                    continue
+                fi
                 if [[ "$checklist_acceptance" == REPAIR ]]; then
                     echo 'Checklist acceptance report recorded a FAIL; repairing before final audit.'
                     printf '%s\n' checklist-fail > "$STATE_DIR/repair-source"

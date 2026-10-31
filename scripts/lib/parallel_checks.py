@@ -57,7 +57,10 @@ def execution_command(command):
     configured = os.environ.get('WORKFLOW_GREEN_E2E_MAX_FAILURES', '1').strip()
     if not configured.isdigit() or int(configured) <= 0:
         return command
-    return f'{command} --max-failures={configured}'
+    # Attach the flag to the Playwright invocation itself, not the end of the line: in a
+    # compound command such as `(npx vitest run) & (npx playwright test) & wait` the end
+    # of the line is `wait`, which rejects it and fails the whole parallel group.
+    return re.sub(r'(\bplaywright\s+test\b)', rf'\1 --max-failures={configured}', command, flags=re.I)
 
 
 def browser_application_unrunnable(log):

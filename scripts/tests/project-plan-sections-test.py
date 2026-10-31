@@ -286,10 +286,21 @@ class Layout(unittest.TestCase):
         self.assertNotIn('NONE', text)
         self.assertIn('| R-1 | y |', text)
 
-    def test_phase_two_workers_read_only_the_outline_not_each_other(self):
+    def test_phase_two_workers_read_the_outline_and_decisions_not_each_other(self):
+        # The decisions worker fixes the choices (file names, tools, launch method) the other sections would otherwise
+        # make independently, so it gates the second phase with the outline; no other early worker does.
+        self.assertEqual(sections.GATE, ('outline', 'decisions'))
         for name in sections.PHASES[1]:
-            self.assertEqual(sections.readable(name, 'd'), ['d/outline.md'], name)
+            self.assertEqual(sections.readable(name, 'd'), ['d/outline.md', 'd/decisions.md'], name)
         self.assertEqual(sections.readable('outline', 'd'), [])
+
+    def test_a_block_worker_gets_the_decision_record_embedded_and_an_early_one_does_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'decisions.md').write_text('## Decision Record\n\n| D-1 | Stylesheet is src/theme.css |\n')
+            Path(tmp, 'outline.json').write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'x', 'stack': 'Vite'}))
+            self.assertIn('Stylesheet is src/theme.css', sections.block_contract('design', tmp))
+            self.assertNotIn('Stylesheet is src/theme.css', sections.block_contract('behaviors', tmp))
+            self.assertNotIn('decision record follows', sections.block_contract('design', tempfile.mkdtemp()))
 
     def test_the_fallback_worker_reads_everything(self):
         self.assertEqual(sections.readable('trace', 'd'),

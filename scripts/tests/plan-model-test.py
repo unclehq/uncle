@@ -86,6 +86,15 @@ class Import(unittest.TestCase):
     def test_file_lists_lose_their_markup(self):
         self.assertEqual(find(model(), 'C-1')['files'], ['src/App.jsx', 'src/App.css'])
 
+    def test_owned_dotfiles_keep_their_leading_dot(self):
+        # `strip('`. ')` turned `.gitignore` into `gitignore`, so a step's worker was
+        # reported as writing undeclared files and the parallel fan-out was discarded.
+        narrative = ('# Plan\n\n## 3. Steps\n\n1. Scaffold.\n'
+                     '   Owns: `package.json`, `.gitignore`, `.uncle/launch.json`, `README.md`.\n')
+        steps = pm.import_markdown(narrative)['sections'][0]['blocks'][0]
+        self.assertEqual(steps['items'][0]['owns'],
+                         ['package.json', '.gitignore', '.uncle/launch.json', 'README.md'])
+
     def test_an_unknown_table_stays_a_generic_table(self):
         block = model()['sections'][4]['blocks'][0]
         self.assertEqual((block['kind'], block['columns']), ('table', ['Layer', 'Runner']))

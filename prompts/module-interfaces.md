@@ -8,6 +8,8 @@ Read `.uncle/docs/UPDATED_PROJECT_PLAN.md`, included in full below. Find every s
 
 Do not include files whose contents nothing else imports (e.g. a leaf UI component nothing else calls into, a standalone config file). Do not include internal/private helpers the plan does not expose across files. Do not guess at files or exports the plan does not mention.
 
+The same disagreement happens one level lower, in the page itself. A component sets `className="keypad"`, a stylesheet written by a different worker styles `.key-grid`, and a test selects `[data-testid="display"]` that a third worker named `screen`. Nothing fails to build; the merged page just renders unstyled or the test cannot find its element. So also list, as `ui_contract`, every name that two or more of the plan's files must agree on by string: the CSS `class` names a component sets and a stylesheet styles, the `data-attribute`s (such as `data-key`), `test-id`s, element `id`s and `aria` labels a component sets and a test selects, and the keyboard `key` values a handler maps and a test presses. For each, give the `kind`, the exact `name` (the literal text), the `element` it is on, the `used_by` files from the plan's file-ownership table, and an optional `note` for the one requirement that matters (for example `4-column grid`). Choose each name once, from the plan if it names it and otherwise the most conventional one; the plan's own selectors, class names and test ids win. Leave `ui_contract` out when the plan has no page, or when no file shares such a name with another.
+
 Write exactly one JSON object, as your one and only output, to this exact absolute path: {{CANONICAL_PATH}}
 
 Use your file-write tool to create or overwrite that exact path -- do not invent a different path, do not place it in a different directory (including any scratch or working directory related to this task), and do not print the JSON as chat text instead of writing the file. The JSON object must match this shape:
@@ -24,6 +26,10 @@ Use your file-write tool to create or overwrite that exact path -- do not invent
         {"name": "reduce", "kind": "function", "signature": "reduce(state: State, action: Action): State -- pure, returns a new state"}
       ]
     }
+  ],
+  "ui_contract": [
+    {"kind": "class", "name": "keypad", "element": "the div around every key", "used_by": ["src/App.jsx", "src/styles.css"], "note": "4-column grid"},
+    {"kind": "data-attribute", "name": "data-key", "element": "every key button, value is the key's id", "used_by": ["src/App.jsx", "e2e/keyboard.spec.js"]}
   ]
 }
 ```

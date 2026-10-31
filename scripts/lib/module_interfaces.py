@@ -29,7 +29,11 @@ def validate(payload):
             or payload.get('kind') != 'module-interfaces':
         raise ValueError('Invalid module-interfaces JSON: wrong schema/kind')
     modules = payload.get('modules')
-    if not isinstance(modules, list) or not modules:
+    contract = payload.get('ui_contract')
+    if contract is not None:
+        validate_ui_contract(contract)
+    # A plan whose only shared surface is the page (no JS export crosses a file boundary) has an empty module list.
+    if not isinstance(modules, list) or (not modules and not contract):
         raise ValueError('module-interfaces: "modules" must be a non-empty list')
     seen = set()
     for entry in modules:
@@ -61,6 +65,52 @@ def validate(payload):
     return payload
 
 
+UI_KINDS = ('class', 'data-attribute', 'test-id', 'id', 'aria', 'key')
+
+
+def validate_ui_contract(contract):
+    """Names the page's files share by string: set in a component, styled in a stylesheet, selected in a test."""
+    if not isinstance(contract, list):
+        raise ValueError('module-interfaces: "ui_contract" must be a list')
+    seen = set()
+    for item in contract:
+        if not isinstance(item, dict):
+            raise ValueError('module-interfaces: each ui_contract entry must be an object')
+        kind, name = item.get('kind'), item.get('name')
+        if kind not in UI_KINDS:
+            raise ValueError('module-interfaces: ui_contract kind must be one of %s, not %r' % (', '.join(UI_KINDS), kind))
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError('module-interfaces: a ui_contract entry is missing "name"')
+        used_by = item.get('used_by')
+        if not isinstance(used_by, list) or not used_by or not all(isinstance(f, str) and f.strip() for f in used_by):
+            raise ValueError('module-interfaces: ui_contract %s %r needs a non-empty "used_by" list of files' % (kind, name))
+        if (kind, name) in seen:
+            raise ValueError('module-interfaces: duplicate ui_contract entry: %s %s' % (kind, name))
+        seen.add((kind, name))
+
+
+def render_ui_contract(contract):
+    lines = [
+        '',
+        '## Fixed UI contract (binding)',
+        '',
+        'These names are shared by string between files that different steps write: the component sets them, '
+        'the stylesheet styles them, the tests select them. Nothing checks them until the merged page is run, '
+        'and a mismatch there reads as a broken screen, not a bad name. Use exactly these names and no others '
+        'for the things listed: a component applies every one it is listed for, a stylesheet defines a rule '
+        'for every `class` listed (and for no class this contract does not list or the component does not set), '
+        'and a test selects by these names only. Do not rename one, and do not invent a second name for the same element.',
+        '',
+    ]
+    for item in contract:
+        note = ' -- %s' % item['note'] if isinstance(item.get('note'), str) and item['note'].strip() else ''
+        element = ' on %s' % item['element'] if isinstance(item.get('element'), str) and item['element'].strip() else ''
+        lines.append('- %s `%s`%s; used by %s%s' % (item['kind'], item['name'], element,
+                                                  ', '.join('`%s`' % f for f in item['used_by']), note))
+    lines.append('')
+    return '\n'.join(lines)
+
+
 def render_section(payload):
     """The exact text embedded, unchanged, into every parallel worker's prompt."""
     lines = [
@@ -79,7 +129,10 @@ def render_section(payload):
         for item in module['exports']:
             lines.append('- `%s` (%s): %s' % (item['name'], item['kind'], item['signature']))
     lines.append('')
-    return '\n'.join(lines)
+    text = '\n'.join(lines) if payload['modules'] else ''
+    if payload.get('ui_contract'):
+        text += render_ui_contract(payload['ui_contract'])
+    return text
 
 
 def main(argv):

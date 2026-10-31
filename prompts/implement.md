@@ -89,6 +89,14 @@ interpolating an object into a shell command silently produces `[object Object]`
 that depends on it, which a smoke-run of the runner against one real entry (not just a syntax check) catches
 immediately and a human reading the code often does not.
 
+## Counts in tests come from the list, not from prose
+
+A test that asserts how many keys, rows, buttons or items there are must take the expected count from the
+source of truth the plan names (the key list, the data module), or list the items itself. Never copy a
+total out of the plan's prose. If a total in the plan disagrees with the plan's own list of those items,
+the list is right: assert against the list, and write the disagreement down in your notes instead of
+asserting the total.
+
 ## Keep the output small
 
 Generating text is the slow part of this stage; everything below only removes text nobody reads.

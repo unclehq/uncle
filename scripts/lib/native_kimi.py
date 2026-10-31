@@ -83,6 +83,9 @@ def run(stage, directory):
         supported = match[1].split(', ')
         aliases = {'none': 'off', 'medium': 'high', 'xhigh': 'max'}
         effort = aliases.get(stage.effort)
+        if effort not in supported and stage.effort == 'none' and supported:
+            # A no-thinking stage on a model that always thinks: its lowest effort is as close as it gets.
+            effort = supported[0]
         if effort not in supported:
             raise
         config['thinking'] = effort

@@ -50,6 +50,18 @@ class Wiring(unittest.TestCase):
         self.assertEqual(ws.scoped_ids(model, ['B-1']), ['B-1', 's1', 's1.1'])
         self.assertEqual(ws.scoped_ids(model, ['s1.1']), ['B-1', 'B-2', 's1', 's1.1'])
 
+    def test_new_step_requires_the_ownership_list_consumed_by_the_model(self):
+        model = {'sections': [{'id': 's1', 'heading': 'Steps', 'blocks': [
+            {'id': 's1.1', 'kind': 'steps', 'items': []}]}]}
+        schema = ws.edit_ops_packet(['s1.1'], model=model)
+        new = {'id': 'step-1', 'number': 1}
+        packet = {'schema': ws.ENVELOPE, 'kind': ws.EDIT_OPS_KIND, 'dispositions': [],
+                  'ops': [{'op': 'insert_item', 'target': 's1.1', 'new': new}]}
+        with self.assertRaises(ValueError):
+            conforms(packet, schema)
+        new['owns'] = ['package.json']
+        conforms(packet, schema)
+
 
 if __name__ == '__main__':
     unittest.main()

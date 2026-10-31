@@ -174,6 +174,139 @@ def plan_model_of(plan, path=None):
     return pm.load_model(path) if path else pm.model_of(plan)
 
 
+def finding_scope(model, findings):
+    """Find editable locations from review evidence, without expanding their ancestors."""
+    from worker_schemas import scoped_ids
+    if len(findings) > 1:
+        return sorted({key for finding in findings for key in finding_scope(model, [finding])})
+    where = pm.index(model)
+    context = re.sub(r'(?<![\w./-])(?:\./)+(?=[\w.])', '', json.dumps(findings, ensure_ascii=False))
+    limit = option('scope-sections', 2)
+    if limit < 1:
+        raise Conflict('updated-plan.scope-sections must be positive')
+    if not option('finding-scopes', 1):
+        return list(where)
+
+    def mentions(value, text=None):
+        text = context if text is None else text
+        return bool(re.search(r'(?<![\w.-])' + re.escape(value) + r'(?![\w.-])', text, re.I))
+
+    def words(text):
+        ignored = {'the', 'and', 'for', 'with', 'from', 'that', 'this', 'plan', 'project', 'json',
+                   'table', 'section', 'step', 'file', 'test', 'tests', 'none', 'has', 'not', 'its',
+                   'are', 'but', 'all', 'only', 'does', 'through', 'says', 'should', 'required',
+                   'change', 'address', 'verify', 'check', 'run', 'evidence', 'severity', 'critical', 'high'}
+        text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+        return {w for w in re.findall(r'[a-z][a-z0-9]+', text.lower()) if len(w) > 2 and w not in ignored}
+
+    def own_text(node):
+        return json.dumps({k: v for k, v in node.items() if k not in ('id', 'blocks', 'rows', 'items')}, ensure_ascii=False)
+
+    def step_body(section):
+        keys = []
+        for block in section['blocks']:
+            heading = re.search(r'(?:^|\n)#+\s+', block.get('text', ''))
+            if not heading or block['text'][:heading.start()].strip():
+                keys.append(block['id'])
+            if heading:
+                break
+        return keys or [section['id']]
+
+    # Ranges in evidence (MC-1 through MC-10, Steps 2-3) cite every member, not just endpoints.
+    for match in list(re.finditer(r'\b([A-Z][A-Z0-9]*-)(\d+)\s*(?:through|to|[–-])\s*(?:\1)?(\d+)\b', context)):
+        prefix, start, end = match.groups()
+        if 0 <= int(end) - int(start) <= 300:
+            context += ' ' + ' '.join(prefix + str(i) for i in range(int(start), int(end) + 1))
+    step_numbers = set()
+    step_labels = {label.lower() for label in re.findall(r'\bsteps?\s+(\d+[a-z]*)\b', context, re.I)}
+    for match in re.finditer(r'\bsteps?\s+(\d+)\b(?:\s*(?:through|to|[–-])\s*(?:steps?\s+)?(\d+)\b)?', context, re.I):
+        start, end = int(match[1]), int(match[2] or match[1])
+        if 0 <= end - start <= 300:
+            step_numbers.update(range(start, end + 1))
+    references = set(re.findall(r'\b[A-Z][A-Z0-9]*-\d+\b', context))
+    paths = set(re.findall(r'(?<![\w./-])(?:[.\w-]+/)*[.\w-]+\.[a-zA-Z][a-zA-Z0-9]*', context))
+    # Legacy intro tables have no editable ids; follow their component/file links to the owning step.
+    cited_intro = '\n'.join(line for line in model.get('intro', '').splitlines()
+                            if any(mentions(ref, line) for ref in references - set(where)))
+    query = words(context + ' ' + cited_intro)
+    for line in model.get('intro', '').splitlines():
+        if line.startswith('|'):
+            cells = pm.cells_of(line)
+            if len(cells) >= 3 and re.fullmatch(r'`?[\w.-]+/[\w./-]+`?', cells[1]):
+                component = words(cells[0])
+                if ((re.search(r'[a-z][A-Z]', cells[0]) and component & query)
+                        or cells[0] in context):
+                    paths.add(cells[1].strip('`'))
+    symbols = set(re.findall(r'\b[a-z]+[A-Z][a-zA-Z]+\b', context))
+    paths -= {'PROJECT_PLAN.json', 'PROJECT_PLAN.md', 'REQUIREMENTS_INTERPRETATION.json', 'REQUIREMENTS_INTERPRETATION.md'}
+    for node, _, _ in where.values():
+        declared = []
+        for field in ('owns', 'files'):
+            value = node.get(field, [])
+            declared.extend(value.split(',') if isinstance(value, str) else value)
+        if 'Owns:' in node.get('heading', ''):
+            declared.extend(node['heading'].split('Owns:', 1)[1].split(','))
+        paths.update(pm.owned_path(path) for path in declared if mentions(pm.owned_path(path)))
+    targets = {key for key in where if mentions(key)}
+    targets.update(step['id'] for step in implementation_steps(model)
+                   if not step.get('_heading') and step['number'] in step_numbers)
+    # Prefer owners to incidental mentions (e.g. an injection row mentioning a source file).
+    owned_paths = set()
+    for path in paths:
+        for key, (node, _, _) in where.items():
+            ownership = json.dumps({field: node[field] for field in ('owns', 'files') if field in node})
+            heading = node.get('heading', '')
+            if mentions(path, ownership) or ('Owns:' in heading and mentions(path, heading)):
+                targets.update(step_body(node) if 'blocks' in node else [key])
+                owned_paths.add(path)
+    paths -= owned_paths
+    for key, (node, _, _) in where.items():
+        text = own_text(node)
+        if 'blocks' not in node and any(mentions(ref, text) for ref in references | paths):
+            targets.add(key)
+        if node.get('kind') in ('prose', 'code') and any(mentions(symbol, text) for symbol in symbols):
+            targets.add(key)
+        if 'blocks' in node:
+            heading = node['heading']
+            title = re.split(r'\s+[—–]\s+Owns:', heading, flags=re.I)[0]
+            title = re.sub(r'^\d+\.\s*', '', title)
+            step = re.match(r'Step\s+(\d+[a-z]*)\b', title, re.I)
+            if step and (step[1].lower() in step_labels or (step[1].isdigit() and int(step[1]) in step_numbers)
+                         or any(mentions(path, heading) for path in paths)):
+                # A legacy step section may also contain the closing tables; only the step body belongs here.
+                targets.update(step_body(node))
+            elif (mentions(title) or any(mentions(path, heading) for path in paths)
+                  or (re.match(r'^(\d+)\.', heading) and re.search(
+                      r'\bsection\s+' + re.escape(heading.split('.')[0]) + r'\b', context, re.I))):
+                targets.add(key)
+            # Imported single-# headings live in prose blocks. Include their following table/list.
+            for pos, block in enumerate(node['blocks']):
+                for heading_match in re.finditer(r'(?:^|\n)#+\s+([^\n]+)', block.get('text', '')):
+                    title = heading_match[1].strip()
+                    if mentions(title) or mentions(title.split(' and ')[0]):
+                        targets.add(block['id'])
+                        for following in node['blocks'][pos + 1:]:
+                            if re.search(r'(?:^|\n)#+\s+', following.get('text', '')):
+                                break
+                            targets.add(following['id'])
+
+    if not targets:
+        query = words(context)
+        ranked = []
+        section_words = [words(json.dumps(section, ensure_ascii=False)) for section in model['sections']]
+        for section in model['sections']:
+            heading = words(section['heading'])
+            body = words(json.dumps(section, ensure_ascii=False))
+            score = 4 * len(query & heading) + sum(1 / sum(word in section for section in section_words) for word in query & body)
+            if score:
+                ranked.append((score, section['id']))
+        targets = {key for _, key in sorted(ranked, key=lambda item: (-item[0], item[1]))[:limit]}
+    if not targets and where:
+        print('updated-plan ops: no relevant scope found; using whole-plan scope', file=sys.stderr)
+        return list(where)
+    return scoped_ids(model, targets)
+
+
 def write_prompt(base_path, ids, output, owns_fields=False, note=None):
     """The sealed prompt with the patch instructions and the plan text replaced by the ops instructions and the model."""
     text = Path(base_path).read_text(encoding='utf-8')
@@ -212,10 +345,7 @@ def write_prompt(base_path, ids, output, owns_fields=False, note=None):
             text += DECIDE_NOTE
     if assigned_context:
         note += '\n\n## Assigned findings and corrections\n```json\n' + json.dumps(assigned_context, ensure_ascii=False) + '\n```\n'
-    from worker_schemas import scoped_ids
-    context = json.dumps(assigned_context, ensure_ascii=False)
-    targets = [key for key in pm.index(model) if re.search(r'(?<![\w.-])' + re.escape(key) + r'(?![\w.-])', context)]
-    scope = scoped_ids(model, targets) if targets else list(pm.index(model))
+    scope = finding_scope(model, assigned_context)
     Path(output).with_suffix('.scope.json').write_text(json.dumps(scope) + '\n', encoding='utf-8')
     note += '\n\nAssigned edit scope (ids): ' + ', '.join(scope) + '.\n'
     Path(output).write_text(base.defer_reply_example(text) + note, encoding='utf-8')
@@ -322,7 +452,7 @@ def op_group(writer_ops, model):
             if isinstance(value, str) and value in where and value not in touched:
                 touched.append(value)
     from worker_schemas import scoped_ids
-    scope = scoped_ids(model, touched)
+    scope = scoped_ids(model, touched) if touched else finding_scope(model, [op.get('flat', op) for _, op in writer_ops])
     context = {}
     for key in scope:
         node = where[key][0]
@@ -647,12 +777,10 @@ def check_resolutions(plan_path, directory):
 
 
 def implementation_steps(model):
-    steps = []
+    steps = pm.steps_of(model)
     for section in model['sections']:
         for block in section['blocks']:
-            if block['kind'] == 'steps':
-                steps.extend(block['items'])
-            elif block['kind'] == 'list' and re.search(r'implementation order', section['heading'], re.I):
+            if block['kind'] == 'list' and re.search(r'implementation (?:order|sequence|steps)', section['heading'], re.I):
                 for item in block['items']:
                     match = re.search(r'Owns:\s*([^\n]+)', item['text'])
                     if item.get('number') and match:
@@ -699,12 +827,65 @@ def ownership_ops(plan, model, gaps):
 
 
 def repair_plan(plan, model, operations):
-    typed = [pm.typed_op(model, operation) for operation in operations]
+    plan, model = dict(plan), copy.deepcopy(model)
+    headings = {step['id']: step for step in implementation_steps(model) if step.get('_heading')}
+    ordinary = []
+    for operation in operations:
+        step = headings.get(operation.get('id'))
+        if step is None:
+            ordinary.append(operation)
+            continue
+        if operation.get('op') != 'set_step' or set(operation.get('fields', {})) != {'owns'}:
+            raise Conflict('heading-step repair may only add owns paths')
+        paths = pm.split_list(operation['fields']['owns'])
+        if any(not pm.valid_path(path) for path in paths):
+            raise Conflict('heading-step repair needs repository-relative ownership paths')
+        old = step['_heading_line']
+        owns = re.search(r'\bOwns\s*:\s*(.*?)(?=\s*(?:[—–-]\s*)?Depends on\s*:|$)', old, re.I)
+        if owns:
+            new = old[:owns.start(1)] + ', '.join('`%s`' % path for path in paths) + old[owns.end(1):]
+        else:
+            additions = [path for path in paths if path not in step['owns']]
+            new = old + ' — Owns: ' + ', '.join('`%s`' % path for path in additions)
+        pattern = re.compile('^' + re.escape(old) + '$', re.M)
+        if len(pattern.findall(plan['narrative'])) != 1:
+            raise Conflict('heading-step repair cannot uniquely locate ' + step['label'])
+        plan['narrative'] = pattern.sub(lambda _: new, plan['narrative'], count=1)
+        for section in model['sections']:
+            if section['heading'] == step['_heading']:
+                section['heading'] = re.sub(r'^#+\s+', '', new)
+            for block in section['blocks']:
+                if 'text' in block:
+                    block['text'] = pattern.sub(lambda _: new, block['text'])
+        model['intro'] = pattern.sub(lambda _: new, model.get('intro', ''))
+    typed = [pm.typed_op(model, operation) for operation in ordinary]
     revised = pm.apply_ops(model, typed)
     result = dict(plan, narrative=apply_patch(plan['narrative'], to_patch(model, revised)))
     # Stale embedded model records must never shadow repaired text.
     result.pop('sections', None)
     return result, revised
+
+
+def structure_schema(model, ids, ownership):
+    from worker_schemas import edit_ops_packet, _object, _text
+    schema = edit_ops_packet(ids, model=model)
+    schema['properties']['protected_verification_paths'] = {'type': 'string'}
+    schema['properties']['dispositions']['maxItems'] = 0
+    if ownership:
+        variants = []
+        candidates = [step for step in implementation_steps(model) if step['id'] in ids]
+        for inline in (False, True):
+            keys = [step['id'] for step in candidates if bool(step.get('_inline')) == inline]
+            if keys:
+                field = 'text' if inline else 'fields'
+                value = _text(12000, 0) if inline else _object({
+                    'owns': {'type': 'array', 'maxItems': 150, 'items': _text(4000)}}, ['owns'])
+                variants.append(_object({'op': {'const': 'set_text' if inline else 'set_step'},
+                                         'id': {'type': 'string', 'enum': keys}, field: value}, ['op', 'id', field]))
+        schema['properties']['ops']['items'] = {'anyOf': variants} if variants else {}
+        schema['properties']['ops']['maxItems'] = 120 if variants else 0
+        schema['properties']['commands_replace']['maxItems'] = 0
+    return schema
 
 
 def prepare_structure_repair(plan_path, project, directory, problem):
@@ -731,16 +912,21 @@ def prepare_structure_repair(plan_path, project, directory, problem):
     sections = [section for section in model['sections'] if any(b['kind'] == 'steps' for b in section['blocks']) or re.search(r'implementation order', section['heading'], re.I)
                 or (not ownership and re.search(r'verif|protect|test', section['heading'], re.I))]
     scope = dict(model, sections=sections)
-    (directory / 'scope.json').write_text(json.dumps({'ids': list(pm.index(scope)), 'gaps': unresolved,
+    candidates = implementation_steps(model)
+    ids = [step['id'] for step in candidates] if ownership else list(pm.index(scope))
+    (directory / 'scope.json').write_text(json.dumps({'ids': ids, 'gaps': unresolved,
                                                     'ownership': ownership, 'problem': problem}) + '\n')
+    (directory / 'schema.json').write_text(json.dumps(structure_schema(model, ids, ownership), separators=(',', ':')) + '\n')
     prompt = ('Repair only the structural defect below using edit ops. Do not read files, run commands or investigate. '
               'Never return the complete plan or a narrative. All current step ownership and affected sections follow. '
               'Return one JSON packet: ' + EXAMPLE % (EDIT_OPS_KIND, '') + '\n'
               'Write dispositions: []; existing dispositions are retained. For an ownership gap use only set_step '
-              'owns edits (set_text for an inline Owns list item) that add the missing paths; do not remove protected paths or existing ownership. '
+              'owns edits (set_text for an inline Owns list item) that add the missing paths, or remove only an unowned path '
+              'from protected_verification_paths if no step will create it. Preserve existing ownership and all other protected paths. '
               'For other structural defects change only the supplied ids, commands_replace, or protected_verification_paths.\n\n'
               + OPS_RULES + '\n\nDefect: ' + problem + '\nUnowned paths: ' + json.dumps(unresolved) +
               '\nCurrent sections and steps:\n' + json.dumps(scope, ensure_ascii=False) +
+              '\nCandidate owners:\n' + json.dumps(candidates, ensure_ascii=False) +
               '\nVerification commands:\n' + plan.get('verification_commands', '') +
               '\nProtected paths:\n' + plan.get('protected_verification_paths', ''))
     (directory / 'prompt.md').write_text(prompt, encoding='utf-8')
@@ -748,7 +934,7 @@ def prepare_structure_repair(plan_path, project, directory, problem):
 
 
 def apply_structure_repair(directory, project):
-    from plan_ownership_gap import unowned_protected_paths
+    from plan_ownership_gap import unowned_protected_paths, normalized_path
     import artifact_json
     import tempfile
     directory = Path(directory)
@@ -758,33 +944,44 @@ def apply_structure_repair(directory, project):
     delivery = first_packet((directory / 'packet.json').read_text())
     from http_agent import conforms
     from worker_schemas import edit_ops_packet
-    schema = edit_ops_packet()
-    schema['properties']['protected_verification_paths'] = {'type': 'string'}
-    conforms(delivery, schema)
+    legacy = edit_ops_packet()
+    legacy['properties']['protected_verification_paths'] = {'type': 'string'}
+    conforms(delivery, {'anyOf': [structure_schema(model, scope['ids'], scope['ownership']), legacy]})
     if delivery.get('dispositions'):
         raise Conflict('structural repair must preserve existing dispositions')
     operations = delivery.get('ops') or []
     for operation in operations:
         target = operation.get('id') or operation.get('target')
         if target not in scope['ids']:
-            raise Conflict('structural repair names an id outside its scope')
+            raise Conflict('structural repair names an id outside its scope: %s' % target)
         if scope['ownership']:
             step = next((s for s in implementation_steps(model) if s['id'] == target), None)
             if step is None:
                 raise Conflict('ownership repair must name an implementation step')
             if operation.get('op') == 'set_step' and set(operation.get('fields', {})) == {'owns'}:
-                after = pm.typed_op(model, operation)['owns']
+                if set(operation) != {'op', 'id', 'fields'}:
+                    raise Conflict('ownership repair changed unrelated operation fields')
+                after = pm.split_list(operation['fields']['owns']) if step.get('_heading') else pm.typed_op(model, operation)['owns']
             elif operation.get('op') == 'set_text' and step.get('_inline'):
                 match = re.search(r'Owns:\s*([^\n]+)', operation.get('text', ''))
                 after = re.findall(r'`([^`]+)`', match[1]) if match else []
             else:
                 raise Conflict('ownership repair may only add owns paths')
-            if (not set(step['owns']) <= set(after) or not (set(after) - set(step['owns'])) <= set(scope['gaps'])
-                    or operation != ownership_edit(step, after)):
+            if step.get('_inline') and operation != ownership_edit(step, after):
+                raise Conflict('ownership repair changed unrelated step text')
+            before = {normalized_path(path) for path in step['owns']}
+            after = [normalized_path(path) for path in after]
+            if (not before <= set(after) or not (set(after) - before) <= {normalized_path(path) for path in scope['gaps']}):
                 raise Conflict('ownership repair changed unrelated paths')
+            operation.clear()
+            operation.update(ownership_edit(step, after))
     result, _ = repair_plan(plan, model, operations)
-    if scope['ownership'] and (delivery.get('commands_replace') or 'protected_verification_paths' in delivery):
-        raise Conflict('ownership repair changed the verification contract')
+    if scope['ownership']:
+        before = {normalized_path(path) for path in pm.protected_paths(plan.get('protected_verification_paths', ''))}
+        after = {normalized_path(path) for path in pm.protected_paths(delivery.get(
+            'protected_verification_paths', plan.get('protected_verification_paths', '')))}
+        if delivery.get('commands_replace') or not after <= before or not before - after <= set(scope['gaps']):
+            raise Conflict('ownership repair changed unrelated verification paths or commands')
     commands = plan.get('verification_commands', '')
     for edit in delivery.get('commands_replace') or []:
         old, new = edit['old'], edit['new']

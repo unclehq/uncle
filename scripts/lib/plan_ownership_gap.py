@@ -26,6 +26,12 @@ from plan_records import canonical_path, load, step_data
 from plan_model import protected_paths
 
 
+def normalized_path(path):
+    while path.startswith('./'):
+        path = path[2:]
+    return path
+
+
 def load_protected_paths(plan, state_dir):
     json_path = canonical_path(plan, state_dir)
     if json_path is None:
@@ -51,8 +57,9 @@ def specifically_owned(plan, state_dir=None):
                               capture_output=True, text=True, check=True).stdout.splitlines()
     model = load(plan, state_dir)
     owned = step_data(model)[1] if model is not None else owns(sh('plan_step_owns'))
-    specific = {step: {path for path in paths if path != '*'} for step, paths in owned.items()}
-    return [paths for paths in specific.values() if paths]
+    specific = list(owned.values())
+    return [{normalized_path(path) for path in paths if path and normalized_path(path) != '*'}
+            for paths in specific if paths]
 
 
 def owns_something_under(specific, directory):
@@ -77,6 +84,7 @@ def unowned_protected_paths(plan, root, protected, state_dir=None):
     specific = specifically_owned(plan, state_dir)
     gaps = []
     for path in protected:
+        path = normalized_path(path)
         if not path or path.startswith('.uncle/'):
             continue
         if (root / path).exists():

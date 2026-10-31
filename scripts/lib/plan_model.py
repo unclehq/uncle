@@ -292,6 +292,8 @@ def parse_list(lines, block_id):
 
 
 def implementation_blocks(body, section_id):
+    if re.search(r'^#{1,6}\s+(?:Step\s+)?\d+[a-z]+[:.)-]|^#{1,6}\s+.*\bOwns\s*:', body, re.M | re.I):
+        return parse_blocks(body, section_id)
     heads = list(re.finditer(r'^#{3,6}\s+(?:Step\s+)?(\d+)[:.)-]\s*(.*)$', body, re.M | re.I))
     if not heads:
         return parse_blocks(body, section_id)
@@ -315,9 +317,58 @@ def implementation_blocks(body, section_id):
     return blocks
 
 
+def heading_steps(narrative):
+    """Read legacy heading steps without changing the document or its section ids."""
+    steps, active, fence = [], None, ''
+    for line in narrative.splitlines():
+        marker = line.lstrip()[:3]
+        if fence or marker in ('```', '~~~'):
+            if active is not None and steps:
+                steps[-1]['text'] += line + '\n'
+            if not fence:
+                fence = marker
+            elif marker == fence:
+                fence = ''
+            continue
+        heading = re.match(r'^(#{1,6})\s+(.+)$', line)
+        if heading and re.match(r'(?:\d+\.\s*)?Implementation (?:order|steps|sequence)\b', heading[2], re.I):
+            active = len(heading[1])
+            continue
+        if active is None:
+            continue
+        step = re.match(r'(?:Step\s+|S[- ]?)?(\d+[a-z]*)[:.)-]\s*(.+)$', heading[2], re.I) if heading else None
+        if step:
+            title = re.split(r'\b(?:Owns|Depends on)\s*:', step[2], maxsplit=1, flags=re.I)[0].rstrip(' —–-')
+            steps.append({'id': 'step-%d' % (len(steps) + 1), 'number': len(steps) + 1,
+                          'label': step[1], 'title': title, 'text': '', 'owns': [], 'depends_on': [],
+                          '_heading': heading[2], '_heading_line': line})
+        elif heading and len(heading[1]) <= active:
+            active = None
+            continue
+        if not steps:
+            continue
+        owns = re.search(r'\bOwns\s*:\s*(.*?)(?=\s*(?:[—–-]\s*)?Depends on\s*:|$)', line, re.I)
+        depends = re.search(r'\bDepends on\s*:\s*(.*)$', line, re.I)
+        if owns:
+            steps[-1]['owns'].extend(owned_path(path) for path in owns[1].split(',') if owned_path(path))
+        if depends:
+            steps[-1]['depends_on'].extend(re.findall(r'\b\d+[a-z]*\b', depends[1], re.I))
+        if not step and not owns and not depends:
+            steps[-1]['text'] += line + '\n'
+    positions = {step['label'].lower(): step['number'] for step in steps}
+    for step in steps:
+        step['text'] = step['text'].strip()
+        try:
+            step['depends_on'] = [positions[label.lower()] for label in step['depends_on']]
+        except KeyError as error:
+            raise PlanError('unknown heading-step dependency %s' % error.args[0]) from error
+    return steps
+
+
 def steps_of(model):
-    return [step for section in model['sections'] for block in section['blocks']
-            if block['kind'] == 'steps' for step in block['items']]
+    steps = [step for section in model['sections'] for block in section['blocks']
+             if block['kind'] == 'steps' for step in block['items']]
+    return steps or heading_steps(render(model))
 
 
 def dependency_list(value):

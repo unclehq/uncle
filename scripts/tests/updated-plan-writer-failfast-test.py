@@ -253,6 +253,19 @@ class BoundedWriter(unittest.TestCase):
             with patch.dict(os.environ, WORKFLOW_UPDATED_PLAN_WRITER_TURNS='4'):
                 self.assertEqual(budget('G1')[0], 4)
 
+    def test_resolver_alternate_mode_uses_effective_config_and_boolean_spellings(self):
+        def mode():
+            result = subprocess.run([sys.executable, '-B', ops.__file__, 'resolver-fallback-mode'],
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+        self.assertEqual(mode(), 'off')
+        (self.root / 'config').write_text('self-hosted.writer-schema-first off\n')
+        self.assertEqual(mode(), 'on')
+        for value in ('off', '0', 'false', 'on', '1', 'true'):
+            with self.subTest(value=value), patch.dict(os.environ, WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=value):
+                self.assertEqual(mode(), 'on' if value in ('off', '0', 'false') else 'off')
+
 
 if __name__ == '__main__':
     unittest.main()

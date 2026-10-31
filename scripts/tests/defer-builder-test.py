@@ -65,6 +65,9 @@ class Deferral(unittest.TestCase):
             model = ops.plan_model_of(plan)
             step = next(s for s in ops.implementation_steps(model) if 'tests/a.test.js' in s['owns'])
             self.packet(directory, '1', dict(op='set_fields', id='B-1', fields={'failure': 'SIBLING-KEPT'}))
+            sibling = json.loads((directory / '1.json').read_text())
+            sibling['protected_verification_paths'] = plan['protected_verification_paths']
+            (directory / '1.json').write_text(json.dumps(sibling))
             operation = ops.ownership_edit(step, ['src/core.js'])
             self.packet(directory, '2', operation)
             env = {k: v for k, v in os.environ.items() if not k.startswith(('UNCLE_', 'WORKFLOW_'))}

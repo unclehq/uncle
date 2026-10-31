@@ -23,7 +23,7 @@ import uuid
 import self_hosted_http as transport
 from self_hosted_http import OutputTruncated, add_usage, chat, conforms, constrained_completion
 
-def strip_thinking(text):
+def strip_thinking(text, trim=True):
     """Drop a reasoning model's <think>...</think> preamble from its message content.
 
     A server without a reasoning parser configured (common for a local DeepSeek-class
@@ -35,7 +35,8 @@ def strip_thinking(text):
     and -- for a plain-text stage with no final_schema -- straight into stage.final_answer,
     the value the rest of the driver treats as the stage's actual output.
     """
-    return re.sub(r'<think>.*?</think>', '', text or '', flags=re.S).strip()
+    text = re.sub(r'<think>.*?</think>', '', text or '', flags=re.S)
+    return text.strip() if trim else text
 
 
 READ_LIMIT = 200_000
@@ -1041,7 +1042,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         choice = data['choices'][0]
         message = transport.clean_message(choice['message'])
         calls = message.get('tool_calls') or []
-        text = strip_thinking(message.get('content') or '')
+        content = strip_thinking(message.get('content') or '', trim=False)
+        text = content.strip()
         if choice.get('finish_reason') == 'length':
             saved = save_truncated('turn', turn_limit, text, calls, data.get('usage'))
             raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete.%s'
@@ -1054,7 +1056,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 for identifier in steered:
                     stage.answered(identifier, str(requests))
                 steered.clear()
-        captured, feedback = policy.capture(text, calls)
+        captured, feedback = policy.capture(content, calls)
         packet = answer_already_given(text, final_schema) if final_schema is not None else None
         if learned.soft and calls and not policy.write and not policy.shell and packet is None:
             learned.intervene('tools_after_final_request')

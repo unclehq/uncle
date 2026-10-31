@@ -96,8 +96,9 @@ run_updated_plan_adaptive
             self.assertIsNone(self_hosted_http.reasoning_effort(values, 'high'))
 
     def test_preflight_probe_state_persists_but_project_is_unchanged(self):
-        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ,
-                UNCLE_STATUS_STAGE='preflight-worker-tooling'):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+                'UNCLE_STATUS_STAGE': 'preflight-worker-tooling',
+                'UNCLE_CONFIG': str(Path(temp) / 'config'), 'UNCLE_PROJECT_ROOT': temp}, clear=True):
             root = Path(temp)
             (root / 'input').write_text('original')
             _, policy, _, _, _, _ = self_hosted._http_setup('agent', {}, '', root, True, 'preflight-worker-packet')

@@ -148,7 +148,8 @@ class PreflightSnapshotMetadata(unittest.TestCase):
                 self.assertFalse(Path(target).is_relative_to(root), 'scratch allocation is inside live project')
                 return copy(source, target)
             with patch.object(tempfile, 'tempdir', str(local)), \
-                    patch.dict(os.environ, TMPDIR=str(local), UNCLE_STATUS_STAGE='preflight-worker-tooling'), \
+                    patch.dict(os.environ, {'TMPDIR': str(local), 'UNCLE_STATUS_STAGE': 'preflight-worker-tooling',
+                               'UNCLE_CONFIG': str(root / 'config'), 'UNCLE_PROJECT_ROOT': str(root)}, clear=True), \
                     patch.object(preflight_readonly, 'copy_project', side_effect=guarded_copy):
                 staged = preflight_readonly.prepare(root)
                 try:

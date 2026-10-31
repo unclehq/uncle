@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / 'scripts/lib'))
 import self_hosted
 import self_hosted_http as transport
 import updated_plan_synthesis_prompt as prompt
+import writer_deadline
 
 
 def fixture(name):
@@ -200,13 +201,13 @@ class ProgressDeadline(unittest.TestCase):
                'WORKFLOW_SELF_HOSTED_WRITER_SECONDS': '8',
                'WORKFLOW_SELF_HOSTED_RESULT_REUSE': 'off', 'WORKFLOW_SELF_HOSTED_HTTP2': 'off'}
         env.update(options)
+        env = {key: value for key, value in env.items() if value is not None}
         with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
             result = self_hosted.run_http_agent('agent', server.values, 'Deliver the packet.', root,
                                                schema_kind='updated-plan-edit-ops-packet')
         return result, server
 
     def test_default_ceiling_scales_and_stage_config_overrides_family(self):
-        import writer_deadline
         with tempfile.TemporaryDirectory() as temp:
             config = Path(temp) / 'config'
             with patch.dict(os.environ, {'UNCLE_CONFIG': str(config),
@@ -229,7 +230,11 @@ class ProgressDeadline(unittest.TestCase):
             yield stream.delta(reason='stop')
             yield '[DONE]'
         started = time.monotonic()
-        result, server = self.run_stream(events)
+        seconds = writer_deadline.seconds
+        # Scale production ceilings 100:1: the old 150s dies at 1.5s, while
+        # the concurrency-scaled ceiling permits this continuously streaming answer.
+        with patch.object(writer_deadline, 'seconds', side_effect=lambda default=3600: seconds(default) / 100):
+            result, server = self.run_stream(events, WORKFLOW_SELF_HOSTED_WRITER_SECONDS=None)
         self.assertEqual(json.loads(result[0]), packet)
         self.assertGreater(time.monotonic() - started, 2)
         self.assertEqual(len(server.requests), 1)

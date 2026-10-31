@@ -48,6 +48,12 @@ PROTECTED = {
     20: ['tests/calc.test.js', 'tests/calculator.spec.js', 'tests/run-defect-injections.js',
          'playwright.config.js', 'tests/defect-injections/apply-mutation.js'],
 }
+TITLES = {
+    11: ['Project scaffold and theme', 'Calculator logic (reducer)', 'UI components', 'Browser tests',
+         'Defect injection runner', 'Launch metadata'],
+    19: ['Scaffold', 'Calculator logic', 'UI components', 'Test suite and injection runner', 'Launch metadata'],
+    20: ['Scaffold', 'Arithmetic core', 'UI components', 'Browser tests', 'Defect injection runner'],
+}
 
 
 class StepLayouts(unittest.TestCase):
@@ -97,7 +103,8 @@ class StepLayouts(unittest.TestCase):
     def test_real_layouts_have_identical_readers(self):
         for run, owners in EXPECTED.items():
             with self.subTest(run=run):
-                self.assert_readers((FIXTURES / ('run-%d.md' % run)).read_text(), owners)
+                model = self.assert_readers((FIXTURES / ('run-%d.md' % run)).read_text(), owners)
+                self.assertEqual([s['title'] for s in pm.steps_of(model)], TITLES[run])
 
     def test_run_19_and_20_protected_paths_have_creators(self):
         for run, protected in PROTECTED.items():
@@ -188,6 +195,40 @@ Owns: `also-not-owned.py`
                             'data-testid', 'Parallel runner'):
             self.assertIn(instruction, published['narrative'])
         self.assertEqual(pm.publish_records(published, self.root, stage='project-plan'), published)
+
+    def test_multiline_fields_and_nested_numbered_instructions(self):
+        text = '''## Implementation sequence
+
+1. **Scaffold**
+   1. Write the manifest.
+   2. Document local commands.
+   **Owns:**
+   - `package.json`
+   - `README.md`
+2. **Tests**
+   **Depends on:**
+   - Step 1
+   **Owns:**
+   - `tests/test_core.py`
+'''
+        model = self.assert_readers(text, [['package.json', 'README.md'], ['tests/test_core.py']],
+                                    {1: set(), 2: {1}})
+        self.assertIn('Write the manifest.', pm.steps_of(model)[0]['text'])
+        self.assertIn('Document local commands.', pm.steps_of(model)[0]['text'])
+
+    def test_table_layout_and_letter_label_dependencies(self):
+        text = '''## Implementation order
+
+| Step | Description | Owns | Depends on |
+|---|---|---|---|
+| Step 0 | Scaffold | `package.json` | none |
+| Step 3b | Browser tests | `tests/browser.spec.js` | Step 0 |
+'''
+        self.assert_readers(text, [['package.json'], ['tests/browser.spec.js']], {1: set(), 2: {1}})
+
+    def test_missing_label_never_crashes_the_step_reader(self):
+        text = '## Implementation order\n\n### Step : Scaffold\nOwns: `package.json`\n'
+        self.assert_readers(text, [['package.json']])
 
 
 if __name__ == '__main__':

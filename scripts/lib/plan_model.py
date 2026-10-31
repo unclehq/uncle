@@ -774,7 +774,8 @@ def typed_op(model, flat):
             return op
         block = block_of(model, node)
         if block['kind'] != 'rows':
-            raise PlanError('%s is not a typed row; use set_text for prose and list items' % flat['id'])
+            detail = 'use set_text' if 'text' in node else 'its fields are ' + ', '.join(k for k in node if k != 'id')
+            raise PlanError('%s is not a typed row; %s' % (flat['id'], detail))
         specs = {f[0]: f for f in ROW_KINDS[block['row_kind']]}
         out = {}
         for field, value in fields.items():
@@ -788,16 +789,16 @@ def typed_op(model, flat):
         block = locate(model, flat.get('target') or '')[0]
         new = flat.get('new') or {}
         if name == 'insert_row':
-            if block['kind'] != 'rows':
+            if block.get('kind') != 'rows':
                 raise PlanError('%s is not a typed rows block' % flat['target'])
             return {'op': 'insert_row', 'block': flat['target'], 'after': after, 'row': typed_row(block['row_kind'], new)}
-        if block['kind'] == 'steps':
+        if block.get('kind') == 'steps':
             number = int(new.get('number') or 0)
             if number < 1 or new.get('id') != 'step-%d' % number:
                 raise PlanError('a new step needs a number and the id step-<number>')
             item = {'id': new['id'], 'number': number, 'title': new.get('title', ''), 'text': new.get('text', ''),
                     'owns': split_list(new.get('owns')), 'depends_on': dependency_list(new.get('depends_on') or '')}
-        elif block['kind'] == 'list':
+        elif block.get('kind') == 'list':
             item = {'id': new.get('id') or '', 'depth': 0, 'text': new.get('text', '')}
         else:
             raise PlanError('%s is neither a list nor steps' % flat['target'])

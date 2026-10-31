@@ -76,6 +76,7 @@ triage_stage_reports() {
         updated-change-plan) printf '%s\n' .uncle/docs/CHANGE_PLAN.md ;;
         preflight) printf '%s\n' .uncle/docs/PREFLIGHT_REPORT.md ;;
         module-interfaces) printf '%s\n' .uncle/workflow/documents/MODULE_INTERFACES.json ;;
+        classify-change) printf '%s\n' .uncle/workflow/change-class.json ;;
         implementation*) printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/CHANGE_TEST_REPORT.md ;;
         repair*) printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md ;;
         test-review) printf '%s\n' .uncle/docs/TEST_REVIEW.md ;;

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Read scheduling and scope records without parsing the rendered approval view.
+"""Read scheduling and scope records, or extract legacy Markdown steps once.
 
-Exit 3 means there are no typed records yet; shell readers then use their
-legacy Markdown parser. Invalid canonical data is an error, never a fallback.
+Exit 3 means the scope/text reader has no canonical records yet. Invalid canonical data is an error, never a fallback.
 """
 from collections import Counter
 import json
@@ -111,15 +110,22 @@ def main(argv):
         model = load(argv[1], argv[2] if len(argv) > 2 and argv[2] else None)
         if model is None and argv[0] in ('steps', 'owns', 'depends'):
             path = canonical_path(argv[1], argv[2] if len(argv) > 2 and argv[2] else None)
-            narrative = (json.loads(path.read_text(encoding='utf-8')).get('narrative', '') if path else
+            payload = json.loads(path.read_text(encoding='utf-8')) if path else {}
+            narrative = (payload['narrative'] if 'narrative' in payload else
                          Path(argv[1]).read_text(encoding='utf-8') if Path(argv[1]).is_file() else '')
-            # Existing Markdown forms keep their established awk reader. Only
-            # forms it cannot represent need the shared heading-step records.
-            new_form = (re.search(r'^(?:#|#{3,6})\s+(?:\d+\.\s*)?Implementation (?:order|steps|sequence)\b', narrative, re.M | re.I)
-                        or re.search(r'^#{1,6}\s+(?:Step\s+)?\d+[a-z]+[:.)-]', narrative, re.M | re.I)
-                        or re.search(r'^##\s+Step\s+\d+[:.)-]', narrative, re.M | re.I))
-            if new_form and pm.heading_steps(narrative):
-                model = pm.import_markdown(narrative)
+            from plan_steps import extract
+            steps = extract(narrative)
+            positions = {step['number']: n for n, step in enumerate(steps, 1)}
+            for n, step in enumerate(steps, 1):
+                if argv[0] == 'steps':
+                    print(step['_task'])
+                elif argv[0] == 'owns':
+                    for path in step['owns']:
+                        print('%d\t%s' % (n, path))
+                elif argv[0] == 'depends':
+                    for dep in step['depends_on']:
+                        print('%d\t%s' % (n, positions.get(dep, dep)))
+            return 0
         result = lines(model, argv[0]) if model is not None else None
         if result is None:
             return 3

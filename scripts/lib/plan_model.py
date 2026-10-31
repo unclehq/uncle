@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plan_patch import split_sections
+import plan_steps
 
 # row_kind -> [(field, rendered column title, is_list, aliases)].  The first field is the row's key.
 # An alias is a column title with everything but letters and digits removed, lowercased.
@@ -90,10 +91,7 @@ ROW_KINDS = {
 ID_VALUE = re.compile(r'^[A-Z]{1,4}-?\d+[A-Za-z]?$')
 TABLE_SEPARATOR = re.compile(r'^\|?[\s:|-]+\|[\s:|-]*$')
 LIST_ITEM = re.compile(r'^(\s*)([-*+]|\d+\.)\s+(.*)$')
-STEP_HEAD = re.compile(r'^\*\*(.+?)\*\*\s*(?:[—–:-]+\s*)?(.*)$', re.S)
-OWNS = re.compile(r'^\s*(?:[-*+]\s*)?\**Owns\**(?:\s*\([^)]*\))?\**\s*:?\**\s*(.*)$', re.I)
-DEPENDS = re.compile(r'^\s*(?:[-*]\s*)?\**Depends on\**\s*:?\**\s*(.*)$', re.I)
-INLINE_OWNS = re.compile(r'(?:^|\s)\**Owns\**(?:\s*\([^)]*\))?\**\s*:\**\s+((?:`[^`]+`(?:,\s*)?)+)(?:\s*\**Depends on\**\s*:\**\s*([\w ,]*?))?\s*\.?$')     # a step on one line: "... Owns: `a`, `b` Depends on: 2"
+
 
 
 class PlanError(ValueError):
@@ -179,7 +177,7 @@ def make_row(kind, mapping, headers, cells, serial):
     return row
 
 
-def parse_blocks(body, section_id):
+def parse_blocks(body, section_id, allow_steps=True):
     lines = body.split('\n')
     blocks, i, count = [], 0, [0]
 
@@ -231,7 +229,7 @@ def parse_blocks(body, section_id):
                     end += 1     # a blank line between two items of one list
                 else:
                     break
-            blocks.append(parse_list([l for l in lines[i:end] if l.strip()], new_id()))
+            blocks.append(parse_list([l for l in lines[i:end] if l.strip()], new_id(), allow_steps=allow_steps))
             i = end
         else:
             end = i
@@ -244,40 +242,20 @@ def parse_blocks(body, section_id):
     return blocks
 
 
-def parse_list(lines, block_id):
+def parse_list(lines, block_id, allow_steps=True):
+    steps = plan_steps.extract_body('\n'.join(lines))[0] if allow_steps else []
+    if steps and any(step['owns'] for step in steps):
+        for step in steps:
+            for key in ('_task', '_line', '_heading', '_heading_line'):
+                step.pop(key, None)
+        return {'id': block_id, 'kind': 'steps', 'items': steps}
     items = []
-    numbered = (bool(lines and re.match(r'^\d+\. ', lines[0]))
-                and any(OWNS.match(line) or INLINE_OWNS.search(line) for line in lines))
     for line in lines:
         match = LIST_ITEM.match(line)
-        if match and (not numbered or (match.group(2)[0].isdigit() and not match.group(1))):
+        if match:
             items.append({'indent': len(match.group(1)), 'marker': match.group(2), 'lines': [match.group(3)]})
         elif items:
             items[-1]['lines'].append(line.strip())
-    one_line = [INLINE_OWNS.search(item['lines'][0]) for item in items]
-    if items and items[0]['marker'][0].isdigit() and sum(1 for f in one_line if f) * 2 >= len(items):
-        for item, found in zip(items, one_line):       # "N. **Title** -- text Owns: `a` Depends on: 2" reads like the three-line form
-            if found and not any(OWNS.match(l) for l in item['lines'][1:]):
-                item['lines'] = ([item['lines'][0][:found.start()], 'Owns: ' + found.group(1)]
-                                 + (['Depends on: ' + found.group(2)] if (found.group(2) or '').strip() else []) + item['lines'][1:])
-    owns = sum(1 for item in items if any(OWNS.match(l) for l in item['lines'][1:]))
-    if items and items[0]['marker'][0].isdigit() and owns:
-        steps = []
-        for item in items:
-            number = int(item['marker'][:-1])
-            head = STEP_HEAD.match(item['lines'][0])
-            title, text = (head.group(1).strip(), head.group(2).strip()) if head else ('', item['lines'][0])
-            step_owns, depends = [], []
-            for extra in item['lines'][1:]:
-                if OWNS.match(extra):
-                    step_owns.extend(owned for owned in map(owned_path, re.split(r',\s*', OWNS.match(extra).group(1))) if owned)
-                elif DEPENDS.match(extra):
-                    depends = [int(n) for n in re.findall(r'\d+', DEPENDS.match(extra).group(1))]
-                else:
-                    text += '\n' + extra
-            steps.append({'id': 'step-%d' % number, 'number': number, 'title': title, 'text': text.strip(),
-                          'owns': step_owns, 'depends_on': depends})
-        return {'id': block_id, 'kind': 'steps', 'items': steps}
     ordered = bool(items) and items[0]['marker'][0].isdigit()
     base = min((item['indent'] for item in items), default=0)
     out = []
@@ -292,77 +270,19 @@ def parse_list(lines, block_id):
 
 
 def implementation_blocks(body, section_id):
-    if re.search(r'^#{1,6}\s+(?:Step\s+)?\d+[a-z]+[:.)-]|^#{1,6}\s+.*\bOwns\s*:', body, re.M | re.I):
-        return parse_blocks(body, section_id)
-    heads = list(re.finditer(r'^#{3,6}\s+(?:Step\s+)?(\d+)[:.)-]\s*(.*)$', body, re.M | re.I))
-    if not heads:
-        return parse_blocks(body, section_id)
-    blocks = parse_blocks(body[:heads[0].start()], section_id)
-    steps = []
-    for n, head in enumerate(heads):
-        end = heads[n + 1].start() if n + 1 < len(heads) else len(body)
-        lines = body[head.end():end].strip().splitlines()
-        owned, deps, text = [], [], []
-        for line in lines:
-            if OWNS.match(line):
-                owned.extend(split_list(OWNS.match(line).group(1)))
-            elif DEPENDS.match(line):
-                deps.extend(int(x) for x in re.findall(r'\d+', DEPENDS.match(line).group(1)))
-            else:
-                text.append(line)
-        number = int(head.group(1))
-        steps.append({'id': 'step-%d' % number, 'number': number, 'title': head.group(2),
-                      'text': '\n'.join(text).strip(), 'owns': owned, 'depends_on': deps})
+    steps, prefix = plan_steps.extract_body(body)
+    if not steps:
+        return parse_blocks(body, section_id, allow_steps=False)
+    blocks = parse_blocks(prefix, section_id, allow_steps=False)
+    for step in steps:
+        for key in ('_task', '_line', '_heading', '_heading_line'):
+            step.pop(key, None)
     blocks.append({'id': '%s.%d' % (section_id, len(blocks) + 1), 'kind': 'steps', 'items': steps})
     return blocks
 
 
 def heading_steps(narrative):
-    """Read legacy heading steps without changing the document or its section ids."""
-    steps, active, fence = [], None, ''
-    for line in narrative.splitlines():
-        marker = line.lstrip()[:3]
-        if fence or marker in ('```', '~~~'):
-            if active is not None and steps:
-                steps[-1]['text'] += line + '\n'
-            if not fence:
-                fence = marker
-            elif marker == fence:
-                fence = ''
-            continue
-        heading = re.match(r'^(#{1,6})\s+(.+)$', line)
-        if heading and re.match(r'(?:\d+\.\s*)?Implementation (?:order|steps|sequence)\b', heading[2], re.I):
-            active = len(heading[1])
-            continue
-        if active is None:
-            continue
-        step = re.match(r'(?:Step\s+|S[- ]?)?(\d+[a-z]*)[:.)-]\s*(.+)$', heading[2], re.I) if heading else None
-        if step:
-            title = re.split(r'\b(?:Owns|Depends on)\s*:', step[2], maxsplit=1, flags=re.I)[0].rstrip(' —–-')
-            steps.append({'id': 'step-%d' % (len(steps) + 1), 'number': len(steps) + 1,
-                          'label': step[1], 'title': title, 'text': '', 'owns': [], 'depends_on': [],
-                          '_heading': heading[2], '_heading_line': line})
-        elif heading and len(heading[1]) <= active:
-            active = None
-            continue
-        if not steps:
-            continue
-        owns = re.search(r'\bOwns\s*:\s*(.*?)(?=\s*(?:[—–-]\s*)?Depends on\s*:|$)', line, re.I)
-        depends = re.search(r'\bDepends on\s*:\s*(.*)$', line, re.I)
-        if owns:
-            steps[-1]['owns'].extend(owned_path(path) for path in owns[1].split(',') if owned_path(path))
-        if depends:
-            steps[-1]['depends_on'].extend(re.findall(r'\b\d+[a-z]*\b', depends[1], re.I))
-        if not step and not owns and not depends:
-            steps[-1]['text'] += line + '\n'
-    positions = {step['label'].lower(): step['number'] for step in steps}
-    for step in steps:
-        step['text'] = step['text'].strip()
-        try:
-            step['depends_on'] = [positions[label.lower()] for label in step['depends_on']]
-        except KeyError as error:
-            raise PlanError('unknown heading-step dependency %s' % error.args[0]) from error
-    return steps
+    return plan_steps.extract(narrative)
 
 
 def steps_of(model):
@@ -419,7 +339,8 @@ def valid_path(path):
 
 def import_markdown(narrative):
     """The model for a plan that exists only as Markdown (legacy plans)."""
-    preamble, sections = split_sections(narrative)
+    preamble, sections = plan_steps.split_for_model(narrative)
+    has_implementation = bool(plan_steps.sections(narrative))
     title = ''
     match = re.match(r'^#\s+(.*)$', preamble.split('\n', 1)[0]) if preamble else None
     intro = preamble
@@ -428,9 +349,11 @@ def import_markdown(narrative):
     model = {'title': title, 'intro': intro, 'sections': []}
     for number, section in enumerate(sections, 1):
         sid = 's%d' % number
-        parser = implementation_blocks if re.search(r'Implementation (?:order|sequence|steps)', section['heading'], re.I) else parse_blocks
-        model['sections'].append({'id': sid, 'heading': section['heading'][3:].strip(),
-                                  'blocks': parser(section['body'], sid)})
+        implementation = re.search(r'Implementation (?:order|sequence|steps|plan)', section['heading'], re.I)
+        blocks = (implementation_blocks(section['body'], sid) if implementation else
+                  parse_blocks(section['body'], sid, allow_steps=not has_implementation))
+        model['sections'].append({'id': sid, 'heading': re.sub(r'^#+\s*', '', section['heading']).strip(),
+                                  'blocks': blocks})
     return dedupe(model)
 
 
@@ -1060,7 +983,7 @@ def renumber_narrative(narrative, before, after):
         end = headings[index + 1].start() if index + 1 < len(headings) else len(narrative)
         body = narrative[start:end]
         pattern = r'^[ \t]*(\d+)\.[ \t]+'
-        if re.search(r'Implementation (?:order|sequence|steps)', section['heading'], re.I) and re.search(
+        if re.search(r'Implementation (?:order|sequence|steps|plan)', section['heading'], re.I) and re.search(
                 r'^#{3,6}\s+(?:Step\s+)?\d+[:.)-]\s*', body, re.M | re.I):
             pattern = r'^#{3,6}\s+(?:Step\s+)?(\d+)[:.)-]\s*'
         markers = list(re.finditer(pattern, body, re.M | re.I))
@@ -1120,6 +1043,13 @@ def publish_records(plan, root='.', model=None, stage=None):
     Also usable by the edit-op merger after it has chosen its protected paths:
     result = publish_records(result, model=new_model).
     """
+    from plan_step_recovery import normalize_publication
+    narrative = plan.get('narrative')
+    if isinstance(narrative, str) and model is None and 'sections' not in plan:
+        normalized = normalize_publication(narrative, root, stage or plan_stage(plan))
+        if normalized != narrative:
+            plan = dict(plan, narrative=normalized)
+            model = import_markdown(normalized)
     if not records_enabled(root):
         return plan
     model = with_protected(model_of(plan) if model is None else model, plan)

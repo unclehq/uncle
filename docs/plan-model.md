@@ -522,3 +522,35 @@ install/browser commands inspect the lockfile before installed metadata and reje
 known stale resolutions before launching; keep
 setup separate when upgrading. Dependencies first resolved inside a compound
 command cannot be inspected between its shell operations.
+
+## Implementation step layout
+
+`plan_steps.py` is the shared Markdown extractor for plan import, scheduling,
+ownership checks and scaffold assessment. Implementation order/steps/sequence/plan
+headings may use any heading level. Heading, bold, list and table steps retain
+labels such as `0` and `3b`; scheduling uses their positions. Ownership and
+dependencies may be inline or on following lines. Fenced examples and nested
+numbered instructions stay in the step text.
+
+Plan publication standardizes alternate layouts into the renderer's numbered
+steps and retains their canonical records. Already numbered plans keep their
+existing layout and numbering validation. Bytes outside the implementation
+section are unchanged. Existing canonical records remain authoritative.
+
+An unreadable section, or one whose steps all lack ownership, gets one bounded
+schema extraction request using only that section. The returned records must
+match source lines, name source-owned paths and have valid dependency edges.
+Failure leaves the existing validation and approval gates in control. Recovery attempts
+are cached by section and configuration under `.uncle/workflow/plan-step-recovery`,
+so preview and publication share one attempt.
+
+The following options use existing runner/stage configuration precedence:
+`plan-step-normalize` and `plan-step-recovery` default to `on`,
+`plan-step-answer-tokens` to `4096`, and `plan-step-seconds` to `60`.
+For example, `updated-plan.plan-step-recovery off` disables recovery for that
+stage; `WORKFLOW_SELF_HOSTED_PLAN_STEP_RECOVERY_UPDATED_PLAN=on` overrides it.
+Native Claude and Codex use their schema flags; self-hosted uses the existing
+constrained-completion transport without exploration, repair turns or network
+reconnect retries. The answer-token limit applies to Claude and self-hosted;
+Codex uses the schema and process timeout because its CLI has no answer-token
+limit flag.

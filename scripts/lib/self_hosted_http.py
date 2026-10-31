@@ -551,6 +551,8 @@ class Connections:
         self.http2 = {}         # (scheme, netloc) -> httpx.Client
         self.lock = threading.Lock()
         self.aborting = threading.Event()   # set while a request is being dropped on purpose
+        self.reconnect_seconds = None
+        self.connect_seconds = None
 
     def abort(self):
         """Wake a request blocked on one of these connections, from another thread.
@@ -692,7 +694,9 @@ def post(url, api_key, body, timeout, what='model request'):
     A server that answered, or one that simply never did (a read timeout), is not retried.
     """
     started = time.monotonic()
-    budget = reconnect_seconds()
+    budget = _connections().reconnect_seconds
+    if budget is None:
+        budget = reconnect_seconds()
     noted = -30.0
     while True:
         try:
@@ -750,15 +754,14 @@ def connect_timeout():
     the operating system's connect timeout, once per attempt and per stage.
     """
     configured = os.environ.get('WORKFLOW_SELF_HOSTED_CONNECT_SECONDS', '').strip()
-    if not configured:
-        return 15.0
     try:
-        value = float(configured)
+        value = float(configured) if configured else 15.0
     except ValueError:
         value = 0
     if value <= 0:
         raise ValueError('WORKFLOW_SELF_HOSTED_CONNECT_SECONDS must be a positive number')
-    return value
+    scoped = _connections().connect_seconds
+    return min(value, scoped) if scoped is not None else value
 
 
 def _failure(url, error, connecting=False):

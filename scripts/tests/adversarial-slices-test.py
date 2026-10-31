@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -33,6 +34,11 @@ with (root / 'calls').open('a') as stream:
                              'marker': os.environ.get('UNCLE_ADVERSARIAL_SLICE'),
                              'output': output}) + '\n')
 mode = os.environ['FIXTURE_MODE']
+if mode == 'fanout':
+    deadline = time.monotonic() + 12
+    while len((root / 'calls').read_text().splitlines()) < 12 and time.monotonic() < deadline:
+        time.sleep(.02)
+    assert len((root / 'calls').read_text().splitlines()) == 12, 'slices did not run concurrently'
 target = lens == 'regression' and number == 2
 if mode in ('retry', 'failed', 'overlap') and target:
     if retry:
@@ -154,6 +160,14 @@ class PanelTests(unittest.TestCase):
                 self.assert_ok(result, state)
                 self.assertEqual(len(calls), 16)
                 self.assertTrue(all('-slice-' in c['name'] and c['marker'] == '1' for c in calls))
+                self.assert_document(state)
+
+    def test_slice_requests_are_concurrent(self):
+        for driver in ('stagegate', 'change-workflow'):
+            with self.subTest(driver=driver):
+                result, state, calls = self.run_panel(driver=driver, config='adversarial-review.slices 3\n', mode='fanout')
+                self.assert_ok(result, state)
+                self.assertEqual(len(calls), 12)
                 self.assert_document(state)
 
     def test_three_slices_merge_to_identical_public_artifacts(self):
@@ -384,6 +398,29 @@ class TuiTests(unittest.TestCase):
 
     def test_lens_stays_active_until_last_slice_completes(self):
         self.assertEqual(self.panel(sliced=True, mixed=True), self.panel(mixed=True))
+
+    def test_footer_keeps_existing_lens_name(self):
+        def draw(stage, root):
+            app = self.tui.UncleTUI.__new__(self.tui.UncleTUI)
+            writes = []
+            app.stdscr = SimpleNamespace(addnstr=lambda y, x, text, *args: writes.append((y, x, text)))
+            app.state = 'running'
+            app.status_stage = stage
+            app.chat_composer = app.chat_error = ''
+            app.chat_choices = []
+            app.chat_focus = 'output'
+            app._control_hint = lambda *_: 'Workflow controls'
+            app._composer_cursor_cell = lambda *_: (0, 0)
+            app._next_run_unattended = lambda: False
+            app.test_execution_status = lambda: ''
+            app._draw_file_picker = lambda *_: None
+            with patch.object(self.tui, '_project_root', return_value=root):
+                app._draw_chat_composer(1, 20, 240, 0, 238)
+            return writes
+        with tempfile.TemporaryDirectory() as root:
+            original = draw('adversarial-review-worker-security', root)
+            self.assertTrue(any('adversarial-review-worker-security' in text for _, _, text in original))
+            self.assertEqual(draw('adversarial-review-worker-security-slice-2', root), original)
 
 
 if __name__ == '__main__':

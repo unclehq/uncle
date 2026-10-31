@@ -271,6 +271,23 @@ class ProgressDeadline(unittest.TestCase):
             self.assertIn('token11', text)
             self.assertGreaterEqual(turns, 1)
 
+    def test_shell_watchdog_uses_actual_worker_stage_override(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = r'''
+. "$ROOT/scripts/lib/model-jobs.sh"
+stage_uses_self_hosted() { return 0; }
+run_claude() { sleep 3; }
+workflow_model_writer updated-plan run_claude prompt updated-plan-worker-edits-3
+'''
+            result = subprocess.run(['bash', '-c', script], cwd=root, env=environment(root,
+                WORKFLOW_SELF_HOSTED_WRITER_SECONDS='8',
+                WORKFLOW_SELF_HOSTED_WRITER_SECONDS_UPDATED_PLAN_WORKER_EDITS_3='1'),
+                capture_output=True, text=True, timeout=6)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('deadline: ceiling', result.stderr)
+            self.assertIn('1s', result.stderr)
+
     def test_nested_runner_deadlines_cannot_extend_aggregate_allowance(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
                 'UNCLE_CONFIG': str(Path(temp) / 'config'),

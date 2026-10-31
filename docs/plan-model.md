@@ -481,3 +481,29 @@ at about 2,300 to 3,000 tokens and 52 s. Time follows output; the models write f
   browser tests and the defect-injection runner run together; the install warm-up no longer takes prose words for packages (noinit:
   40 of them, one invalid, so nothing was cached); the first group's step sandboxes are made while the updated plan is written.
 - Estimate, not measured: outline about 15 s, second phase about 20 s, so about 35 to 40 s.
+
+## Dependency compatibility before verification
+
+Plans and scaffolds use current stable test tools resolved at install time and keep
+this machine's installed Node. The opt-in Vite React template uses `latest` for
+Playwright, Vite, Vitest and the Vite React plugin; the generated lockfile records
+concrete versions.
+
+`dependency_versions.py` checks local manifests and resolved Playwright metadata
+without loading project JavaScript or contacting a registry. Deterministic
+preflight and serial/parallel verification use the same check. A version below
+`execution.playwright-min-version` (default `1.50`) or an `engines.node` range
+excluding the installed Node produces one actionable finding through the existing
+failure/repair path. Approved plans are never edited by the guard.
+
+Set `execution.playwright-min-version` or `execution.dependency-version-check`
+(default `true`) in `.uncle/config`; `WORKFLOW_PLAYWRIGHT_MIN_VERSION` and
+`WORKFLOW_DEPENDENCY_VERSION_CHECK` override those values. `UNCLE_CONFIG` selects
+an alternate config file, as for other execution settings. A manifest range is
+not a resolved version: installed package metadata takes precedence over npm
+shrinkwrap/lockfiles, with exact manifest pins as the final fallback. Install-only
+commands may replace stale packages and are checked again afterward. Combined
+install/browser commands inspect the lockfile before installed metadata and reject
+known stale resolutions before launching; keep
+setup separate when upgrading. Dependencies first resolved inside a compound
+command cannot be inspected between its shell operations.

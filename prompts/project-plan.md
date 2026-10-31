@@ -340,3 +340,11 @@ refused to merge anyone's work. Getting this right at the very start, before any
 implementation step runs, means no later step has to discover it by failing.
 Name `.gitignore` in whichever step's `Owns:` covers project scaffolding, the
 same as any other file it writes.
+
+Use current stable test tooling resolved at install time (`latest` or a `^` range
+based on the current release), including Playwright, Vite and Vitest when used;
+never pin an old Playwright or an old Node. Keep the installed Node: do not
+install or switch Node versions. If `package.json` sets `engines.node`, its
+range must accept the installed Node major. Record resolved versions in the
+lockfile; reuse a compatible installation. If an approved plan conflicts,
+report it through the existing review/repair path; do not silently edit it.

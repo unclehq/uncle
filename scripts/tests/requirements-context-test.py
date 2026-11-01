@@ -124,7 +124,8 @@ class Requirements(unittest.TestCase):
             canonical.write_text(json.dumps(payload))
             result=subprocess.run(['bash','-c',harness],cwd=d,capture_output=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            self.assertEqual((Path(d)/'state').read_text().strip(),'WAIT_REQUIREMENTS_APPROVAL')
+            # Classification now sits between validation and the requirements gate, so the plan can use the class.
+            self.assertEqual((Path(d)/'state').read_text().strip(),'CLASSIFY')
             self.assertIn('## 1. Required functionality',p.read_text())
 
 if __name__=='__main__': unittest.main()

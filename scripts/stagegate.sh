@@ -4123,7 +4123,7 @@ project_plan_sections_enabled() {
     local minimum="${WORKFLOW_PROJECT_PLAN_SECTIONS_MIN_BYTES:-12000}"
     case "$setting" in
         0|false|no|off) return 1 ;;
-        1|true|yes|on) return 0 ;;
+        1|true|yes|on) [[ -n "${WORKFLOW_PROJECT_PLAN_SECTIONS:-}" ]] || { change_class_plan_single && return 1; }; return 0 ;;
         auto|'') ;;
         *) echo "Invalid WORKFLOW_PROJECT_PLAN_SECTIONS value: $setting (use auto, 0, or 1)." >&2; return 1 ;;
     esac
@@ -5147,7 +5147,7 @@ while true; do
                 # speculative stage.
                 hash_file "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json" > "$STATE_DIR/merged-plan.input"
             fi
-            set_state WAIT_REQUIREMENTS_APPROVAL
+            set_state CLASSIFY
             ;;
 
         WAIT_REQUIREMENTS_APPROVAL)
@@ -5194,14 +5194,17 @@ while true; do
             # packet.  Hydrate it before opening the approval gate: the
             # speculative adversarial review consumes only this JSON file.
             ensure_project_plan_json || exit 1
-            set_state CLASSIFY
+            # Planned under the class decided from the requirements; raise it if the plan outgrew it (no model call).
+            change_class_recheck app .uncle/docs/PROJECT_PLAN.md
+            set_state WAIT_PLAN_APPROVAL
             ;;
 
         CLASSIFY)
-            # How much review this plan needs; its own timed stage, fail-open, and it runs before the speculative review
-            # that starts at WAIT_PLAN_APPROVAL so that review already uses the classified lens set.
-            classify_change_stage app .uncle/docs/PROJECT_PLAN.md || true
-            set_state WAIT_PLAN_APPROVAL
+            # How much scrutiny this build needs, decided from the approved requirements interpretation, so that it runs before
+            # the plan (including the plan the speculative stage starts at the requirements gate) and the plan can use it.
+            # Its own timed stage, fail-open. The plan's size is checked again after planning, which can only raise the class.
+            classify_change_stage app .uncle/docs/REQUIREMENTS_INTERPRETATION.md || true
+            set_state WAIT_REQUIREMENTS_APPROVAL
             ;;
 
         WAIT_PLAN_APPROVAL)

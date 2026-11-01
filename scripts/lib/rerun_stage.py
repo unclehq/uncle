@@ -10,7 +10,7 @@ from supervisor import state_digest
 
 STEP = re.compile(r'implementation-step-([1-9][0-9]*)$')
 
-APP = {'requirements':'REQUIREMENTS','project-plan':'PROJECT_PLAN','classify-change':'CLASSIFY','adversarial-review':'ADVERSARIAL_REVIEW','updated-plan':'UPDATED_PLAN','preflight':'PREFLIGHT','implementation':'IMPLEMENT','test-review':'TEST_REVIEW','manual-checklist':'MANUAL_CHECKLIST','execute-checklist':'EXECUTE_CHECKLIST','final-audit':'FINAL_AUDIT'}
+APP = {'requirements':'REQUIREMENTS','classify-change':'CLASSIFY','project-plan':'PROJECT_PLAN','adversarial-review':'ADVERSARIAL_REVIEW','updated-plan':'UPDATED_PLAN','preflight':'PREFLIGHT','implementation':'IMPLEMENT','test-review':'TEST_REVIEW','manual-checklist':'MANUAL_CHECKLIST','execute-checklist':'EXECUTE_CHECKLIST','final-audit':'FINAL_AUDIT'}
 CHANGE = {'baseline':'ANALYZE','change-plan-stage-duties':'CHANGE_PLAN_DUTIES','change-plan':'PLAN','classify-change':'CLASSIFY','adversarial-review':'ADVERSARIAL_REVIEW','updated-change-plan':'UPDATED_PLAN','implementation':'IMPLEMENT','test-review':'TEST_REVIEW','manual-checklist':'CHECKLIST','execute-checklist':'EXECUTE_CHECKLIST','final-audit':'FINAL_AUDIT'}
 
 def supports(name, family):

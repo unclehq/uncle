@@ -25,6 +25,8 @@ text; nothing here depends on one runner's output protocol.
     change_class.py force    FAMILY PROJECT PLAN CLASS               # WORKFLOW_CHANGE_CLASS
     change_class.py current  FAMILY PROJECT PLAN                    # exit 0 when change-class.json matches this plan
     change_class.py get      PROJECT KEY [DEFAULT]                  # class | lenses | edit_slice | source
+    change_class.py recheck  FAMILY PROJECT PLAN                    # after planning: raise the class if the plan outgrew it
+    change_class.py budget   PROJECT                                # the planner's size paragraph for a small application
 """
 import hashlib
 import json
@@ -140,9 +142,39 @@ def criteria_count(project):
         return 0
 
 
+INTERPRETATION = '.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json'
+# What the approved reading of the brief says the application must do, and the places a risk keyword means something. The
+# non-goals are deliberately absent from the second list: "no backend, accounts or persistence" names what is excluded, and
+# counting it as risk would class the safest apps as the riskiest.
+RISK_SECTIONS = ('required_functionality', 'definition_of_done', 'failure_behaviors', 'constraints', 'user_visible_behaviors',
+                 'system_behaviors')
+# An application is small when the approved interpretation is: this many requirements and done-criteria, no risk keyword, and a
+# plan that did not balloon (a sparse brief can still be planned into dozens of files, and that is not small).
+APP_SMALL = {'requirements': 6, 'criteria': 8, 'steps': 12, 'files': 30}
+
+
+def interpretation(project):
+    """The sections of REQUIREMENTS_INTERPRETATION.json as text, or {} when there is none (then the plan's size decides alone)."""
+    try:
+        sections = json.loads(_read(Path(project) / INTERPRETATION)).get('sections')
+    except (ValueError, AttributeError):
+        return {}
+    if not isinstance(sections, dict):
+        return {}
+    return {name: value if isinstance(value, str) else json.dumps(value) for name, value in sections.items()}
+
+
+def interpretation_counts(project):
+    """(required functionality items, definition-of-done rows) in the approved interpretation."""
+    sections = interpretation(project)
+    return (len(set(re.findall(r'\bR-\d+', sections.get('required_functionality', '')))),
+            len(set(re.findall(r'\bD-\d+', sections.get('definition_of_done', '')))))
+
+
 def criteria_text(family, project):
     if family != 'change':
-        return ''
+        sections = interpretation(project)
+        return '\n'.join(sections.get(name, '') for name in RISK_SECTIONS)
     try:
         spec = json.loads(_read(Path(project) / '.uncle/workflow/documents/CHANGE_SPEC.json'))
     except ValueError:
@@ -163,9 +195,19 @@ def features(family, project, plan):
     return {
         'family': family, 'request_chars': len(request), 'plan_chars': len(plan_text), 'steps': steps,
         'owned_files': len(owned), 'directories': len(directories), 'file_kinds': kinds,
-        'criteria': criteria_count(project) if family == 'change' else 0, 'risk_hits': hits[:12],
+        'criteria': criteria_count(project) if family == 'change' else interpretation_counts(project)[1],
+        'requirements': interpretation_counts(project)[0] if family != 'change' else 0, 'risk_hits': hits[:12],
         'owned_sample': owned[:12], 'plan_sha': digest(plan_text),
     }
+
+
+def app_is_small(f):
+    """A new application whose approved interpretation is small, taken from what it must do rather than how many files the plan
+    scaffolds. Needs an interpretation to read: with none, the plan's size decides alone, as before."""
+    limits = APP_SMALL
+    return (f['family'] != 'change' and 0 < f.get('requirements', 0) <= limits['requirements']
+            and 0 < f['criteria'] <= limits['criteria'] and f['steps'] <= limits['steps']
+            and f['owned_files'] <= limits['files'] and not f['risk_hits'])
 
 
 def deterministic_class(f):
@@ -176,6 +218,8 @@ def deterministic_class(f):
         return 'docs'
     if f['family'] == 'change' and files and kinds['test'] == files:
         return 'test-only'
+    if app_is_small(f):
+        return 'small'
     if f['steps'] >= 7 or files >= 15 or f['directories'] >= 6:
         return 'large'
     if f['steps'] <= 2 and files <= 4 and f['criteria'] <= 4 and f['family'] == 'change':
@@ -297,9 +341,53 @@ for a genuinely small, low-risk change.
 def prompt(family, project, plan, out, template):
     f = features(family, project, plan)
     request = request_text(family, project)[:3500]
-    body = _read(template) + '\n\n## The request\n\n' + request + PROMPT_FOOTER % json.dumps(f, indent=2)
+    body = _read(template) + '\n\n## The request\n\n' + request
+    if family != 'change':
+        # Classified before the plan exists: the approved reading of the brief is what there is to judge, and the plan size
+        # in the features below is unknown (0 steps, 0 files), not small.
+        sections = interpretation(project)
+        shown = ['### %s\n%s' % (name, sections[name][:1500]) for name in
+                 ('required_functionality', 'definition_of_done', 'constraints', 'explicit_non_goals') if sections.get(name)]
+        if shown:
+            body += '\n\n## The approved requirements interpretation (the plan does not exist yet)\n\n' + '\n\n'.join(shown)
+    body += PROMPT_FOOTER % json.dumps(f, indent=2)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(body, encoding='utf-8')
+
+
+def recheck(family, project, plan):
+    """Run once the plan exists: raise the class if the plan is bigger than the class it was planned under. Never lowers it, and
+    never calls a model. Returns the new class when it changed, else ''."""
+    try:
+        current = json.loads(_read(Path(project) / OUTPUT)).get('class')
+    except ValueError:
+        return ''
+    if current not in CLASSES:
+        return ''
+    f = features(family, project, plan)
+    floor = deterministic_class(f)
+    if CLASSES.index(floor) <= CLASSES.index(current):
+        return ''
+    result = build(family, project, plan, {'class': current}, 'plan-recheck',
+                   'Raised from %s to %s: the plan (%d steps, %d files) is larger than the %s class allows.'
+                   % (current, floor, f['steps'], f['owned_files'], current))
+    write(project, result)
+    return result['class']
+
+
+def plan_budget(project):
+    """The sizing paragraph the planner is given for the class it is planning under; '' for classes it does not constrain."""
+    try:
+        data = json.loads(_read(Path(project) / OUTPUT))
+    except ValueError:
+        return ''
+    if data.get('class') != 'small' or data.get('family') == 'change':
+        return ''
+    return ('\n\n## Build class (binding)\n\nThis application was classified **small** from its approved requirements: few '
+            'requirements and done-criteria, nothing security-sensitive. Plan it as a small build: at most %d implementation '
+            'steps and %d owned files, sharing files between related work rather than scaffolding one file per idea. A plan '
+            'larger than that is reclassified and reviewed in full, so it costs more than the budget saves.\n'
+            % (APP_SMALL['steps'], APP_SMALL['files']))
 
 
 def get(project, key, default=''):
@@ -352,6 +440,12 @@ def main(argv):
         except ValueError:
             return 1
         return 0 if stored.get('features', {}).get('plan_sha') == digest(_read(plan)) else 1
+    elif command == 'recheck' and len(argv) == 5:
+        raised = recheck(*argv[2:5])
+        if raised:
+            print('Build class raised to %s: the plan is larger than the class it was planned under.' % raised)
+    elif command == 'budget' and len(argv) == 3:
+        sys.stdout.write(plan_budget(argv[2]))
     elif command == 'get' and len(argv) in (4, 5):
         print(get(argv[2], argv[3], argv[4] if len(argv) == 5 else ''))
     else:

@@ -31,6 +31,20 @@ class Rerun(unittest.TestCase):
             consume(root,'change')
             self.assertEqual((state/'state').read_text().strip(),'116:TEST_REVIEW')
             self.assertTrue((state/'approvals/IMPLEMENTATION_REVIEW.sha256').exists())
+    def test_application_classify_runs_before_the_plan_and_keeps_the_requirements_approval(self):
+        # CLASSIFY is decided from the approved requirements, ahead of PROJECT_PLAN, so rerunning it invalidates the plan's
+        # approval and everything after it but not the requirements'.
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);state=root/'.uncle/workflow';(state/'approvals').mkdir(parents=True)
+            (state/'state').write_text('WAIT_PLAN_APPROVAL\n')
+            (state/'rerun-request.json').write_text(json.dumps({'stage':'classify-change'}))
+            for name in ['REQUIREMENTS_INTERPRETATION','PROJECT_PLAN','ADVERSARIAL_REVIEW']:
+                (state/'approvals'/f'{name}.sha256').write_text('approved')
+            consume(root,'app')
+            self.assertEqual((state/'state').read_text().strip(),'CLASSIFY')
+            self.assertTrue((state/'approvals/REQUIREMENTS_INTERPRETATION.sha256').exists())
+            self.assertFalse((state/'approvals/PROJECT_PLAN.sha256').exists())
+            self.assertFalse((state/'approvals/ADVERSARIAL_REVIEW.sha256').exists())
     def test_unknown_does_not_change_state(self):
         with tempfile.TemporaryDirectory() as d:
             state=Path(d)/'.uncle/workflow';state.mkdir(parents=True)

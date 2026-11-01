@@ -109,6 +109,28 @@ change_class_test_scope() {
     esac
 }
 
+# change_class_recheck <family> <plan> -- after planning: raise the class if the plan outgrew it (no model call; never lowers it).
+change_class_recheck() {
+    local message
+    [[ "${WORKFLOW_CLASSIFY:-1}" != 0 && -z "${WORKFLOW_CHANGE_CLASS:-}" && -s "$STATE_DIR/change-class.json" && -s "$2" ]] || return 0
+    message="$(python3 -B "$CHANGE_CLASS_PY" recheck "$1" . "$2" 2>/dev/null)" || return 0
+    [[ -z "$message" ]] || echo "$message"
+}
+
+# change_class_plan_single -- succeeds when a new application is small enough that its plan is written in one pass rather than by the
+# sectioned worker panel. An explicit WORKFLOW_PROJECT_PLAN_SECTIONS (1 or 0) is the operator's word and is read before this.
+change_class_plan_single() {
+    [[ "${WORKFLOW_CLASSIFY:-1}" != 0 ]] || return 1
+    [[ "$(python3 -B "$CHANGE_CLASS_PY" get . class 2>/dev/null)" == small \
+        && "$(python3 -B "$CHANGE_CLASS_PY" get . family 2>/dev/null)" == app ]]
+}
+
+# change_class_budget -- the planner's size paragraph for the class (empty unless the application is small).
+change_class_budget() {
+    [[ "${WORKFLOW_CLASSIFY:-1}" != 0 ]] || return 0
+    python3 -B "$CHANGE_CLASS_PY" budget . 2>/dev/null || true
+}
+
 # change_class_implement_single -- succeeds when the change is small enough to implement in one session. WORKFLOW_STEPWISE_IMPLEMENT
 # (1 or 0) is the operator's word and is read before this; with no classification the answer is no.
 change_class_implement_single() {

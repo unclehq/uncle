@@ -252,6 +252,25 @@ def render(project, target='.uncle/docs/IMPLEMENTATION_NOTES.md'):
     path.write_text(merge_and_render(fragments), encoding='utf-8')
 
 
+def record_deviations(project, reason, paths, label='Driver-recorded scope deviations'):
+    """Record files as deviations from the plan, as a fragment of their own, and re-render the notes.
+
+    For an unattended run that changed files outside the plan's change-impact table without writing them down: there is no one to
+    ask, the work is already done, and the point of the rule is that the departure is on the record where the diff review and the
+    PR show it. The reason says it was the driver that recorded it, so it can never pass for the implementer's own account.
+    """
+    paths = [p for p in dict.fromkeys(paths) if isinstance(p, str) and p.strip()]
+    if not paths or not reason.strip():
+        raise ValueError('record-deviations needs a reason and at least one path')
+    fragment = {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes', 'changed_files': [],
+                'deviations': [{'file': path, 'reason': reason} for path in paths], 'unresolved_concerns': [], 'deliveries': []}
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='uncle-deviations-') as directory:
+        path = Path(directory) / 'fragment.json'
+        path.write_text(json.dumps(fragment), encoding='utf-8')
+        append(project, str(path), '.uncle/docs/IMPLEMENTATION_NOTES.md', label)
+
+
 def deviation_paths(project):
     """Print paths explicitly recorded as implementation deviations.
 
@@ -299,6 +318,8 @@ if __name__ == '__main__':
             render(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '.uncle/docs/IMPLEMENTATION_NOTES.md')
         elif action == 'deviation-paths':
             deviation_paths(sys.argv[2])
+        elif action == 'record-deviations':
+            record_deviations(sys.argv[2], sys.argv[3], sys.argv[4:])
         else:
             raise ValueError('unknown action: ' + action)
     except (OSError, ValueError, KeyError) as error:

@@ -473,8 +473,14 @@ repair_exhausted() {
 # and the checklists would only be run against a build that is known not to pass: it goes straight to the final audit, which
 # reads the failure. While passes remain, or when repair was never available, the checklists still run first. This is only for a
 # failure that is actually present; a clean test review after successful repairs still goes through the checklists.
+#
+# Severity gates the skip. Only a failure that leaves nothing to look at (the application cannot build or start, or the test runner
+# executed no tests: green_application_not_runnable) goes straight to the audit. Anything else, a failing assertion or a wrong
+# oracle included, still gets the checklists, which are how the application is actually observed in a browser; the audit then reads
+# their results beside the failure.
 test_review_next_stage() {
-    if repair_exhausted && [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]]; then
+    if repair_exhausted && [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]] \
+       && { ! declare -f green_application_not_runnable > /dev/null || green_application_not_runnable; }; then
         printf FINAL_AUDIT
     else
         printf MANUAL_CHECKLIST
@@ -6106,7 +6112,7 @@ while true; do
                         fi
                         ;;
                     3|5) continue ;;
-                    6) set_state FINAL_AUDIT; continue ;;
+                    6) set_state "$(test_review_next_stage)"; continue ;;
                     *) exit 1 ;;
                 esac
             fi

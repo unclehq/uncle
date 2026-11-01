@@ -40,6 +40,6 @@ grep -q 'rc=1' <<< "$out"                   || bad "WORKFLOW_REPAIR=0 still stop
 
 # the driver sends 6 to the final audit
 block="$(sed -n '/repair_judge || repair_status=\$?/,/^                esac/p' "$SG")"
-printf '%s\n' "$block" | grep -q '6) set_state FINAL_AUDIT; continue' || bad "REPAIR does not route 6 to FINAL_AUDIT"
+printf '%s\n' "$block" | grep -qF '6) set_state "$(test_review_next_stage)"; continue' || bad "REPAIR does not route 6 through test_review_next_stage"
 [[ $fail == 0 ]] && echo "repair-noop-route-test.sh: ok"
 exit $fail

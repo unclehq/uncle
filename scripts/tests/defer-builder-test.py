@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -41,6 +42,57 @@ class Deferral(unittest.TestCase):
                 self.assertEqual(defer.option(stage, 'finding-seconds', 360), '30')
                 with patch.dict(os.environ, WORKFLOW_UPDATED_PLAN_FINDING_SECONDS_UPDATED_CHANGE_PLAN_WORKER_EDITS_2='40'):
                     self.assertEqual(defer.option(stage, 'finding-seconds', 360), '40')
+
+    def test_speculative_adoption_prints_deferred_rows_to_the_terminal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state, directory, _ = self.fixture(root)
+            (directory / 'deferred.json').write_text(json.dumps({'AR-2': {
+                'finding': 'AR-2', 'disposition': 'Deferred', 'reason': 'Deferred: typed rows block; review by hand.'}}))
+            (state / 'speculative').mkdir()
+            (state / 'speculative/UPDATED_PLAN.input').write_text('unchanged')
+            (root / 'gate.json').write_text('{}')
+            (root / 'artifact.json').write_text(json.dumps({'dispositions': [{
+                'finding': 'AR-2', 'disposition': 'Deferred', 'reason': 'Deferred: typed rows block; review by hand.'}]}))
+            source = (ROOT / 'scripts/stagegate.sh').read_text()
+            function = re.search(r'^adopt_speculation\(\) \{\n.*?^}', source, re.M | re.S)[0]
+            script = function + '''
+canonical_artifact_path() { echo "$1"; }
+hash_file() { echo unchanged; }
+speculation_artifact_valid() { return 0; }
+SPEC_DIR="$STATE_DIR/speculative"
+(exit 0) &
+spec_pid=$!
+spec_stage=UPDATED_PLAN
+adopt_speculation UPDATED_PLAN gate.json artifact.json
+'''
+            result = subprocess.run(['bash', '-c', script], cwd=root, capture_output=True, text=True,
+                                    env=dict(os.environ, ROOT=str(ROOT), STATE_DIR=str(state), LOG_DIR=str(state / 'logs')))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.count('Updated-plan finding AR-2: Deferred:'), 1)
+            self.assertIn('1 finding(s) Deferred', result.stdout)
+            (root / 'artifact.json').write_text('{\"dispositions\": []}')
+            clean = subprocess.run(['bash', '-c', script], cwd=root, capture_output=True, text=True,
+                                   env=dict(os.environ, ROOT=str(ROOT), STATE_DIR=str(state), LOG_DIR=str(state / 'logs')))
+            self.assertEqual(clean.returncode, 0, clean.stderr)
+            self.assertNotIn('AR-2', clean.stdout)
+
+    def test_speculation_records_each_deferred_line_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state, directory, _ = self.fixture(root)
+            (directory / 'deferred.json').write_text(json.dumps({'AR-2': {
+                'finding': 'AR-2', 'disposition': 'Deferred', 'reason': 'Deferred: review by hand.'}}))
+            script = '''
+. "$ROOT/scripts/lib/model-jobs.sh"
+UNCLE_SPECULATIVE=true workflow_deferred_report "$STATE_DIR/updated-plan-edits" >> "$LOG_DIR/UPDATED_PLAN.speculative.log"
+'''
+            subprocess.run(['bash', '-ec', script], cwd=root, check=True,
+                           env=dict(os.environ, ROOT=str(ROOT), STATE_DIR=str(state), LOG_DIR=str(state / 'logs')))
+            for name in ('UPDATED_PLAN.log', 'UPDATED_PLAN.speculative.log'):
+                text = (state / 'logs' / name).read_text()
+                self.assertEqual(text.count('Updated-plan finding AR-2: Deferred:'), 1)
+                self.assertEqual(text.count('1 finding(s) Deferred'), 1)
 
     def fixture(self, root):
         state = root / '.uncle/workflow'

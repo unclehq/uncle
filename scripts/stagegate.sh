@@ -4968,6 +4968,9 @@ adopt_speculation() {
 
     echo "Adopted speculative $stage — inputs unchanged since it started."
     echo "Log: $LOG_DIR/${stage}.speculative.log"
+    if [[ "$stage" == UPDATED_PLAN ]]; then
+        python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" report-plan "$artifact" || return 1
+    fi
     return 0
 }
 

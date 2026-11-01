@@ -16,7 +16,7 @@ running_workflow_pids() {
     local processes helper
     case "${OSTYPE:-}" in
         msys*|cygwin*|win32*)
-            helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/running-workflow.ps1"
+            helper="$(cd "${BASH_SOURCE[0]%/*}" && pwd)/running-workflow.ps1"
             if command -v cygpath >/dev/null 2>&1; then helper="$(cygpath -w "$helper")"; fi
             powershell.exe -NoProfile -NonInteractive -File "$helper" | tr '\r\n' '  '
             return "${PIPESTATUS[0]}"

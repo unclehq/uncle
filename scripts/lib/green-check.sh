@@ -23,7 +23,7 @@
 # command only blocks when it passed then and fails now.
 #
 # bash 3.2 compatible: no associative arrays, no ${var^^}.
-GREEN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GREEN_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 . "$GREEN_LIB_DIR/performance.sh"
 
 # Optional approved groups refer to consecutive, one-based command positions.

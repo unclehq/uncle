@@ -2,12 +2,18 @@
 # Prompt bytes and portable case conversion. Optional supervision is supplied
 # by the caller; sourcing this module performs no initialization.
 
+. "$(cd "${BASH_SOURCE[0]%/*}" && pwd)/strings.sh"
+
 upper() {
-    printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+    local _r
+    uncle_upper_to _r "$1"
+    printf '%s' "$_r"
 }
 
 lower() {
-    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+    local _r
+    uncle_lower_to _r "$1"
+    printf '%s' "$_r"
 }
 
 gate_prompt() {

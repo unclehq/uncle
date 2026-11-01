@@ -11,7 +11,7 @@ if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; 
 # exists. The popup collects; this applies. Keeping them apart means the file
 # writing is testable without a terminal, and a curses loop never writes to the
 # project.
-HUMAN_INPUT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HUMAN_INPUT_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 
 # collect_human_inputs <report> <out> <id>... -- ask for each blocker.
 #   0 something was provided, 1 nothing was.

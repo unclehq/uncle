@@ -20,9 +20,10 @@
 # including them here would bury the code change in the paper trail describing
 # it.
 # hash_file, which this lib uses and its tests source it without.
-. "$(dirname "${BASH_SOURCE[0]}")/sha256.sh"
+IMPL_REVIEW_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"   # once, here: the functions below run on every diff
+. "$IMPL_REVIEW_LIB_DIR/sha256.sh"
 
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workflow-artifacts.sh"
+. "$(cd "${BASH_SOURCE[0]%/*}" && pwd)/workflow-artifacts.sh"
 
 # A file listing the untracked paths that already existed when implementation
 # started. Anything in it predates the change and is not part of it: a scratch
@@ -55,7 +56,7 @@ in_git_repo() {
 # all — precisely what this gate exists to show.
 change_diff_files() {
     WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" \
-        python3 -B "$(dirname "${BASH_SOURCE[0]}")/review_paths.py"
+        python3 -B "$IMPL_REVIEW_LIB_DIR/review_paths.py"
 }
 
 # write_change_diff <out> — the reviewable diff, tracked and untracked.
@@ -73,7 +74,7 @@ write_change_diff() {
     local out="$1" f
 
     if command -v python3 >/dev/null 2>&1; then
-        change_diff_files | python3 -B "$(dirname "${BASH_SOURCE[0]}")/parallel_diff.py" > "$out"
+        change_diff_files | python3 -B "$IMPL_REVIEW_LIB_DIR/parallel_diff.py" > "$out"
         return $?
     fi
     : > "$out"

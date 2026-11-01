@@ -10,7 +10,7 @@
 #
 # bash 3.2 compatible: no associative arrays, no ${var^^}.
 
-SUPERVISION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUPERVISION_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 
 supervision_config_file() {
     printf '%s' "${UNCLE_CONFIG:-${PROJECT_ROOT:-$PWD}/.uncle/config}"

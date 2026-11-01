@@ -13,7 +13,8 @@
 # Until untracked files were examined, this check and that one carried two
 # different copies of it, and the difference could not show up: none of these
 # artifacts is committed in a target repository, so `git diff` never named one.
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workflow-artifacts.sh"
+PLAN_SCOPE_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"   # once, here: plan_record_lines runs ~10 times per IMPLEMENT
+. "$PLAN_SCOPE_LIB_DIR/workflow-artifacts.sh"
 
 # Plan packets retain their narrative for human rendering, but that narrative
 # is carried by canonical JSON.  Scope/step extraction must consume that
@@ -29,7 +30,7 @@ plan_text() {
 # Scope/text return 3 for legacy plans; step records include the shared Markdown fallback.
 plan_record_lines() {
     local helper
-    helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/plan_records.py"
+    helper="$PLAN_SCOPE_LIB_DIR/plan_records.py"
     python3 -B "$helper" "$1" "$2" "${STATE_DIR:-}"
 }
 

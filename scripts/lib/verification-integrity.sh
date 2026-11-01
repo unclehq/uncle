@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Approved path scopes cover tests, fixtures/oracles, helpers and test config.
 # Verification may produce reports, but must not change these inputs.
-. "$(dirname "${BASH_SOURCE[0]}")/sha256.sh"
-VERIFICATION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${BASH_SOURCE[0]%/*}/sha256.sh"
+VERIFICATION_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 
 # The heading is matched the way verify_commands matches its own: by the words
 # it contains, at any level, with or without a section number. An exact-string

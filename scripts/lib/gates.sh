@@ -1,3 +1,4 @@
+. "$(cd "${BASH_SOURCE[0]%/*}" && pwd)/strings.sh"
 # Gate resolution: local project gates first, installed uncle gates second.
 #
 # Gates are the output rules a plan-producing stage must satisfy (see
@@ -12,7 +13,7 @@
 GATES_BASENAME="GATES.md"
 # This file's own directory, for helpers shipped beside it. $ROOT is the
 # installed uncle root, which is not the same place in a dev checkout.
-GATES_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATES_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 # gates.sh calls document_layout_prompt, so it sources its own dependency
 # rather than relying on every caller to have done it first.
 . "$GATES_LIB_DIR/document-layout.sh"
@@ -580,7 +581,7 @@ document_budget_override_path() {
     source="$(document_budget_source "$1")"
     fingerprint="$(cksum 2>/dev/null < "$source" | awk '{print $1 "-" $2}')" || fingerprint=missing
     [[ -n "$fingerprint" ]] || fingerprint=missing
-    key=$(printf '%s' "${1##*/}" | tr -c 'A-Za-z0-9._-' '_')
+    uncle_sanitize_to key "${1##*/}" "azAZ09._-"
     printf '%s/document-budgets/%s-%s\n' "${STATE_DIR:-.uncle/workflow}" "$fingerprint" "$key"
 }
 
@@ -602,7 +603,7 @@ document_budget() {
             l=int((b*ll+lo-1)/lo); if(l>lh)l=lh;
             printf "%.0f %.0f\n", b, l;
         }')"
-    key=$(printf '%s' "${file%.md}" | tr '[:lower:].-' '[:upper:]__')
+    uncle_upper_to key "${file%.md}" ".-"
     byte_key="WORKFLOW_DOC_MAX_BYTES_$key"
     line_key="WORKFLOW_DOC_MAX_LINES_$key"
     max_bytes="${!byte_key:-${WORKFLOW_DOC_MAX_BYTES:-$max_bytes}}"

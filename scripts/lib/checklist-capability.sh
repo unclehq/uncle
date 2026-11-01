@@ -20,7 +20,7 @@ if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; 
 # an operator dialog instead of spending the stage.
 #
 # bash 3.2 compatible: no associative arrays.
-CAPABILITY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CAPABILITY_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 
 # checklist_capability_of <token> -> port | gui | human | ""  (empty: ordinary
 # state, isolated by the grouping and needing nothing of the environment)

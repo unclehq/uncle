@@ -7,7 +7,7 @@
 # was the longest step of the build (noinit: 190 lines, 53 s) and the one that failed, because it was written blind against files other
 # steps were writing at the same moment.
 set -euo pipefail
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+here="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 target="${2:?target path}"
 case "$target" in /*|*..*) echo "Refusing to write outside the project: $target" >&2; exit 1 ;; esac
 mkdir -p "$(dirname "$target")"

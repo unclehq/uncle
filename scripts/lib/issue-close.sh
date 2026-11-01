@@ -8,9 +8,9 @@
 
 # state_issue lives next door and is needed by state_origin_agree.
 # hash_file, which this lib uses and its tests source it without.
-. "$(dirname "${BASH_SOURCE[0]}")/sha256.sh"
+. "${BASH_SOURCE[0]%/*}/sha256.sh"
 
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"
+. "$(cd "${BASH_SOURCE[0]%/*}" && pwd)/state.sh"
 
 # Legacy timeout setting retained for older callers.
 ISSUE_CLOSE_TIMEOUT_SECS="${STAGEGATE_CLOSE_TIMEOUT:-30}"

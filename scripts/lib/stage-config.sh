@@ -1,3 +1,4 @@
+. "$(cd "${BASH_SOURCE[0]%/*}" && pwd)/strings.sh"
 # Per-stage settings, read from the project's .uncle/config at the moment a
 # stage starts.
 #
@@ -268,7 +269,8 @@ uncle_no_runner() {
 # Explicit commands bypass discovery, including when no binaries are installed.
 uncle_resolve_stage_runner() {
     local stage="$1" side="$2" var global
-    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
+    local _k; uncle_upper_to _k "$stage" "-."
+    var="WORKFLOW_${side}_CMD_$_k"
     global="WORKFLOW_${side}_CMD"
     UNCLE_RESOLVED_RUNNER=""
     if [[ -n "${!var:-}" || -n "${!global:-}" ]]; then
@@ -373,7 +375,8 @@ uncle_has_config() {
 # Explicit per-stage environment settings override config and defaults.
 uncle_effective_stage_effort() {
     local stage="$1" var value
-    var="WORKFLOW_EFFORT_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
+    local _k; uncle_upper_to _k "$stage" "-."
+    var="WORKFLOW_EFFORT_$_k"
     value="${!var:-}"
     if [[ -z "$value" && "$stage" == implementation-step-* ]]; then
         value="${WORKFLOW_EFFORT_IMPLEMENTATION:-}"
@@ -400,7 +403,8 @@ uncle_stage_network() {
     case "$stage" in implementation-step-*) stage=implementation ;; esac
     v="$(uncle_stage_key "$stage" network)"
     [[ -n "$v" ]] || v="$(uncle_config_get network)"
-    case "$(printf '%s' "${v:-false}" | tr '[:upper:]' '[:lower:]')" in
+    local _l; uncle_lower_to _l "${v:-false}"
+    case "$_l" in
         1|true|yes|on) printf 'true' ;;
         *)             printf 'false' ;;
     esac
@@ -411,7 +415,8 @@ uncle_stage_network() {
 # built-in default applies only when the project has no config at all.
 stage_agent_cmd() {
     local var
-    var="WORKFLOW_AGENT_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
+    local _k; uncle_upper_to _k "$1" "-."
+    var="WORKFLOW_AGENT_CMD_$_k"
     if [[ -n "${!var:-}" ]]; then
         printf '%s' "${!var}"
     elif [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
@@ -435,7 +440,8 @@ stage_reviewer_cmd() {
 
 stage_command_overridden() {
     local side="$1" stage="$2" var global
-    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
+    local _k; uncle_upper_to _k "$stage" "-."
+    var="WORKFLOW_${side}_CMD_$_k"
     global="WORKFLOW_${side}_CMD"
     [[ -n "${!var:-}" || -n "${!global:-}" ]]
 }

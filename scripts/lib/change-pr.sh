@@ -1715,6 +1715,6 @@ except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.Subproc
     sys.exit(1)
 PY
     # The attestation module lives beside this file; the driver may override.
-    UNCLE_LIB_DIR="${UNCLE_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}" \
+    UNCLE_LIB_DIR="${UNCLE_LIB_DIR:-$(cd "${BASH_SOURCE[0]%/*}" && pwd)}" \
         python3 -c "$pr_code" "$@"
 }

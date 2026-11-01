@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # One atomic record per completed attempt, safe for concurrent/speculative
 # stages. Observability must not change the outcome of a workflow.
+#
+# The library directory is worked out once, when this file is sourced: perf_record, perf_stage and perf_stream run on every model call
+# and every state, and `${BASH_SOURCE[0]%/*}` inside them started a process each time.
+PERF_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 perf_record() (
     [[ "${WORKFLOW_METRICS:-1}" == 1 && -n "${STATE_DIR:-}" ]] || exit 0
     local kind="$1" stage="$2" elapsed="$3" status="$4"
     local log="${5:-/dev/null}" runner="${6:-}" model="${7:-}" effort="${8:-}"
     local dir="$STATE_DIR/metrics" tmp
     local timing_dir="${UNCLE_TIMING_DIR:-}"
-    mkdir -p "$dir" || exit 0
+    [[ -d "$dir" ]] || mkdir -p "$dir" || exit 0
     tmp="$(mktemp "$dir/.pending.XXXXXX")" || exit 0
     [[ -f "$log" ]] || log=/dev/null
     if jq -R -s -c --arg kind "$kind" --arg stage "$stage" \
@@ -35,7 +39,7 @@ perf_record() (
            log:$log}
     ' "$log" > "$tmp"; then
         # One process prices the record, publishes it as $tmp.json, and refreshes the session totals.
-        python3 "$(dirname "${BASH_SOURCE[0]}")/usage-cost.py" "$tmp" --finish "$STATE_DIR" || true
+        python3 "$PERF_LIB_DIR/usage-cost.py" "$tmp" --finish "$STATE_DIR" || true
         [[ ! -e "$tmp" ]] || mv "$tmp" "$tmp.json"
     else
         rm -f "$tmp"
@@ -48,15 +52,15 @@ perf_record() (
 perf_stage() {
     [[ -n "${UNCLE_TIMING_DIR:-}" && "${WORKFLOW_METRICS:-1}" == 1 ]] || return 0
     export UNCLE_TIMING_STAGE="$1"
-    python3 -B "$(dirname "${BASH_SOURCE[0]}")/build_timing.py" stage "$1" 2>/dev/null || true
+    python3 -B "$PERF_LIB_DIR/build_timing.py" stage "$1" 2>/dev/null || true
 }
 
 # Transparent raw-stream observation; native adapters retain their own events.
 perf_stream() {
     if [[ -n "${UNCLE_TIMING_DIR:-}" && "${WORKFLOW_METRICS:-1}" == 1 ]]; then
-        UNCLE_TIMING_MODEL="${model:-}" python3 -B "$(dirname "${BASH_SOURCE[0]}")/runner_timing.py" stream "$1"
+        UNCLE_TIMING_MODEL="${model:-}" python3 -B "$PERF_LIB_DIR/runner_timing.py" stream "$1"
     else
         cat
     fi
 }
-export UNCLE_TIMING_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_timing.py"
+export UNCLE_TIMING_HELPER="$PERF_LIB_DIR/runner_timing.py"

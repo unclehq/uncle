@@ -9,7 +9,7 @@
 # bash 3.2 compatible: no associative arrays, no ${var^^}.
 
 if ! declare -f state_read > /dev/null 2>&1; then
-    . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"
+    . "$(cd "${BASH_SOURCE[0]%/*}" && pwd)/state.sh"
 fi
 
 TRIAGE_LOG_TAIL="${TRIAGE_LOG_TAIL:-200}"

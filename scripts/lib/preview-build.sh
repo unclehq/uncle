@@ -34,7 +34,7 @@
 # driver. Without it the survival check silently fails -- safe (it rebuilds) but
 # the feature never works.
 if ! declare -f plan_material_hash > /dev/null 2>&1; then
-    . "${PREVIEW_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/plan-scope.sh"
+    . "${PREVIEW_LIB_DIR:-$(cd "${BASH_SOURCE[0]%/*}" && pwd)}/plan-scope.sh"
 fi
 
 PREVIEW_BUILD="${WORKFLOW_PREVIEW_BUILD:-1}"

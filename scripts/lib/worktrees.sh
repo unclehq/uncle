@@ -9,7 +9,7 @@
 #
 # bash 3.2 compatible.
 
-WORKTREES_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKTREES_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 . "$WORKTREES_LIB_DIR/state.sh"
 
 # Physical path of an existing directory; empty when it does not exist.

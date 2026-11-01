@@ -903,7 +903,8 @@ stage_setting() {
     local fallback="$3"
     local var
 
-    var="WORKFLOW_${kind}_$(upper "$stage" | tr -c 'A-Z0-9' '_')"
+    local _u; uncle_upper_to _u "$stage"; uncle_sanitize_to _u "$_u" "AZ09"
+    var="WORKFLOW_${kind}_$_u"
     eval "printf '%s' \"\${$var:-$fallback}\""
 }
 
@@ -917,7 +918,8 @@ stage_setting_opt() {
     local fallback="$3"
     local var
 
-    var="WORKFLOW_${kind}_$(upper "$stage" | tr -c 'A-Z0-9' '_')"
+    local _u; uncle_upper_to _u "$stage"; uncle_sanitize_to _u "$_u" "AZ09"
+    var="WORKFLOW_${kind}_$_u"
     eval "printf '%s' \"\${$var-$fallback}\""
 }
 
@@ -1227,7 +1229,8 @@ format_claude_stream() {
 # is a deliberate deviation from the plan's literal wording.
 self_hosted_candidate_count() {
     local stage="$1" var fallback
-    var="WORKFLOW_SELF_HOSTED_CANDIDATES_$(upper "$stage" | tr -c 'A-Z0-9' '_')"
+    local _u; uncle_upper_to _u "$stage"; uncle_sanitize_to _u "$_u" "AZ09"
+    var="WORKFLOW_SELF_HOSTED_CANDIDATES_$_u"
     if [[ -n "${!var:-}" ]]; then
         printf '%s' "${!var}"
         return

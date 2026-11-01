@@ -169,8 +169,10 @@ acceptance_transition() {
     fi
     result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$canonical" ${3:-})"
     supervision_artifact="$canonical"
+    # REPAIR is a valid review with a correctable finding; it has its own bounded repair path below and is not a
+    # validator rejection, so it does not spend a supervisor call.
     case "$result" in
-        REPAIR|BLOCKED-SETUP|BLOCKED-IMPOSSIBLE)
+        BLOCKED-SETUP|BLOCKED-IMPOSSIBLE)
             supervision_validation_failed acceptance "$supervision_artifact" "Acceptance $result: $supervision_artifact" 0 ;;
     esac
     case "$result" in

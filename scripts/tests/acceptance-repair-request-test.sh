@@ -29,6 +29,7 @@ grep -q acceptance-repair-exhausted "$STATE_DIR/ledger" || bad "exhaustion was n
 UNATTENDED=0; printf '2\n' > "$STATE_DIR/acceptance-repair-count-TEST_REVIEW"
 ( acceptance_queue_repair "$work/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md CHECKLIST ) >/dev/null 2>&1 && bad "an exhausted attended repair did not stop"
 
+grep -Eq '^\s+REPAIR\|' "$ROOT/scripts/lib/acceptance-gate.sh" && bad "a REPAIR review is treated as a supervision validation failure"
 grep -q 'acceptance-repair-request.md' "$ROOT/scripts/change-workflow.sh" || bad "IMPLEMENT does not consume the repair request"
 [[ $fail == 0 ]] && echo "acceptance-repair-request-test.sh: ok"
 exit $fail

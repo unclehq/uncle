@@ -423,6 +423,8 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
+. "$ROOT/scripts/lib/early-baseline.sh"
+. "$ROOT/scripts/lib/change-class-stage.sh"
 . "$ROOT/scripts/lib/change-plan-duties-stage.sh"
 . "$ROOT/scripts/lib/triage.sh"
 

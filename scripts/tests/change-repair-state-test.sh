@@ -18,10 +18,10 @@ go() {   # <repair-count|none> <judge rc> <unrunnable|runnable> [repair-source] 
     local src="${4:-.uncle/docs/TEST_REVIEW.md}"
     printf '%s\n' "$src" > "$dir/.uncle/workflow/repair-source"
     [[ "$1" == none ]] || printf '%s\n' "$1" > "$dir/.uncle/workflow/repair-count"
-    : > "$dir/.uncle/docs/TEST_REVIEW.md"; echo '{}' > "$dir/.uncle/workflow/documents/TEST_REVIEW.json"; echo '{}' > "$dir/.uncle/workflow/documents/IMPLEMENTATION_NOTES.json"
+    : > "$dir/.uncle/docs/TEST_REVIEW.md"; echo '{}' > "$dir/.uncle/workflow/documents/TEST_REVIEW.json"; echo '{}' > "$dir/.uncle/workflow/documents/IMPLEMENTATION_NOTES.json"; echo '{}' > "$dir/.uncle/workflow/documents/FINAL_AUDIT.json"; : > "$dir/.uncle/docs/FINAL_AUDIT.md"; : > "$dir/.uncle/workflow/audit-verdict"; : > "$dir/.uncle/workflow/audit-verdict.original"
     [[ "$3" == unrunnable ]] && echo 'error when starting dev server' > "$dir/.uncle/workflow/logs/green-check.log" || : > "$dir/.uncle/workflow/logs/green-check.log"
     ( cd "$dir" && env -i PATH="$PATH" HOME="$HOME" "${@:5}" bash --norc --noprofile -c "
-        ROOT='$ROOT'; STATE_DIR='.uncle/workflow'; LOG_DIR='.uncle/workflow/logs'; GREEN_BG_PID=''
+        ROOT='$ROOT'; STATE_DIR='.uncle/workflow'; LOG_DIR='.uncle/workflow/logs'; GREEN_BG_PID=''; VERDICT_FILE='.uncle/workflow/audit-verdict'; AUDIT_OVERRIDE_FILE='.uncle/workflow/audit-override'
         WORKFLOW_AUTO_REPAIR_ATTEMPTS=\${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-2}; BUDGET_IMPLEMENT=5; MODEL_IMPLEMENT=m
         require_file() { [[ -s \"\$1\" ]]; }
         record_nonblocking_failure() { echo \"nonblocking:\$1\"; }
@@ -50,6 +50,7 @@ grep -q 'green-restarted' <<< "$out" && grep -q 'state=TEST_REVIEW' <<< "$out" |
 LAST="$(cat "$work/last")"
 [[ ! -e "$LAST/.uncle/workflow/documents/TEST_REVIEW.json" && ! -e "$LAST/.uncle/docs/TEST_REVIEW.md" ]] || bad "the stale review was kept"
 [[ "$(cat "$LAST/.uncle/workflow/repair-count")" == 1 ]] || bad "the pass was not counted"
+[[ ! -e "$LAST/.uncle/workflow/documents/FINAL_AUDIT.json" && ! -e "$LAST/.uncle/docs/FINAL_AUDIT.md" && ! -e "$LAST/.uncle/workflow/audit-verdict" && ! -e "$LAST/.uncle/workflow/audit-verdict.original" ]] || bad "a repair left the stale final audit and its verdict in place"
 
 out="$(go 1 0 runnable)"
 grep -q 'plan_before:repair-2' <<< "$out" || bad "the second pass should be counted as 2"
@@ -107,6 +108,7 @@ grep -q 'fell-through' <<< "$out" && ! grep -q 'state=' <<< "$out" || bad "no re
 # the driver sends failing acceptance rows here, and nowhere else
 grep -q "'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS' REPAIR" "$CW" || bad "VALIDATE_TEST_REVIEW does not route to REPAIR"
 grep -q "acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT '' REPAIR" "$CW" || bad "VALIDATE_CHECKLIST does not route to REPAIR"
+grep -q 'final_audit_override_recovery "$audit_class" "${STAGEGATE_RUN_ID:--}" 1' "$CW" || bad "a NOT READY audit does not take the repair-before-waiver route"
 grep -q '^REPAIR_BASE_PROMPT=prompts/change/repair.md' "$CW" || bad "the change driver does not name its own repair prompt"
 [[ -s "$ROOT/prompts/change/repair.md" ]] || bad "prompts/change/repair.md is missing"
 grep -q 'UPDATED_PROJECT_PLAN\|AUTOMATED_TEST_REPORT' "$ROOT/prompts/change/repair.md" && bad "the change repair prompt names new-application documents"

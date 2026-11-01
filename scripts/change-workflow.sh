@@ -4690,6 +4690,10 @@ REPAIR
             # The tree changed, so the review and the verification both describe another tree: discard the review and verify again.
             echo 'Repair changed the tree; invalidating the test review and verifying again.'
             rm -f "$STATE_DIR/checklist-ran"
+            # A NOT READY audit that sent the run here judged the tree before this repair: its verdict describes findings the repair was
+            # meant to fix, so none of it may be served again.
+            rm -f .uncle/docs/FINAL_AUDIT.md "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" \
+                "$VERDICT_FILE" "$STATE_DIR/audit-verdict.original" "$AUDIT_OVERRIDE_FILE"
             rm -f .uncle/docs/TEST_REVIEW.md "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
             python3 -B "$ROOT/scripts/lib/completion_preview.py" --normalize "$PWD" || exit 1
             start_green_check_bg
@@ -5014,12 +5018,11 @@ PY
 
             # Shared with stagegate.sh (uncle consolidation item 2): see
             # final_audit_override_recovery/final_audit_override_gate in
-            # scripts/lib/audit-verdict.sh. change-workflow.sh has no
-            # unattended repair-before-waiver route (enable_unattended_repair_route=0;
-            # stagegate.sh's original had one -- see that function's header
-            # comment for why this stays a parameter rather than a pick).
+            # scripts/lib/audit-verdict.sh. This driver now has a REPAIR state like stagegate.sh's, so it takes the same unattended
+            # repair-before-waiver route (enable_unattended_repair_route=1): a NOT READY audit with a driver-observed failure is
+            # repaired while a pass remains, before any unreviewed waiver.
             audit_recovery_status=0
-            final_audit_override_recovery "$audit_class" "${STAGEGATE_RUN_ID:--}" 0 || audit_recovery_status=$?
+            final_audit_override_recovery "$audit_class" "${STAGEGATE_RUN_ID:--}" 1 || audit_recovery_status=$?
             [[ "$audit_recovery_status" != 0 ]] || continue
 
             final_audit_override_gate "$audit_class" human_gate \

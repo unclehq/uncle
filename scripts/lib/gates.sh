@@ -481,6 +481,11 @@ request a separate executability approval.
 FEASIBILITY
                 ;;
         esac
+        # A small application is planned to a budget: the planner is told the class it is planning under.
+        case "$log_name" in
+            project-plan|project-plan-investigate)
+                declare -F change_class_budget >/dev/null && change_class_budget ;;
+        esac
         if [[ "$role" == "reviewer" ]]; then
             printf '\n\n---\n\n# Reviewer output (binding)\n\nYou run read-only: you cannot write files or run shell commands, so Rule 0\ncannot apply to you. Do not attempt Write, Edit, Bash, or any unavailable tool\nand do not narrate a failed attempt. The document the stage asked for is your\nfinal assistant message: return it in full as that message — not a path, not a\nsummary, not a note about a file you could not write. If a needed fact is not\navailable, state that limitation in the required document rather than trying a\nwrite or shell tool.\n\n## Response budget (binding)\n\nUse no more than 2,000 output tokens for this entire turn, including\nreasoning, tool-call narration, and the final document. Work from the\ndriver-supplied evidence first; read only the files needed to substantiate a\nconcrete finding or required gate row. Do not narrate your investigation,\nrepeat clean evidence, re-read the same file, or perform a second review pass.\nKeep the final document dense: IDs and locations instead of quotations, one\nshort sentence per field, and closing sections that reference finding IDs\nrather than summarize them. Preserve every real blocker, but merge duplicate\ncauses and consequences into one canonical finding.\n'
         fi

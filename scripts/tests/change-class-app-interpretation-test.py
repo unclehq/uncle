@@ -8,6 +8,8 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 import change_class as c
 
+ROOT_PROMPT = Path(__file__).resolve().parents[2] / 'prompts/classify-change.md'
+
 
 def interpretation(requirements=5, criteria=6, required_extra='', non_goals='N-1 Scientific functions. N-2 Backend, accounts.'):
     return {'kind': 'requirements-interpretation', 'schema': 'uncle.artifact/v1', 'sections': {
@@ -78,6 +80,64 @@ class AppClass(unittest.TestCase):
              'requirements': 5, 'file_kinds': {'docs': 0, 'test': 0, 'scaffold': 0, 'app': 17}}
         self.assertFalse(c.app_is_small(f))
         self.assertEqual(c.deterministic_class(f), 'large')
+
+
+class AfterPlanning(unittest.TestCase):
+    def project(self, interp, steps, files, cls='small'):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / '.uncle/workflow/documents').mkdir(parents=True)
+        (root / '.uncle/docs').mkdir()
+        (root / '.uncle/docs/REQUIREMENTS.md').write_text('# brief\n')
+        (root / c.INTERPRETATION).write_text(json.dumps(interp))
+        (root / 'interp.md').write_text('approved interpretation')
+        (root / 'plan.md').write_text(plan(steps, files))
+        c.write(root, c.build('app', root, root / 'interp.md', {'class': cls}, 'model'))
+        return root
+
+    def test_a_plan_that_outgrew_small_raises_the_class(self):
+        root = self.project(interpretation(), 14, 40)
+        self.assertEqual(c.get(root, 'class'), 'small')
+        raised = c.recheck('app', root, root / 'plan.md')
+        self.assertIn(raised, ('standard', 'large'))
+        self.assertEqual(c.get(root, 'class'), raised)
+        self.assertEqual(c.get(root, 'source'), 'plan-recheck')
+        self.assertEqual(c.get(root, 'implement_mode'), 'auto')
+        self.assertEqual(c.get(root, 'checklist_lenses'), 'coverage invariants resources regressions')
+
+    def test_a_plan_inside_the_budget_changes_nothing(self):
+        root = self.project(interpretation(), 9, 17)
+        self.assertEqual(c.recheck('app', root, root / 'plan.md'), '')
+        self.assertEqual(c.get(root, 'class'), 'small')
+        self.assertEqual(c.get(root, 'source'), 'model')
+
+    def test_the_recheck_never_lowers_a_class(self):
+        root = self.project(interpretation(), 9, 17, cls='risky')
+        self.assertEqual(c.recheck('app', root, root / 'plan.md'), '')
+        self.assertEqual(c.get(root, 'class'), 'risky')
+
+    def test_no_classification_means_no_recheck(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(c.recheck('app', tmp, Path(tmp) / 'plan.md'), '')
+
+    def test_the_planner_is_given_a_budget_only_for_a_small_application(self):
+        root = self.project(interpretation(), 9, 17)
+        text = c.plan_budget(root)
+        self.assertIn('classified **small**', text)
+        self.assertIn('at most %d implementation steps and %d owned files' % (c.APP_SMALL['steps'], c.APP_SMALL['files']), text)
+        for other in ('standard', 'large', 'risky'):
+            self.assertEqual(c.plan_budget(self.project(interpretation(), 9, 17, cls=other)), '', other)
+        self.assertEqual(c.plan_budget('/nonexistent'), '')
+
+    def test_the_model_is_shown_the_interpretation_for_an_application(self):
+        root = self.project(interpretation(), 9, 17)
+        out = root / 'prompt.md'
+        c.prompt('app', root, root / 'interp.md', out, ROOT_PROMPT)
+        text = out.read_text()
+        self.assertIn('approved requirements interpretation', text)
+        self.assertIn('R-1 does something', text)
+        self.assertIn('D-1', text)
 
 
 if __name__ == '__main__':

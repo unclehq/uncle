@@ -25,6 +25,8 @@ text; nothing here depends on one runner's output protocol.
     change_class.py force    FAMILY PROJECT PLAN CLASS               # WORKFLOW_CHANGE_CLASS
     change_class.py current  FAMILY PROJECT PLAN                    # exit 0 when change-class.json matches this plan
     change_class.py get      PROJECT KEY [DEFAULT]                  # class | lenses | edit_slice | source
+    change_class.py recheck  FAMILY PROJECT PLAN                    # after planning: raise the class if the plan outgrew it
+    change_class.py budget   PROJECT                                # the planner's size paragraph for a small application
 """
 import hashlib
 import json
@@ -339,9 +341,53 @@ for a genuinely small, low-risk change.
 def prompt(family, project, plan, out, template):
     f = features(family, project, plan)
     request = request_text(family, project)[:3500]
-    body = _read(template) + '\n\n## The request\n\n' + request + PROMPT_FOOTER % json.dumps(f, indent=2)
+    body = _read(template) + '\n\n## The request\n\n' + request
+    if family != 'change':
+        # Classified before the plan exists: the approved reading of the brief is what there is to judge, and the plan size
+        # in the features below is unknown (0 steps, 0 files), not small.
+        sections = interpretation(project)
+        shown = ['### %s\n%s' % (name, sections[name][:1500]) for name in
+                 ('required_functionality', 'definition_of_done', 'constraints', 'explicit_non_goals') if sections.get(name)]
+        if shown:
+            body += '\n\n## The approved requirements interpretation (the plan does not exist yet)\n\n' + '\n\n'.join(shown)
+    body += PROMPT_FOOTER % json.dumps(f, indent=2)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(body, encoding='utf-8')
+
+
+def recheck(family, project, plan):
+    """Run once the plan exists: raise the class if the plan is bigger than the class it was planned under. Never lowers it, and
+    never calls a model. Returns the new class when it changed, else ''."""
+    try:
+        current = json.loads(_read(Path(project) / OUTPUT)).get('class')
+    except ValueError:
+        return ''
+    if current not in CLASSES:
+        return ''
+    f = features(family, project, plan)
+    floor = deterministic_class(f)
+    if CLASSES.index(floor) <= CLASSES.index(current):
+        return ''
+    result = build(family, project, plan, {'class': current}, 'plan-recheck',
+                   'Raised from %s to %s: the plan (%d steps, %d files) is larger than the %s class allows.'
+                   % (current, floor, f['steps'], f['owned_files'], current))
+    write(project, result)
+    return result['class']
+
+
+def plan_budget(project):
+    """The sizing paragraph the planner is given for the class it is planning under; '' for classes it does not constrain."""
+    try:
+        data = json.loads(_read(Path(project) / OUTPUT))
+    except ValueError:
+        return ''
+    if data.get('class') != 'small' or data.get('family') == 'change':
+        return ''
+    return ('\n\n## Build class (binding)\n\nThis application was classified **small** from its approved requirements: few '
+            'requirements and done-criteria, nothing security-sensitive. Plan it as a small build: at most %d implementation '
+            'steps and %d owned files, sharing files between related work rather than scaffolding one file per idea. A plan '
+            'larger than that is reclassified and reviewed in full, so it costs more than the budget saves.\n'
+            % (APP_SMALL['steps'], APP_SMALL['files']))
 
 
 def get(project, key, default=''):
@@ -394,6 +440,12 @@ def main(argv):
         except ValueError:
             return 1
         return 0 if stored.get('features', {}).get('plan_sha') == digest(_read(plan)) else 1
+    elif command == 'recheck' and len(argv) == 5:
+        raised = recheck(*argv[2:5])
+        if raised:
+            print('Build class raised to %s: the plan is larger than the class it was planned under.' % raised)
+    elif command == 'budget' and len(argv) == 3:
+        sys.stdout.write(plan_budget(argv[2]))
     elif command == 'get' and len(argv) in (4, 5):
         print(get(argv[2], argv[3], argv[4] if len(argv) == 5 else ''))
     else:

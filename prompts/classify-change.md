@@ -8,6 +8,8 @@ Classes, smallest to largest:
 - `docs`: only documentation changes; nothing executable.
 - `test-only`: only tests change.
 - `small`: a narrow, low-risk change: at most two steps, a few files, a few acceptance criteria.
+  A new application is small when its approved requirements are: a handful of requirements and done-criteria, no sensitive
+  behavior. It is classified before it is planned, so the plan size in the features is 0 (unknown), not small.
 - `standard`: an ordinary feature or fix.
 - `large`: many steps, many files or many directories; a cross-cutting change.
 - `risky`: anything touching security, secrets, signing, publication, approval gates, deletion, migrations or concurrency, or

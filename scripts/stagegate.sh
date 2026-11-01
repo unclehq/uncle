@@ -3706,13 +3706,16 @@ PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
 # give it one retry with the exact schema error.
 checklist_run_worker() {
     local prompt="$1" label="$2" size="$3" packet="$4" worker_error
+    # Bound the worker by progress, as the other writers are: a self-hosted worker that stops producing output is stopped, and only
+    # its assigned rows are run again by reconciliation. Other runners are bounded only by their own ceiling.
+    declare -F workflow_model_writer >/dev/null || . "$ROOT/scripts/lib/model-jobs.sh"
     SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" \
-        run_claude "$prompt" "execute-checklist-worker-$label"
+        workflow_model_writer execute-checklist run_claude "$prompt" "execute-checklist-worker-$label"
     if ! worker_error="$(python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$packet" 2>&1)"; then
         rm -f "$packet"
         echo "Worker $label packet rejected; retrying once with the exact schema error." >&2
         SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" UNCLE_WORKER_PACKET_ERROR="$worker_error" \
-            run_claude "$prompt" "execute-checklist-worker-$label"
+            workflow_model_writer execute-checklist run_claude "$prompt" "execute-checklist-worker-$label"
         python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$packet"
     fi
 }

@@ -519,6 +519,12 @@ class Stage:
                   '--strict-mcp-config']
             if self.model: args+=['--model',self.model]
             if self.effort: args+=['--effort',self.effort]
+            # A review packet with a schema (review_schema.py) is answered through Claude's own structured output: valid by
+            # construction, read-only, no Write tool. The final message is the packet.
+            schema_file=os.environ.get('UNCLE_OUTPUT_SCHEMA_FILE','')
+            if schema_file and not self.delivery:
+                try: args+=['--json-schema',Path(schema_file).read_text(encoding='utf-8').strip()]
+                except OSError: pass
         args+=['--input-format','stream-json','--replay-user-messages']
         self.spawn([os.environ.get('WORKFLOW_CLAUDE_CMD','claude')]+args)
         def message(text,id):
@@ -603,7 +609,13 @@ class Stage:
                     getattr(self,self.runner)(directory)
                 success=True
                 if self.output:
-                    Path(self.output).write_text(self.output_answer(),encoding='utf-8')
+                    answer=self.output_answer()
+                    # A review lens answered through the runner's schema (review-schema.sh): the validated object is the packet. Claude
+                    # reports it on the result event and leaves the assistant text empty or a summary, and Codex's raw answer carries
+                    # the nulls its strict schema forced; the object has neither problem.
+                    if self.side=='reviewer' and os.environ.get('UNCLE_OUTPUT_SCHEMA_FILE') and isinstance(self.structured_output,dict):
+                        answer=json.dumps(self.structured_output,ensure_ascii=False)
+                    Path(self.output).write_text(answer,encoding='utf-8')
             except (OSError,ValueError,KeyError,TypeError,queue.Empty,KeyboardInterrupt) as exc:
                 error='Workflow parent exited; native stage cancelled' if self.parent_lost else str(exc) or 'Stage interrupted'
             finally:

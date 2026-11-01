@@ -157,6 +157,7 @@ uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
 . "$ROOT/scripts/lib/change-class-stage.sh"
+. "$ROOT/scripts/lib/review-schema.sh"
 . "$ROOT/scripts/lib/state.sh"
 
 # Absolute, not "$PROJECT_ROOT"-relative: this value is embedded verbatim
@@ -2144,6 +2145,9 @@ run_codex_review() {
             || { [[ "${UNCLE_RUNNER_REUSE:-1}" != 0 ]] && ! stage_command_overridden REVIEWER "$log_name"; }; }; then
         client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side reviewer --stage "$log_name" --)
     fi
+    # A read-only panel lens on a hosted runner answers through the runner's structured output (scripts/lib/review-schema.sh).
+    review_schema_setup "$prompt_file" "$log_name" "$output_file" "$([[ "${client_cmd[0]}" == python3 ]] && echo 1 || echo 0)"
+    local review_schema="$REVIEW_SCHEMA_FILE"
 
     # Keep the reviewer read-only. The shell writes the reviewer's final
     # message into the designated review artifact.
@@ -2175,13 +2179,16 @@ run_codex_review() {
 
     # Canonical JSON is file-backed workflow data, never a final chat reply.
     local delivery_file="" reviewer_sandbox="read-only"
-    if [[ "$output_file" == *.json ]]; then
+    if [[ "$output_file" == *.json && -z "$review_schema" ]]; then
         mkdir -p "$STATE_DIR/artifact-delivery"
         delivery_file="${output_file}.delivery.json"
         rm -f "$delivery_file"
         { cat "$prompt_file"; printf '\n## Canonical JSON delivery (binding)\n\nUse your Write tool to create exactly one JSON object at `%s`. This is the only artifact the driver reads. Do not write or modify any other file. Chat text is diagnostics only.\n' "$delivery_file"; } > "$STATE_DIR/${log_name}-delivery-prompt.md"
         prompt_file="$STATE_DIR/${log_name}-delivery-prompt.md"
         reviewer_sandbox="workspace-write"
+    fi
+    if [[ -n "$review_schema" ]]; then
+        printf '\n## Delivery (binding)\n\nYour final answer is the complete packet, delivered through the structured-output tool the runner provides. Do not write a file.\n' >> "$prompt_file"
     fi
 
     local review_key
@@ -2211,6 +2218,7 @@ run_codex_review() {
                 (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/${log_name}.log") || return 1 ;;
         esac
         started="$SECONDS"
+        [[ -z "$review_schema" ]] || rm -f "$review_schema.out"
         local reviewer_candidates raced=0
         reviewer_candidates="$(self_hosted_candidate_count "$log_name")"
         if [[ "${UNCLE_RESOLVED_RUNNER:-}" == self-hosted && "$reviewer_candidates" -gt 1 ]]; then
@@ -2223,7 +2231,7 @@ run_codex_review() {
         # stdin is the operator's gate-answer channel, not stage input: codex
         # appends a non-TTY stdin to the prompt and would block on it forever.
         # Project dirs need not be git repos; the read-only sandbox is the boundary.
-        env UNCLE_ARTIFACT_DELIVERY="$delivery_file" "${client_cmd[@]}" exec \
+        env UNCLE_ARTIFACT_DELIVERY="$delivery_file" UNCLE_OUTPUT_SCHEMA_FILE="$review_schema" UNCLE_STRUCTURED_OUTPUT_PATH="${review_schema:+$review_schema.out}" "${client_cmd[@]}" exec \
             --ephemeral \
             --skip-git-repo-check \
             --sandbox "$reviewer_sandbox" \
@@ -2238,6 +2246,8 @@ run_codex_review() {
         # touched by any candidate, so this legacy single-shot handling must
         # not re-inspect it and mistake a successful race for a missing
         # delivery.
+        # A Codex lens answered through its output schema: the runner already restored the object into the structured-output file.
+        if [[ -n "$review_schema" && -s "$review_schema.out" ]]; then cp "$review_schema.out" "$output_file"; fi
         if [[ "$raced" != 1 && -n "$delivery_file" ]]; then
             if [[ -s "$delivery_file" ]]; then
                 cp "$delivery_file" "$output_file"

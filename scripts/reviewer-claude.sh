@@ -119,6 +119,12 @@ if [[ -n "$effort" ]]; then
     claude_flags+=(--effort "$effort")
 fi
 
+# A review packet with a schema (scripts/lib/review_schema.py) is answered through Claude's structured output: the final message is the
+# packet, valid by construction, and the reviewer stays read-only (no Write tool, no delivery file).
+if [[ -n "${UNCLE_OUTPUT_SCHEMA_FILE:-}" && -z "${UNCLE_ARTIFACT_DELIVERY:-}" && -r "$UNCLE_OUTPUT_SCHEMA_FILE" ]]; then
+    claude_flags+=(--json-schema "$(cat "$UNCLE_OUTPUT_SCHEMA_FILE")")
+fi
+
 # Render progress to stdout the way codex does — the drivers tee this to the
 # stage log — while keeping the raw events for the extraction below.
 set +e

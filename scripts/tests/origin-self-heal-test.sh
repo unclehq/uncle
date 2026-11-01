@@ -42,4 +42,28 @@ check "...with no warning and no tamper log" bash -c '[ ! -e "$1/origin-tamper.l
 out="$(run_case complete COMPLETE 'owner/repo\t42\tgh\n' '' )"
 check "a finished run of another issue is still not corruption" grep -q 'rc=0' <<< "$out"
 
+
+# --- the real from-issue.sh: re-invoking the issue whose origin was clobbered recovers; invoking another issue still refuses ----------
+make_issue_project() {   # <name> -- a project plus the issue-116 worktree uncle made for it, whose origin was clobbered
+    local d="$TMP/$1" w="$TMP/$1-issue-116"; rm -rf "$d" "$w"; mkdir -p "$d/bin"
+    ( cd "$d" && git init -q -b main && git -c user.name=t -c user.email=t@e.t -c commit.gpgsign=false commit --no-gpg-sign -q --allow-empty -m base \
+        && git remote add origin https://github.com/unclehq/uncle.git && git worktree add -q -b uncle/remove-the-cline-runner "$w" )
+    mkdir -p "$w/.uncle/workflow"
+    printf '116:IMPLEMENT\n' > "$w/.uncle/workflow/state"
+    printf 'owner/repo\t42\tgh\n' > "$w/.uncle/workflow/origin"; printf 'unclehq/uncle\t116\tgh\n' > "$w/.uncle/workflow/origin.bound"
+    printf '#!/bin/sh\nprintf "%%s\\n" "{\\"title\\":\\"Remove the Cline runner\\",\\"body\\":\\"b\\",\\"url\\":\\"https://github.com/unclehq/uncle/issues/NUM\\"}"\n' > "$d/bin/gh"
+    chmod +x "$d/bin/gh"; echo "$d"
+}
+from_issue() {  # <dir> <issue number> -> output
+    ( cd "$1" && sed -i.bak "s#issues/NUM#issues/$2#" bin/gh 2>/dev/null; rm -f bin/gh.bak
+      env -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE UNCLE_PROJECT_ROOT="$1" PATH="$1/bin:$PATH" \
+        bash "$ROOT/scripts/from-issue.sh" "https://github.com/unclehq/uncle/issues/$2" --change --seed-only < /dev/null 2>&1 )
+}
+d="$(make_issue_project fi-same)"; out="$(from_issue "$d" 116)"
+check "from-issue.sh for the same issue recovers a clobbered origin" test "$(head -1 "$d-issue-116/.uncle/workflow/origin")" == $'unclehq/uncle\t116\tgh'
+check "...with the warning" grep -q 'WARNING: .*named issue 42, but this run is bound to issue 116' <<< "$out"
+check "...and not the corruption refusal" bash -c '! grep -q "Refusing to act on corrupt workflow state" <<< "$1"' _ "$out"
+d="$(make_issue_project fi-other)"; from_issue "$d" 7 > /dev/null
+check "invoking a different issue works in its own worktree and never touches issue 116's origin" test "$(head -1 "$d-issue-116/.uncle/workflow/origin")" == $'owner/repo\t42\tgh'
+
 [[ "$fails" == 0 ]] && echo "origin-self-heal-test.sh: all checks passed" || { echo "origin-self-heal-test.sh: $fails failure(s)"; exit 1; }

@@ -42,9 +42,9 @@ UNATTENDED=1
 status=0
 output="$(implementation_complete 2>&1)" || status=$?
 check "unattended stops (does not return 1 for a retry)" "1" "$status"
-check "the stop message names the conflict" "yes" "$(printf '%s' "$output" | grep -q 'Conflicting delivery status for AC-3' && echo yes || echo no)"
+check "the stop message names the conflict" "yes" "$(grep -q 'Conflicting delivery status for AC-3' <<<"$output" && echo yes || echo no)"
 check "the stop message explains it is a cross-step conflict" "yes" \
-    "$(printf '%s' "$output" | grep -q 'conflict between two steps' && echo yes || echo no)"
+    "$(grep -q 'conflict between two steps' <<<"$output" && echo yes || echo no)"
 check "supervision is never invoked for this failure class" "" "$(cat "$temp/calls" 2>/dev/null)"
 
 # --- attended: still goes through supervision as before --------------------

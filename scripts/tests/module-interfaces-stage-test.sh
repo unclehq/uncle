@@ -26,11 +26,11 @@ for driver in stagegate.sh change-workflow.sh; do
     [[ "$n" != 1 ]] || ok
     block="$(sed -n '/^        MODULE_INTERFACES)$/,/^        IMPLEMENT)$/p' "$ROOT/scripts/$driver" | sed '1d;$d')"
     [[ -n "$block" ]] || { echo "FATAL: could not extract the MODULE_INTERFACES case body from $driver"; exit 2; }
-    if printf '%s' "$block" | grep -q 'module_interfaces_stage '; then ok
+    if grep -q 'module_interfaces_stage ' <<<"$block"; then ok
     else bad "calls-shared-handler-$driver" "$driver's MODULE_INTERFACES case does not call the shared module_interfaces_stage function"; fi
     # Each driver's own case body must not reimplement derive/set_state itself
     # -- the whole point is that the logic lives once, in the shared function.
-    if printf '%s' "$block" | grep -q 'derive_module_interfaces\|set_state IMPLEMENT'; then
+    if grep -q 'derive_module_interfaces\|set_state IMPLEMENT' <<<"$block"; then
         bad "no-reimplementation-$driver" "$driver's MODULE_INTERFACES case reimplements logic that belongs only in the shared function"
     else
         ok
@@ -47,10 +47,10 @@ done
 mi_line="$(grep -n '^        MODULE_INTERFACES)$' "$ROOT/scripts/stagegate.sh" | head -1 | cut -d: -f1)"
 preflight_line="$(grep -n '^        PREFLIGHT)$' "$ROOT/scripts/stagegate.sh" | awk -F: -v m="$mi_line" '$1 < m { line = $1 } END { print line }')"
 preflight_block="$(sed -n "${preflight_line},${mi_line}p" "$ROOT/scripts/stagegate.sh")"
-set_implement_count="$(printf '%s' "$preflight_block" | grep -c 'set_state IMPLEMENT' || true)"
+set_implement_count="$(grep -c 'set_state IMPLEMENT' <<<"$preflight_block" || true)"
 [[ "$set_implement_count" == 0 ]] || bad "stagegate-preflight-skips-mi" "stagegate.sh's PREFLIGHT state still transitions directly to IMPLEMENT ($set_implement_count call site(s)) instead of through MODULE_INTERFACES"
 [[ "$set_implement_count" != 0 ]] || ok
-set_mi_count="$(printf '%s' "$preflight_block" | grep -c 'set_state MODULE_INTERFACES' || true)"
+set_mi_count="$(grep -c 'set_state MODULE_INTERFACES' <<<"$preflight_block" || true)"
 [[ "$set_mi_count" -ge 2 ]] && ok || bad "stagegate-preflight-routes-mi" "stagegate.sh's PREFLIGHT state has $set_mi_count set_state MODULE_INTERFACES call site(s), expected at least 2 (background and blocking paths)"
 
 # change-workflow.sh: WAIT_UPDATED_PLAN_APPROVAL must route through
@@ -58,12 +58,12 @@ set_mi_count="$(printf '%s' "$preflight_block" | grep -c 'set_state MODULE_INTER
 wupa_line="$(grep -n '^        WAIT_UPDATED_PLAN_APPROVAL)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
 mi_line_cw="$(grep -n '^        MODULE_INTERFACES)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
 wupa_block="$(sed -n "${wupa_line},${mi_line_cw}p" "$ROOT/scripts/change-workflow.sh")"
-if printf '%s' "$wupa_block" | grep -q 'set_state IMPLEMENT'; then
+if grep -q 'set_state IMPLEMENT' <<<"$wupa_block"; then
     bad "change-workflow-wupa-skips-mi" "change-workflow.sh's WAIT_UPDATED_PLAN_APPROVAL still transitions directly to IMPLEMENT instead of through MODULE_INTERFACES"
 else
     ok
 fi
-if printf '%s' "$wupa_block" | grep -q 'set_state MODULE_INTERFACES'; then ok
+if grep -q 'set_state MODULE_INTERFACES' <<<"$wupa_block"; then ok
 else bad "change-workflow-wupa-routes-mi" "change-workflow.sh's WAIT_UPDATED_PLAN_APPROVAL does not route to MODULE_INTERFACES"; fi
 
 bash -n "$ROOT/scripts/stagegate.sh" && ok || bad "syntax-stagegate" "stagegate.sh fails bash -n"

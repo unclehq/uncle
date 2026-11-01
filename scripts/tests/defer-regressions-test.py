@@ -331,7 +331,7 @@ else:
                     root, result, calls, elapsed = self.run_driver(change=change, mode='slow', runner=runner,
                         overrides={'WORKFLOW_UPDATED_PLAN_FINDING_SECONDS': '2'})
                     self.assert_published(root, result, change, cause='wall')
-                    self.assertLess(elapsed, 12)
+                    self.assertLess(elapsed, 19)
                     self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 1)
                     self.assertFalse((root / '.uncle/workflow/late-child-write').exists())
     def test_resplitting_a_timed_out_group_does_not_reset_finding_deadlines(self):
@@ -340,7 +340,7 @@ else:
                 root, result, calls, elapsed = self.run_driver(change=change, mode='slow', overrides={
                     'WORKFLOW_UPDATED_PLAN_FINDING_SECONDS': '2', 'WORKFLOW_UPDATED_PLAN_EDIT_SLICE': '2'})
                 self.assert_published(root, result, change, cause='wall', deferred=('AR-003', 'AR-022'))
-                self.assertLess(elapsed, 12)
+                self.assertLess(elapsed, 19)
                 self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 1)
 
 

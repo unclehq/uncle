@@ -300,6 +300,11 @@ def kill_tree(process):
         except ProcessLookupError:
             pass
         except PermissionError:
-            if process.poll() is None:
+            # macOS answers EPERM for a group whose leader has exited but is not yet reaped; under load that window is
+            # wide enough to hit. A leader that is gone is the outcome wanted: give the reaper a moment, and only a
+            # leader that is still running after that is a real permission failure.
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
                 raise
         process._uncle_tree_killed = True

@@ -16,8 +16,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 serial_block="$(sed -n '/^[[:space:]]*IMPLEMENT)/,/^[[:space:]]*PREFLIGHT)/p' "$STAGEGATE")"
 [[ "$serial_block" == *"Implementation omitted a required handoff; recording incomplete reports without rerunning source."* ]] || fail "serial reconciliation missing"
 
-fallback_pos="$(printf '%s\n' "$serial_block" | grep -n 'implementation_report_fallback.py" --project . --kind application --missing-only' | head -1 | cut -d: -f1)"
-validate_pos="$(printf '%s\n' "$serial_block" | grep -n 'implementation_notes.py" validate' | head -1 | cut -d: -f1)"
+fallback_pos="$(grep -n 'implementation_report_fallback.py" --project . --kind application --missing-only' <<<"$serial_block" | head -1 | cut -d: -f1)"
+validate_pos="$(grep -n 'implementation_notes.py" validate' <<<"$serial_block" | head -1 | cut -d: -f1)"
 [[ -n "$fallback_pos" && -n "$validate_pos" && "$fallback_pos" -lt "$validate_pos" ]] || fail "serial reconciliation must precede notes validation"
 [[ "$serial_block" != *'prompts/test-evidence-handoff.md implementation-report'* ]] || fail "serial reconciliation must not start a report-only model turn"
 [[ "$serial_block" != *'require_file "$implementation_notes_investigation"'* ]] || fail "missing private notes checkpoint must not discard completed code"

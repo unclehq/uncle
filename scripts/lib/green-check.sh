@@ -291,7 +291,7 @@ green_run() {
         && [[ -f "$GREEN_LIB_DIR/parallel_checks.py" ]] \
         && [[ -z "$guard" || "$guard" == check_verification_inputs ]]; then
         local -a flags=(--commands "$cmds" --out "$out" --log "$log"
-                       --groups "$groups" --jobs "${WORKFLOW_VERIFY_JOBS:-4}")
+                       --groups "$groups" --jobs "$(python3 -B "$GREEN_LIB_DIR/cpu_jobs.py")")
         if [[ -n "$guard" ]]; then
             flags+=(--paths "$STATE_DIR/verification.paths"
                     --expected "$STATE_DIR/verification.manifest"
@@ -329,7 +329,7 @@ green_run() {
         started="$SECONDS"
         local -a check_command=(bash -o pipefail -c "$cmd")
         if [[ -f "$GREEN_LIB_DIR/shell_syntax.py" ]] && command -v python3 >/dev/null 2>&1; then
-            check_command=(python3 -B "$GREEN_LIB_DIR/shell_syntax.py" --command-file "$cmds" "$command_line" "${WORKFLOW_VERIFY_JOBS:-4}")
+            check_command=(python3 -B "$GREEN_LIB_DIR/shell_syntax.py" --command-file "$cmds" "$command_line" "$(python3 -B "$GREEN_LIB_DIR/cpu_jobs.py")")
         fi
         # Bound the command (WORKFLOW_CHECK_TIMEOUT_SECONDS, default 900): a check that
         # waits forever used to stall the run with no output at all.

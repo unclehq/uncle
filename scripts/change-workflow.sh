@@ -939,7 +939,7 @@ check_scope_deviations() {
     local f
     while IFS= read -r f; do
         [[ -n "$f" ]] || continue
-        if ! printf '%s\n' "$deviations" | grep -qxF "$f"; then
+        if ! grep -qxF "$f" <<<"$deviations"; then
             missing="$missing$f"$'\n'
         fi
     done <<< "$extra"
@@ -1924,7 +1924,7 @@ progress_tap() {
         printf '%s\n' "$line"
         case "$line" in
             *MC-*)
-                for id in $(printf '%s' "$line" | grep -oE 'MC-[0-9]+' | sort -u); do
+                for id in $(grep -oE 'MC-[0-9]+' <<<"$line" | sort -u); do
                     case " $seen " in
                         *" $id "*) ;;
                         *)
@@ -2293,7 +2293,7 @@ STRUCTURED_OUTPUT_CONTRACT
             # not a decision an operator needs to make; double it once, the
             # same bounded-retry shape self_hosted.py already uses for an
             # output-token ceiling, before ever treating this as a real stop.
-            if [[ -z "${UNCLE_WORKER_MAX_TURNS:-}" && -z "$turns_retried" ]] && printf '%s' "$error_detail$subtype" | grep -qiE 'maximum number of turns|max.?turns'; then
+            if [[ -z "${UNCLE_WORKER_MAX_TURNS:-}" && -z "$turns_retried" ]] && grep -qiE 'maximum number of turns|max.?turns' <<<"$error_detail$subtype"; then
                 turns_retried=1
                 local larger_turns=$((max_turns * 2))
                 [[ "$larger_turns" -le 200 ]] || larger_turns=200
@@ -3184,7 +3184,7 @@ run_checklist_panel() {
         elif [[ "$serial_workers" == 1 ]]; then
             local input_path
             printf '\n## Canonical inputs (inlined, binding)\n\nThe canonical JSON artifacts are reproduced below in full. Do not call Read, Glob, Grep, or List: everything you need is here. Your only tool call is one Write of the packet.\n' >> "$prompt"
-            for input_path in $(printf '%s' "$inputs" | grep -o '\.uncle/workflow/[A-Za-z_./-]*\.json') .uncle/workflow/green-check.tsv; do
+            for input_path in $(grep -o '\.uncle/workflow/[A-Za-z_./-]*\.json' <<<"$inputs") .uncle/workflow/green-check.tsv; do
                 [[ -f "$input_path" ]] || continue
                 printf '\n### `%s`\n\n```\n' "$input_path" >> "$prompt"
                 cat "$input_path" >> "$prompt"

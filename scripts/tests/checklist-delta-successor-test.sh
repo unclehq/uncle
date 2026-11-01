@@ -26,7 +26,7 @@ body="$(awk '/^        MANUAL_CHECKLIST\)$/{p=1} p{print} p && /^        VALIDAT
 [[ -n "$body" ]] || fail 'could not isolate the CHECKLIST state body'
 
 # Every set_state inside CHECKLIST, excluding the next label the awk consumed.
-targets="$(printf '%s\n' "$body" | grep -oE 'set_state [A-Z_]+' | awk '{print $2}' | sort -u)"
+targets="$(grep -oE 'set_state [A-Z_]+' <<<"$body" | awk '{print $2}' | sort -u)"
 [[ -n "$targets" ]] || fail 'CHECKLIST sets no state at all'
 
 while read -r target; do
@@ -37,7 +37,7 @@ done <<< "$targets"
 
 # The fast path must still be there: this test is about where it goes, not
 # about removing it.
-printf '%s\n' "$body" | grep -q 'CHECKLIST_PANEL_DIRECT' \
+grep -q 'CHECKLIST_PANEL_DIRECT' <<<"$body" \
     || fail 'the delta fast path vanished; this test no longer covers it'
 
 # And the chain it rejoins must still lead to execution.

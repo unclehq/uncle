@@ -20,13 +20,13 @@ fa_line="$(grep -n '^        FINAL_AUDIT)$' "$ROOT/scripts/change-workflow.sh" |
 
 vc_block="$(sed -n "${vc_line},${fa_line}p" "$ROOT/scripts/change-workflow.sh")"
 
-if printf '%s' "$vc_block" | grep -q 'acceptance_transition .uncle/docs/VERIFICATION_REPORT.md'; then ok
+if grep -q 'acceptance_transition .uncle/docs/VERIFICATION_REPORT.md' <<<"$vc_block"; then ok
 else bad "uses-shared-acceptance-transition" "VALIDATE_CHECKLIST does not call the shared acceptance_transition"; fi
 
 if printf '%s' "$vc_block" | tr '\n' ' ' | grep -q "acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT.*REPAIR"; then ok
 else bad "fail-routes-to-repair" "VALIDATE_CHECKLIST does not pass REPAIR as acceptance_transition's repair_target (the change driver has a REPAIR state like stagegate.sh's; acceptance_transition still accepts IMPLEMENT for a family without one, which the functional checks below exercise)"; fi
 
-if printf '%s' "$vc_block" | grep -q '^            set_state FINAL_AUDIT$'; then
+if grep -q '^            set_state FINAL_AUDIT$' <<<"$vc_block"; then
     bad "no-bare-advance" "VALIDATE_CHECKLIST still unconditionally set_state FINAL_AUDIT with no acceptance routing"
 else
     ok

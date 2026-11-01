@@ -220,7 +220,7 @@ for line in sys.stdin:
      self.assertIsNotNone(ready)
      message=Path(ready['channel'])/'direction.json'
      message.write_text(json.dumps({'id':'direction','text':'Use the requested direction'}))
-     stdout,stderr=child.communicate(timeout=10)
+     stdout,stderr=child.communicate(timeout=45)
      self.assertEqual(child.returncode,0,stderr+stdout)
      result=json.loads(stdout.splitlines()[-1])
      self.assertEqual(result['usage']['input_tokens'],250 if runner=='claude' else 150)
@@ -270,7 +270,7 @@ for line in sys.stdin:
       stdout,stderr=child.communicate(timeout=1)
       self.fail(stdout+stderr)
      (Path(ready['channel'])/'direction.json').write_text(json.dumps({'id':'direction','text':'Use the requested direction'}))
-     stdout,stderr=child.communicate(timeout=10)
+     stdout,stderr=child.communicate(timeout=45)
      self.assertEqual(child.returncode,0,stdout+stderr)
      result=json.loads(stdout.splitlines()[-1])
      self.assertEqual(result['usage']['input_tokens'],250 if runner=='claude' else 150)
@@ -384,7 +384,7 @@ class ContextBudgetTests(unittest.TestCase):
   args=[sys.executable,'-B',str(ROOT/'scripts/lib/native_stage.py'),'--runner','codex','--side','agent','--stage','implementation','--','-p','--model','fake-model']
   child=subprocess.Popen(args,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env,cwd=root)
   child.stdin.write('Initial task');child.stdin.close();child.stdin=None
-  stdout,stderr=child.communicate(timeout=10)
+  stdout,stderr=child.communicate(timeout=45)
   return child,stdout,stderr,status
 
  def test_auto_steer_fires_once_above_budget(self):

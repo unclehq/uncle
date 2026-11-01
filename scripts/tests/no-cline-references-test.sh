@@ -17,11 +17,11 @@ while IFS=: read -r f n; do
     [[ -n "$f" ]] || continue
     [[ "$f" =~ $ALLOW_FILES ]] && continue
     line="$(sed -n "${n}p" "$f")"
-    if printf '%s' "$line" | grep -qiE "$ALLOW_LINE"; then continue; fi
+    if grep -qiE "$ALLOW_LINE" <<<"$line"; then continue; fi
     bad+="$f:$n: ${line:0:100}"$'\n'
 done <<< "$hits"
 if [[ -n "$bad" ]]; then
     echo "FAIL: unexpected cline references:"; printf '%s' "$bad" | head -60
-    echo "total: $(printf '%s' "$bad" | grep -c .)"; exit 1
+    echo "total: $(grep -c . <<<"$bad")"; exit 1
 fi
 echo "no-cline-references-test: ok"

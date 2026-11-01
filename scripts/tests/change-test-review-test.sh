@@ -25,12 +25,12 @@ n="$(grep -c '^        TEST_REVIEW)$' "$ROOT/scripts/change-workflow.sh" || true
 wia_line="$(grep -n '^        WAIT_IMPLEMENT_APPROVAL)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
 tr_line="$(grep -n '^        TEST_REVIEW)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
 wia_block="$(sed -n "${wia_line},${tr_line}p" "$ROOT/scripts/change-workflow.sh")"
-if printf '%s' "$wia_block" | grep -q 'set_state MANUAL_CHECKLIST'; then
+if grep -q 'set_state MANUAL_CHECKLIST' <<<"$wia_block"; then
     bad "wia-skips-test-review" "WAIT_IMPLEMENT_APPROVAL still transitions directly to CHECKLIST instead of through TEST_REVIEW"
 else
     ok
 fi
-set_tr_count="$(printf '%s' "$wia_block" | grep -c 'set_state TEST_REVIEW' || true)"
+set_tr_count="$(grep -c 'set_state TEST_REVIEW' <<<"$wia_block" || true)"
 [[ "$set_tr_count" -ge 2 ]] && ok || bad "wia-routes-test-review" "WAIT_IMPLEMENT_APPROVAL has $set_tr_count set_state TEST_REVIEW call site(s), expected at least 2 (diff-gate-disabled and normal approve paths)"
 
 vtr_line="$(grep -n '^        VALIDATE_TEST_REVIEW)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
@@ -41,7 +41,7 @@ checklist_line="$(grep -n '^        MANUAL_CHECKLIST)$' "$ROOT/scripts/change-wo
 # --- (b) uses the shared acceptance-gate framework --------------------------
 
 vtr_block="$(sed -n "${vtr_line},${checklist_line}p" "$ROOT/scripts/change-workflow.sh")"
-if printf '%s' "$vtr_block" | grep -q 'acceptance_transition .uncle/docs/TEST_REVIEW.md'; then ok
+if grep -q 'acceptance_transition .uncle/docs/TEST_REVIEW.md' <<<"$vtr_block"; then ok
 else bad "uses-shared-acceptance-transition" "VALIDATE_TEST_REVIEW does not call the shared acceptance_transition"; fi
 
 grep -Fq '. "$ROOT/scripts/lib/acceptance-gate.sh"' "$ROOT/scripts/change-workflow.sh" \

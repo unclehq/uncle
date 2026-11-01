@@ -26,21 +26,21 @@ grep -q '^\. "\$ROOT/scripts/lib/module-interfaces-stage\.sh"$' "$ROOT/scripts/c
 wrapper_block="$(sed -n '/^run_supervised_parallel_implementation() {/,/^}/p' "$ROOT/scripts/change-workflow.sh")"
 [[ -n "$wrapper_block" ]] || { echo 'FATAL: could not extract run_supervised_parallel_implementation'; exit 2; }
 
-if printf '%s' "$wrapper_block" | grep -q 'parallel_implement_run_groups \\$' \
-   && printf '%s' "$wrapper_block" | grep -A1 'parallel_implement_run_groups \\$' | grep -q '.uncle/docs/CHANGE_PLAN.md'; then
+if grep -q 'parallel_implement_run_groups \\$' <<<"$wrapper_block" \
+   && grep -A1 'parallel_implement_run_groups \\$' <<<"$wrapper_block" | grep -q '.uncle/docs/CHANGE_PLAN.md'; then
     ok
 else
     bad "derives-against-change-plan" "run_supervised_parallel_implementation does not call the shared fan-out against CHANGE_PLAN.md"
 fi
 
-prompt_fn="$(printf '%s' "$wrapper_block" | grep -o '_changeworkflow_parallel_build_step_prompt' | head -1)"
+prompt_fn="$(grep -o '_changeworkflow_parallel_build_step_prompt' <<<"$wrapper_block" | head -1)"
 [[ -n "$prompt_fn" ]] || bad "names-prompt-callback" "run_supervised_parallel_implementation does not pass its own prompt-builder callback"
 [[ -z "$prompt_fn" ]] || ok
 
 block="$(sed -n "/^${prompt_fn:-_no_such_fn_}() {/,/^}/p" "$ROOT/scripts/change-workflow.sh")"
 [[ -n "$block" ]] || { echo 'FATAL: could not extract the change-workflow.sh prompt-builder callback'; exit 2; }
 
-if printf '%s' "$block" | grep -q 'module_interfaces_section'; then ok
+if grep -q 'module_interfaces_section' <<<"$block"; then ok
 else bad "injects-into-prompt" "the change-workflow.sh prompt-builder callback never references module_interfaces_section"; fi
 
 # uncle consolidation phase (d): derivation itself moved out of this function
@@ -53,24 +53,24 @@ else bad "injects-into-prompt" "the change-workflow.sh prompt-builder callback n
 shared_block="$(sed -n '/^parallel_implement_run_groups() {/,/^}/p' "$ROOT/scripts/lib/parallel-implement.sh")"
 [[ -n "$shared_block" ]] || { echo 'FATAL: could not extract the shared parallel_implement_run_groups'; exit 2; }
 
-if printf '%s' "$shared_block" | grep -q 'derive_module_interfaces'; then
+if grep -q 'derive_module_interfaces' <<<"$shared_block"; then
     bad "no-redundant-derive" "parallel_implement_run_groups still calls derive_module_interfaces directly; it should only render from the MODULE_INTERFACES state's own output"
 else
     ok
 fi
 
-if printf '%s' "$shared_block" | grep -q '\[\[ -s "\$STATE_DIR/documents/MODULE_INTERFACES\.json" \]\]'; then ok
+if grep -q '\[\[ -s "\$STATE_DIR/documents/MODULE_INTERFACES\.json" \]\]' <<<"$shared_block"; then ok
 else bad "shared-checks-existing-json" "parallel_implement_run_groups does not check for an already-derived MODULE_INTERFACES.json"; fi
 
-if printf '%s' "$shared_block" | grep -q 'module_interfaces_section='; then ok
+if grep -q 'module_interfaces_section=' <<<"$shared_block"; then ok
 else bad "shared-renders-section" "parallel_implement_run_groups does not render the module-interfaces section"; fi
 
-render_line="$(printf '%s' "$shared_block" | grep -n '\[\[ -s "\$STATE_DIR/documents/MODULE_INTERFACES\.json" \]\]' | head -1 | cut -d: -f1)"
-loop_line="$(printf '%s' "$shared_block" | grep -n 'while IFS= read -r group' | head -1 | cut -d: -f1)"
+render_line="$(grep -n '\[\[ -s "\$STATE_DIR/documents/MODULE_INTERFACES\.json" \]\]' <<<"$shared_block" | head -1 | cut -d: -f1)"
+loop_line="$(grep -n 'while IFS= read -r group' <<<"$shared_block" | head -1 | cut -d: -f1)"
 if [[ -n "$render_line" && -n "$loop_line" && "$render_line" -lt "$loop_line" ]]; then ok
 else bad "runs-before-loop" "the MODULE_INTERFACES.json check (line $render_line) does not precede the group loop (line $loop_line)"; fi
 
-callback_line="$(printf '%s' "$shared_block" | grep -n '"\$prompt_builder_fn"' | head -1 | cut -d: -f1)"
+callback_line="$(grep -n '"\$prompt_builder_fn"' <<<"$shared_block" | head -1 | cut -d: -f1)"
 if [[ -n "$render_line" && -n "$callback_line" && "$render_line" -lt "$callback_line" ]]; then ok
 else bad "callback-after-render" "the prompt-builder callback (line $callback_line) is invoked before the MODULE_INTERFACES.json check (line $render_line)"; fi
 
@@ -89,26 +89,26 @@ bash -n "$ROOT/scripts/lib/module-interfaces-stage.sh" && ok || bad "syntax-lib"
 serial_block="$(sed -n '/^run_stepwise_implementation() {/,/^}/p' "$ROOT/scripts/change-workflow.sh")"
 [[ -n "$serial_block" ]] || { echo 'FATAL: could not extract run_stepwise_implementation'; exit 2; }
 
-if printf '%s' "$serial_block" | grep -q 'derive_module_interfaces'; then
+if grep -q 'derive_module_interfaces' <<<"$serial_block"; then
     bad "no-redundant-serial-derive" "run_stepwise_implementation still calls derive_module_interfaces directly; it should only render from the MODULE_INTERFACES state's own output"
 else
     ok
 fi
 
-derive_line2="$(printf '%s' "$serial_block" | grep -n '\[\[ -s "\$STATE_DIR/documents/MODULE_INTERFACES\.json" \]\]' | head -1 | cut -d: -f1)"
-single_stage_line="$(printf '%s' "$serial_block" | grep -n 'running implementation as a single stage' | head -1 | cut -d: -f1)"
-loop_line2="$(printf '%s' "$serial_block" | grep -n 'while IFS= read -r step' | head -1 | cut -d: -f1)"
+derive_line2="$(grep -n '\[\[ -s "\$STATE_DIR/documents/MODULE_INTERFACES\.json" \]\]' <<<"$serial_block" | head -1 | cut -d: -f1)"
+single_stage_line="$(grep -n 'running implementation as a single stage' <<<"$serial_block" | head -1 | cut -d: -f1)"
+loop_line2="$(grep -n 'while IFS= read -r step' <<<"$serial_block" | head -1 | cut -d: -f1)"
 if [[ -n "$derive_line2" && -n "$single_stage_line" && "$derive_line2" -lt "$single_stage_line" ]]; then ok
 else bad "serial-renders-before-single-stage" "the MODULE_INTERFACES.json check (line $derive_line2) does not precede the single-stage path (line $single_stage_line)"; fi
 if [[ -n "$derive_line2" && -n "$loop_line2" && "$derive_line2" -lt "$loop_line2" ]]; then ok
 else bad "serial-renders-before-loop" "the MODULE_INTERFACES.json check (line $derive_line2) does not precede the per-step loop (line $loop_line2)"; fi
 
 single_stage_block="$(printf '%s' "$serial_block" | sed -n "/running implementation as a single stage/,/return 0/p")"
-if printf '%s' "$single_stage_block" | grep -q 'module_interfaces_section'; then ok
+if grep -q 'module_interfaces_section' <<<"$single_stage_block"; then ok
 else bad "serial-single-stage-injects" "the single-stage prompt path never references module_interfaces_section"; fi
 
 per_step_block="$(printf '%s' "$serial_block" | sed -n '/while IFS= read -r step/,/^    done < "\$steps_file"/p')"
-if printf '%s' "$per_step_block" | grep -q 'module_interfaces_section'; then ok
+if grep -q 'module_interfaces_section' <<<"$per_step_block"; then ok
 else bad "serial-per-step-injects" "the per-step prompt loop never references module_interfaces_section"; fi
 
 echo

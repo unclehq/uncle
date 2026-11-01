@@ -347,7 +347,7 @@ PYREVISE
         # the exact path named in its own prompt text), merged into the
         # canonical accumulator by the driver after this call returns -- never
         # the single-shot delivery the non-stepwise contract below uses.
-        step_frag="$(printf '%s\n' "$prompt" | grep -oE '\.uncle/workflow/implement-step-[0-9]+-notes\.json' | head -n1)"
+        step_frag="$(grep -oE '\.uncle/workflow/implement-step-[0-9]+-notes\.json' <<<"$prompt" | head -n1)"
         if [[ -n "$step_frag" ]]; then
             jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
                 changed_files:[{path:"app/main.sh",purpose:"Changed app/main.sh."}],

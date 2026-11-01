@@ -61,7 +61,7 @@ printf '# Verification report\n\n## Acceptance gate\n\n| ID | Required | Status 
 # The stage must no longer walk straight from the runner into VALIDATE_CHECKLIST.
 block="$(awk '/^        EXECUTE_CHECKLIST\)$/{p=1} p{print} p && /^        VALIDATE_CHECKLIST\)$/{exit}' \
     "$ROOT/scripts/change-workflow.sh")"
-printf '%s\n' "$block" | grep -q 'checklist_execution_delivered' \
+grep -q 'checklist_execution_delivered' <<<"$block" \
     || fail 'EXECUTE_CHECKLIST no longer checks that results were delivered'
 
 echo 'checklist-execution-delivered-test.sh: only this attempt’s real report counts as delivered results'

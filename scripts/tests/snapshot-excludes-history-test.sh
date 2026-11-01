@@ -79,35 +79,35 @@ EOF
 tree="$(python3 harness.py)" || fail 'snapshot() raised'
 listing="$(git ls-tree -r --name-only "$tree")"
 
-printf '%s\n' "$listing" | grep -qx 'src/app.py' \
+grep -qx 'src/app.py' <<<"$listing" \
     || fail 'project files must be in the snapshot'
-printf '%s\n' "$listing" | grep -qx '.uncle/docs/CHANGE_PLAN.md' \
+grep -qx '.uncle/docs/CHANGE_PLAN.md' <<<"$listing" \
     || fail 'audit-visible workflow documents must stay in the snapshot'
 
-printf '%s\n' "$listing" | grep -q '^\.uncle/workflow/' \
+grep -q '^\.uncle/workflow/' <<<"$listing" \
     && fail 'the live workflow directory leaked into the snapshot'
-printf '%s\n' "$listing" | grep -q '^\.uncle/workflow-history/' \
+grep -q '^\.uncle/workflow-history/' <<<"$listing" \
     && fail "a previous run's archived workflow directory leaked into the snapshot"
 
 # The rule is the directory, not a list of its children: anything uncle
 # writes outside .uncle/docs/ stays out, including names added later.
 for leaked in .uncle/attestation.json .uncle/config .uncle/launch.json .uncle/some-future-dir/state; do
-    printf '%s\n' "$listing" | grep -qx "$leaked" \
+    grep -qx "$leaked" <<<"$listing" \
         && fail "uncle state leaked into the snapshot: $leaked"
 done
 
 # A tracked file that .gitignore covers is excluded from the hash as well:
 # `ls-files --others --exclude-standard` never sees it, and check-ignore only
 # reports it with --no-index.
-printf '%s\n' "$listing" | grep -qx 'node_modules/pkg/index.js' \
+grep -qx 'node_modules/pkg/index.js' <<<"$listing" \
     && fail 'a tracked but gitignored file was hashed'
-printf '%s\n' "$listing" | grep -qx '.uncle/docs/FINAL_AUDIT.md' \
+grep -qx '.uncle/docs/FINAL_AUDIT.md' <<<"$listing" \
     && fail 'FINAL_AUDIT.md is added under the audit flag, not by the plain walk'
 
-printf '%s\n' "$listing" | grep -qx 'src/link.py' \
+grep -qx 'src/link.py' <<<"$listing" \
     || fail 'a symlink went missing from the snapshot'
 # ls-tree renders a path with a newline in git's quoted form, on one line.
-printf '%s\n' "$listing" | grep -qF 'od\nd.py' \
+grep -qF 'od\nd.py' <<<"$listing" \
     || fail 'a path containing a newline went missing from the snapshot'
 
 # And a symlink is still stored as its target text, not as a copy of the file

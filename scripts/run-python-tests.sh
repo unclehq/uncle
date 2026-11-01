@@ -4,13 +4,13 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="$ROOT"
-jobs="${WORKFLOW_VERIFY_JOBS:-16}"
+jobs="$(python3 -B "$ROOT/scripts/lib/cpu_jobs.py")"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --project-root) project="$2"; shift 2 ;;
         --jobs) jobs="$2"; shift 2 ;;
         --) shift; break ;;
-        *) echo "Usage: bash scripts/run-python-tests.sh [--jobs 1-16] [--project-root path] [-- suite ...]" >&2; exit 2 ;;
+        *) echo "Usage: bash scripts/run-python-tests.sh [--jobs 1-64, default one per core] [--project-root path] [-- suite ...]" >&2; exit 2 ;;
     esac
 done
 cd "$project"

@@ -13,11 +13,13 @@ import tempfile
 import threading
 import time
 from process_tree import bash_executable, start_check, finish_check, kill_tree
+from cpu_jobs import MAX_JOBS, default_jobs
+from suite_split import expand
 
 
 def run(jobs, suites=()):
-    if not 1 <= jobs <= 32:
-        raise ValueError('WORKFLOW_VERIFY_JOBS must be from 1 to 32')
+    if not 1 <= jobs <= MAX_JOBS:
+        raise ValueError(f'WORKFLOW_VERIFY_JOBS must be from 1 to {MAX_JOBS}')
     if any(not re.fullmatch(r'[a-z0-9][a-z0-9-]*', name) for name in suites):
         raise ValueError('Invalid shell suite name')
     files = ([f'scripts/tests/{name}-test.sh' for name in suites] if suites
@@ -29,7 +31,10 @@ def run(jobs, suites=()):
     isolate_git()
     # Keep suites off the network and the real model cache; model-catalog-test manages its own env.
     os.environ.setdefault('UNCLE_MODEL_REFRESH', '0')
-    return run_commands(jobs, {path: [bash_executable(), path] for path in files})
+    commands = {}
+    for path in files:
+        commands.update(expand(path, 'shell', path, [bash_executable(), path]))
+    return run_commands(jobs, commands)
 
 
 def isolate_git():
@@ -97,6 +102,39 @@ def guard_violations(before, after):
     return [name for name in GUARDED if before.get(name) != after.get(name)]
 
 
+WEIGHTS = Path('scripts/tests/suite-weights.tsv')
+UNKNOWN_WEIGHT = 60.0   # a suite with no recorded time starts early rather than last
+
+
+def read_weights(path=WEIGHTS):
+    """Recorded seconds per suite, from the project's own weights file; empty when it has none (any other project)."""
+    weights = {}
+    try:
+        for line in Path(path).read_text(encoding='utf-8').splitlines():
+            seconds, _, name = line.partition('\t')
+            if name:
+                weights[name] = float(seconds)
+    except (OSError, ValueError):
+        return {}
+    # gates-test.sh runs its groups itself in the per-kind runners; it is as long as its longest group.
+    gates = [seconds for name, seconds in weights.items() if name.startswith('gates-')]
+    if gates:
+        weights.setdefault('scripts/tests/gates-test.sh', max(gates))
+    return weights
+
+
+def ordered(commands, weights):
+    """Longest recorded suite first, so the long ones start at once and the short ones fill the gaps behind them."""
+    def weight(name):
+        if name in weights:
+            return weights[name]
+        base, _, piece = name.partition('#')       # an unmeasured piece of a split suite weighs its share of the whole
+        if piece and base in weights:
+            return weights[base] / int(piece.partition('of')[2])
+        return UNKNOWN_WEIGHT
+    return dict(sorted(commands.items(), key=lambda item: -weight(item[0])))
+
+
 def report_timings(kind, durations, statuses, show=15):
     """Print the slowest suites, and with WORKFLOW_SUITE_TIMINGS=<file> write every suite's wall time, longest first.
 
@@ -132,6 +170,7 @@ def run_commands(jobs, commands, kind='shell'):
         raise ValueError(f'Worker count must be from 1 to {max(32, len(commands))}')
     timeout = check_timeout('WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 600)
     guarded_before = guarded_snapshot()
+    commands = ordered(commands, read_weights())
     files = list(commands)
     active, lock, stopped = set(), threading.Lock(), threading.Event()
     running = {}
@@ -204,4 +243,4 @@ def run_commands(jobs, commands, kind='shell'):
 
 
 if __name__ == '__main__':
-    raise SystemExit(run(int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get('WORKFLOW_VERIFY_JOBS', '4')), sys.argv[2:]))
+    raise SystemExit(run(int(sys.argv[1]) if len(sys.argv) > 1 else default_jobs(), sys.argv[2:]))

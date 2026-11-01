@@ -1,0 +1,12 @@
+scripts/tests/close-flow-test.sh	4
+scripts/tests/plan-recovery-test.sh	3
+scripts/tests/defer-regressions-test.py	6
+scripts/tests/updated-plan-schema-order-test.py	3
+scripts/tests/pr-originless-test.py	3
+scripts/tests/auto-boundary-test.py	3
+scripts/tests/fast4-regressions-test.py	2
+gates-document-budgets	4
+gates-green-check	3
+gates-application-review-2	2
+gates-repair	2
+gates-review-cache-2	2

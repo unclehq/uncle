@@ -133,7 +133,7 @@ write_implementation_review() {
 
         local files count
         files="$(change_diff_files)"
-        count="$(printf '%s\n' "$files" | grep -c . || true)"
+        count="$(grep -c . <<<"$files" || true)"
 
         if ! in_git_repo; then
             echo "UNKNOWN. This directory is not a git repository, so the"

@@ -20,8 +20,8 @@ eq "the setting still overrides it" "$(idle execute-checklist-worker-1 WORKFLOW_
 # --- both drivers wrap the runner call -----------------------------------------------------------------------------------------
 for driver in stagegate.sh change-workflow.sh; do
     body="$(awk '/^checklist_run_worker\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$ROOT/scripts/$driver")"
-    eq "$driver wraps both runner calls" "$(printf '%s\n' "$body" | grep -c 'workflow_model_writer execute-checklist run_claude')" 2
-    printf '%s\n' "$body" | grep -E '^\s+run_claude ' && bad "$driver still calls run_claude directly"
+    eq "$driver wraps both runner calls" "$(grep -c 'workflow_model_writer execute-checklist run_claude' <<<"$body")" 2
+    grep -E '^\s+run_claude ' <<<"$body" && bad "$driver still calls run_claude directly"
 done
 
 # --- the real function, hosted runner ------------------------------------------------------------------------------------------

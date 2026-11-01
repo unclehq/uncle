@@ -14,6 +14,8 @@ import re
 import shutil
 import sys
 
+from cpu_jobs import MAX_JOBS, default_jobs
+from suite_split import expand
 from shell_suites import isolate_git, run_commands
 
 
@@ -35,8 +37,8 @@ def suite_command(path):
 
 
 def run(jobs, suites=()):
-    if not 1 <= jobs <= 16:
-        raise ValueError('WORKFLOW_VERIFY_JOBS must be from 1 to 16')
+    if not 1 <= jobs <= MAX_JOBS:
+        raise ValueError(f'WORKFLOW_VERIFY_JOBS must be from 1 to {MAX_JOBS}')
     if any(not re.fullmatch(r'[a-z0-9][a-z0-9-]*', name) for name in suites):
         raise ValueError('Invalid python suite name')
     files = ([f'scripts/tests/{name}-test.py' for name in suites] if suites
@@ -48,8 +50,14 @@ def run(jobs, suites=()):
     isolate_git()
     # Keep suites off the network and the real model cache, as the shell runner does.
     os.environ.setdefault('UNCLE_MODEL_REFRESH', '0')
-    return run_commands(jobs, {path: suite_command(path) for path in files}, kind='python')
+    commands = {}
+    for path in files:
+        command = suite_command(path)
+        # Only the plain interpreter launch can be split by test id; uv and pytest runs keep the whole file.
+        split = command[:2] == [sys.executable, '-B'] and os.environ.get('WORKFLOW_PYTHON_TESTS_RUNNER', 'python') == 'python'
+        commands.update(expand(path, 'python', path, command) if split else {path: command})
+    return run_commands(jobs, commands, kind='python')
 
 
 if __name__ == '__main__':
-    raise SystemExit(run(int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get('WORKFLOW_VERIFY_JOBS', '4')), sys.argv[2:]))
+    raise SystemExit(run(int(sys.argv[1]) if len(sys.argv) > 1 else default_jobs(), sys.argv[2:]))

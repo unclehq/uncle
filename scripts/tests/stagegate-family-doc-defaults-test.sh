@@ -82,7 +82,7 @@ implement_line="$(grep -n '^        IMPLEMENT)$' "$ROOT/scripts/stagegate.sh" | 
 # PLAN_DOC in phase (a) of the stagegate/change-workflow consolidation.
 implement_block="$(sed -n "${implement_line},${wait_line}p" "$ROOT/scripts/stagegate.sh" | tail -n +2 \
     | grep -v 'preflight-plan\.sha256')"
-if printf '%s' "$implement_block" | grep -q '\.uncle/docs/UPDATED_PROJECT_PLAN\.md\|\.uncle/docs/AUTOMATED_TEST_REPORT\.md'; then
+if grep -q '\.uncle/docs/UPDATED_PROJECT_PLAN\.md\|\.uncle/docs/AUTOMATED_TEST_REPORT\.md' <<<"$implement_block"; then
     bad "no-stray-literals" "IMPLEMENT block still has a hardcoded app-family doc path alongside the variables"
 else
     ok

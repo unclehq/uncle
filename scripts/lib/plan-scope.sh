@@ -176,10 +176,10 @@ plan_out_of_scope() {
         # ("`app/static/admin.js`, `admin.html`"), so a scope entry with no
         # directory matches on basename. Tolerant in the safe direction: it
         # avoids calling an in-scope file a deviation.
-        if printf '%s\n' "$scope" | grep -qxF "$f"; then
+        if grep -qxF "$f" <<<"$scope"; then
             continue
         fi
-        if printf '%s\n' "$scope" | grep -v '/' | grep -qxF "${f##*/}"; then
+        if grep -v '/' <<<"$scope" | grep -qxF "${f##*/}"; then
             continue
         fi
         printf '%s\n' "$f"

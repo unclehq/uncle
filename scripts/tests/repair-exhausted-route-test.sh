@@ -39,11 +39,11 @@ route() {   # <WORKFLOW_REPAIR> <attempts> <used|none> [POSTFLIGHT] [runnable|un
 start="$(grep -n '^        VALIDATE_TEST_REVIEW)' "$SG" | tail -1 | cut -d: -f1)"
 end="$(grep -n '^        REPAIR)' "$SG" | tail -1 | cut -d: -f1)"
 block="$(sed -n "${start},${end}p" "$SG")"
-[[ "$(printf '%s\n' "$block" | grep -c 'acceptance_transition .uncle/docs/TEST_REVIEW.md "\$(test_review_next_stage)"')" == 3 ]] \
+[[ "$(grep -c 'acceptance_transition .uncle/docs/TEST_REVIEW.md "\$(test_review_next_stage)"' <<<"$block")" == 3 ]] \
     || bad "the three failing-check routes in VALIDATE_TEST_REVIEW do not use test_review_next_stage"
-printf '%s\n' "$block" | grep -q "continue_nonblocking_test_review MANUAL_CHECKLIST || \\\\" \
+grep -q "continue_nonblocking_test_review MANUAL_CHECKLIST || \\\\" <<<"$block" \
     || bad "the nonblocking route lost its call"
-printf '%s\n' "$block" | grep -q "^                    acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE" \
+grep -q "^                    acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE" <<<"$block" \
     || bad "a clean test review must still go on to MANUAL_CHECKLIST"
 sed -n '/^continue_nonblocking_test_review()/,/^}/p' "$SG" | grep -q 'test_review_next_stage' \
     || bad "continue_nonblocking_test_review does not route an exhausted failure to the audit"

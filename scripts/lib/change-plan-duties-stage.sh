@@ -22,7 +22,7 @@ change_plan_duties_stage() {
     fi
     [[ -s "$plan" ]] || return 0
     before="$(python3 -B "$py" check . "$plan" 2>/dev/null)" || before=""
-    count_before="$(printf '%s' "$before" | grep -c . || true)"
+    count_before="$(grep -c . <<<"$before" || true)"
     if [[ "$count_before" == 0 ]]; then
         echo "Change plan duties: the plan is consistent (no mentioned file lacks an owner); no model call needed."
         printf '{"before": 0, "after": 0, "model_called": false}\n' > "$STATE_DIR/change-plan-duties.json"
@@ -37,7 +37,7 @@ change_plan_duties_stage() {
     ( UNCLE_WORKER_PACKET_PATH="$dir/answer.json" run_claude "$dir/prompt.md" change-plan-stage-duties "" "" 20 ) \
         > "$LOG_DIR/change-plan-stage-duties.log" 2>&1 || true
     if after="$(python3 -B "$py" apply . "$dir/answer.json" "$LOG_DIR/change-plan-stage-duties.jsonl" 2>"$dir/error.txt")"; then
-        count_after="$(printf '%s' "$after" | grep -c . || true)"
+        count_after="$(grep -c . <<<"$after" || true)"
         # The plan changed, so the key that says "this plan was drafted with the approved specification" must follow it, or PLAN
         # would decide the draft is stale and plan again.
         change_plan_draft_key > "$STATE_DIR/change-plan.draft-key" 2>/dev/null || true

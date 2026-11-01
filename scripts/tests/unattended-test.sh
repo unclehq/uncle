@@ -204,7 +204,7 @@ printf 'not a well formed row\n' > "$ic/.uncle/workflow/implementation-completio
 touch "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" "$ic/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
 : > "$ic/.uncle/workflow/hooks"
 out="$(cd "$ic" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
-check "ic-malformed-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-malformed-returns" "CHOICE_RETURNED 2" "$(grep CHOICE_RETURNED <<<"$out")"
 if grep -q 'STATE ANALYZE' "$ic/.uncle/workflow/hooks"; then
     bad "ic-malformed-never-replans" "an unevaluable contract sent the run back to ANALYZE (a second change-plan)"
 else ok; fi
@@ -224,7 +224,7 @@ rm -f "$ic/.uncle/workflow/unattended-gates"
 printf 'AC-1: requires IMPLEMENTED, changed code, and observed targeted verification; got missing\n' \
     > "$ic/.uncle/workflow/implementation-completion.txt"
 out="$(cd "$ic" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
-check "ic-rejected-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-rejected-returns" "CHOICE_RETURNED 2" "$(grep CHOICE_RETURNED <<<"$out")"
 case "$out" in
     *"Retry the implementation, waive"*) bad "ic-rejected-no-prompt" "the human prompt was printed anyway" ;;
     *) ok ;;
@@ -241,7 +241,7 @@ rm -f "$ic/.uncle/workflow/unattended-gates" "$ic/.uncle/workflow/waivers/AC-1"
 printf 'AC-4b: requires IMPLEMENTED, changed code, and observed targeted verification; got missing\n' \
     > "$ic/.uncle/workflow/implementation-completion.txt"
 out="$(cd "$ic" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
-check "ic-lettered-id-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-lettered-id-returns" "CHOICE_RETURNED 2" "$(grep CHOICE_RETURNED <<<"$out")"
 case "$out" in
     *"cannot be evaluated"*) bad "ic-lettered-id-not-malformed" "AC-4b was wrongly treated as a malformed contract" ;;
     *) ok ;;
@@ -256,7 +256,7 @@ else bad "ic-lettered-id-waiver-file" "no waiver written for AC-4b"; fi
 rm -rf "$ic/.uncle/workflow/unattended-gates" "$ic/.uncle/workflow/waivers" \
     "$ic/.uncle/workflow/implementation-completion.txt"
 out="$(cd "$ic" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh < /dev/null 2>&1)" || true
-check "ic-no-rows-returns" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-no-rows-returns" "CHOICE_RETURNED 1" "$(grep CHOICE_RETURNED <<<"$out")"
 case "$out" in
     *"unbound variable"*) bad "ic-no-rows-crash" "the empty waiver crashed the driver" ;;
     *"waiving rejected rows"*) bad "ic-no-rows-no-waiver" "an empty set of rows was announced as waived" ;;
@@ -270,24 +270,24 @@ else ok; fi
 printf 'AC-1: requires IMPLEMENTED, missing\n' > "$ic/.uncle/workflow/implementation-completion.txt"
 touch "$ic/.uncle/workflow/implementation-completion-repair"
 out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< retry 2>&1)"
-check "ic-retry-returns" "CHOICE_RETURNED 0" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-retry-returns" "CHOICE_RETURNED 0" "$(grep CHOICE_RETURNED <<<"$out")"
 check "ic-retry-plan-hook" "PLAN retry" "$(cat "$ic/.uncle/workflow/hooks")"
 if [[ -e "$ic/.uncle/workflow/implementation-completion-repair" ]]; then
     bad "ic-retry-clears-repair" "the retry digest was not cleared"
 else ok; fi
 out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< stop 2>&1)"
-check "ic-stop-returns" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-stop-returns" "CHOICE_RETURNED 1" "$(grep CHOICE_RETURNED <<<"$out")"
 out="$(cd "$ic" && UNATTENDED=0 bash gate.sh < /dev/null 2>&1)"
-check "ic-eof-returns" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-eof-returns" "CHOICE_RETURNED 1" "$(grep CHOICE_RETURNED <<<"$out")"
 out="$(cd "$ic" && printf 'waive\nfixture reason\n' | UNATTENDED=0 bash gate.sh 2>&1)"
-check "ic-attended-waiver-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-attended-waiver-returns" "CHOICE_RETURNED 2" "$(grep CHOICE_RETURNED <<<"$out")"
 check "ic-attended-waiver-reason" "reason: fixture reason" "$(grep '^reason:' "$ic/.uncle/workflow/waivers/AC-1")"
 printf 'bad row\n' > "$ic/.uncle/workflow/implementation-completion.txt"
 touch "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" "$ic/.uncle/workflow/approvals/CHANGE_PLAN.sha256" \
     "$ic/.uncle/workflow/implementation-completion-repair"
 : > "$ic/.uncle/workflow/hooks"
 out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< continue 2>&1)"
-check "ic-attended-continue" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep -o 'CHOICE_RETURNED [0-9]*' || printf 'no result; output: %s' "$out")"
+check "ic-attended-continue" "CHOICE_RETURNED 2" "$(grep -o 'CHOICE_RETURNED [0-9]*' <<<"$out" || printf 'no result; output: %s' "$out")"
 if grep -q 'STATE ANALYZE\|INVALIDATE' "$ic/.uncle/workflow/hooks"; then
     bad "ic-attended-never-replans" "attended continue restarted planning"
 else ok; fi
@@ -297,10 +297,10 @@ done
 # The old answer that rebuilt the plan is no longer offered: it is refused, and with no further answer the run stays pending.
 : > "$ic/.uncle/workflow/hooks"
 out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< repair 2>&1)"
-check "ic-attended-repair-refused" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep -o 'CHOICE_RETURNED [0-9]*')"
+check "ic-attended-repair-refused" "CHOICE_RETURNED 1" "$(grep -o 'CHOICE_RETURNED [0-9]*' <<<"$out")"
 if grep -q 'STATE ANALYZE' "$ic/.uncle/workflow/hooks"; then bad "ic-repair-never-replans" "'repair' restarted planning"; else ok; fi
 out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< stop 2>&1)"
-check "ic-attended-stop" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep -o 'CHOICE_RETURNED [0-9]*')"
+check "ic-attended-stop" "CHOICE_RETURNED 1" "$(grep -o 'CHOICE_RETURNED [0-9]*' <<<"$out")"
 
 # --- the issue stays open ---------------------------------------------------
 

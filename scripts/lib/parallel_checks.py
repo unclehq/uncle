@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 
+from cpu_jobs import MAX_JOBS
 from verification_manifest import manifest
 from shell_syntax import syntax_command
 import check_reuse
@@ -175,8 +176,8 @@ def _run_checks(args):
             raise ValueError("Parallel groups must contain ordered, disjoint, consecutive command numbers.")
         groups[indices[0] - 1] = indices[-1]
         previous = indices[-1]
-    if not 1 <= args.jobs <= 16:
-        raise ValueError("WORKFLOW_VERIFY_JOBS must be from 1 to 16.")
+    if not 1 <= args.jobs <= MAX_JOBS:
+        raise ValueError(f"WORKFLOW_VERIFY_JOBS must be from 1 to {MAX_JOBS}.")
     expected = Path(args.expected).read_text(encoding="utf-8") if args.expected else None
     scopes = args.paths
     halted = threading.Event()

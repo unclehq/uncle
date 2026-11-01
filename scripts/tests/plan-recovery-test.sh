@@ -350,5 +350,6 @@ with tempfile.TemporaryDirectory() as directory:
             raise AssertionError('permission failure for a live group was swallowed')
 PYLOCK
 
+# split:end -- everything below runs in every piece (scripts/lib/suite_split.py)
 if [[ "$FAILED" != 0 ]]; then echo "$FAILED/$COUNT plan recovery checks failed"; exit 1; fi
 echo "$COUNT plan recovery checks passed"

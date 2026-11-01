@@ -11,14 +11,14 @@ bad() { FAIL=$((FAIL + 1)); echo "FAIL [$1] $2" >&2; }
 block="$(sed -n '/^        VALIDATE_TEST_REVIEW)/,/^        [A-Z_]*)/p' "$ROOT/scripts/stagegate.sh")"
 [[ -n "$block" ]] || { echo 'FATAL: could not extract VALIDATE_TEST_REVIEW'; exit 2; }
 
-if printf '%s' "$block" | grep -q 'test_review_advisory.py'; then ok; else bad "calls-advisory-tool" "VALIDATE_TEST_REVIEW does not call test_review_advisory.py"; fi
-if printf '%s' "$block" | grep -q 'WORKFLOW_ADVISORY_TEST_REVIEW'; then ok; else bad "has-kill-switch" "no WORKFLOW_ADVISORY_TEST_REVIEW kill switch"; fi
-if printf '%s' "$block" | grep -qE '\$UNATTENDED.*== 1'; then ok; else bad "gated-to-unattended" "advisory downgrade is not gated to UNATTENDED"; fi
-if printf '%s' "$block" | grep -q 'record_nonblocking_failure TEST_REVIEW.json'; then ok; else bad "ledgers-the-downgrade" "a downgrade is not recorded to the nonblocking-failures ledger"; fi
+if grep -q 'test_review_advisory.py' <<<"$block"; then ok; else bad "calls-advisory-tool" "VALIDATE_TEST_REVIEW does not call test_review_advisory.py"; fi
+if grep -q 'WORKFLOW_ADVISORY_TEST_REVIEW' <<<"$block"; then ok; else bad "has-kill-switch" "no WORKFLOW_ADVISORY_TEST_REVIEW kill switch"; fi
+if grep -qE '\$UNATTENDED.*== 1' <<<"$block"; then ok; else bad "gated-to-unattended" "advisory downgrade is not gated to UNATTENDED"; fi
+if grep -q 'record_nonblocking_failure TEST_REVIEW.json' <<<"$block"; then ok; else bad "ledgers-the-downgrade" "a downgrade is not recorded to the nonblocking-failures ledger"; fi
 # The call must happen before the canonical JSON feeds any acceptance_json.py
 # routing decision, or the downgrade never has a chance to change the result.
-advisory_line="$(printf '%s' "$block" | grep -n 'test_review_advisory.py' | head -1 | cut -d: -f1)"
-first_route_line="$(printf '%s' "$block" | grep -n 'acceptance_json.py' | head -1 | cut -d: -f1)"
+advisory_line="$(grep -n 'test_review_advisory.py' <<<"$block" | head -1 | cut -d: -f1)"
+first_route_line="$(grep -n 'acceptance_json.py' <<<"$block" | head -1 | cut -d: -f1)"
 if [[ -n "$advisory_line" && -n "$first_route_line" && "$advisory_line" -lt "$first_route_line" ]]; then
     ok
 else

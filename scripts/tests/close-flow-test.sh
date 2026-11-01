@@ -902,6 +902,7 @@ while IFS= read -r line; do
 done < "$SOTMP/out"
 COUNT=$((COUNT + 6))
 
+# split:end -- everything below runs in every piece (scripts/lib/suite_split.py); the handoff cases below take their share
 # T-5–8: local Git publication with a persistent fake GitHub server.
 # The Git shim changes only identity discovery; commits/pushes use real bare repos.
 CASE_NAME=pr-handoff
@@ -1643,6 +1644,9 @@ import io
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 names = unittest.defaultTestLoader.getTestCaseNames(HandoffTests)
+if os.environ.get('UNCLE_SPLIT_PART'):     # a piece of a split run (scripts/lib/suite_split.py) runs its share of the cases
+    piece, pieces = map(int, os.environ['UNCLE_SPLIT_PART'].split('/'))
+    names = names[piece::pieces]
 # Up to 16 workers by default, 32 at most; each case owns its repository, keys and fake server. At 32 a case's
 # 60-second subprocess timeout was hit under load, with no gain in wall-clock over 8.
 workers = int(os.environ.get('WORKFLOW_TEST_JOBS', str(min(len(names), 16))))

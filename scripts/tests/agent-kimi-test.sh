@@ -146,7 +146,7 @@ check_eq "passthrough: stdin preserved" \
 
 # claude speaks the schema itself; the shim must not add a second result event.
 check_eq "passthrough: shim adds no result event" "0" \
-    "$(printf '%s\n' "$out" | grep -c '"type":"result"')"
+    "$(grep -c '"type":"result"' <<<"$out")"
 
 status=0
 FAKE_CLAUDE_EXIT=7 run_shim -p --model opus < /dev/null > /dev/null || status=$?

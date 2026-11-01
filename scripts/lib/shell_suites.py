@@ -53,7 +53,7 @@ def isolate_git():
 # *inside a live workflow*, so without this a test that drives stagegate.sh or change-workflow.sh with a stub agent
 # writes its stage events (a second change-plan, requirements, preview-build, adversarial-review) into the live run's
 # UNCLE_STATUS_FILE, and one that honours WORKFLOW_AGENT_CMD or UNCLE_PROJECT_ROOT would run against the real thing.
-KEEP_ENV = ('UNCLE_MODEL_REFRESH', 'WORKFLOW_VERIFY_JOBS', 'WORKFLOW_TEST_JOBS', 'WORKFLOW_PYTHON_TESTS_RUNNER',
+KEEP_ENV = ('UNCLE_MODEL_REFRESH', 'UNCLE_SUITE_CPU', 'WORKFLOW_VERIFY_JOBS', 'WORKFLOW_TEST_JOBS', 'WORKFLOW_PYTHON_TESTS_RUNNER',
             'WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 'WORKFLOW_SUITE_TIMINGS')
 LEAKY_PREFIXES = ('UNCLE_', 'STAGEGATE_', 'WORKFLOW_')
 
@@ -175,6 +175,8 @@ def run_commands(jobs, commands, kind='shell'):
     active, lock, stopped = set(), threading.Lock(), threading.Event()
     running = {}
     durations, statuses = {}, {}
+    cpu_target = os.environ.get('UNCLE_SUITE_CPU') if os.path.exists('/usr/bin/time') else None
+    cpu_seconds = {}
     def interrupted(*_):
         raise KeyboardInterrupt
     previous = signal.signal(signal.SIGTERM, interrupted)
@@ -187,7 +189,10 @@ def run_commands(jobs, commands, kind='shell'):
                     with lock:
                         if stopped.is_set():
                             return path, 130, log
-                        child = start_check(commands[path], stdout=output, stderr=subprocess.STDOUT)
+                        command = commands[path]
+                        if cpu_target:      # `time -p` appends this suite's user/sys CPU (its whole process tree) to its log
+                            command = ['/usr/bin/time', '-p', *command]
+                        child = start_check(command, stdout=output, stderr=subprocess.STDOUT)
                         active.add(child)
                         running[path] = time.monotonic()
                     try:
@@ -213,6 +218,10 @@ def run_commands(jobs, commands, kind='shell'):
                             while chunk := source.read(65536):
                                 sys.stdout.buffer.write(chunk)
                         sys.stdout.buffer.flush()
+                        if cpu_target:
+                            tail = log.read_bytes()[-400:].decode('utf-8', 'replace')
+                            found = re.findall(r'(?m)^(user|sys)\s+([0-9.]+)\s*$', tail)
+                            cpu_seconds[path] = sum(float(value) for _, value in found[-2:])
                         label = 'SKIP' if status == 77 else ('PASS' if status == 0 else f'FAIL({status})')
                         statuses[path] = status
                         print(f'{label} {path}', flush=True)
@@ -232,6 +241,10 @@ def run_commands(jobs, commands, kind='shell'):
                 pool.shutdown(wait=True)
             print(f'{kind.capitalize()} suites: {len(files) - failed - skipped} passed, {failed} failed, {skipped} skipped.', flush=True)
             report_timings(kind, durations, statuses)
+            if cpu_target:
+                with open(cpu_target, 'w', encoding='utf-8') as out:
+                    for path, cpu in sorted(cpu_seconds.items(), key=lambda item: -item[1]):
+                        out.write(f'{cpu:.1f}\t{durations.get(path, 0):.1f}\t{path}\n')
             touched = guard_violations(guarded_before, guarded_snapshot())
             if touched:
                 print('FAIL: test isolation: a suite modified the live workflow binding it was run inside: ' + ', '.join(touched)

@@ -56,7 +56,31 @@ def enrich(record):
     return record
 
 
+def finish(path, workflow):
+    """What the recorder did in three launches, in one: price the record, publish it, then refresh the session totals.
+
+    Each step is independent, as it was when they were separate commands: a failure in one is reported and does not stop the
+    next, and the record is always published under its final name.
+    """
+    try:
+        path.write_bytes((json.dumps(enrich(json.loads(path.read_text()))) + '\n').encode('utf-8'))
+    except Exception as error:
+        print(f'usage-cost: {error}', file=sys.stderr)
+    os.replace(path, str(path) + '.json')
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('session_totals', Path(__file__).with_name('session-totals.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.update(workflow)
+    except Exception as error:
+        print(f'session-totals: {error}', file=sys.stderr)
+
+
 if __name__ == '__main__':
     path = Path(sys.argv[1])
-    data = enrich(json.loads(path.read_text()))
-    path.write_bytes((json.dumps(data) + '\n').encode('utf-8'))
+    if len(sys.argv) == 4 and sys.argv[2] == '--finish':
+        finish(path, sys.argv[3])
+    else:
+        data = enrich(json.loads(path.read_text()))
+        path.write_bytes((json.dumps(data) + '\n').encode('utf-8'))

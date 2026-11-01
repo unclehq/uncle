@@ -3791,7 +3791,8 @@ case "$(get_state)" in
 esac
 
 while true; do
-    python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
+    # Only a request to rerun a stage needs the helper; the loop turns over many times without one.
+    [[ ! -e .uncle/workflow/rerun-request.json ]] || python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
     state="$(get_state)"
     if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 

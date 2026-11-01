@@ -34,9 +34,9 @@ perf_record() (
            input_includes_cache:($r.input_includes_cache // false),
            log:$log}
     ' "$log" > "$tmp"; then
-        python3 "$(dirname "${BASH_SOURCE[0]}")/usage-cost.py" "$tmp" || true
-        mv "$tmp" "$tmp.json"
-        python3 "$(dirname "${BASH_SOURCE[0]}")/session-totals.py" "$STATE_DIR" || true
+        # One process prices the record, publishes it as $tmp.json, and refreshes the session totals.
+        python3 "$(dirname "${BASH_SOURCE[0]}")/usage-cost.py" "$tmp" --finish "$STATE_DIR" || true
+        [[ ! -e "$tmp" ]] || mv "$tmp" "$tmp.json"
     else
         rm -f "$tmp"
     fi

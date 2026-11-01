@@ -5156,7 +5156,8 @@ green_background_recover
 
 while true; do
     preserve_requirements_source
-    python3 "$ROOT/scripts/lib/rerun_stage.py" app || exit 1
+    # Only a request to rerun a stage needs the helper; the loop turns over many times without one.
+    [[ ! -e .uncle/workflow/rerun-request.json ]] || python3 "$ROOT/scripts/lib/rerun_stage.py" app || exit 1
     state="$(get_state)"
     if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 

@@ -59,6 +59,8 @@ run_codex_review() {
     esac
 }
 # shellcheck disable=SC1090
+# The lens list is the panel's own choice (stagegate.sh test_review_lenses); this test is about overlap, so it names all three.
+test_review_lenses() { printf 'coverage assertions oracle\n'; }
 source "$temp/fns.sh"
 
 # --- phase 1 starts immediately and does not wait on anything -------------

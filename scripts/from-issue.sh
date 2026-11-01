@@ -67,7 +67,9 @@ check_origin_or_refuse() {
 
     # Mirror of the driver's preflight: a state file bound to one issue beside
     # an origin naming another is corruption, not a foreign-owner conflict.
-    state_origin_agree "$STATE_FILE" "$ORIGIN_FILE" || exit 1
+    # This invocation names the issue (the operator asked for it by number), which is the launch binding state_origin_agree can
+    # recover a clobbered origin file from when the state file agrees with it.
+    STAGEGATE_ORIGIN_REPO="$OWNER/$REPO" STAGEGATE_ORIGIN_ISSUE="$ISSUE_NUM" state_origin_agree "$STATE_FILE" "$ORIGIN_FILE" || exit 1
 
     if ! run_in_flight; then
         return 0
@@ -109,6 +111,7 @@ write_origin() {
 
     mkdir -p "$STATE_DIR"
     printf '%s\t%s\t%s\n' "$OWNER/$REPO" "$ISSUE_NUM" "$fetch" > "$ORIGIN_FILE"
+    cp "$ORIGIN_FILE" "$ORIGIN_FILE.bound" 2>/dev/null || true   # the copy state_origin_agree restores from
 }
 
 run_issue_workflow() {

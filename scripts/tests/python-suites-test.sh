@@ -68,4 +68,19 @@ check "shell suites do not inherit the launching run's variables (UNCLE_TEST_* i
 out="$(UNCLE_STATUS_FILE=/x WORKFLOW_AGENT_CMD=real UNCLE_PROJECT_ROOT=/y bash "$ROOT/scripts/run-python-tests.sh" --project-root "$L" 2>&1)"
 check "python suites do not inherit the launching run's variables" grep -q '^Python suites: 1 passed' <<< "$out"
 
+
+# A suite that overwrites the live run's origin or state binding fails the run, even though the suite itself exits 0.
+G="$TMP/guard"; mkdir -p "$G/scripts/tests" "$G/.uncle/workflow"
+printf 'unclehq/uncle\t116\tgh\n' > "$G/.uncle/workflow/origin"; printf '116:IMPLEMENT\n' > "$G/.uncle/workflow/state"
+printf '#!/usr/bin/env bash\nprintf "owner/repo\\t42\\tgh\\n" > .uncle/workflow/origin\n' > "$G/scripts/tests/clobber-test.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$G/scripts/tests/clean-test.sh"
+out="$(bash "$ROOT/scripts/run-shell-tests.sh" --project-root "$G" 2>&1)"; rc=$?
+check "a suite that overwrites the live origin fails the run" test "$rc" != 0
+check "...naming the file" grep -q 'test isolation: a suite modified the live workflow binding.*\.uncle/workflow/origin' <<< "$out"
+check "...although every suite itself passed" grep -q '2 passed, 0 failed' <<< "$out"
+rm "$G/scripts/tests/clobber-test.sh"; printf 'unclehq/uncle\t116\tgh\n' > "$G/.uncle/workflow/origin"
+out="$(bash "$ROOT/scripts/run-shell-tests.sh" --project-root "$G" 2>&1)"; rc=$?
+check "suites that leave the binding alone pass" test "$rc" == 0
+check "a project with no workflow state is not flagged" bash -c '! grep -q "test isolation" <<< "$1"' _ "$out"
+
 [[ "$fails" == 0 ]] && echo "python-suites-test.sh: all checks passed" || { echo "python-suites-test.sh: $fails failure(s)"; exit 1; }

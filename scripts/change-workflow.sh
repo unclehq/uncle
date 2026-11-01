@@ -642,6 +642,7 @@ write_origin() {
     else
         printf '%s\t%s\n' "$repo" "$issue" > "$ORIGIN_FILE"
     fi
+    cp "$ORIGIN_FILE" "$ORIGIN_FILE.bound" 2>/dev/null || true   # the copy state_origin_agree restores from
 }
 
 # stage, seconds, usd, input, output, cache_read, cache_write

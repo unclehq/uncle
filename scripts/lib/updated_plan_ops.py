@@ -198,6 +198,12 @@ def capture_packet(path):
     # Merge still checks finding coverage, ops and conflicts. Capture never repairs JSON.
     if not isinstance(value.get('ops'), list) and not isinstance(value.get('resolutions'), list):
         raise Conflict('expected an edit or resolution packet')
+    intent_file = path.parent / 'prompts' / (path.stem + '.intent.json')
+    if intent_file.is_file():
+        try:
+            pin_delivery(value, json.loads(intent_file.read_text(encoding='utf-8')))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     path.write_text(json.dumps(value, ensure_ascii=False) + '\n', encoding='utf-8')
 
 
@@ -339,6 +345,96 @@ def finding_scope(model, findings):
     return scoped_ids(model, targets)
 
 
+# --- findings whose operation the driver decides ----------------------------------------------------------------------------------
+# "Add a test" and "add a defect injection" findings are an insert into one known table. The operation, the table, the place in it
+# and the new id are then facts about the plan, not judgment, so the driver fixes them (the writer's schema allows only that one
+# insert_row, and a delivered insert into that table is re-pinned) and the model fills in the row's fields. Conservative on
+# purpose: a finding that says the plan contradicts itself, or that is not plainly about a missing test or injection, is left to
+# the writer as before, and so is any writer that owns more than one finding.
+INTENT_CONFLICT = re.compile(r'\b(?:conflict|contradict|inconsisten|mismatch|disagree|incorrect|wrong|ambiguous|misleading)\w*', re.I)
+INTENT_INJECTION = re.compile(
+    r'\b(?:no|missing|lacks?|lacking|without|absent|add|adds|adding|needs?|requires?)\b[^.\n]{0,40}'
+    r'\b(?:defect[- ]inject\w*|mutation\w*|mutant\w*)\b', re.I)
+INTENT_TEST = re.compile(
+    r'\b(?:no|missing|lacks?|lacking|without|absent|add|adds|adding|needs?|requires?)\b[^.\n]{0,30}'
+    r'\b(?:automated |unit |e2e |browser |regression )?test(?:s| case| cases)?\b|'
+    r'\bnot covered by any (?:automated )?test\b|\buntested\b', re.I)
+INTENT_KINDS = (('mutation', INTENT_INJECTION, 'DI-'), ('automated_test', INTENT_TEST, 'T-'))
+
+
+def rows_block(model, row_kind):
+    for section in model['sections']:
+        for block in section['blocks']:
+            if block.get('kind') == 'rows' and block.get('row_kind') == row_kind:
+                return block
+    return None
+
+
+def finding_intent(model, finding, advice=()):
+    """{'op','target','after','row_kind','new_id','label'} when this finding is plainly "add a row to that table", else None."""
+    if not isinstance(finding, dict):
+        return None
+    text = ' '.join(str(finding.get(key, '')) for key in ('title', 'failure', 'fix', 'references'))
+    text += ' ' + ' '.join(str(c) for row in advice if isinstance(row, dict) for c in row.get('required_corrections') or [])
+    if INTENT_CONFLICT.search(text):
+        return None
+    for row_kind, pattern, prefix in INTENT_KINDS:
+        if not pattern.search(text):
+            continue
+        block = rows_block(model, row_kind)
+        if block is None:
+            return None
+        members = [row['id'] for row in block.get('rows') or [] if isinstance(row, dict) and row.get('id')]
+        used = set(pm.index(model))
+        numbers = [int(m[1]) for ident in members for m in [re.fullmatch(re.escape(prefix) + r'(\d+)', ident)] if m]
+        number = (max(numbers) if numbers else 0) + 1
+        while prefix + str(number) in used:
+            number += 1
+        return {'op': 'insert_row', 'target': block['id'], 'after': members[-1] if members else '', 'row_kind': row_kind,
+                'new_id': prefix + str(number), 'label': 'add_defect_injection' if row_kind == 'mutation' else 'add_test'}
+    return None
+
+
+INTENT_NOTE = '''
+
+## The driver decided this finding's operation (binding)
+
+Your finding asks for a new row in the %s table. The driver fixed the operation, so you do not choose one: if you accept the
+finding, `ops` holds exactly one `insert_row` into `%s`, after `%s`, with the new row's `id` `%s` (the schema allows nothing
+else). Your part is the row's field values, written from the finding and the rows already in the table. If the finding is wrong
+or out of scope, reject or defer it with `"ops": []`.
+'''
+
+
+def write_intent(model, findings, output, scope, advice=()):
+    """Write `<name>.intent.json` beside the writer's scope file for a single deterministic finding, add its table to the scope, and
+    return the intent. Any stale intent file is removed first."""
+    target = Path(output).with_suffix('.intent.json')
+    target.unlink(missing_ok=True)
+    if len(findings) != 1:
+        return None, scope
+    intent = finding_intent(model, findings[0], advice)
+    if not intent:
+        return None, scope
+    target.write_text(json.dumps(intent) + '\n', encoding='utf-8')
+    return intent, sorted(set(scope) | {intent['target']} | ({intent['after']} - {''}))
+
+
+def pin_delivery(delivery, intent):
+    """Re-pin what the driver owns in a delivered packet: an insert_row into the intent's table goes after the pinned row, under the
+    pinned id. Other ops are untouched. Returns whether anything changed."""
+    changed = False
+    for op in delivery.get('ops') or []:
+        if isinstance(op, dict) and op.get('op') == 'insert_row' and op.get('target') == intent['target']:
+            new = op.get('new')
+            if not isinstance(new, dict):
+                continue
+            if op.get('after') != intent['after'] or new.get('id') != intent['new_id']:
+                op['after'], new['id'] = intent['after'], intent['new_id']
+                changed = True
+    return changed
+
+
 def write_prompt(base_path, ids, output, owns_fields=False, note=None):
     """The sealed prompt with the patch instructions and the plan text replaced by the ops instructions and the model."""
     text = Path(base_path).read_text(encoding='utf-8')
@@ -378,8 +474,12 @@ def write_prompt(base_path, ids, output, owns_fields=False, note=None):
     if assigned_context:
         note += '\n\n## Assigned findings and corrections\n```json\n' + json.dumps(assigned_context, ensure_ascii=False) + '\n```\n'
     scope = finding_scope(model, assigned_context)
+    intent, scope = write_intent(model, assigned_context, output, scope)
     Path(output).with_suffix('.scope.json').write_text(json.dumps(scope) + '\n', encoding='utf-8')
     note += '\n\nAssigned edit scope (ids): ' + ', '.join(scope) + '.\n'
+    if intent:
+        note += INTENT_NOTE % (intent['row_kind'].replace('_', ' '), intent['target'], intent['after'] or '(the start of the table)',
+                              intent['new_id'])
     Path(output).write_text(base.defer_reply_example(text) + note, encoding='utf-8')
 
 

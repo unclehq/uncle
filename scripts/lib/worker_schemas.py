@@ -227,6 +227,22 @@ def _new_step(ids=None):
                                     'depends_on': strings}, ('title', 'text', 'owns', 'depends_on'))}, ('op', 'new'))
 
 
+def load_intent(scope_path):
+    """The operation the driver decided for this writer's finding, from `<name>.intent.json` beside the `--scope` file it was
+    handed (updated_plan_ops.py writes both); None when there is none or it is malformed."""
+    if not scope_path:
+        return None
+    scope = Path(scope_path)
+    if not scope.name.endswith('.scope.json'):
+        return None
+    try:
+        intent = json.loads(scope.with_name(scope.name[:-len('.scope.json')] + '.intent.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    keys = ('op', 'target', 'after', 'row_kind', 'new_id')
+    return intent if isinstance(intent, dict) and all(isinstance(intent.get(k), str) for k in keys) and intent['op'] == 'insert_row' else None
+
+
 def scoped_ids(model, targets):
     """Explicit containers include their contents; ancestors supply insertion targets only."""
     from plan_model import index, parent_of
@@ -247,9 +263,25 @@ def scoped_ids(model, targets):
     return sorted(selected)
 
 
-def model_op(model, ids=None):
-    """Closed operation variants, grouped by actual row kind instead of by individual id."""
+def intent_variant(intent):
+    """The one operation the driver decided for a finding: an insert_row into a named table, at a named place, under a fresh id.
+    The model fills in the row's field values and nothing else."""
+    from plan_model import ROW_KINDS
+    properties = {name: ({'type': 'array', 'maxItems': 150, 'items': _text(4000)} if is_list else _text(EDIT_MAX, 0))
+                  for name, _, is_list, _ in ROW_KINDS[intent['row_kind']] if name != 'id'}
+    properties['id'] = {'const': intent['new_id']}
+    return _object({'op': {'const': 'insert_row'}, 'target': {'const': intent['target']}, 'after': {'const': intent['after']},
+                    'new': _object(properties, ('id',))}, ['op', 'target', 'after', 'new'])
+
+
+def model_op(model, ids=None, intent=None):
+    """Closed operation variants, grouped by actual row kind instead of by individual id.
+
+    With an `intent` (updated_plan_ops.finding_intent) the driver has already decided the operation and the target, so the only
+    variant is that insert_row, with its id fixed: the model's part is the row's field values."""
     from plan_model import ROW_KINDS, index, steps_of
+    if intent:
+        return intent_variant(intent)
     allowed = set(index(model))
     if ids is not None:
         allowed.intersection_update(ids)
@@ -347,18 +379,18 @@ def _minimal(schema):
     return result
 
 
-def _ops(ids, model, maximum, generic_model=None):
-    item = model_op(model, ids) if model is not None else _op(ids, generic_model)
-    return {'type': 'array', 'maxItems': maximum if item else 0, 'items': item}
+def _ops(ids, model, maximum, generic_model=None, intent=None):
+    item = model_op(model, ids, intent) if model is not None else _op(ids, generic_model)
+    return {'type': 'array', 'maxItems': (1 if intent and model is not None else maximum) if item else 0, 'items': item}
 
 
-def edit_ops_packet(ids=None, owner=False, model=None, generic_model=None):
+def edit_ops_packet(ids=None, owner=False, model=None, generic_model=None, intent=None):
     owner = owner and os.environ.get('UNCLE_PLAN_KIND') != 'change-plan'
     properties = {
         'dispositions': {'type': 'array', 'maxItems': 40, 'items': _object({
             'finding': _text(80), 'disposition': {'type': 'string', 'enum': list(DISPOSITIONS)},
             'reason': _text(300), 'plan_change': _text(300)}, ('finding', 'disposition', 'reason', 'plan_change'))},
-        'ops': _ops(ids, model, 120, generic_model),
+        'ops': _ops(ids, model, 120, generic_model, intent),
         'commands_replace': _commands(),
     }
     if owner or os.environ.get('UNCLE_UPDATED_PLAN_STRUCTURE_REPAIR') == '1':
@@ -395,6 +427,7 @@ def plan_ids(plan_json):
 def main(argv):
     argv = list(argv)
     scope = None
+    intent = None
     attempt = None
     if '--attempt' in argv:
         at = argv.index('--attempt')
@@ -404,6 +437,7 @@ def main(argv):
         at = argv.index('--scope')
         scope = json.loads(Path(argv[at + 1]).read_text(encoding='utf-8'))
         scope = scope['ids'] if isinstance(scope, dict) else scope
+        intent = load_intent(argv[at + 1])
         del argv[at:at + 2]
     output = argv[2] if len(argv) > 2 else None
     try:
@@ -436,7 +470,8 @@ def main(argv):
             from plan_model import load_model
             from updated_plan_ops import strict_schema_attempt
             model = load_model(argv[1]) if strict_schema_attempt(attempt) else None
-            schema = edit_ops_packet(scope if scope is not None else plan_ids(argv[1]), owner=len(argv) == 4, model=model, generic_model=load_model(argv[1]))
+            schema = edit_ops_packet(scope if scope is not None else plan_ids(argv[1]), owner=len(argv) == 4, model=model,
+                                     generic_model=load_model(argv[1]), intent=intent)
         elif len(argv) == 3 and argv[0] == 'resolve-ops':
             from plan_model import load_model
             from updated_plan_ops import strict_schema_attempt

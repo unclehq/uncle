@@ -98,10 +98,13 @@ class Stage:
         self.correlation = 'none'  # 'turn' | 'message' | 'none': how answers are tied to steering
         self.note = os.environ.get('UNCLE_SUPERVISION_NOTE', '')
         self.turn = self.session = None
+        # What the CLI (and every command the agent runs from it) may inherit: nothing that names the live run. A test the agent
+        # runs that drives stagegate.sh or change-workflow.sh would otherwise write its stage events (a second change-plan,
+        # requirements, adversarial-review) into the operator's stage panel through UNCLE_STATUS_FILE.
         self.env = os.environ.copy()
         for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG', 'UNCLE_STEERING',
                     'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'DOCUMENT_BUDGET_SOURCE',
-                    'UNCLE_SUPERVISION_NOTE', 'UNCLE_SUPERVISION_HOST'):
+                    'UNCLE_SUPERVISION_NOTE', 'UNCLE_SUPERVISION_HOST', 'UNCLE_RUNNER_POOL_OWNER_PID'):
             self.env.pop(key, None)
 
     def option(self, *names):
@@ -279,7 +282,8 @@ class Stage:
             return False
         from runner_pool import ensure
         pool = Path(os.getcwd()) / '.uncle' / 'workflow' / 'runner-pool'
-        ensure(str(pool), int(owner), self.runner, self.side, launch_command(command))
+        # The idle CLI is the very process the real stage reuses, so it is started with the cleaned environment, not this one.
+        ensure(str(pool), int(owner), self.runner, self.side, launch_command(command), env=self.env)
         self.status('runner_prewarmed', pool=str(pool))
         return True
 

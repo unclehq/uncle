@@ -69,7 +69,7 @@ def acquire(lock, deadline):
     raise RuntimeError('runner pool startup lock timed out')
 
 
-def ensure(root, owner, runner, side, command, slot=0):
+def ensure(root, owner, runner, side, command, slot=0, env=None):
     Path(root).mkdir(parents=True, exist_ok=True)
     digest = identity(command, os.getcwd(), runner, side, slot)
     descriptor, lock, log = paths(root, digest)
@@ -88,7 +88,7 @@ def ensure(root, owner, runner, side, command, slot=0):
                  '--root', root, '--owner', str(owner), '--runner', runner,
                  '--side', side, '--digest', digest, '--', *command],
                 stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                cwd=os.getcwd(), close_fds=True, start_new_session=(os.name != 'nt'))
+                cwd=os.getcwd(), close_fds=True, start_new_session=(os.name != 'nt'), env=env)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             existing = read_descriptor(descriptor, owner, digest)

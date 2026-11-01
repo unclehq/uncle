@@ -9,7 +9,11 @@ resolve_prompt() {
     # invoking us. Preserve that identity even if another process has removed
     # it by the time this check runs: prefixing it with ROOT turns
     # /var/.../batch-4.md into an impossible Cellar-relative pathname.
-    if [[ "$p" == /* || -e "$p" ]]; then
+    # A relative prompt is the driver's own (prompts/...). Resolve it against ROOT first: a project that is itself an Uncle
+    # checkout has its own prompts/ directory, and the current directory's copy of a prompt is not the one this driver ships.
+    if [[ "$p" != /* && -e "$ROOT/$p" ]]; then
+        printf '%s' "$ROOT/$p"
+    elif [[ "$p" == /* || -e "$p" ]]; then
         printf '%s' "$p"
     else
         printf '%s' "$ROOT/$p"

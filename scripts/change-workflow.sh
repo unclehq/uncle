@@ -244,6 +244,8 @@ stepwise_implementation_enabled() {
         1|true|yes|on) return 0 ;;
         0|false|no|off) return 1 ;;
         auto)
+            # A docs, test-only or small change with no risk keyword is one session (scripts/lib/change_class.py).
+            change_class_implement_single && return 1
             local count
             count="$(plan_steps .uncle/docs/CHANGE_PLAN.md 2>/dev/null | grep -c . || true)"
             [[ "${count:-0}" -ge 8 ]] && return 0
@@ -1382,7 +1384,7 @@ run_parallel_checklist_workers() {
         compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-1}"
         [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=1
         # Workers running at once inside one group; a larger group's batches simply grow.
-        compact_max_workers="${WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-8}"
+        compact_max_workers="$(change_class_panel execute_workers 8 WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS)"
         [[ "$compact_max_workers" =~ ^[1-9][0-9]*$ ]] || compact_max_workers=8
         echo "Checklist compact mode: declared groups kept as barriers, up to $compact_batch_size checks per worker session; automated rows cite driver green-check evidence."
     fi
@@ -3096,11 +3098,12 @@ run_updated_change_plan_fast_path() {
 }
 
 run_final_audit_panel() {
-    local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
+    local directory="$STATE_DIR/final-audit-panel" lens prompt output pid audit_lenses
     local -a pids=()
     [[ "${WORKFLOW_FINAL_AUDIT_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"; mkdir -p "$directory/prompts"
-    for lens in verification scope regression waivers; do
+    audit_lenses="$(change_class_panel final_audit_lenses 'verification scope regression waivers' WORKFLOW_FINAL_AUDIT_LENSES)"
+    for lens in $audit_lenses; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/final-audit-review-worker.md" "$prompt"
         printf '\n## Assigned audit lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
@@ -3108,7 +3111,7 @@ run_final_audit_panel() {
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit worker failed; canonical packet validation will stop the panel.' >&2; done
-    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected verification scope regression waivers || return 1
+    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected $audit_lenses || return 1
     python3 -B "$ROOT/scripts/lib/final_audit_packets.py" . || return 1
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"
     cp "$ROOT/prompts/change/final-audit.md" "$FINAL_AUDIT_PROMPT"
@@ -3127,7 +3130,8 @@ checklist_worker_codex() {
 }
 
 run_checklist_panel() {
-    local kind="$1" source="$2" directory="$STATE_DIR/checklist-$1-panel" lens prompt output pid
+    local kind="$1" source="$2" directory="$STATE_DIR/checklist-$1-panel" lens prompt output pid checklist_lenses
+    checklist_lenses="$(change_class_panel checklist_lenses 'coverage invariants resources regressions' WORKFLOW_CHECKLIST_LENSES)"
     local serial_workers=0
     local -a pids=()
     # A relative "prompts/change/..." template lives in the uncle
@@ -3145,7 +3149,7 @@ run_checklist_panel() {
     [[ "$(uncle_stage_runner manual-checklist)" == self-hosted ]] && serial_workers=1
     [[ "$serial_workers" == 0 ]] || echo 'Manual-checklist panel: self-hosted runner detected; running lens workers serially.'
     rm -rf "$directory"; mkdir -p "$directory/prompts"
-    for lens in coverage invariants resources regressions; do
+    for lens in $checklist_lenses; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
         local range
@@ -3182,7 +3186,7 @@ run_checklist_panel() {
     # Repair only the malformed worker packet.  A stale rendered checklist can
     # tempt a weak model into prose; it must still deliver its assigned JSON
     # lens, and healthy siblings must not be re-run.
-    for lens in coverage invariants resources regressions; do
+    for lens in $checklist_lenses; do
         output="$directory/$lens.json"; prompt="$directory/prompts/$lens.md"
         if ! python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$output"; then
             echo "Checklist worker $lens returned an invalid packet; retrying that worker once."
@@ -3193,7 +3197,7 @@ run_checklist_panel() {
     done
     local target="$STATE_DIR/documents/MANUAL_CHECKLIST.json"
     [[ "$kind" == base ]] && target="$STATE_DIR/documents/MANUAL_CHECKLIST.base.json"
-    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" coverage invariants resources regressions || return 1
+    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" $checklist_lenses || return 1
     python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" "$target" \
         --proposed "${target%.json}.proposed.json" \
         --scope "${target%.json}.driver-scope.json" || return 1

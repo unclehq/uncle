@@ -40,6 +40,28 @@ SLICE_BY_CLASS = {'docs': 8, 'test-only': 6, 'small': 4, 'standard': 2, 'large':
 # How much of the test suite the final check runs (scripts/lib/test_scope.py): impacted tests only, the full suite, or ask the
 # operator. Never the model's call: it follows from the class, and only a change request has an existing suite to scope.
 TEST_SCOPE = {'docs': 'impacted', 'test-only': 'impacted', 'small': 'impacted', 'standard': 'ask', 'large': 'full', 'risky': 'full'}
+# The review panels after implementation, sized by class. A class not listed here (standard, large, risky) runs every lens, and
+# so does any change whose request or owned paths hit a risk keyword: the last independent checks are the wrong place to economise
+# on a change that touches secrets, deletion or publication. Fewer lenses means fewer model sessions, never a weaker row: every
+# acceptance row is still required of the synthesis stage.
+PANELS = {
+    # Never narrowed: each lens is the only source of its acceptance rows (the oracle lens alone writes ORACLE and NEGATIVE), so
+    # dropping one deletes required rows and the report fails validation. The key exists so the driver reads one source of truth.
+    'test_review': {},
+    'checklist': {'docs': ('coverage',), 'test-only': ('coverage', 'regressions'),
+                  'small': ('coverage', 'invariants', 'regressions')},
+    'final_audit': {'docs': ('verification', 'waivers'), 'test-only': ('verification', 'regression', 'waivers')},
+}
+PANEL_FULL = {'test_review': ('coverage', 'assertions', 'oracle'),
+              'checklist': ('coverage', 'invariants', 'resources', 'regressions'),
+              'final_audit': ('verification', 'scope', 'regression', 'waivers')}
+# Checklist rows executed at once. Only the smallest classes are narrowed: a wide fan-out buys nothing for a handful of rows.
+EXECUTE_WORKERS = {'docs': 2, 'test-only': 2, 'small': 4}
+EXECUTE_WORKERS_FULL = 8
+# How the change is implemented. A change this small gains nothing from sandbox copies, per-step sessions and a merge: one session
+# is faster and cheaper. Only the classes that cannot touch much, and only when no risk keyword was hit; everything else stays on
+# the plan-driven path (stepwise, with parallel groups where the plan's file ownership allows them).
+SINGLE_SESSION = ('docs', 'test-only', 'small')
 OUTPUT = Path('.uncle/workflow/change-class.json')
 
 # Matched against what the *request* says and which files the plan touches, never against the plan's own prose: a plan carries
@@ -190,8 +212,14 @@ def profile(cls, f, proposed=None):
     size = bound if not isinstance(wanted, int) or isinstance(wanted, bool) else max(1, min(wanted, bound))
     if cls not in REDUCIBLE:
         size = min(size, 2)
-    return {'adversarial_lenses': ordered(chosen), 'edit_slice': size,
-            'test_scope': TEST_SCOPE[cls] if f['family'] == 'change' else 'full'}
+    panels = {}
+    for name, full in PANEL_FULL.items():
+        reduced = None if f['risk_hits'] else PANELS[name].get(cls)
+        panels[name + '_lenses'] = list(reduced or full)
+    workers = EXECUTE_WORKERS_FULL if f['risk_hits'] else EXECUTE_WORKERS.get(cls, EXECUTE_WORKERS_FULL)
+    mode = 'single' if cls in SINGLE_SESSION and not f['risk_hits'] and f['family'] == 'change' else 'auto'
+    return dict({'adversarial_lenses': ordered(chosen), 'edit_slice': size, 'execute_workers': workers, 'implement_mode': mode,
+                 'test_scope': TEST_SCOPE[cls] if f['family'] == 'change' else 'full'}, **panels)
 
 
 def merge(cls_floor, cls_model):

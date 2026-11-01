@@ -109,6 +109,36 @@ change_class_test_scope() {
     esac
 }
 
+# change_class_implement_single -- succeeds when the change is small enough to implement in one session. WORKFLOW_STEPWISE_IMPLEMENT
+# (1 or 0) is the operator's word and is read before this; with no classification the answer is no.
+change_class_implement_single() {
+    [[ "$(python3 -B "$CHANGE_CLASS_PY" get . implement_mode auto 2>/dev/null)" == single ]]
+}
+
+# change_class_panel <key> <default> <override env var> -- a post-implementation panel's lens list (checklist_lenses,
+# final_audit_lenses, test_review_lenses) or worker cap (execute_workers). The override wins; with no classification the default
+# stands, so a missing or unreadable change-class.json changes nothing.
+change_class_panel() {
+    local key="$1" default="$2" override="${3:-}" explicit="" classified
+    [[ -z "$override" ]] || explicit="${!override:-}"
+    if [[ -n "$explicit" ]]; then printf '%s' "$explicit"; return 0; fi
+    classified="$(python3 -B "$CHANGE_CLASS_PY" get . "$key" 2>/dev/null)" || classified=""
+    printf '%s' "${classified:-$default}"
+}
+
+# change_class_panel_subset <key> <default list> <override env var> -- like change_class_panel, but only ever narrows: the
+# classified lenses that are also in <default list>, in the default's order. A driver whose own default already leaves a lens out
+# (a new application has nothing to regress) does not get it back from the class. An empty result falls back to the default.
+change_class_panel_subset() {
+    local key="$1" default="$2" override="${3:-}" wanted lens kept=""
+    wanted=" $(change_class_panel "$key" "" "$override") "
+    [[ "$wanted" != "  " ]] || { printf '%s' "$default"; return 0; }
+    for lens in $default; do
+        [[ "$wanted" == *" $lens "* ]] && kept="${kept:+$kept }$lens"
+    done
+    printf '%s' "${kept:-$default}"
+}
+
 # change_class_lenses <default list> -- the adversarial review lenses to run; WORKFLOW_ADVERSARIAL_LENSES wins.
 change_class_lenses() {
     local explicit="${WORKFLOW_ADVERSARIAL_LENSES:-}" classified

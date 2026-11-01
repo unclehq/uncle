@@ -15,7 +15,7 @@ enabled() {   # plan-body [env...]
     printf '# Change plan\n\n## 20. Implementation sequence\n\n%s\n' "$1" > "$dir/.uncle/docs/CHANGE_PLAN.md"; shift
     ( cd "$dir"; ROOT="$ROOT"; STATE_DIR="$PWD/.uncle/workflow"; STEPWISE_IMPLEMENT=auto
       for a in "$@"; do eval "$a"; done
-      . "$TMP/fn.sh"; stepwise_implementation_enabled )
+      . "$ROOT/scripts/lib/change-class-stage.sh"; . "$TMP/fn.sh"; stepwise_implementation_enabled )
 }
 TWO_INDEPENDENT=$'1. First — Owns: `a.js`\n2. Second — Owns: `b.js`'
 TWO_CHAIN=$'1. First — Owns: `a.js`\n2. Second — Owns: `a.js`'
@@ -32,6 +32,12 @@ enabled "$TWO_INDEPENDENT" 'WORKFLOW_PARALLEL_IMPLEMENT=0'
 enabled "$TWO_INDEPENDENT" 'STEPWISE_IMPLEMENT=0'
                                             check "an explicit 0 still wins"                            test "$?" == 1
 EIGHT=""; for i in 1 2 3 4 5 6 7 8; do EIGHT+="$i. Step — Owns: \`f.js\`"$'\n'; done
+enabled "$TWO_INDEPENDENT" 'printf "{\"implement_mode\": \"single\"}" > .uncle/workflow/change-class.json'
+                                            check "a small classified change is one session even with independent steps" test "$?" == 1
+enabled "$TWO_INDEPENDENT" 'printf "{\"implement_mode\": \"auto\"}" > .uncle/workflow/change-class.json'
+                                            check "a larger classified change keeps the stepwise path" test "$?" == 0
+enabled "$TWO_INDEPENDENT" 'printf "{\"implement_mode\": \"single\"}" > .uncle/workflow/change-class.json' 'STEPWISE_IMPLEMENT=1'
+                                            check "an explicit 1 still wins over the class" test "$?" == 0
 enabled "$EIGHT";                           check "eight steps stay stepwise as before"                 test "$?" == 0
 
 [[ "$fails" == 0 ]] && echo "stepwise-auto-test.sh: all checks passed" || exit 1

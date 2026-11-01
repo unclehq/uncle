@@ -37,7 +37,8 @@ class CompactGroups(unittest.TestCase):
             start = text.index('run_parallel_checklist_workers()')
             block = text[start:text.index('\n}\n', start)]
             self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-1', block)
-            self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-8', block)
+            # 8 unless the change class narrows it (docs, test-only and small changes); the env var still wins.
+            self.assertIn('change_class_panel execute_workers 8 WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS', block)
             self.assertEqual(block.count('batches="$compact_max_workers"'), 2)
 
 

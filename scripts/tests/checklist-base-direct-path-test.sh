@@ -52,6 +52,7 @@ run_codex() {
 }
 EOF
 printf '%s\n' '. "$ROOT/scripts/lib/workflow-paths-change.sh"' >> harness.sh
+printf '%s\n' '. "$ROOT/scripts/lib/change-class-stage.sh"' >> harness.sh
 awk '/^record_cost\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh
 awk '/^record_codex_cost\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh
 awk '/^run_checklist_panel\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh

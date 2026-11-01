@@ -3142,6 +3142,12 @@ PY
 # results exist. Non-blocking: starts the workers and returns at once, so this
 # investigation and the driver's verification run run concurrently instead of
 # one stage sitting idle waiting for the other to finish first.
+# The test-review panel's lenses: all three, narrowed only for the smallest classes (scripts/lib/change_class.py). The same list
+# is read for the investigation, the panel, and the packet check, so they cannot disagree.
+test_review_lenses() {
+    change_class_panel_subset test_review_lenses 'coverage assertions oracle' WORKFLOW_TEST_REVIEW_LENSES
+}
+
 run_test_review_investigate() {
     local directory="$STATE_DIR/test-review-panel" lens prompt current
     [[ "${WORKFLOW_TEST_REVIEW_PANEL:-1}" == 1 ]] || return 0
@@ -3164,7 +3170,7 @@ run_test_review_investigate() {
     . "$ROOT/scripts/lib/model-jobs.sh"
     local jobs
     jobs="$(workflow_model_capacity test-review REVIEWER)" || return 1
-    for lens in coverage assertions oracle; do
+    for lens in $(test_review_lenses); do
         prompt="$directory/prompts/investigate-$lens.md"
         cp "$ROOT/prompts/change/test-review-worker-investigate.md" "$prompt"
         if [[ "$lens" == oracle ]]; then
@@ -3198,7 +3204,7 @@ run_test_review_panel() {
     # execution record, so asking a reviewer to rediscover it is both slower
     # and less reliable.  The remaining three lenses are judgement calls.
     # oracle/negative merge because both judge whether tests are trustworthy.
-    for lens in coverage assertions oracle; do
+    for lens in $(test_review_lenses); do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/test-review-worker-finalize.md" "$prompt"
         # The investigation is untrusted model output, not driver-written
@@ -3227,7 +3233,7 @@ run_test_review_panel() {
     done
     # A bad response is isolated to its lens. Retry that one compact worker
     # once; never discard its healthy siblings or restart the whole panel.
-    for lens in coverage assertions oracle; do
+    for lens in $(test_review_lenses); do
         output="$directory/$lens.json"; prompt="$directory/prompts/$lens.md"
         if ! python3 -B "$ROOT/scripts/lib/test_review_packets.py" validate "$output" "$lens"; then
             echo "Test-review worker $lens returned an invalid packet; retrying that worker once."
@@ -3236,7 +3242,7 @@ run_test_review_panel() {
               UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens-retry" < /dev/null ) || true
         fi
     done
-    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || return 1
+    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" $(test_review_lenses) || return 1
     python3 "$ROOT/scripts/lib/acceptance_context.py" --validate-json "$STATE_DIR/documents/TEST_REVIEW.json" || return 1
     python3 "$ROOT/scripts/lib/acceptance_context.py" --render "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md || return 1
     cp "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
@@ -3251,6 +3257,7 @@ run_manual_checklist_panel() {
     # behavior checks (MC-400s repeating the MC-100s and MC-200s), about a third of a 42-check list.
     local lenses="coverage invariants resources"
     [[ "${WORKFLOW_MANUAL_CHECKLIST_REGRESSIONS:-0}" != 1 ]] || lenses="$lenses regressions"
+    lenses="$(change_class_panel_subset checklist_lenses "$lenses" WORKFLOW_CHECKLIST_LENSES)"
     for lens in $lenses; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
@@ -3390,11 +3397,12 @@ early_execute_usable() {
 }
 
 run_final_audit_panel() {
-    local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
+    local directory="$STATE_DIR/final-audit-panel" lens prompt output pid audit_lenses
     local -a pids=()
     [[ "${WORKFLOW_FINAL_AUDIT_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"; mkdir -p "$directory/prompts"
-    for lens in verification scope regression waivers; do
+    audit_lenses="$(change_class_panel_subset final_audit_lenses 'verification scope regression waivers' WORKFLOW_FINAL_AUDIT_LENSES)"
+    for lens in $audit_lenses; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/final-audit-review-worker.md" "$prompt"
         printf '\n## Assigned audit lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
@@ -3402,7 +3410,7 @@ run_final_audit_panel() {
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit worker failed; canonical packet validation will stop the panel.' >&2; done
-    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected verification scope regression waivers || return 1
+    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected $audit_lenses || return 1
     python3 -B "$ROOT/scripts/lib/final_audit_packets.py" . || return 1
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"; cp "$ROOT/prompts/final-audit.md" "$FINAL_AUDIT_PROMPT"
     printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/FINAL_AUDIT_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$FINAL_AUDIT_PROMPT"
@@ -3785,7 +3793,7 @@ run_parallel_checklist_workers() {
         compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-1}"
         [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=1
         # Workers running at once inside one group; a larger group's batches simply grow.
-        compact_max_workers="${WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-8}"
+        compact_max_workers="$(change_class_panel execute_workers 8 WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS)"
         [[ "$compact_max_workers" =~ ^[1-9][0-9]*$ ]] || compact_max_workers=8
         echo "Checklist compact mode: declared groups kept as barriers, up to $compact_batch_size checks per worker session; automated rows cite driver green-check evidence."
     fi
@@ -5692,7 +5700,7 @@ while true; do
             # Re-collate their immutable packets now so only driver-owned
             # rows change from PENDING to the completed canonical result.
             if [[ -d "$STATE_DIR/test-review-panel" ]]; then
-                python3 -B "$ROOT/scripts/lib/test_review_packets.py" "$STATE_DIR/test-review-panel" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || exit 1
+                python3 -B "$ROOT/scripts/lib/test_review_packets.py" "$STATE_DIR/test-review-panel" "$STATE_DIR/documents/TEST_REVIEW.json" $(test_review_lenses) || exit 1
                 python3 -B "$ROOT/scripts/lib/acceptance_context.py" --render "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md || exit 1
             fi
             # The direct worker fast path leaves the current acceptance report

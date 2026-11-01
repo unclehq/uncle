@@ -460,6 +460,25 @@ has_nonblocking_failure() {
 # already run every approved command successfully, continue in the same
 # explicit, auditable mode used for failed green-check commands.  This avoids
 # a coverage/packet-format finding bouncing FINAL_AUDIT back to REPAIR forever.
+# Automatic repair is on, at least one pass ran, and every pass allowed has been used.
+repair_exhausted() {
+    local used
+    used="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
+    [[ "${WORKFLOW_REPAIR:-1}" == 1 && "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" -ge 1 && "$used" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]
+}
+
+# Where a failure that is known to remain goes after test review. Once the repair passes are used up, nothing more can fix it,
+# and the checklists would only be run against a build that is known not to pass: it goes straight to the final audit, which
+# reads the failure. While passes remain, or when repair was never available, the checklists still run first. This is only for a
+# failure that is actually present; a clean test review after successful repairs still goes through the checklists.
+test_review_next_stage() {
+    if repair_exhausted && [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]]; then
+        printf FINAL_AUDIT
+    else
+        printf MANUAL_CHECKLIST
+    fi
+}
+
 continue_nonblocking_test_review() {
     local next="$1" result
     [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] || return 1
@@ -488,6 +507,7 @@ continue_nonblocking_test_review() {
     fi
     echo 'Test-review findings are recorded as nonblocking evidence after a passing driver green check.'
     record_nonblocking_failure TEST_REVIEW.json "canonical test-review acceptance $result after passing driver green check"
+    if [[ "$next" == MANUAL_CHECKLIST ]]; then next="$(test_review_next_stage)"; fi
     set_state "$next"
     return 0
 }
@@ -5748,7 +5768,7 @@ while true; do
                         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
                         "$(green_regressions "$GREEN_CLASS") failing check(s) continued automatically" \
                         > "$GREEN_OVERRIDE_FILE"
-                    acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                    acceptance_transition .uncle/docs/TEST_REVIEW.md "$(test_review_next_stage)" 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
                     continue
                 fi
                 # Repair is the right answer for a check the code can satisfy.
@@ -5765,7 +5785,7 @@ while true; do
                     echo
                     echo "Verification failure waived earlier; continuing."
                     echo "$GREEN_MD still records the failure."
-                    acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                    acceptance_transition .uncle/docs/TEST_REVIEW.md "$(test_review_next_stage)" 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
                     continue
                 fi
                 # The first failure goes to repair unasked: most are real and
@@ -5784,7 +5804,7 @@ while true; do
                     echo "still reads it."
                     # shellcheck disable=SC2086
                     if record_waiver "$GREEN_MD" $green_ids; then
-                        acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                        acceptance_transition .uncle/docs/TEST_REVIEW.md "$(test_review_next_stage)" 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
                         continue
                     fi
                 fi

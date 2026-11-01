@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -93,19 +94,33 @@ def normalize_launch_manifest(root):
     command = fixed.get('command')
     if isinstance(command, str):
         match = re.fullmatch(r'npm\s+run\s+([A-Za-z0-9][A-Za-z0-9:_.-]*)', command.strip())
-        if not match:
-            return False
-        try:
-            scripts = json.loads((root / 'package.json').read_text()).get('scripts', {})
-        except (OSError, ValueError, AttributeError):
-            return False
-        if match[1] not in scripts:
-            return False
-        fixed['command'] = ['npm', 'run', match[1]]
+        if match:
+            try:
+                scripts = json.loads((root / 'package.json').read_text()).get('scripts', {})
+            except (OSError, ValueError, AttributeError):
+                return False
+            if match[1] not in scripts:
+                return False
+            fixed['command'] = ['npm', 'run', match[1]]
+        else:
+            # Any other plain command line (`npx vite --port 5173`) is the same mistake: the contract wants the argument array.
+            # Split it exactly as a shell would split words, and refuse anything that needs a shell (pipes, redirects,
+            # substitution, chaining), so nothing is ever run through one.
+            if re.search(r'[;&|<>$`()\\\n]', command):
+                return False
+            try:
+                words = shlex.split(command)
+            except ValueError:
+                return False
+            if not words:
+                return False
+            fixed['command'] = words
     if 'kind' not in fixed and isinstance(fixed.get('command'), list):
         url = urlparse(fixed.get('url', ''))
         if url.scheme in ('http', 'https') and url.hostname in ('localhost', '127.0.0.1', '::1'):
             fixed['kind'] = 'webpage'
+        elif not fixed.get('url') and not fixed.get('path'):
+            fixed['kind'] = 'command'
     if fixed == data:
         return False
     # Validate before replacing anything. Invalid or ambiguous manifests retain

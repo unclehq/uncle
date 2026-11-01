@@ -60,8 +60,8 @@ def _parse_request_options(text, source):
     return result
 
 
-def request_options(stage=None, config=None):
-    """Resolve one whole object; {} explicitly opts out of inherited options."""
+def _lookup_request_options(stage=None, config=None):
+    """(whether anything was configured for this stage, the options). `{}` configured explicitly is "found": it opts out."""
     from self_hosted import config_stage
     stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
     config = _config_values() if config is None else config
@@ -71,12 +71,31 @@ def request_options(stage=None, config=None):
         if name:
             var += '_' + re.sub(r'[^A-Z0-9]', '_', name.upper())
         if var in os.environ:
-            return _parse_request_options(os.environ[var], var)
+            return True, _parse_request_options(os.environ[var], var)
     for name in names + ['self-hosted']:
         key = name + '.request-options'
         if key in config:
-            return _parse_request_options(config[key], key)
-    return {}
+            return True, _parse_request_options(config[key], key)
+    return False, {}
+
+
+def request_options(stage=None, config=None):
+    """Resolve one whole object; {} explicitly opts out of inherited options."""
+    return _lookup_request_options(stage, config)[1]
+
+
+# A worker answers one narrow question from inputs it was handed: its packet is the deliverable and the stage waits for the
+# slowest worker, so reasoning it was never asked for is pure latency. Unless the operator configured request options for the
+# stage (an explicit {} included) or set WORKFLOW_WORKER_THINKING=on, a worker's requests turn thinking off. The setting is the
+# one the updated-plan retry path already sends.
+def is_worker_stage(stage):
+    return '-worker-' in stage or stage.startswith('project-plan-section')
+
+
+def worker_default_options(stage, found):
+    if found or not is_worker_stage(stage or '') or os.environ.get('WORKFLOW_WORKER_THINKING', '').lower() in ('on', '1', 'true'):
+        return None
+    return {'chat_template_kwargs': {'enable_thinking': False}}
 
 
 def configure_request_options(values, stage=None, config=None):
@@ -89,7 +108,9 @@ def configure_request_options(values, stage=None, config=None):
     if '_request_options' in values:
         return values
     stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
-    return dict(values, _request_options=request_options(stage, config), _request_options_stage=stage)
+    found, options = _lookup_request_options(stage, config)
+    options = worker_default_options(stage, found) or options
+    return dict(values, _request_options=options, _request_options_stage=stage)
 
 
 def merge_request_options(body, options):

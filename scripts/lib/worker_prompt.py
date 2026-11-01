@@ -77,6 +77,23 @@ def render(path):
     return raw.rstrip('\n'), 'text'
 
 
+SUPERSEDED = (('PROJECT_PLAN.json', 'UPDATED_PROJECT_PLAN.json'), ('PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md'))
+
+
+def drop_superseded(paths):
+    """(the inputs to embed, the ones left out): the approved updated plan is the original plan with the review's dispositions
+    applied, so a worker that is handed both gets only the updated one. Carrying both was most of what pushed a small
+    application's checklist workers over LIMIT_BYTES, which left them reading the same files turn by turn."""
+    dropped = []
+    for old, new in SUPERSEDED:
+        for path in paths:
+            if path.endswith('/' + new) or path == new:
+                original = path[:-len(new)] + old
+                if original in paths and original not in dropped:
+                    dropped.append(original)
+    return [path for path in paths if path not in dropped], dropped
+
+
 def embed(paths):
     parts, total = [], 0
     for path in paths:
@@ -107,6 +124,11 @@ def main(argv):
     paths = named or list(argv[2:])
     if not paths:
         return 3
+    paths, superseded = drop_superseded(paths)
+    if superseded:
+        kept = (kept + '\n\n' if kept else '## Input notes\n\n') + (
+            '%s is superseded by the updated plan embedded above: it is not embedded and you must not read it.'
+            % ', '.join('`%s`' % path for path in superseded))
     embedded = embed(paths)
     if embedded is None:
         return 3

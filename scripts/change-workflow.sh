@@ -3779,6 +3779,10 @@ change_pr_engine start || exit 1
 [[ -e "$STATE_FILE" ]] || finished_extras reset
 finished_extras start
 
+# A saved runner the dispatch cannot run (the removed cline, or a typo) stops the run here, with the one message that names the way out,
+# before any stage, agent or background suite starts. It was written and tested but never called.
+uncle_validate_config_runners || exit 1
+
 # The baseline is a baseline: it describes the tree before this run touches it, so it starts now, in the background, before any
 # stage (the approved command list is not needed to know what the project's own suites are). A resume past planning skips it.
 case "$(get_state)" in

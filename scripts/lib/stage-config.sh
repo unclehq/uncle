@@ -185,6 +185,30 @@ uncle_unsupported_runner() {
     return 1
 }
 
+# Start-of-run check of every saved runner key (global `runner`, any
+# `<stage>.runner`: primary, reviewer, checklist and `supervision.runner`). Rejects the removed
+# cline runner or any unknown value before any stage or agent starts.
+uncle_validate_config_runners() {
+    local file line key value rc=0
+    file="$(uncle_config_file)"
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | tr -s '[:space:]' ' ')"
+        line="${line# }"
+        key="${line%% *}"
+        [[ "$key" == runner || "$key" == *.runner ]] || continue
+        value="${line#* }"
+        [[ "$line" == *" "* ]] || continue
+        value="${value%% *}"
+        case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
+            ""|claude|codex|kimi|self-hosted|opencode|aider) ;;
+            *) uncle_unsupported_runner "$value" || rc=1 ;;
+        esac
+    done < "$file"
+    return "$rc"
+}
+
 # The CLI that runs one stage. The sides are not interchangeable: an agent
 # stage writes code, a reviewer stage must stay read-only, and codex has no
 # agent shim.

@@ -5137,6 +5137,10 @@ run_gated_stage() {
 python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" "$DOCUMENT_BUDGET_SOURCE" \
     "${STAGEGATE_ORIGIN_REPO:-}#${STAGEGATE_ORIGIN_ISSUE:-}" || true
 
+# A saved runner the dispatch cannot run (the removed cline, or a typo) stops the run here, with the one message that names the way out,
+# before any stage, agent or background suite starts. It was written and tested but never called.
+uncle_validate_config_runners || exit 1
+
 # A stop reason belongs to the run that recorded it. Left in place, a
 # previous "human" stop would silence the triage bundle on this run's failure.
 rm -f "$STATE_DIR/stop-reason" "$STATE_DIR/updated-plan-writers-exhausted" "$STATE_DIR/preflight-readonly-violation"

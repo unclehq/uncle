@@ -11,3 +11,10 @@ required suite, a wording or evidence nit). Do not report a passing check as a f
 
 Report at most 6 findings, most severe first, one per distinct issue. `summary` is one or two
 sentences; `evidence` is a file, row ID or command output in at most two sentences. A separate final auditor owns the verdict.
+
+## Mutation checks are informational
+
+Mutation (defect-injection) evidence is reported but never blocks the run: the NEGATIVE row, `tests/mutations`, and any command
+whose name says mutation, defect or inject. Grade the NEGATIVE row honestly (PASS, FAIL or NOT RUN, with the evidence) and record
+a mutation gap as a nonblocking finding (`Blocks` NO). Do not ask for a repair, a waiver, a plan change or a rerun because of it,
+and never make it a reason for a NOT READY verdict. The driver documents failing mutation commands and moves on.

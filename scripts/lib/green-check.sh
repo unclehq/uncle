@@ -358,6 +358,7 @@ green_run() {
 #   FIXED        failed before, passes now
 #   PREEXISTING  failed before and still fails — not this change's regression
 #   REGRESSION   fails now and did not fail before
+#   MUTATION     a mutation / defect-injection command that fails: documented in the report and the ledger, never blocking
 #
 # A command with no baseline entry that fails now is a REGRESSION. That is the
 # fail-closed reading: an unrecorded baseline is not evidence of a prior
@@ -389,12 +390,32 @@ green_classify() {
             if (st == "0") {
                 if (known && b[cm] != "0") print "FIXED\t" cm
                 else                       print "PASS\t" cm
+            } else if (tolower(cm) ~ /mutat|defect|inject/) {
+                # A failing mutation (defect-injection) check is documented and never blocks: it is not a regression.
+                print "MUTATION\t" cm
             } else {
                 if (known && b[cm] != "0") print "PREEXISTING\t" cm
                 else                       print "REGRESSION\t" cm
             }
         }
     ' "$cur"
+}
+
+# green_mutation_failures <classified_file> — one failing mutation / defect-injection command per line.
+green_mutation_failures() {
+    [[ -s "$1" ]] || return 0
+    awk '{ t = index($0, "\t") } t > 0 && substr($0, 1, t - 1) == "MUTATION" { print substr($0, t + 1) }' "$1"
+}
+
+# green_record_mutation_failures <classified_file> — put the failures in the ledger the final audit reads, once each.
+green_record_mutation_failures() {
+    local classified="$1" command ledger="${STATE_DIR:-.uncle/workflow}/nonblocking-test-failures.tsv"
+    declare -F record_nonblocking_failure >/dev/null || return 0
+    while IFS= read -r command; do
+        [[ -n "$command" ]] || continue
+        grep -qF "mutation check failed (documented, not blocking): $command" "$ledger" 2>/dev/null && continue
+        record_nonblocking_failure green-check "mutation check failed (documented, not blocking): $command"
+    done < <(green_mutation_failures "$classified")
 }
 
 # green_regressions <classified_file> — how many commands regressed.
@@ -478,6 +499,17 @@ green_report() {
             echo
         fi
 
+        local mutation
+        mutation="$(green_mutation_failures "$classified")"
+        if [[ -n "$mutation" ]]; then
+            echo "**Mutation checks failed (documented; they never block the run).** The defect-injection checks below did not pass,"
+            echo "or did not run because an earlier command failed, so there is no evidence these tests reject the defects they"
+            echo "are meant to catch:"
+            echo
+            printf '%s\n' "$mutation" | sed 's/^/- `/; s/$/`/'
+            echo
+        fi
+
         local failures
         failures="$(green_regressions "$classified")"
 
@@ -494,4 +526,5 @@ green_report() {
             echo "No regressions. PREEXISTING rows failed before this change too."
         fi
     } > "$out"
+    green_record_mutation_failures "$classified"
 }

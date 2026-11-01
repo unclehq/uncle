@@ -17,7 +17,7 @@ FUNCS="$(ROOT="$ROOT" python3 -B - <<'PY'
 import os, re
 from pathlib import Path
 source = (Path(os.environ["ROOT"]) / "scripts" / "stagegate.sh").read_text()
-for name in ("continue_nonblocking_test_review", "green_failure_route"):
+for name in ("continue_nonblocking_test_review", "green_failure_route", "repair_exhausted", "test_review_next_stage"):
     print(re.search(r"^" + name + r"\(\) \{.*?^}", source, re.M | re.S).group(0))
 PY
 )"
@@ -51,11 +51,12 @@ run() {  # $1 next state, $2 repairs used; prints "<return status> <state set>"
 write_review FAIL
 check "failed rows, attempts left: not carried forward (goes to repair)" "return=1  1" "$(run MANUAL_CHECKLIST 0)"
 check "failed rows, second attempt still repairs" "return=1  1" "$(run MANUAL_CHECKLIST 2)"
-check "failed rows, attempts spent: carried forward" "return=0 state=MANUAL_CHECKLIST 0" "$(run MANUAL_CHECKLIST 3)"
+check "failed rows, attempts spent: carried straight to the final audit" "return=0 state=FINAL_AUDIT 0" "$(run MANUAL_CHECKLIST 3)"
 check "failed rows at final audit are never sent back to repair" "return=0 state=FINAL_AUDIT 0" "$(run FINAL_AUDIT 0)"
 
 write_review 'NOT RUN'
 check "rows that are only NOT RUN pass through" "return=0 state=MANUAL_CHECKLIST 0" "$(run MANUAL_CHECKLIST 0)"
+check "rows that are only NOT RUN, attempts spent: also straight to the final audit" "return=0 state=FINAL_AUDIT 0" "$(run MANUAL_CHECKLIST 3)"
 write_review PASS
 check "a passing review is not a finding at all" "return=1  0" "$(run MANUAL_CHECKLIST 0)"
 

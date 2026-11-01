@@ -215,7 +215,7 @@ def _acceptance(state, journal):
 
 
 def _verification(state):
-    counts = {'pass': 0, 'pre': 0, 'regressed': 0}
+    counts = {'pass': 0, 'pre': 0, 'regressed': 0, 'mutation': 0}
     total = 0
     for line in _read(Path(state) / 'green-check.tsv').splitlines():
         label = line.split('\t')[0].strip()
@@ -228,11 +228,15 @@ def _verification(state):
             counts['pre'] += 1
         elif label == 'REGRESSION':
             counts['regressed'] += 1
+        elif label == 'MUTATION':
+            counts['mutation'] += 1
     if not total:
         return None
     value = '%d commands: %d pass, %d pre-existing, %d regressed' % (
         total, counts['pass'], counts['pre'], counts['regressed'])
-    return atom(value, r'[0-9]+ commands: [0-9]+ pass, [0-9]+ pre-existing, [0-9]+ regressed')
+    if counts['mutation']:
+        value += ', %d mutation' % counts['mutation']
+    return atom(value, r'[0-9]+ commands: [0-9]+ pass, [0-9]+ pre-existing, [0-9]+ regressed(?:, [0-9]+ mutation)?')
 
 
 def _override(state, journal):

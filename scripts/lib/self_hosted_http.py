@@ -60,8 +60,8 @@ def _parse_request_options(text, source):
     return result
 
 
-def request_options(stage=None, config=None):
-    """Resolve one whole object; {} explicitly opts out of inherited options."""
+def _lookup_request_options(stage=None, config=None):
+    """(whether anything was configured for this stage, the options). `{}` configured explicitly is "found": it opts out."""
     from self_hosted import config_stage
     stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
     config = _config_values() if config is None else config
@@ -71,12 +71,43 @@ def request_options(stage=None, config=None):
         if name:
             var += '_' + re.sub(r'[^A-Z0-9]', '_', name.upper())
         if var in os.environ:
-            return _parse_request_options(os.environ[var], var)
+            return True, _parse_request_options(os.environ[var], var)
     for name in names + ['self-hosted']:
         key = name + '.request-options'
         if key in config:
-            return _parse_request_options(config[key], key)
-    return {}
+            return True, _parse_request_options(config[key], key)
+    return False, {}
+
+
+def request_options(stage=None, config=None):
+    """Resolve one whole object; {} explicitly opts out of inherited options."""
+    return _lookup_request_options(stage, config)[1]
+
+
+# The stages that run without thinking are the same on every runner (scripts/lib/thinking-off.sh, uncle_stage_thinking_off: claude
+# gets MAX_THINKING_TOKENS=0, codex and kimi their no-thinking effort). Self-hosted gets the equivalent here: unless the operator
+# configured request options for the stage (an explicit {} included), those stages' requests turn thinking off, the setting the
+# updated-plan retry path already sends. WORKFLOW_THINKING=on restores thinking everywhere, and WORKFLOW_THINKING_OFF_EXTRA adds
+# stage globs, exactly as for the other runners. Keep THINKING_OFF_STAGES in step with thinking-off.sh (a test compares them).
+THINKING_OFF_STAGES = (
+    'requirements', 'requirements-investigate', 'project-plan', 'project-plan-investigate', 'project-plan-section-*',
+    'updated-plan', 'updated-plan-*', 'updated-change-plan', 'updated-change-plan-*',
+    'preflight', 'preflight-*', 'preview-build', 'preview-build-*', 'module-interfaces', 'classify-change',
+    'execute-checklist', 'execute-checklist-*', 'test-review', 'test-review-*', 'final-audit', 'final-audit-*')
+
+
+def thinking_off_stage(stage):
+    import fnmatch
+    if os.environ.get('WORKFLOW_THINKING', 'auto') == 'on' or os.environ.get('WORKFLOW_WORKER_THINKING', '').lower() in ('on', '1', 'true'):
+        return False
+    patterns = THINKING_OFF_STAGES + tuple(os.environ.get('WORKFLOW_THINKING_OFF_EXTRA', '').split())
+    return any(fnmatch.fnmatchcase(stage, pattern) for pattern in patterns)
+
+
+def worker_default_options(stage, found):
+    if found or not thinking_off_stage(stage or ''):
+        return None
+    return {'chat_template_kwargs': {'enable_thinking': False}}
 
 
 def configure_request_options(values, stage=None, config=None):
@@ -89,7 +120,9 @@ def configure_request_options(values, stage=None, config=None):
     if '_request_options' in values:
         return values
     stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
-    return dict(values, _request_options=request_options(stage, config), _request_options_stage=stage)
+    found, options = _lookup_request_options(stage, config)
+    options = worker_default_options(stage, found) or options
+    return dict(values, _request_options=options, _request_options_stage=stage)
 
 
 def merge_request_options(body, options):

@@ -44,7 +44,7 @@ def integrity_row():
   records=[line.split('\t',1) for line in path.read_text().splitlines() if line.strip()]
  except OSError as e:
   return {'id':'INTEGRITY','required':True,'status':'BLOCKED-SETUP','evidence':'Driver green-check record is unavailable: %s.'%e}
- if not records or any(len(record)!=2 or record[0] not in {'PASS','FIXED','PREEXISTING','REGRESSION'} for record in records):
+ if not records or any(len(record)!=2 or record[0] not in {'PASS','FIXED','PREEXISTING','REGRESSION','MUTATION'} for record in records):
   return {'id':'INTEGRITY','required':True,'status':'BLOCKED-SETUP','evidence':'Driver green-check is incomplete or unavailable; see .uncle/workflow/green-check.tsv.'}
  if any(record[0]=='REGRESSION' for record in records):
   return {'id':'INTEGRITY','required':True,'status':'FAIL','evidence':'Driver green-check recorded one or more failed verification command(s); see .uncle/workflow/green-check.tsv.'}

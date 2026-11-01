@@ -844,6 +844,21 @@ def prefetch_context(prompt, policy, read_cache=None):
             'is uncertain. Context only, never verification evidence.\n' + json.dumps(selected, ensure_ascii=False))
 
 
+# A review lens whose inputs the driver has already put in its prompt has nothing to look up: every tool turn would only resend
+# those inputs. Its packet comes straight from one schema-constrained request, valid by construction, as the bounded updated-plan
+# writers' and the adversarial slices' do. Only read-only review packets qualify (a worker that runs checks or inspects the machine
+# needs its tools), and only when worker_prompt.py really embedded the inputs: its contract text is the marker, and a prompt it
+# left alone (inputs missing or too large) keeps the ordinary tool loop.
+INLINE_INPUTS_MARK = 'The input documents are embedded above.'
+INLINE_REVIEW_PACKETS = frozenset({'adversarial_review_worker_packet', 'manual_checklist_worker_packet', 'test_review_worker_packet',
+                                   'final_audit_worker_packet', 'updated_plan_worker_packet'})
+
+
+def inline_worker_schema_first(final_name, prompt):
+    return (final_name in INLINE_REVIEW_PACKETS and INLINE_INPUTS_MARK in prompt
+            and transport.option('worker-schema-first', 'on') not in ('off', '0', 'false'))
+
+
 def run_agent(values, prompt, policy, limit, turns=80, usage=None, final_schema=None, final_name='artifact',
               stage=None, read_cache=None, seconds=3600, tools_required=True, side='agent'):
     """Run on the stage's connection; a run outside any stage scope gets one of its own.
@@ -1005,7 +1020,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
          and (os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1'
               or transport.option('writer-schema-first', 'on') not in ('off', '0', 'false')))
         or (os.environ.get('UNCLE_ADVERSARIAL_SLICE') == '1'
-            and final_name == 'adversarial_review_worker_packet')))
+            and final_name == 'adversarial_review_worker_packet')
+        or inline_worker_schema_first(final_name, prompt)))
     exhausted = False
     warned = False
     for turn_number in range(0 if schema_first else turns):

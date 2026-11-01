@@ -32,6 +32,13 @@ def jobs():
     return option('writer-jobs', 12)
 
 
+def no_progress_seconds():
+    """How long a writer may go without any output before it is stopped. A checklist worker runs real browser steps between its
+    model turns, so it gets longer than a writer that only produces text."""
+    stage = os.environ.get('UNCLE_STATUS_STAGE', '')
+    return option('writer-no-progress-seconds', 180 if stage.startswith('execute-checklist') else 45)
+
+
 def seconds(default=3600):
     stage = os.environ.get('UNCLE_STATUS_STAGE', '')
     if '-worker-edits' in stage or '-worker-resolve' in stage:
@@ -70,7 +77,7 @@ def deadline(limit):
     if not hasattr(signal, 'setitimer') or threading.current_thread() is not threading.main_thread():
         yield
         return
-    idle = option('writer-no-progress-seconds', 45)
+    idle = no_progress_seconds()
     previous = signal.getsignal(signal.SIGALRM)
     timer = signal.getitimer(signal.ITIMER_REAL)
     started = time.monotonic()
@@ -103,7 +110,7 @@ def deadline(limit):
 
 def watch(pid, limit, worker, heartbeat='', logs=()):
     import sys
-    idle = float('inf') if 'ceiling-only' in logs else option('writer-no-progress-seconds', 45)
+    idle = float('inf') if 'ceiling-only' in logs else no_progress_seconds()
     logs = [path for path in logs if path and path != 'ceiling-only']
     started = changed = time.monotonic()
     previous = None

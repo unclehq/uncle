@@ -1297,13 +1297,16 @@ green_requires_implementation_repair() {
 checklist_run_worker() {
     local prompt="$1" label="$2" size="$3" packet="$4" worker_error budget
     budget="$(awk -v cap="${CHECKLIST_WORKER_CAP:-}" -v n="$size" 'BEGIN { printf "%.2f", cap * n }')"
-    SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" \
-        run_claude "$prompt" "execute-checklist-worker-$label" "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 "$budget"
+    # Bound the worker by progress, as the other writers are: a self-hosted worker that stops producing output is stopped, and only
+    # its assigned rows are run again by reconciliation. Other runners are bounded only by their own ceiling.
+    declare -F workflow_model_writer >/dev/null || . "$ROOT/scripts/lib/model-jobs.sh"
+    SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" UNCLE_WRITER_CEILING="${WORKFLOW_EXECUTE_CHECKLIST_WORKER_SECONDS:-1800}" \
+        workflow_model_writer execute-checklist run_claude "$prompt" "execute-checklist-worker-$label" "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 "$budget"
     if ! worker_error="$(python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$packet" 2>&1)"; then
         rm -f "$packet"
         echo "Worker $label packet rejected; retrying once with the exact schema error." >&2
-        SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" UNCLE_WORKER_PACKET_ERROR="$worker_error" \
-            run_claude "$prompt" "execute-checklist-worker-$label" "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 "$budget"
+        SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" UNCLE_WORKER_PACKET_ERROR="$worker_error" UNCLE_WRITER_CEILING="${WORKFLOW_EXECUTE_CHECKLIST_WORKER_SECONDS:-1800}" \
+            workflow_model_writer execute-checklist run_claude "$prompt" "execute-checklist-worker-$label" "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 "$budget"
         python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$packet"
     fi
 }
@@ -3097,20 +3100,38 @@ run_updated_change_plan_fast_path() {
         --render .uncle/docs/CHANGE_PLAN.md
 }
 
+# `audit_review_call PROMPT NAME OUTPUT`: one final-audit lens on the reviewer runner (NAME is third on the command line for the deadline).
+audit_review_call() { run_codex "$1" "$3" "$2" "$CODEX_EFFORT_AUDIT"; }
+
 run_final_audit_panel() {
     local directory="$STATE_DIR/final-audit-panel" lens prompt output pid audit_lenses
     local -a pids=()
     [[ "${WORKFLOW_FINAL_AUDIT_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     audit_lenses="$(change_class_panel final_audit_lenses 'verification scope regression waivers' WORKFLOW_FINAL_AUDIT_LENSES)"
+    declare -F workflow_bounded_lens >/dev/null || . "$ROOT/scripts/lib/model-jobs.sh"
+    local -a lens_order=() present=() missing=()
     for lens in $audit_lenses; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/final-audit-review-worker.md" "$prompt"
         printf '\n## Assigned audit lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        ( run_codex "$prompt" "$output" "final-audit-review-worker-$lens" "$CODEX_EFFORT_AUDIT" ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
-        pids+=("$!")
+        ( workflow_bounded_lens final-audit "final-audit-review-worker-$lens" "$output" "$directory" final-audit-worker-packet "$lens" audit_review_call "$prompt" < /dev/null ) \
+            > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
+        pids+=("$!"); lens_order+=("$lens")
     done
-    for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit worker failed; canonical packet validation will stop the panel.' >&2; done
+    local index=0
+    for pid in "${pids[@]}"; do
+        if wait "$pid"; then present+=("${lens_order[$index]}"); else missing+=("${lens_order[$index]}"); fi
+        index=$((index + 1))
+    done
+    # A lens that still has no valid packet after its own retry is documented and left out; the audit goes on with the others.
+    # Only if none delivered is there nothing to audit from.
+    [[ "${#present[@]}" -gt 0 ]] || { echo 'No final-audit lens delivered a valid packet.' >&2; return 1; }
+    for lens in ${missing[@]+"${missing[@]}"}; do
+        echo "Final-audit lens $lens did not deliver a valid packet after a retry; the audit continues without it." >&2
+        record_nonblocking_failure final-audit "lens $lens did not complete (documented; the audit continued without it)" || true
+    done
+    audit_lenses="${present[*]}"
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected $audit_lenses || return 1
     python3 -B "$ROOT/scripts/lib/final_audit_packets.py" . || return 1
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"

@@ -4,9 +4,15 @@
 # tokens and half its wall clock (invariants worker: 4,257 -> 2,132 tokens, 27s -> 14s, same
 # packet size), and `--effort low` does not turn it off.
 #
-# Judgment stays on: implementation, repair, adversarial-review, test-review, manual-checklist,
-# final-audit, derive-brief, and project-plan-stage-duties (the whole-plan consistency check,
-# which is what finds contradictions between independently written sections).
+# Test review and the final audit judge from evidence the driver hands them (the plan, the reports, the green check), and the
+# per-stage config used to say thinking false by hand; they run without thinking too, on every runner.
+#
+# Judgment stays on: implementation, repair, adversarial-review, manual-checklist, derive-brief, and
+# project-plan-stage-duties (the whole-plan consistency check, which is what finds contradictions
+# between independently written sections).
+#
+# The self-hosted runner follows the same list (scripts/lib/self_hosted_http.py, thinking_off_stage), kept in step by
+# scripts/tests/thinking-off-parity-test.sh.
 #
 #   WORKFLOW_THINKING=on             restores thinking for every stage
 #   WORKFLOW_THINKING_OFF_EXTRA      extra space-separated stage globs to switch off
@@ -30,6 +36,7 @@ uncle_stage_thinking_off() {
         updated-plan|updated-plan-*|updated-change-plan|updated-change-plan-*) return 0 ;;
         preflight|preflight-*|preview-build|preview-build-*|module-interfaces|classify-change) return 0 ;;
         execute-checklist|execute-checklist-*) return 0 ;;
+        test-review|test-review-*|final-audit|final-audit-*) return 0 ;;
     esac
     # The operator's extra globs must not expand against the working directory.
     [[ $- == *f* ]] && frozen=1

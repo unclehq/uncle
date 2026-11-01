@@ -112,12 +112,16 @@ workflow_model_cancel() {
 # Bound the whole runner call, including streaming, retries and child processes.
 workflow_model_writer() {
     local stage="$1"; shift
-    local limit=3600 pid guard heartbeat status=0 finding_limit="" idle_mode=""
-    if declare -F stage_uses_self_hosted >/dev/null && stage_uses_self_hosted "$stage" AGENT; then
+    local limit=3600 pid guard heartbeat status=0 finding_limit="" idle_mode="" ceiling=""
+    # UNCLE_WRITER_CEILING (seconds) is a wall-clock ceiling for any runner, hosted ones included; unset, zero or non-numeric means none.
+    [[ "${UNCLE_WRITER_CEILING:-}" =~ ^[1-9][0-9]*$ ]] && ceiling="$UNCLE_WRITER_CEILING"
+    # UNCLE_WRITER_SIDE=REVIEWER bounds a reviewer-side call (a panel lens) by the reviewer's configured runner.
+    if declare -F stage_uses_self_hosted >/dev/null && stage_uses_self_hosted "$stage" "${UNCLE_WRITER_SIDE:-AGENT}"; then
         limit="$(UNCLE_STATUS_STAGE="$3" python3 -B "$ROOT/scripts/lib/writer_deadline.py" seconds)" || return 1
     else
         idle_mode=ceiling-only
     fi
+    [[ -z "$ceiling" ]] || limit="$(python3 -c 'import sys; print(min(map(float, sys.argv[1:])))' "$limit" "$ceiling")"
     if [[ -n "${UNCLE_UPDATED_PLAN_ATTEMPTS_DIR:-}" && -n "${UNCLE_UPDATED_PLAN_FINDINGS:-}" ]]; then
         finding_limit="$(python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" remaining "$UNCLE_UPDATED_PLAN_ATTEMPTS_DIR" "$UNCLE_UPDATED_PLAN_FINDINGS" "$3")" || return 1
         if [[ "$finding_limit" == 0 || "$finding_limit" == 0.0 ]]; then
@@ -125,7 +129,7 @@ workflow_model_writer() {
             return 124
         fi
         limit="$(python3 -c 'import sys; print(min(map(float, sys.argv[1:])))' "$limit" "$finding_limit")"
-    elif [[ -n "$idle_mode" ]]; then
+    elif [[ -n "$idle_mode" && -z "$ceiling" ]]; then
         "$@"; return $?
     fi
     heartbeat="$(mktemp "${TMPDIR:-/tmp}/uncle-writer-progress.XXXXXX")" || return 1
@@ -139,6 +143,27 @@ workflow_model_writer() {
     if [[ -e "$heartbeat.failed" ]]; then cat "$heartbeat.failed" >&2; status=124; fi
     rm -f "$heartbeat" "$heartbeat.failed"
     return "$status"
+}
+
+# One review lens of a panel, bounded by progress. A lens whose packet is missing or invalid is run once more, alone; it is never
+# the whole stage that is restarted. Returns nonzero when the lens still has no valid packet, and the caller decides what to do
+# without it.
+#   workflow_bounded_lens STAGE NAME OUTPUT DIRECTORY KIND LENS CALL_FUNCTION PROMPT
+# CALL_FUNCTION is called as `CALL_FUNCTION PROMPT NAME OUTPUT` (NAME is third on the command line, as the deadline expects).
+workflow_bounded_lens() {
+    local stage="$1" name="$2" output="$3" directory="$4" kind="$5" lens="$6" call="$7" prompt="$8" probe
+    probe="$directory/$lens.validated.json"
+    UNCLE_WRITER_CEILING="${UNCLE_WRITER_CEILING-${WORKFLOW_FINAL_AUDIT_LENS_SECONDS:-900}}" UNCLE_WRITER_SIDE=REVIEWER \
+        workflow_model_writer "$stage" "$call" "$prompt" "$name" "$output" || true
+    if ! python3 -B "$ROOT/scripts/lib/worker_packets.py" "$directory" "$probe" --kind "$kind" --expected "$lens" > /dev/null 2>&1; then
+        echo "$name did not deliver a valid packet; running that lens once more." >&2
+        rm -f "$output" "$output.delivery.json" "$probe"
+        UNCLE_WRITER_CEILING="${UNCLE_WRITER_CEILING-${WORKFLOW_FINAL_AUDIT_LENS_SECONDS:-900}}" UNCLE_WRITER_SIDE=REVIEWER \
+            workflow_model_writer "$stage" "$call" "$prompt" "$name-retry" "$output" || true
+        python3 -B "$ROOT/scripts/lib/worker_packets.py" "$directory" "$probe" --kind "$kind" --expected "$lens" > /dev/null 2>&1 \
+            || { rm -f "$probe"; return 1; }
+    fi
+    rm -f "$probe"
 }
 
 # Bound writer fan-out separately from the provider-wide lease pool.

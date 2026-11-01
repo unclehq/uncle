@@ -140,9 +140,39 @@ def criteria_count(project):
         return 0
 
 
+INTERPRETATION = '.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json'
+# What the approved reading of the brief says the application must do, and the places a risk keyword means something. The
+# non-goals are deliberately absent from the second list: "no backend, accounts or persistence" names what is excluded, and
+# counting it as risk would class the safest apps as the riskiest.
+RISK_SECTIONS = ('required_functionality', 'definition_of_done', 'failure_behaviors', 'constraints', 'user_visible_behaviors',
+                 'system_behaviors')
+# An application is small when the approved interpretation is: this many requirements and done-criteria, no risk keyword, and a
+# plan that did not balloon (a sparse brief can still be planned into dozens of files, and that is not small).
+APP_SMALL = {'requirements': 6, 'criteria': 8, 'steps': 12, 'files': 30}
+
+
+def interpretation(project):
+    """The sections of REQUIREMENTS_INTERPRETATION.json as text, or {} when there is none (then the plan's size decides alone)."""
+    try:
+        sections = json.loads(_read(Path(project) / INTERPRETATION)).get('sections')
+    except (ValueError, AttributeError):
+        return {}
+    if not isinstance(sections, dict):
+        return {}
+    return {name: value if isinstance(value, str) else json.dumps(value) for name, value in sections.items()}
+
+
+def interpretation_counts(project):
+    """(required functionality items, definition-of-done rows) in the approved interpretation."""
+    sections = interpretation(project)
+    return (len(set(re.findall(r'\bR-\d+', sections.get('required_functionality', '')))),
+            len(set(re.findall(r'\bD-\d+', sections.get('definition_of_done', '')))))
+
+
 def criteria_text(family, project):
     if family != 'change':
-        return ''
+        sections = interpretation(project)
+        return '\n'.join(sections.get(name, '') for name in RISK_SECTIONS)
     try:
         spec = json.loads(_read(Path(project) / '.uncle/workflow/documents/CHANGE_SPEC.json'))
     except ValueError:
@@ -163,9 +193,19 @@ def features(family, project, plan):
     return {
         'family': family, 'request_chars': len(request), 'plan_chars': len(plan_text), 'steps': steps,
         'owned_files': len(owned), 'directories': len(directories), 'file_kinds': kinds,
-        'criteria': criteria_count(project) if family == 'change' else 0, 'risk_hits': hits[:12],
+        'criteria': criteria_count(project) if family == 'change' else interpretation_counts(project)[1],
+        'requirements': interpretation_counts(project)[0] if family != 'change' else 0, 'risk_hits': hits[:12],
         'owned_sample': owned[:12], 'plan_sha': digest(plan_text),
     }
+
+
+def app_is_small(f):
+    """A new application whose approved interpretation is small, taken from what it must do rather than how many files the plan
+    scaffolds. Needs an interpretation to read: with none, the plan's size decides alone, as before."""
+    limits = APP_SMALL
+    return (f['family'] != 'change' and 0 < f.get('requirements', 0) <= limits['requirements']
+            and 0 < f['criteria'] <= limits['criteria'] and f['steps'] <= limits['steps']
+            and f['owned_files'] <= limits['files'] and not f['risk_hits'])
 
 
 def deterministic_class(f):
@@ -176,6 +216,8 @@ def deterministic_class(f):
         return 'docs'
     if f['family'] == 'change' and files and kinds['test'] == files:
         return 'test-only'
+    if app_is_small(f):
+        return 'small'
     if f['steps'] >= 7 or files >= 15 or f['directories'] >= 6:
         return 'large'
     if f['steps'] <= 2 and files <= 4 and f['criteria'] <= 4 and f['family'] == 'change':

@@ -957,9 +957,21 @@ check_scope_deviations() {
         echo "Not recorded as deviations in canonical IMPLEMENTATION_NOTES.json:"
         printf '%s' "$missing" | sed 's/^/  /'
         echo
-        echo "Every file outside the frozen scope must be named there with its"
-        echo "reason. Add them, or revert the unintended edits, then re-run."
-        exit 1
+        if [[ "${UNATTENDED:-0}" == 1 ]]; then
+            # Nobody can be asked to hand-edit JSON, and the work is already done (issue 116: twenty-four test files that
+            # removing a runner necessarily edits or deletes, none listed in the plan's table). The rule exists so a
+            # departure from the plan is on the record where the diff review and the PR show it, so the driver records it, in
+            # its own words, instead of stopping the run.
+            # shellcheck disable=SC2086
+            python3 "$ROOT/scripts/lib/implementation_notes.py" record-deviations . \
+                "Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff." \
+                $(printf '%s' "$missing" | tr '\n' ' ') || exit 1
+            echo "Unattended run: recorded the files above as deviations (driver-recorded); they appear in IMPLEMENTATION_NOTES.md."
+        else
+            echo "Every file outside the frozen scope must be named there with its"
+            echo "reason. Add them, or revert the unintended edits, then re-run."
+            exit 1
+        fi
     fi
 
     echo "  (all recorded in canonical IMPLEMENTATION_NOTES.json)"

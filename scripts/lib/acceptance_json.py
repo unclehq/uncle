@@ -18,7 +18,7 @@ def result(path, expected=()):
     rows = payload.get('rows')
     if not isinstance(rows, list):
         return 'UNKNOWN'
-    seen, required = set(), {}
+    seen, required, downgraded = set(), {}, set()
     for row in rows:
         if (not isinstance(row, dict) or not isinstance(row.get('id'), str)
                 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', row['id'])
@@ -27,7 +27,10 @@ def result(path, expected=()):
         seen.add(row['id'])
         if row.get('required') is True and row['id'] not in INFORMATIONAL:
             required[row['id']] = row.get('status')
-    if not required or any(identifier not in required and identifier not in INFORMATIONAL for identifier in expected):
+        elif row.get('severity_downgraded') is True:
+            downgraded.add(row['id'])       # failure_severity.py: a non-critical finding the driver chose not to repair
+    if not required or any(identifier not in required and identifier not in INFORMATIONAL and identifier not in downgraded
+                           for identifier in expected):
         return 'UNKNOWN'
     statuses = set(required.values())
     if 'FAIL' in statuses: return 'REPAIR'

@@ -146,6 +146,27 @@ PY
     return 0
 }
 
+# Only a CRITICAL failure makes repair necessary (scripts/lib/failure_severity.py). A test review that fails rows about how thorough the
+# tests are (assertions, coverage, the oracle, defect injection) while the driver's own verification has no failing command and the
+# application runs is a finding for the final audit, not a defect a repair pass can fix: those rows name protected tests and mutation
+# lists, which repair may not touch, and the pass either changes nothing or edits what it must not. The rows keep their FAIL status
+# in the reviewer's report; only their routing changes. WORKFLOW_REPAIR_SEVERITY=all restores repair for every failing row.
+severity_gate_test_review() {
+    local canonical="$1" reason rows
+    [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical ]] || return 0
+    [[ -s "$canonical" && -n "${GREEN_CLASS:-}" && -s "$GREEN_CLASS" ]] || return 0
+    reason="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" critical "$GREEN_CLASS" "${LOG_DIR:-$STATE_DIR/logs}/green-check.log")" && return 0
+    rows="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" downgrade "$canonical")" || return 0
+    [[ -n "$rows" ]] || return 0
+    local id severity
+    while IFS=$'\t' read -r id severity; do
+        [[ -n "$id" ]] || continue
+        echo "Severity $severity: test-review row $id failed, but the driver's verification is clean and the application runs; repair is for critical failures, so this goes to the final audit."
+        record_nonblocking_failure TEST_REVIEW.json "$severity: test-review row $id failed; no critical failure, so no repair"
+    done <<< "$rows"
+    printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(printf '%s' "$rows" | tr '\t\n' ': ' )" >> "$STATE_DIR/failure-severity.tsv"
+}
+
 acceptance_transition() {
     local report="$1" next="$2" result ids canonical supervision_artifact
     # repair_target: stagegate.sh has a dedicated REPAIR state that reads
@@ -167,6 +188,7 @@ acceptance_transition() {
         echo "Canonical acceptance JSON is missing: $canonical"
         return 1
     fi
+    [[ "$(basename "$report")" != TEST_REVIEW.md ]] || severity_gate_test_review "$canonical"
     result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$canonical" ${3:-})"
     supervision_artifact="$canonical"
     # REPAIR is a valid review with a correctable finding; it has its own bounded repair path below and is not a

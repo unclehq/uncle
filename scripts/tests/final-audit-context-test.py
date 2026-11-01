@@ -9,6 +9,22 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 HEADER = '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n'
 
+# These tests write the canonical workflow artifacts under the current directory (project='.'). Run from a scratch directory so
+# running one of them inside a live worktree (a model worker's narrow check, the baseline) can never overwrite that run's files.
+def setUpModule():
+    import os, tempfile
+    global _scratch, _previous_cwd
+    _scratch = tempfile.TemporaryDirectory(prefix='uncle-test-cwd-')
+    _previous_cwd = os.getcwd()
+    os.chdir(_scratch.name)
+
+
+def tearDownModule():
+    import os
+    os.chdir(_previous_cwd)
+    _scratch.cleanup()
+
+
 class Audit(unittest.TestCase):
     def test_json_response_is_validated_exported_and_rendered(self):
         import json

@@ -21,6 +21,16 @@ class Rerun(unittest.TestCase):
             self.assertFalse((state/'approvals/IMPLEMENTATION_REVIEW.sha256').exists())
             self.assertEqual((root/'ADVERSARIAL_REVIEW.md').read_text(),'existing findings')
             self.assertEqual(len(list((state/'stage-reruns').glob('*/ADVERSARIAL_REVIEW.md'))),1)
+    def test_change_flow_can_rerun_test_review_and_keeps_the_implementation_approval(self):
+        # A supervisor retry on test-review (a rejected acceptance report) must be honoured by the change flow too.
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);state=root/'.uncle/workflow';(state/'approvals').mkdir(parents=True)
+            (state/'state').write_text('116:VALIDATE_TEST_REVIEW\n')
+            (state/'rerun-request.json').write_text(json.dumps({'stage':'test-review','source':'supervisor-retry'}))
+            (state/'approvals/IMPLEMENTATION_REVIEW.sha256').write_text('approved')
+            consume(root,'change')
+            self.assertEqual((state/'state').read_text().strip(),'116:TEST_REVIEW')
+            self.assertTrue((state/'approvals/IMPLEMENTATION_REVIEW.sha256').exists())
     def test_unknown_does_not_change_state(self):
         with tempfile.TemporaryDirectory() as d:
             state=Path(d)/'.uncle/workflow';state.mkdir(parents=True)

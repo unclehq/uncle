@@ -33,6 +33,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from uncle_gitignore import only_adds_managed
+
 FORBIDDEN_FILES = (
     '.uncle/docs/ADVERSARIAL_REVIEW.md', '.uncle/docs/MANUAL_CHECKLIST.md', '.uncle/docs/TEST_REVIEW.md', '.uncle/docs/FINAL_AUDIT.md',
 )
@@ -434,6 +437,14 @@ def end(args):
         post = after.get(rel)
         pre_hash = pre[0] if pre else '-'
         post_hash = post[0] if post else '-'
+        if rel == '.gitignore' and pre and post and (Path(project) / rel).is_file() and sha256(Path(project) / rel) == pre[0]:
+            try:
+                benign = only_adds_managed((Path(project) / rel).read_text(encoding='utf-8'),
+                                           (sandbox / rel).read_text(encoding='utf-8'))
+            except (OSError, UnicodeDecodeError):
+                benign = False
+            if benign:
+                continue    # Uncle's own ignore entry appeared in the sandbox copy: not an edit, so nothing to apply or refuse
         markdown_edit = rel.lower().endswith('.md') or rel.startswith('.uncle/')
         proposal_report_edit = args.mode == 'execute' and rel in FORBIDDEN_FILES
         if ((is_forbidden(rel) and not proposal_report_edit) or rel in result['refused']

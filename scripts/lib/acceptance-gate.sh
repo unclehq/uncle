@@ -113,6 +113,39 @@ ensure_acceptance_canonical() {
     return 2
 }
 
+# A family with no REPAIR state re-enters its implementation stage for a FAIL row. That stage accepts an existing delivery, so
+# without this the failing rows never reach the implementer and the same review fails again. Write them to a request the stage
+# consumes, and bound the loop: a review that is still failing after ACCEPTANCE_REPAIR_LIMIT repairs is ledgered and carried to
+# the next stage (which reads it) when unattended, and stops the run when a person is present to decide.
+# Returns 1 when it moved the run on itself.
+acceptance_queue_repair() {
+    local canonical="$1" report="$2" next="$3" count_file limit="${ACCEPTANCE_REPAIR_LIMIT:-2}" count=0
+    count_file="$STATE_DIR/acceptance-repair-count-$(basename "${report%.md}")"
+    [[ -s "$count_file" ]] && count="$(cat "$count_file")"
+    if (( count >= limit )); then
+        echo "Acceptance repair already attempted $count time(s) for $report; the same rows still fail."
+        if [[ "${UNATTENDED:-0}" == 1 ]]; then
+            record_unattended_gate "acceptance-repair-exhausted" "continued to $next with rows still failing in $report after $count repair(s)"
+            rm -f "$count_file"
+            set_state "$next"
+            return 1
+        fi
+        triage_stop_reason "$STATE_DIR" human
+        exit 1
+    fi
+    printf '%s\n' "$((count + 1))" > "$count_file"
+    python3 -B - "$canonical" "$report" > "$STATE_DIR/acceptance-repair-request.md" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding='utf-8'))
+print('The independent review of this change (%s) rejected these required rows. Fix each one within the approved scope, '
+      'by editing code, tests or the test report, then update the implementation notes and test report.\n' % sys.argv[2])
+for row in doc.get('rows', []):
+    if row.get('required', True) and row.get('status') not in ('PASS', 'N/A'):
+        print('- %s [%s]: %s' % (row.get('id'), row.get('status'), row.get('evidence', '')))
+PY
+    return 0
+}
+
 acceptance_transition() {
     local report="$1" next="$2" result ids canonical supervision_artifact
     # repair_target: stagegate.sh has a dedicated REPAIR state that reads
@@ -136,8 +169,10 @@ acceptance_transition() {
     fi
     result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$canonical" ${3:-})"
     supervision_artifact="$canonical"
+    # REPAIR is a valid review with a correctable finding; it has its own bounded repair path below and is not a
+    # validator rejection, so it does not spend a supervisor call.
     case "$result" in
-        REPAIR|BLOCKED-SETUP|BLOCKED-IMPOSSIBLE)
+        BLOCKED-SETUP|BLOCKED-IMPOSSIBLE)
             supervision_validation_failed acceptance "$supervision_artifact" "Acceptance $result: $supervision_artifact" 0 ;;
     esac
     case "$result" in
@@ -145,6 +180,8 @@ acceptance_transition() {
         REPAIR)
             if [[ "$repair_target" == REPAIR ]]; then
                 printf '%s\n' "$report" > "$STATE_DIR/repair-source"
+            elif ! acceptance_queue_repair "$canonical" "$report" "$next"; then
+                return 0
             fi
             set_state "$repair_target"
             ;;

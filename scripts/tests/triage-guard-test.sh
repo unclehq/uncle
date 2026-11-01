@@ -94,6 +94,26 @@ for mode in diagnosis execute; do
     check_row "$mode .uncle edit recorded" APPLIED .uncle/workflow/approvals/CHANGE_PLAN.sha256 .uncle/workflow/triage-actions.tsv
  done
 
+# --- Uncle's own ignore entry appearing in the sandbox's .gitignore is not an edit ----
+
+for mode in diagnosis execute; do
+    P="$(project "gitignore-benign-$mode")"; cd "$P"
+    out="$(begin "$P" 1 "$mode")"
+    SB="$P/.uncle/workflow/triage/sandbox"
+    printf '.uncle\n' >> "$SB/.gitignore"
+    res="$(end "$P" 1 "$mode" "$(printf '%s' "$out" | json_field digest)")"
+    check_file_is "$mode benign .gitignore append not applied" "$(printf '.uncle/workflow/\nignored.txt')" .gitignore
+    COUNT=$((COUNT + 1))
+    ! awk -F'\t' '$5 == ".gitignore" { found = 1 } END { exit !found }' .uncle/workflow/triage-actions.tsv 2>/dev/null \
+        || fail "$mode benign .gitignore append was recorded as a refused or applied edit"
+    check_eq "$mode benign .gitignore append does not taint" false "$(printf '%s' "$res" | json_field tainted)"
+done
+P="$(project gitignore-real)"; cd "$P"
+out="$(begin "$P" 1 diagnosis)"
+printf 'secrets.txt\n' >> "$P/.uncle/workflow/triage/sandbox/.gitignore"
+end "$P" 1 diagnosis "$(printf '%s' "$out" | json_field digest)" > /dev/null
+check_row "a real .gitignore rule is still refused in diagnosis" REFUSED .gitignore .uncle/workflow/triage-actions.tsv
+
 # --- AC-10: project writes persist, while installed-code writes still taint ----
 
 P="$(project forbidden)"; cd "$P"

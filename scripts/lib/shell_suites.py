@@ -59,6 +59,26 @@ def isolate_environment():
             del os.environ[name]
 
 
+# The files that bind a live workflow run to its issue. A suite has no business touching them, and when the runner is executing inside
+# a live worktree (the baseline and green check do exactly that) a suite that does is overwriting the run it is verifying: issue 116
+# stopped with "state is bound to issue 116 but origin names issue 42" because a fixture's origin landed in its worktree.
+GUARDED = ('.uncle/workflow/origin', '.uncle/workflow/state')
+
+
+def guarded_snapshot(root='.'):
+    snapshot = {}
+    for name in GUARDED:
+        try:
+            snapshot[name] = Path(root, name).read_bytes()
+        except OSError:
+            snapshot[name] = None
+    return snapshot
+
+
+def guard_violations(before, after):
+    return [name for name in GUARDED if before.get(name) != after.get(name)]
+
+
 def run_commands(jobs, commands, kind='shell'):
     """Execute named isolated commands with shared progress and cleanup.
 
@@ -74,6 +94,7 @@ def run_commands(jobs, commands, kind='shell'):
     if not 1 <= jobs <= max(32, len(commands)):
         raise ValueError(f'Worker count must be from 1 to {max(32, len(commands))}')
     timeout = check_timeout('WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 600)
+    guarded_before = guarded_snapshot()
     files = list(commands)
     active, lock, stopped = set(), threading.Lock(), threading.Event()
     running = {}
@@ -132,6 +153,11 @@ def run_commands(jobs, commands, kind='shell'):
                         kill_tree(child)
                 pool.shutdown(wait=True)
             print(f'{kind.capitalize()} suites: {len(files) - failed - skipped} passed, {failed} failed, {skipped} skipped.', flush=True)
+            touched = guard_violations(guarded_before, guarded_snapshot())
+            if touched:
+                print('FAIL: test isolation: a suite modified the live workflow binding it was run inside: ' + ', '.join(touched)
+                      + '. A suite must keep its state in its own scratch directory.', flush=True)
+                return 1
             return int(bool(failed))
     finally:
         signal.signal(signal.SIGTERM, previous)

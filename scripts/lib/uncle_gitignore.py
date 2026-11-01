@@ -49,6 +49,30 @@ MANAGED = {
 CANONICAL = ['.uncle/*', '!.uncle/docs/']
 
 
+def only_adds_managed(before, after):
+    """True when `after` is `before` plus lines that are Uncle's own ignore entries and nothing else.
+
+    Something running next to a stage appends a bare `.uncle` to a project's .gitignore. That is not an edit anyone made to the
+    project, so a guard that compares the file byte for byte (the triage sandbox diff, the implementation approval) tolerates
+    exactly this and nothing more: any removal, reordering of other rules or added rule of the project's own still counts."""
+    if before == after:
+        return True
+    old, new = before.splitlines(), after.splitlines()
+    pool = list(old)
+    extra = []
+    for line in new:
+        if line in pool:
+            pool.remove(line)
+        else:
+            extra.append(line)
+    return not pool and all(line.strip() in MANAGED for line in extra)
+
+
+def strip_managed(text):
+    """The file's content without Uncle's own ignore entries; what an approval should be bound to."""
+    return '\n'.join(line for line in text.splitlines() if line.strip() not in MANAGED)
+
+
 def ensure(project_root):
     """Normalize <project_root>/.gitignore. Returns True when it was changed."""
     path = os.path.join(project_root, ".gitignore")

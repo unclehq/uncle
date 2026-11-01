@@ -3512,6 +3512,41 @@ change_preflight_collect() {
     return 0
 }
 
+# An application that cannot be built, served or tested is a CRITICAL failure (scripts/lib/failure_severity.py). As in stagegate.sh's
+# route_unrunnable_application: with repair off (or none left) it is recorded once for the audit and the checklist still runs to observe
+# it; unattended it is repaired once before any browser or checklist work; attended it stops. Returns 0 to go on, 2 when the state changed.
+change_route_unrunnable_application() {
+    python3 -B "$ROOT/scripts/lib/failure_severity.py" unrunnable "$LOG_DIR/green-check.log" || return 0
+    local marker="$STATE_DIR/runtime-readiness-repair-attempted" recorded="$STATE_DIR/runtime-unrunnable-recorded" run_id count
+    count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"; case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    if [[ "$WORKFLOW_REPAIR" != 1 || "$((10#$count))" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
+        run_id="$(cat "$STATE_DIR/run-started-at" 2>/dev/null)"; run_id="${run_id:-no-run-id}"
+        if [[ "$(cat "$recorded" 2>/dev/null)" != "$run_id" ]]; then
+            printf '%s\n' "$run_id" > "$recorded"
+            record_nonblocking_failure green-check 'the verification log says the application cannot render or its test runner did not execute tests; no repair pass remains, so the checklist still runs to observe it directly'
+            record_test_failure_disposition || true
+            echo 'The verification log says the application cannot render or its test runner executed no tests. No repair pass remains: the failure is recorded for the final audit and the checklist still runs.'
+        fi
+        return 0
+    fi
+    if [[ "${UNATTENDED:-0}" == 1 && ! -e "$marker" ]]; then
+        touch "$marker"
+        {
+            printf '# Application startup verification failed\n\n'
+            printf 'Repair the startup failure before browser/checklist verification.\n'
+            printf 'Driver command results: `%s`\nFull execution evidence: `%s/green-check.log`\n\n' "$GREEN_MD" "$LOG_DIR"
+            [[ ! -f "$GREEN_MD" ]] || cat "$GREEN_MD"
+        } > "$STATE_DIR/runtime-unrunnable-application"
+        printf '%s\n' "$STATE_DIR/runtime-unrunnable-application" > "$STATE_DIR/repair-source"
+        echo 'The changed application cannot render or its configured test runner did not execute tests; repairing once before browser/checklist work.'
+        set_state REPAIR
+        return 2
+    fi
+    echo 'Application or verification setup is not runnable; browser/checklist work is not started.' >&2
+    echo "See $LOG_DIR/green-check.log and correct the implementation before resuming." >&2
+    return 1
+}
+
 BG_PID=""
 BG_LABEL=""
 BG_START=0
@@ -4592,11 +4627,10 @@ REPAIR
                 verify_implementation_review
             fi
             wait_green_check_bg || exit $?
-            if green_requires_implementation_repair; then
-                echo 'Application or verification setup is not runnable; returning to implementation before test review.' >&2
-                set_state IMPLEMENT
-                continue
-            fi
+            runtime_ready_rc=0
+            change_route_unrunnable_application || runtime_ready_rc=$?
+            if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+            [[ "$runtime_ready_rc" == 0 ]] || exit 1
             # change-workflow.sh has no REPAIR state (see acceptance_transition's
             # repair_target parameter in scripts/lib/acceptance-gate.sh): a FAIL
             # finding here re-enters IMPLEMENT directly, the same destination
@@ -4667,17 +4701,10 @@ REPAIR
                 verify_implementation_review
             fi
             wait_green_check_bg || exit $?
-            if green_requires_implementation_repair; then
-                runtime_marker="$STATE_DIR/runtime-readiness-repair-attempted"
-                if [[ "${UNATTENDED:-0}" == 1 && ! -e "$runtime_marker" ]]; then
-                    touch "$runtime_marker"
-                    echo 'The changed application cannot render or its configured test runner executed no tests; returning once to IMPLEMENT before checklist work.'
-                    set_state IMPLEMENT
-                    continue
-                fi
-                echo 'Application or verification setup is not runnable; refusing checklist work without valid driver evidence.' >&2
-                exit 1
-            fi
+            runtime_ready_rc=0
+            change_route_unrunnable_application || runtime_ready_rc=$?
+            if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+            [[ "$runtime_ready_rc" == 0 ]] || exit 1
 
             # A malformed checklist gets one real re-run with the exact
             # validator diagnosis appended, the same one-shot recovery
@@ -4797,11 +4824,10 @@ This is a new response: write the complete document text now, in this message. A
 
         EXECUTE_CHECKLIST)
             wait_green_check_bg || exit $?
-            if green_requires_implementation_repair; then
-                echo 'Application or verification setup is not runnable; returning to implementation before EXECUTE_CHECKLIST.' >&2
-                set_state IMPLEMENT
-                continue
-            fi
+            runtime_ready_rc=0
+            change_route_unrunnable_application || runtime_ready_rc=$?
+            if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+            [[ "$runtime_ready_rc" == 0 ]] || exit 1
             if ! python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json"; then
                 # A zero-commit project is valid. Regenerate a delta checklist
                 # that incorrectly made historical Git state a prerequisite.
@@ -4922,17 +4948,10 @@ PY
             # not change source, tests, or configuration.
             start_green_check_bg
             wait_green_check_bg || exit $?
-            if green_requires_implementation_repair; then
-                runtime_marker="$STATE_DIR/runtime-readiness-repair-attempted"
-                if [[ "${UNATTENDED:-0}" == 1 && ! -e "$runtime_marker" ]]; then
-                    touch "$runtime_marker"
-                    echo 'The changed application cannot render or its configured test runner executed no tests; returning once to IMPLEMENT before final audit.'
-                    set_state IMPLEMENT
-                    continue
-                fi
-                echo 'Application or verification setup is not runnable; refusing to audit it as a nonblocking test failure.' >&2
-                exit 1
-            fi
+            runtime_ready_rc=0
+            change_route_unrunnable_application || runtime_ready_rc=$?
+            if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+            [[ "$runtime_ready_rc" == 0 ]] || exit 1
             # Remove any prior audit first: run_codex's require_file then treats
             # the file's existence as proof this invocation produced it, so a
             # reviewer call that exits 0 without writing cannot be read as fresh.

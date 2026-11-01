@@ -27,7 +27,7 @@ set_state() { echo "$1" > state; }
 require_file() { test -s "$1"; }
 check_document_budget() { test ! -e bad-report; }
 stage_uses_self_hosted() { return 1; }
-green_requires_implementation_repair() { return 1; }
+change_route_unrunnable_application() { return 0; }
 # Inject a report-recovery failure at the durable validation boundary.
 # Presentation budgets no longer gate canonical report validation.
 recover_missing_checklist_reports() {
@@ -45,7 +45,7 @@ report = '.uncle/docs/VERIFICATION_REPORT.md'
 os.utime(report, (os.stat(marker).st_mtime + 1, os.stat(marker).st_mtime + 1))
 PYTIME
 }
-for fn in green_requires_implementation_repair checklist_execution_delivered; do
+for fn in checklist_execution_delivered; do
     eval "$(awk -v start="^${fn}\\(\\)" '$0 ~ start {active=1} active {print} active && /^}$/ {exit}' "$ROOT/scripts/change-workflow.sh")"
 done
 # Verification is started by the preceding stage and collected on checklist

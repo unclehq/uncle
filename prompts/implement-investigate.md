@@ -249,3 +249,30 @@ real implementation work above.
 Write only `.uncle/docs/AUTOMATED_TEST_REPORT.md` and
 `.uncle/workflow/implementation-notes-investigation.md` as reports, plus
 whatever application files the plan requires.
+
+Use current stable test tooling resolved at install time (`latest` or a `^` range
+based on the current release), including Playwright, Vite and Vitest when used;
+never pin an old Playwright or an old Node. Keep the installed Node: do not
+install or switch Node versions. If `package.json` sets `engines.node`, its
+range must accept the installed Node major. Record resolved versions in the
+lockfile; reuse a compatible installation. If an approved plan conflicts,
+report it through the existing review/repair path; do not silently edit it.
+
+## Project-native verification and module contracts
+
+Choose verification from the project's actual language, framework, runtime, and
+acceptance criteria. A CLI, service, library, or native application must not gain
+React, Vite, Node, or browser dependencies merely because another project used them.
+Use browser checks only for browser behavior; use the project's native tools for
+other behavior. Preserve all required assertions when repairing a test harness.
+
+Load test subjects through the project's supported build or module entry points.
+Do not assume a generated dependency filename or an export shape from a different
+bundler or runtime. Check the installed dependency's actual public exports and use
+its supported interop mechanism. For browser lifecycle tests, use a test entry
+processed by the project's own bundler when applicable; exercise setup, teardown,
+and repeated initialization without duplicate handlers or leaked resources.
+
+Concurrent checks must use isolated temporary files, output directories, and any
+server ports they require. Honor the runner's allocated resources rather than
+hard-coding a shared port. Projects without servers need no port or browser probe.

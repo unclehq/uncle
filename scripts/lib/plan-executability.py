@@ -150,30 +150,15 @@ def _implementation_step_blocks(text):
     next heading. Positions are assigned in the same order plan_step_owns uses,
     so a finding's step number lines up with the Owns lookup below.
     """
-    match = re.search(r'^## (?:\d+\. )?Implementation (?:sequence|order)\s*$', text, re.M)
-    if not match:
-        return []
-    rest = text[match.end():]
-    end = re.search(r'^## ', rest, re.M)
-    section = rest[:end.start()] if end else rest
-    blocks, current = [], None
-    for line in section.splitlines():
-        if re.match(r'^\d+\.', line):
-            if current is not None:
-                blocks.append('\n'.join(current))
-            current = [line]
-        elif current is not None:
-            current.append(line)
-    if current is not None:
-        blocks.append('\n'.join(current))
-    return blocks
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from plan_steps import extract
+    return [step['_task'] + '\n' + step['text'] for step in extract(text)]
 
 
 def _plan_step_owns(plan):
     """Position -> declared Owns tokens, via plan-scope.sh's own parser.
 
-    Reusing the shared awk implementation (rather than a second, python copy of
-    its continuation-line and Depends-on-stripping rules) guarantees this check
+    Reusing the shared step extractor guarantees this check
     sees exactly the same declarations step_groups.py's group() would act on.
     """
     lib = Path(__file__).resolve().parent

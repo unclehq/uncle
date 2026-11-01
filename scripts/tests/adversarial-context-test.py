@@ -11,6 +11,22 @@ spec.loader.exec_module(module)
 CLEAN='## Overall assessment\nNo findings.\n'
 FINDING='## AR-001: Missing behavior\n- Severity: High\n- References: REQ-1\n- Failure: Missing output\n- Fix: Add output\n- Verify: Assert output\n'+CLEAN.replace('No findings.','Revision required.')
 
+# These tests write the canonical workflow artifacts under the current directory (project='.'). Run from a scratch directory so
+# running one of them inside a live worktree (a model worker's narrow check, the baseline) can never overwrite that run's files.
+def setUpModule():
+    import os, tempfile
+    global _scratch, _previous_cwd
+    _scratch = tempfile.TemporaryDirectory(prefix='uncle-test-cwd-')
+    _previous_cwd = os.getcwd()
+    os.chdir(_scratch.name)
+
+
+def tearDownModule():
+    import os
+    os.chdir(_previous_cwd)
+    _scratch.cleanup()
+
+
 class Review(unittest.TestCase):
     def test_direct_json_response_is_validated_exported_and_rendered(self):
         import json

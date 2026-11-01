@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 from evidence_index import save
 from review_paths import paths
+from uncle_gitignore import strip_managed
 
 
 def tracked_names(state):
@@ -22,8 +23,13 @@ def snapshot(names):
             result[name]={'link':os.readlink(p)}
         elif p.is_file():
             h=hashlib.sha256()
-            with p.open('rb') as stream:
-                while chunk:=stream.read(65536):h.update(chunk)
+            if name=='.gitignore':
+                # Uncle's own ignore entries come and go (something appends a bare `.uncle`); they are not what was approved.
+                try:h.update(strip_managed(p.read_text(encoding='utf-8')).encode())
+                except (OSError,UnicodeDecodeError):h.update(p.read_bytes())
+            else:
+                with p.open('rb') as stream:
+                    while chunk:=stream.read(65536):h.update(chunk)
             result[name]={'sha256':h.hexdigest(),'executable':bool(p.stat().st_mode & 0o111)}
         else:result[name]={'missing':True}
     return result

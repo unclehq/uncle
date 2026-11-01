@@ -128,6 +128,12 @@ class Import(unittest.TestCase):
 
 
 class Render(unittest.TestCase):
+    def test_step_text_ending_in_dash_survives_round_trip(self):
+        for description in ('S1 —', '**S1** — preserve this —', '**S1**'):
+            text = '# Plan\n\n## Implementation\n\n1. ' + description + '\n   Owns: `app.js`\n'
+            model = pm.import_markdown(text)
+            self.assertEqual(pm.import_markdown(pm.render(model)), model)
+
     def test_render_then_import_is_the_same_model(self):
         m = model()
         self.assertEqual(pm.import_markdown(pm.render(m)), m)

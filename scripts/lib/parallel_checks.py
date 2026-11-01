@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -18,6 +19,7 @@ import time
 from verification_manifest import manifest
 from shell_syntax import syntax_command
 import check_reuse
+from browser_install import prepare
 
 
 # These are prerequisites, not an attempt to infer arbitrary application test
@@ -31,7 +33,37 @@ UNIT = re.compile(r'\b(?:vitest|jest|mocha|pytest)\b|\bgo\s+test\b|\bcargo\s+tes
 MUTATION = re.compile(r'mutat|defect|inject', re.I)
 
 
+def npm_script(command):
+    """Resolve a simple npm script without executing shell text or guessing its name."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ''
+        words = list(lexer)
+        if not words or words.pop(0) != 'npm':
+            return ''
+        root = Path.cwd()
+        if words[:1] == ['--prefix'] and len(words) >= 2:
+            root = root / words[1]
+            words = words[2:]
+        if len(words) < 2 or words[0] not in ('run', 'run-script'):
+            return ''
+        name = words[1]
+        tail = words[2:]
+        if tail and (tail[0] != '--' or any(re.search(r'[;&|<>`$()]', arg) for arg in tail)):
+            return ''
+        value = json.loads((root / 'package.json').read_text())['scripts'][name]
+        return value if isinstance(value, str) else ''
+    except (OSError, ValueError, KeyError, TypeError):
+        return ''
+
+
+def command_evidence(command):
+    return command + '\n' + npm_script(command)
+
+
 def prerequisite_skip(command, failed_build, failed_unit, failed_e2e):
+    command = command_evidence(command)
     if E2E.search(command) and failed_build:
         return 'NOT RUN: an earlier build command failed; browser tests require its build output.\n'
     if MUTATION.search(command) and (failed_build or failed_unit or failed_e2e):
@@ -50,6 +82,16 @@ def execution_command(command):
     executes.  Set WORKFLOW_GREEN_E2E_MAX_FAILURES=0 to retain Playwright's
     normal unlimited behavior.
     """
+    script = npm_script(command)
+    # Forward only to a single known Playwright invocation. Arbitrary scripts,
+    # pipelines and other runners must never receive Playwright-specific flags.
+    if script and re.fullmatch(r'(?:npx\s+)?playwright\s+test(?:\s+[^;&|<>`$()]*)?', script):
+        configured = os.environ.get('WORKFLOW_GREEN_E2E_MAX_FAILURES', '1').strip()
+        if (configured.isdigit() and int(configured) > 0
+                and '--max-failures' not in script + command):
+            separator = ' ' if ' -- ' in command else ' -- '
+            return command + separator + '--max-failures=' + configured
+        return command
     if not E2E.search(command) or not re.search(r'\bplaywright\s+test\b', command, re.I):
         return command
     if re.search(r'--max-failures(?:=|\s+)', command):
@@ -203,27 +245,37 @@ def _run_checks(args):
                     record(command, time.monotonic() - started, 0, args.log)
                     return 0, log
                 return 125, log
-            with lock:
-                if halted.is_set():
-                    output.write(b"NOT RUN: protected verification inputs changed.\n")
-                    return 125, log
-                check_env = dict(os.environ)
-                for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG',
-                            'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
-                            'DOCUMENT_BUDGET_SOURCE', 'UNCLE_STEERING', 'UNCLE_SUPERVISION_HOST'):
-                    check_env.pop(key, None)
-                if invoked != command:
-                    output.write(f"EXECUTION: {invoked}\n".encode('utf-8'))
-                argv = syntax_command(invoked, args.jobs) or [bash_executable(), '-o', 'pipefail', '-c', invoked]
-                child = start_check(argv, env=check_env,
-                                    stdout=output, stderr=subprocess.STDOUT)
-                children.add(child)
-            status = wait_check(child, timeout, output)
-            with lock:
-                finish_check(child)
-                children.discard(child)
+            check_env = dict(os.environ)
+            try:
+                with prepare(command, output, check_env, halted):
+                    with lock:
+                        if halted.is_set():
+                            output.write(b"NOT RUN: protected verification inputs changed.\n")
+                            return 125, log
+                        for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG',
+                                    'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
+                                    'DOCUMENT_BUDGET_SOURCE', 'UNCLE_STEERING', 'UNCLE_SUPERVISION_HOST'):
+                            check_env.pop(key, None)
+                        if invoked != command:
+                            output.write(f"EXECUTION: {invoked}\n".encode('utf-8'))
+                        argv = syntax_command(invoked, args.jobs) or [bash_executable(), '-o', 'pipefail', '-c', invoked]
+                        output.flush()
+                        child = start_check(argv, env=check_env,
+                                            stdout=output, stderr=subprocess.STDOUT)
+                        children.add(child)
+                    try:
+                        status = wait_check(child, timeout, output, cancelled=halted)
+                    finally:
+                        with lock:
+                            kill_tree(child)
+                            child.wait()
+                            finish_check(child)
+                            children.discard(child)
+            except (OSError, ValueError) as error:
+                output.write((str(error) + '\n').encode())
+                status = 126
             intact()  # Check each command, even if a peer later restores bytes.
-        if status != 0 and E2E.search(command) and browser_application_unrunnable(log):
+        if status != 0 and E2E.search(command_evidence(command)) and browser_application_unrunnable(log):
             with log.open('ab') as output:
                 output.write(
                     b'APPLICATION_RUNTIME_UNRUNNABLE: browser checks found no mounted application root; '
@@ -246,33 +298,61 @@ def _run_checks(args):
             index = 0
             while index < len(commands):
                 end = groups.get(index, index + 1)
+                # Mutation evidence requires a passing ordinary baseline, even
+                # when a generated plan incorrectly groups them together.
+                if MUTATION.search(command_evidence(commands[index])):
+                    end = index + 1
+                else:
+                    for candidate in range(index + 1, end):
+                        if MUTATION.search(command_evidence(commands[candidate])):
+                            end = candidate
+                            break
                 futures = [pool.submit(check, i, Path(temporary.name)) for i in range(index, end)]
                 for i, future in zip(range(index, end), futures):
                     # Python <=3.13 on Windows cannot dispatch SIGBREAK while
                     # blocked in an unbounded condition wait. Return to Python
                     # regularly so cancellation reaches the cleanup below.
+                    combined.write(f"\n$ {commands[i]}\n".encode())
+                    combined.flush()
+                    print(f"  RUNNING   {commands[i]}", flush=True)
+                    live_log = Path(temporary.name) / str(i)
+                    offset = 0
+                    last_progress = time.monotonic()
+                    latest_output = ''
+                    def stream_available():
+                        nonlocal offset, latest_output
+                        if live_log.exists():
+                            with live_log.open('rb') as source:
+                                source.seek(offset)
+                                chunk = source.read()
+                                offset += len(chunk)
+                            lines = chunk.decode('utf-8', errors='replace').splitlines()
+                            if lines:
+                                latest_output = lines[-1][-240:]
+                            combined.write(chunk)
+                            combined.flush()
                     while not future.done():
+                        stream_available()
+                        if time.monotonic() - last_progress >= 15:
+                            print(f"  STILL RUNNING   {commands[i]} | {latest_output or 'waiting for output'}", flush=True)
+                            last_progress = time.monotonic()
                         wait([future], timeout=0.1)
                     status, log = future.result()
+                    stream_available()
                     if status == 0:
                         passed += 1
                     else:
                         failed += 1
                     if status != 0:
-                        if BUILD.search(commands[i]):
+                        if BUILD.search(command_evidence(commands[i])):
                             failed_build = True
-                        if UNIT.search(commands[i]):
+                        if UNIT.search(command_evidence(commands[i])):
                             failed_unit = True
-                        if E2E.search(commands[i]):
+                        if E2E.search(command_evidence(commands[i])):
                             failed_e2e = True
                     results.write(f"{status}\t{commands[i]}\n")
                     results.flush()
-                    combined.write(f"\n$ {commands[i]}\n".encode())
-                    with log.open("rb") as source:
-                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                            combined.write(chunk)
-                    combined.flush()
-                    label = 'INVALID' if halted.is_set() else ('PASS' if status == 0 else ('SKIP' if status == 125 else f'FAIL({status})'))
+                    label = 'INVALID' if halted.is_set() else ('PASS' if status == 0 else ('SKIP' if status == 125 else ('STALLED' if status == 123 else f'FAIL({status})')))
                     print(f"  {label}      {commands[i]}", flush=True)
                 if halted.is_set():
                     Path(args.integrity_log).write_bytes(("\n".join(violations) + "\n").encode("utf-8"))

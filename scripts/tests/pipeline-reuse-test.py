@@ -70,6 +70,13 @@ class Reuse(unittest.TestCase):
                 with self.assertRaises(ValueError):approval_snapshot.main('check',state)
             finally:os.chdir(old)
 
+    def test_application_start_discards_previous_verification_cache_identity(self):
+        script = (Path(__file__).resolve().parents[1] / 'stagegate.sh').read_text()
+        self.assertIn('export WORKFLOW_CHECK_REUSE=0', script)
+        self.assertIn('rm -f "$STATE_DIR/green-check.fingerprint"\ngreen_background_recover', script)
+        change = (Path(__file__).resolve().parents[1] / 'change-workflow.sh').read_text()
+        self.assertNotIn('export WORKFLOW_CHECK_REUSE=0', change)
+
     def test_reuse_is_opt_in_and_invalidates(self):
         with tempfile.TemporaryDirectory() as d:
             old=os.getcwd();os.chdir(d)
@@ -82,6 +89,10 @@ class Reuse(unittest.TestCase):
                 key=check_reuse.key('python3 --version');Path('log').write_text('assertion passed')
                 check_reuse.record(key,'log');output=io.BytesIO()
                 self.assertTrue(check_reuse.restore(key,output));self.assertIn(b'REUSED',output.getvalue())
+                with patch.dict(os.environ, WORKFLOW_CHECK_REUSE='0'):
+                    disabled = check_reuse.key('python3 --version')
+                    self.assertIsNone(disabled)
+                    self.assertFalse(check_reuse.restore(disabled, io.BytesIO()))
                 Path('app.txt').write_text('changed')
                 self.assertNotEqual(key,check_reuse.key('python3 --version'))
                 self.assertFalse(check_reuse.restore(check_reuse.key('python3 --version'),io.BytesIO()))

@@ -104,14 +104,30 @@ class Unprotect(unittest.TestCase):
 class Playwright(unittest.TestCase):
     def test_the_browser_download_checks_the_local_cli_first(self):
         line, why = ic.adapt('npx playwright install chromium', '.')
-        self.assertEqual(line, 'npx --no-install playwright install chromium || npx playwright install chromium')
-        self.assertIn('--no-install', why)
+        self.assertIn('browser_setup.py', line)
+        self.assertTrue(line.endswith(' chromium'))
+        self.assertIn('bound browser installation', why)
 
-    def test_it_is_idempotent_and_leaves_chained_commands_alone(self):
+    def test_it_is_idempotent_and_preserves_chained_commands(self):
         once, _ = ic.adapt('npx playwright install chromium', '.')
         self.assertEqual(ic.adapt(once, '.'), (once, ''))
-        chained = 'npm ci && npx playwright install chromium'
-        self.assertEqual(ic.adapt(chained, '.')[0].count('--no-install'), 0)
+        chained = 'node probe.mjs || (./node_modules/.bin/playwright install chromium && node probe.mjs)'
+        adapted, _ = ic.adapt(chained, '.')
+        self.assertIn('browser_setup.py chromium && node probe.mjs)', adapted)
+        self.assertTrue(adapted.startswith('node probe.mjs || ('))
+
+    def test_non_browser_projects_and_command_arguments_are_unchanged(self):
+        for command in ('python3 -m pytest', 'cargo test', 'go test ./...',
+                        'dotnet test', 'cmake --build build',
+                        'python3 -m playwright install chromium',
+                        'echo npx playwright install chromium',
+                        'printf npx playwright install chromium'):
+            with self.subTest(command=command):
+                self.assertEqual(ic.adapt(command, '.'), (command, ''))
+
+    def test_quoted_diagnostic_text_is_not_rewritten(self):
+        command = '''node -e 'console.log("npx playwright install chromium")' '''
+        self.assertEqual(ic.adapt(command, '.'), (command, ''))
 
 
 if __name__ == '__main__':

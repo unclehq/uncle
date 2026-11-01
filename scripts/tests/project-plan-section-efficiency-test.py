@@ -72,10 +72,13 @@ class Efficiency(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(Path(result.stdout.strip()).read_bytes(), source.read_bytes())
 
-    def test_fixed_stub_assembly_is_byte_identical_to_baseline(self):
+    def test_fixed_stub_preserves_baseline_and_embeds_the_outline_contract(self):
         fixture.good_files(self.directory)
         text = sections.assemble(self.directory)
-        self.assertEqual(hashlib.sha256(text.encode()).hexdigest(),
+        contract = '### Binding planning outline\n\n' + fixture.OUTLINE.replace('## ', '#### ')
+        self.assertIn(contract, text)
+        without_contract = text.replace('\n\n' + contract, '', 1)
+        self.assertEqual(hashlib.sha256(without_contract.encode()).hexdigest(),
                          '33eb9e660b5248b90956bcfa0ef9e721e857954f24e00c108a6037ce34857be1')
 
     def setup_packet(self):

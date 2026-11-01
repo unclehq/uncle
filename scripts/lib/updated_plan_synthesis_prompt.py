@@ -46,13 +46,17 @@ def review_findings(review):
     for finding in review.get('findings') or []:
         if not isinstance(finding, dict):
             continue
-        evidence = finding.get('references') or finding.get('failure') or finding.get('title') or ''
+        evidence = '; '.join(dict.fromkeys(_text(finding[key]) for key in ('references', 'failure', 'title')
+                                            if finding.get(key)))
         change = _text(finding.get('fix'))
         verify = finding.get('verify')
         if verify:
             change = (change + ' Verify: ' + _text(verify)).strip()
         rows.append({'id': _text(finding.get('id')), 'severity': _text(finding.get('severity')),
                      'evidence': _text(evidence), 'required_plan_change': change})
+        for key in ('location', 'locations', 'section', 'sections', 'path', 'paths', 'requirement_ids'):
+            if finding.get(key):
+                rows[-1][key] = finding[key]
     return json.dumps({'findings': rows, 'overall_verdict': _text(review.get('overall_assessment'))},
                       ensure_ascii=False, indent=1)
 

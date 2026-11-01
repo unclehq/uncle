@@ -768,6 +768,11 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
     delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
     synthesis = SYNTHESIS_MARKER in prompt and (protected or require_dispositions)
     schema = artifact_schema(schema_kind, protected, require_dispositions, synthesis) if schema_kind else None
+    worker_schema = os.environ.get('UNCLE_WORKER_SCHEMA_FILE') or os.environ.get('UNCLE_OUTPUT_SCHEMA_FILE')
+    if schema_kind in ('updated-plan-edit-ops-packet', 'updated-plan-resolution-ops-packet') and worker_schema:
+        schema = json.loads(Path(worker_schema).read_text(encoding='utf-8'))
+        if schema.get('properties', {}).get('kind', {}).get('const') != schema_kind:
+            raise ValueError('worker output schema does not match the requested packet kind')
     request = prompt
     if schema_kind:
         request += ('\nYour final message must be exactly one JSON object matching the required schema; the server '
@@ -784,7 +789,8 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
             policy.writable.add(policy.root / relative)
     if schema_kind in ('project-plan-section-worker-packet', 'project-plan-section-model-packet', 'project-plan-outline-packet',
                        'updated-plan-edit-ops-packet', 'updated-plan-resolution-ops-packet',
-                       'plan', 'change-plan', 'change-planning-bundle'):
+                       'plan', 'change-plan', 'change-planning-bundle') or (
+            schema_kind == 'adversarial-review-worker-packet' and os.environ.get('UNCLE_ADVERSARIAL_SLICE') == '1'):
         # Plans and packets are final answers. Whole-stage writes have one owner;
         # offering Write/Bash here invites drafting the packet through tools and
         # then generating it again as the final answer. Reads remain available.
@@ -795,8 +801,24 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
                     'and do not draft the packet in a tool call or commentary. '
                     'For edit ops, return only the assigned dispositions and changed fields/insertions; '
                     'unchanged plan content is carried forward mechanically.')
+    if stage_name.startswith('preflight-worker-') or stage_name == 'preflight-investigate' or os.environ.get('UNCLE_PREFLIGHT_READONLY') == '1':
+        policy = Policy(root, shell=allow_shell)
+        policy.preflight_worker = stage_name
+        if stage_name == 'preflight-investigate':
+            relative, document = INVESTIGATION_DOCUMENTS[stage_name]
+            policy.write = True
+            policy.writable = {policy.root / relative}
+            policy.preflight_delivery = policy.root / relative
+            policy.draft_checks[policy.root / relative] = lambda text: validate_investigation(document, text)
+        request += ('\nRead-only preflight: never edit project inputs. Shell probes run in a private scratch copy; '
+                    'use relative paths.')
+        if stage_name == 'preflight-investigate':
+            request += '\nWrite only the required investigation document; the driver publishes it after validation.'
+        else:
+            request += '\nReturn the worker packet as final JSON; the driver writes it.'
+    from writer_deadline import seconds
     return (request, policy, schema, (schema_kind or 'artifact').replace('-', '_'), output_token_limit(stage_name),
-            int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))
+            seconds(int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))))
 
 
 def run_http_stage(stage, directory, values, root, allow_shell=True):
@@ -806,11 +828,27 @@ def run_http_stage(stage, directory, values, root, allow_shell=True):
                                                           reviewer_artifact_kind(stage.prompt))
     stage.model = values['model']
     stage.ready(directory)
-    run_agent(values, request, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
-              final_name=name, stage=stage, seconds=seconds)
+    from contextlib import nullcontext
+    from writer_deadline import deadline
+    writer = '-worker-edits-' in stage.stage or '-worker-resolve-' in stage.stage
+    with deadline(seconds) if writer else nullcontext():
+        run_agent(values, request, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
+                  final_name=name, stage=stage, seconds=seconds)
 
 
 def run_http_agent(side, values, prompt, root, allow_shell=True, usage=None, schema_kind=None, read_cache=None,
+                   protected=False, require_dispositions=False, turns=None):
+    from writer_deadline import deadline, seconds
+    stage_name = os.environ.get('UNCLE_STATUS_STAGE', '')
+    if '-worker-edits-' in stage_name or '-worker-resolve-' in stage_name:
+        with deadline(seconds(int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))):
+            return _run_http_agent(side, values, prompt, root, allow_shell, usage, schema_kind, read_cache,
+                                   protected, require_dispositions, turns)
+    return _run_http_agent(side, values, prompt, root, allow_shell, usage, schema_kind, read_cache,
+                           protected, require_dispositions, turns)
+
+
+def _run_http_agent(side, values, prompt, root, allow_shell=True, usage=None, schema_kind=None, read_cache=None,
                    protected=False, require_dispositions=False, turns=None):
     """One self-hosted stage over direct HTTP; returns (final text, requests made).
 
@@ -1206,7 +1244,7 @@ def is_json_response(text):
     return _artifact_json_module().unfence_json(text).startswith('{')
 
 
-def document_response(response, artifact, expected_kind='plan', require_dispositions=False):
+def document_response(response, artifact, expected_kind='plan', require_dispositions=False, root=None):
     text = strip_reasoning(response).strip()
     _artifact_json = _artifact_json_module()
     unfenced = _artifact_json.unfence_json(text)
@@ -1237,6 +1275,10 @@ def document_response(response, artifact, expected_kind='plan', require_disposit
         if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != expected_kind:
             raise ValueError('wrong plan JSON schema')
         try:
+            from plan_model import plan_stage, publish_records, renumber_enabled
+            stage = plan_stage(payload, artifact)
+            if renumber_enabled(payload, root or Path.cwd(), stage):
+                payload = publish_records(payload, root or Path.cwd(), stage=stage)
             if expected_kind == 'change-plan':
                 return _artifact_json.render_change_plan(payload, require_dispositions=require_dispositions) + '\n'
             protected = Path(artifact).name == 'UPDATED_PROJECT_PLAN.md'
@@ -1381,7 +1423,7 @@ def repair_http_plan(values, prompt, root, raw, error, artifact, kind, usage,
 
     def validate(text):
         conforms(json.loads(text), schema)
-        document = document_response(text, artifact, kind, require_dispositions)
+        document = document_response(text, artifact, kind, require_dispositions, root=root)
         if kind == 'plan':
             validate_plan(document, protected=protected)
 
@@ -1401,10 +1443,35 @@ def repair_http_plan(values, prompt, root, raw, error, artifact, kind, usage,
 
 
 def run_opencode(side, values, prompt, root, stage=None, usage=None):
+    from writer_deadline import deadline, seconds
+    stage_name = stage or os.environ.get('UNCLE_STATUS_STAGE', '')
+    if '-worker-edits-' in stage_name or '-worker-resolve-' in stage_name:
+        with deadline(seconds(int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))):
+            return _run_stage(side, values, prompt, root, stage, usage)
+    return _run_stage(side, values, prompt, root, stage, usage)
+
+
+def _run_stage(side, values, prompt, root, stage=None, usage=None):
     # The normal OpenCode CLI has no observer attached while it runs.  Supply
     # validated reads from earlier stages up front, then ingest its canonical
     # JSON tool events below for the next stage.  Live sessions already do
     # this through native_stage, so never append the packet twice.
+    if (stage or os.environ.get('UNCLE_STATUS_STAGE', '')) == 'preflight-investigate':
+        from preflight_readonly import copy_project, temp_parent
+        relative, document = INVESTIGATION_DOCUMENTS['preflight-investigate']
+        with tempfile.TemporaryDirectory(prefix='uncle-preflight-investigation-', dir=temp_parent(root)) as temporary:
+            staged = Path(temporary).resolve() / 'project'
+            copy_project(root, staged)
+            response, turns = run_http_agent(side, values, prompt, staged, usage=usage)
+            candidate = staged / relative
+            text = candidate.read_text(encoding='utf-8')
+            validate_investigation(document, text)
+            target = root / relative
+            if target.is_symlink():
+                raise ValueError('Refusing symlinked preflight investigation')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding='utf-8')
+            return response, turns
     from read_cache import ReadCache
     read_cache = ReadCache(root)
     if os.environ.get('UNCLE_STEERING') != '1':
@@ -1430,7 +1497,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
     if stage_name == 'project-plan' and 'You perform two consecutive roles in a single pass' in prompt:
         artifact = PLAN_ARTIFACTS['requirements']
     if not artifact:
-        if http_transport():
+        if (http_transport() or stage_name.startswith('preflight-worker-')
+                or os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1'):
             kind = reviewer_artifact_kind(prompt)
             text, turns = run_http_agent(side, values, prompt, root, usage=usage, schema_kind=kind, read_cache=read_cache)
             delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
@@ -1597,7 +1665,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                             if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md':
                                 file_text = preserve_updated_plan_contract(file_text, root)
                             canonical_response = file_text
-                            candidate.write_text(document_response(file_text, artifact, expected_kind, require_dispositions), encoding='utf-8', newline='\n')
+                            candidate.write_text(document_response(file_text, artifact, expected_kind, require_dispositions, root=root), encoding='utf-8', newline='\n')
                     elif not require_file_delivery or is_json_response(response):
                         # Either compatibility mode, or a complete, schema-shaped
                         # response that never reached the Write tool -- seen live,
@@ -1613,7 +1681,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                         # JSON, not a fence -- candidate.exists() always held bare
                         # text because a model that used Write never fenced it.
                         canonical_response = _artifact_json_module().unfence_json(response) if is_json_response(response) else response
-                        candidate.write_text(document_response(response, artifact, expected_kind, require_dispositions), encoding='utf-8', newline='\n')
+                        candidate.write_text(document_response(response, artifact, expected_kind, require_dispositions, root=root), encoding='utf-8', newline='\n')
                     else:
                         raise ValueError('plan agent did not write canonical JSON delivery: ' + str(candidate))
                     if expected_kind == 'plan':
@@ -1716,12 +1784,18 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                 child = start_check(launch_command(command), cwd=root, env=env,
                                     stdout=log, stderr=subprocess.STDOUT)
                 deadline = time.monotonic() + seconds
+                output_size = 0
                 try:
                     while True:
                         try:
                             status = child.wait(timeout=.1)
                             break
                         except subprocess.TimeoutExpired:
+                            size = os.fstat(log.fileno()).st_size
+                            if size > output_size:
+                                from writer_deadline import progress
+                                progress()
+                                output_size = size
                             if time.monotonic() >= deadline:
                                 raise ValueError(f'OpenCode exceeded its {seconds}-second time limit')
                 finally:

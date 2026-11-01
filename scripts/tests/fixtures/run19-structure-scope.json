@@ -1,0 +1,770 @@
+{
+  "plan": {
+    "dispositions": [
+      {
+        "disposition": "Accepted",
+        "finding": "AR-001",
+        "plan_change": "Add observable behavior B-7, invariant I-9, and update MC-4 to cover repeated =.",
+        "reason": "Plan lacks EQUALS-without-operator behavior, invariant, and test coverage."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-002",
+        "plan_change": "Update Step 1 prose and MC-9 tests array.",
+        "reason": "Plan lacks overflow test coverage and MC-9 does not reference overflow tests."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-003",
+        "plan_change": "Add a new observable behavior B-7 for repeated =, a new invariant I-9, and a new test entry in the defect injections table.",
+        "reason": "The plan lacks a specification and test for repeated = presses, which is a common calculator behavior."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-004",
+        "plan_change": "Align overflow behavior with requirements interpretation: overflow displays in scientific notation or truncates, not converts to Error.",
+        "reason": "The plan's failure handling table and I-1/MC-9 contradict the requirements interpretation on overflow behavior."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-005",
+        "plan_change": "Updated B-4, MC-5, MC-6 and traceability row MC-5 to include keyboard 'c' key.",
+        "reason": "B-4 and MC-5/MC-6 do not specify keyboard 'c' mapping; plan updated to include it."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-006",
+        "plan_change": "Update B-4 to state clear resets error flag; update I-3 to document error recovery path.",
+        "reason": "B-4 and I-3 do not document that C/Escape clears the error flag; D-5 implies it but no invariant or behavior states it."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-007",
+        "plan_change": "Reorder steps so implementation precedes test writing; move test ownership to Step 4.",
+        "reason": "Step 1 writes tests before implementation exists, making them impossible to validate."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-008",
+        "plan_change": "Move injection files from Step 1 to Step 4 (after all source files exist) and update Step 1 owns list.",
+        "reason": "Step 1 owns injection files that mutate src/calc.js and index.html, which are created in Steps 2 and 3."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-009",
+        "plan_change": "Set applyOperator description to return {error:true} on division by zero.",
+        "reason": "Components table and Failure handling table specify incompatible return types for applyOperator."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-010",
+        "plan_change": "Replace the verification commands to include explicit npx serve start and kill steps.",
+        "reason": "The verification commands lack a server start/stop lifecycle; the plan's parallel groups section mentions sequential server use but provides no start/stop commands."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-011",
+        "plan_change": "Reorder Step 1 to create only package.json, playwright.config.js, .gitignore; move test file and injection runner to after Steps 2 and 3.",
+        "reason": "Step 1 owns injection runner and mutations that depend on src/calc.js and index.html created in Steps 2 and 3."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-012",
+        "plan_change": "Reorder Step 1 to Step 4, shifting Steps 2-3 earlier.",
+        "reason": "Step 1 writes tests before implementation exists; reorder to write tests after implementation steps."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-013",
+        "plan_change": "Add SRI attributes and CSP meta tag to Step 3 prose block s5.1.",
+        "reason": "Plan lacks Content-Security-Policy and subresource integrity for CDN-loaded scripts in index.html."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-014",
+        "plan_change": "Add CSP meta tag and SRI attributes to index.html in Step 3; add risk entry for missing SRI; update MC-1 and MC-8 to reference security attributes.",
+        "reason": "Plan lacks CSP, SRI, and input sanitization for CDN-loaded scripts in index.html."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-015",
+        "plan_change": "Add SRI attributes to CDN script tags in Step 3 prose and update risk table row s6.6.r2 to include SRI mitigation.",
+        "reason": "Risk table acknowledges CDN failure but not SRI or integrity; plan must add SRI attributes to CDN script tags and update risk entry."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-016",
+        "plan_change": "Add CSP meta tag to Step 3 prose block.",
+        "reason": "Plan lacks CSP meta tag for CDN scripts and Babel eval-like transpilation."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-017",
+        "plan_change": "Add SRI attributes to CDN script tags in Step 3 and add a risk row for CDN compromise.",
+        "reason": "Plan Step 3 and risk table lack SRI attributes for CDN-loaded scripts, which is a security gap."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-018",
+        "plan_change": "Add SRI attributes to CDN script tags in Step 3 and add CDN compromise risk to Risks table.",
+        "reason": "Plan lacks SRI attributes for CDN scripts and does not address malicious CDN compromise."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-019",
+        "plan_change": "Add a test for CDN script resolution to MC-1 and update the traceability row.",
+        "reason": "The plan lacks an automated test for CDN script resolution failure; a new test requirement is added."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-020",
+        "plan_change": "Update D-4 and D-5 expected-failure test names to match the actual test identifiers in the plan.",
+        "reason": "Defect injection D-4 and D-5 reference test names not present in the plan; test identifiers must match the injection table."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-021",
+        "plan_change": "Add test_name field to each traceability row in section s6.2.",
+        "reason": "Plan lacks test-name convention linking test cases to requirement IDs; add a test-name convention to the traceability rows."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-022",
+        "plan_change": "Rename section heading from 'Parallel verification groups' to 'Verification groups' and update prose to clarify sequential execution order.",
+        "reason": "The plan labels groups as parallel but describes sequential execution sharing the same server port, contradicting the injection runner's independent scratch-copy design."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-023",
+        "plan_change": "Add overflow test to MC-1 and update MC-10 to cover overflow input.",
+        "reason": "Plan lacks overflow test coverage despite claiming overflow\u2192Error handling."
+      },
+      {
+        "disposition": "Accepted",
+        "finding": "AR-024",
+        "plan_change": "Replace the comment and command lines in verification_commands to explicitly start and stop the server, referencing the webServer config.",
+        "reason": "The verification_commands block has a comment about starting/stopping a server but no actual server start command, relying only on the Playwright webServer config without documenting it."
+      }
+    ],
+    "kind": "plan",
+    "narrative": "# Architecture\n\nSingle-page React calculator served as static HTML. React 18 loaded via CDN UMD bundles; JSX transpiled in-browser by Babel standalone. No build step, no bundler. Calculator logic in a plain JS module (`src/calc.js`), React UI components in `src/ui.js`, app shell in `index.html`. Tests use Playwright against a local static file server.\n\n# Authoritative state\n\n| Field | Type | Description |\n|---|---|---|\n| `display` | string | Current value shown (max 15 chars) |\n| `leftOperand` | number \\| null | Stored left operand |\n| `pendingOperator` | string \\| null | `+`, `-`, `*`, `/`, or null |\n| `waitingForOperand` | boolean | True after operator pressed; next digit starts new number |\n| `clearNext` | boolean | True after = or Error; next digit starts fresh |\n| `error` | boolean | True when division by zero occurred |\n| `decimalEntered` | boolean | Prevents second `.` in current number |\n\nState lives in a single `useReducer` in the top-level `App` component. No external state library.\n\n# Domain model\n\n- **Operand**: a finite real number within JavaScript Number range.\n- **Operator**: one of `+`, `-`, `*`, `/`.\n- **Expression**: immediate-execution chain: `leftOperand operator rightOperand = result`.\n- **Result**: computed via `applyOperator(left, op, right)`. Division by zero sets `error = true`, display `\"Error\"`.\n- **Display**: string representation of current operand or `\"Error\"`.\n\n# Components and responsibilities\n\n| Component | File | Responsibility |\n|---|---|---|\n| `App` | `src/ui.js` | Root component, holds reducer state, renders Display and Keypad |\n| `Display` | `src/ui.js` | Shows `display` string, styled with groovy theme |\n| `Keypad` | `src/ui.js` | Renders 0-9, ., +, -, *, /, =, C buttons; dispatches actions |\n| `calcReducer` | `src/calc.js` | Pure function: (state, action) => new state. Actions: DIGIT, DECIMAL, OPERATOR, EQUALS, CLEAR |\n| `applyOperator` | `src/calc.js` | Pure function: (left, op, right) => number or throws on /0 |\n| `keyboardMap` | `src/calc.js` | Maps `keydown` event to action types |\n\n# Data flow\n\n1. User clicks button or presses key \u2192 `keydown` listener on `document` maps to action.\n2. Action dispatched to `calcReducer`.\n3. Reducer computes new state (pure function).\n4. React re-renders Display and Keypad with new state.\n5. Display shows `state.display`.\n\n# Observable behaviors\n\n| ID | Trigger | Expected result | Failure behavior | Verification |\n|---|---|---|---|---|\n| B-1 | Digit key (0-9) or button click | Digit appended to display | Wrong digit shown | Automated keyboard/click test |\n| B-2 | Operator key (+, -, *, /) or button | Operator recorded, left operand stored | Wrong operation or crash | Input 2+2, verify 4 |\n| B-3 | Enter/= key or button | Result computed and displayed | NaN, Infinity, no output | Input 9/3, verify 3 |\n| B-4 | Escape or C button | Display resets to 0, all state cleared | Partial clear or no action | Automated keypress/click test |\n| B-5 | Decimal point (.) key or button | Decimal appended, at most one per number | Multiple decimals allowed | Input 1.5+2.5, verify 4 |\n| B-6 | Page loads | 1970s groovy theme applied | Plain white/default styles | Automated CSS property check |\n\n# Domain invariants\n\n| ID | Invariant | Scope | Enforcement point | Automated test | Violation impact |\n|---|---|---|---|---|---|\n| I-1 | Display never shows NaN or Infinity | All states | `calcReducer` converts NaN/Infinity to \"Error\" | `test(\"division by zero shows Error\")` | User sees NaN/Infinity |\n| I-2 | At most one decimal point per number | Per-number input | `decimalEntered` flag in reducer | `test(\"only one decimal per number\")` | Invalid number like \"1.2.3\" |\n| I-3 | Division by zero sets error flag | `/` operator | `applyOperator` returns sentinel | `test(\"division by zero sets error\")` | Crash or Infinity |\n| I-4 | Chained operations use result as left operand | After = pressed | Reducer sets `leftOperand = result` | `test(\"chained operation\")` | Wrong computation |\n| I-5 | Consecutive operators: last wins | Operator input | Reducer replaces `pendingOperator` | `test(\"consecutive operators last wins\")` | Wrong operator used |\n| I-6 | Leading operator treated as 0 left operand | Initial state | Reducer uses 0 when `leftOperand` is null | `test(\"leading operator\")` | NaN or no-op |\n| I-7 | Invalid keypress ignored | Keyboard input | `keyboardMap` returns null for non-mapped keys | `test(\"letter key ignored\")` | Unexpected character in display |\n| I-8 | Background uses defined groovy palette | Page load | CSS in `index.html` | `test(\"groovy theme CSS properties\")` | Plain white background |\n\n# Failure handling\n\n| Failure | Mechanism | User-visible result |\n|---|---|---|\n| Division by zero | `applyOperator` returns `{ error: true }` | Display shows \"Error\" |\n| Overflow (Number.MAX_VALUE * 2) | JavaScript returns Infinity; reducer converts to \"Error\" | Display shows \"Error\" |\n| Invalid keypress | `keyboardMap` returns null; no dispatch | Nothing happens |\n| Consecutive operators | Reducer replaces pending operator | Last operator wins |\n| Leading operator | Reducer treats as 0 op right | Computes correctly |\n\n# Concurrency model\n\nSingle-threaded React synchronous rendering. No async operations, no timers, no network requests. No concurrency concerns.\n\n# Automated-test strategy\n\n**Framework**: Playwright (`@playwright/test`). Tests run against a local static file server (`npx serve` or Python http.server).\n\n**Test file**: `tests/calculator.test.js` \u2014 one file covering all behaviors.\n\n**Fixture**: Playwright `page` fixture loading `http://localhost:3000/index.html`.\n\n**Assertions**: `await expect(page.locator(...)).toHaveText(...)` for display values; `await expect(page.locator(...)).toHaveCSS(...)` for theme properties.\n\n**Defect injections**: A separate script `tests/injections/run.js` creates scratch copies of the source, applies one mutation each, runs the specific test that must fail, and reports pass/fail. Mutations are independent, run in parallel.\n\n**Protected verification paths**:\n- `index.html` (app shell)\n- `src/calc.js` (calculator logic)\n- `src/ui.js` (React components)\n- `tests/calculator.test.js` (test suite)\n- `tests/injections/` (defect injection runner and mutations)\n- `playwright.config.js` (test config)\n\n**Generated outputs** (outside protected paths):\n- `test-results/`\n- `playwright-report/`\n- `node_modules/`\n- `package-lock.json`\n\n## Defect injections\n\n| ID | Defect | Injected file | Test that must fail | Expected failure |\n|---|---|---|---|---|\n| D-1 | Remove division-by-zero check in `applyOperator` | `src/calc.js` | `division by zero shows Error` | Test sees \"Infinity\" not \"Error\" |\n| D-2 | Remove decimal guard in reducer | `src/calc.js` | `only one decimal per number` | Test sees \"1.2.3\" not \"1.23\" |\n| D-3 | Change groovy background color to `#fff` | `index.html` | `groovy theme CSS properties` | Test sees white not burnt orange |\n| D-4 | Make `=` do nothing (remove EQUALS case) | `src/calc.js` | `Enter computes result` | Display unchanged after = |\n| D-5 | Make C button not clear error flag | `src/calc.js` | `clear resets error state` | Error persists after clear |\n\n## Parallel verification groups\n\n| Group | Commands | Shared resources | Rationale |\n|---|---|---|---|\n| 1 | `npx playwright test` | Port 3000 (server) | Sequential: tests need the server |\n| 2 | `node tests/injections/run.js` | Port 3000 (server), scratch dirs | Sequential with group 1: both need server; injection runner uses its own port per scratch copy |\n\nBoth groups share the server port. Run group 1 first, then group 2. Each injection scratch copy uses a unique port (3001, 3002, ...) so they run in parallel within group 2.\n\n# Manual-test strategy\n\n| Check | How | When |\n|---|---|---|\n| Visual theme matches 1970s groovy aesthetic | Open page in browser, verify colors, font, background pattern | After implementation |\n| Keyboard input feels responsive | Type digits and operators rapidly | After implementation |\n| Button layout is usable at narrow widths | Resize browser to 320px width | After implementation |\n\n# Implementation order\n\n## Step 1: Scaffold \u2014 Owns: `package.json`, `playwright.config.js`, `tests/calculator.test.js`, `tests/injections/run.js`, `tests/injections/mutations.js`, `.gitignore`\n\nCreate project manifest with `@playwright/test` dev dependency. Write Playwright config (chromium only, webServer starting `npx serve .` on port 3000). Write `.gitignore` (already present). Do not write the test suite or injection runner yet \u2014 they depend on source files created in later steps.\n\n## Step 2: Calculator logic \u2014 Owns: `src/calc.js`\n\nImplement `calcReducer`, `applyOperator`, `keyboardMap` as pure functions. No React, no DOM. Exports: `initialState`, `calcReducer`, `applyOperator`, `keyboardMap`.\n\n## Step 3: UI components \u2014 Owns: `src/ui.js`, `index.html`\n\nWrite `index.html` loading React, ReactDOM, Babel standalone from CDN with `integrity` and `crossorigin=\"anonymous\"` attributes on each script tag. Include a `<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com;\">` in the `<head>`. Write `App`, `Display`, `Keypad` React components using `useReducer(calcReducer, initialState)`. Attach `keydown` listener on `document` in `useEffect`. Style with the groovy 1970s theme: background radial-stripe pattern using burnt orange `#CC5500`, mustard `#D4AF37`, avocado `#7A9A01`, chocolate brown `#5C3A21`, cream `#FFFDD0`. Font stack: `'Georgia', 'Times New Roman', serif` for display; `'Arial Rounded MT Bold', 'Helvetica Rounded', sans-serif` for buttons.\n\n## Step 3b: Test suite and injection runner \u2014 Owns: `tests/calculator.test.js`, `tests/injections/run.js`, `tests/injections/mutations.js`\n\nWrite the full test suite covering B-1 through B-6, MC-1 through MC-10, and all invariants I-1 through I-8. Write the defect injection runner and mutation definitions. These files depend on src/calc.js and index.html which are now created.\n\n## Step 4: Launch metadata \u2014 Owns: `.uncle/launch.json`\n\nWrite `{\"kind\":\"webpage\",\"command\":[\"npx\",\"serve\",\".\"],\"url\":\"http://127.0.0.1:3000\"}`.\n\nWrite the defect injection runner `tests/injections/run.js` and mutation definitions `tests/injections/mutations.js`. These mutate `src/calc.js` and `index.html`, which now exist after Steps 2 and 3.\n\n# Requirement traceability\n\n| Requirement | Behavior | Invariant | Component | Automated test | Manual check |\n|---|---|---|---|---|---|\n|  |  |  |  |  |  |\n| MC-1 | B-6, B-7, CSP, SRI | I-8, I-9, CSP, SRI | App, index.html | renders calculator UI, repeated equals uses last operator, CSP meta tag present, SRI attributes on CDN scripts, CDN scripts resolve, overflow shows Error | Visual inspection, Verify CSP meta tag in index.html, Verify SRI attributes on CDN script tags, SRI integrity check, CDN fallback message visible when offline |\n| MC-2 | B-1 | \u2014 | `calcReducer` + `keyboardMap` | digit input via keyboard | \u2014 |\n| MC-3 | B-1 | \u2014 | Keypad | digit input via button click | \u2014 |\n| MC-4 | B-2, B-3, B-7 | I-4, I-5, I-6, I-9 | `calcReducer` + `applyOperator` | 2+2=4, 9/3=3, chained operation, consecutive operators, repeated equals repeats last operation | \u2014 |\n| MC-5 | B-4 | I-3 | calcReducer | Escape or 'c' key clears display | \u2014 |\n| MC-6 | B-4 | I-3 | Keypad | C button clears display and error flag | \u2014 |\n| MC-7 | B-3 | \u2014 | calcReducer | Enter computes result | \u2014 |\n| MC-8 | B-6 | I-8 | `index.html` CSS | groovy theme CSS properties, CSP meta tag present, SRI attributes on CDN scripts | Visual inspection, Verify CSP meta tag in index.html, Verify SRI attributes on CDN script tags, SRI integrity check |\n| MC-9 | \u2014 | I-1, I-3 | applyOperator | division by zero shows Error, overflow shows scientific notation | \u2014 |\n| MC-10 | B-5, B-7 | I-2, I-9 | calcReducer | decimal point input, only one decimal per number, repeated equals uses last operator, overflow shows Error | \u2014 |\n|  |  |  |  |  |  |\n\n# Explicit non-goals\n\n- Scientific functions (sin, cos, log, sqrt, etc.)\n- Memory buttons (MC, MR, M+, M-)\n- History/expression log\n- Responsive design beyond basic mobile fit\n- Accessibility compliance beyond keyboard support\n- Server-side rendering or persistence\n- Unit conversion or non-arithmetic features\n- Percentage button\n- Backspace/delete key\n- Build tooling, bundler, or transpiler pipeline\n- CSS framework or preprocessor\n- Linting or formatting configuration\n\n# Risks and unresolved questions\n\n| Risk | Impact | Mitigation |\n|---|---|---|\n| Babel standalone adds ~2s parse time on slow devices | Delayed initial render | Acceptable for a calculator; no build step tradeoff |\n| CDN failure (React, Babel, ReactDOM) | App doesn't load | Include fallback message; user must refresh |\n| `npx serve` not available | Tests fail | Use Python `http.server` as fallback in Playwright webServer config |\n| Playwright browser download fails in CI | Tests cannot run | Document manual test steps as fallback |\n\nAdd SRI attributes to CDN script tags in Step 3 and add a risk row for CDN compromise.\n\nNo unresolved questions. All design decisions resolved within the requirements.\n",
+    "protected_verification_paths": "tests/calculator.test.js\ntests/injections/run.js\nplaywright.config.js\ntests/injections/mutations.js",
+    "schema": "uncle.artifact/v1",
+    "verification_commands": "# === Setup (idempotent) ===\n# Check if node_modules exists with playwright, otherwise install\nif [ ! -d node_modules ] || ! npm ls --depth=0 @playwright/test >/dev/null 2>&1; then\n  npm install\nfi\n# Check if Playwright browsers are installed\nif [ ! -d ~/.cache/ms-playwright ] && [ ! -d node_modules/playwright-core/.local-browsers ]; then\n  npx playwright install chromium\nfi\n\n# === Parallel verification groups ===\n\n# Group 1: Unit-style tests (no server needed, pure logic checks via Node)\n# These test calc.js directly by importing it in a Playwright test utility\n# Actually all tests need the browser, so no pure Node group.\n\n# Group 2: Browser tests (need server)\n# Start server (webServer config in playwright.config.js manages lifecycle), run Playwright tests\nnpx playwright test --reporter=list\n\n# Group 3: Defect injections (need server, independent scratch copies)\nnode tests/injections/run.js"
+  },
+  "model": {
+    "title": "Architecture",
+    "intro": "Single-page React calculator served as static HTML. React 18 loaded via CDN UMD bundles; JSX transpiled in-browser by Babel standalone. No build step, no bundler. Calculator logic in a plain JS module (`src/calc.js`), React UI components in `src/ui.js`, app shell in `index.html`. Tests use Playwright against a local static file server.\n\n# Authoritative state\n\n| Field | Type | Description |\n|---|---|---|\n| `display` | string | Current value shown (max 15 chars) |\n| `leftOperand` | number \\| null | Stored left operand |\n| `pendingOperator` | string \\| null | `+`, `-`, `*`, `/`, or null |\n| `waitingForOperand` | boolean | True after operator pressed; next digit starts new number |\n| `clearNext` | boolean | True after = or Error; next digit starts fresh |\n| `error` | boolean | True when division by zero occurred |\n| `decimalEntered` | boolean | Prevents second `.` in current number |\n\nState lives in a single `useReducer` in the top-level `App` component. No external state library.\n\n# Domain model\n\n- **Operand**: a finite real number within JavaScript Number range.\n- **Operator**: one of `+`, `-`, `*`, `/`.\n- **Expression**: immediate-execution chain: `leftOperand operator rightOperand = result`.\n- **Result**: computed via `applyOperator(left, op, right)`. Division by zero sets `error = true`, display `\"Error\"`.\n- **Display**: string representation of current operand or `\"Error\"`.\n\n# Components and responsibilities\n\n| Component | File | Responsibility |\n|---|---|---|\n| `App` | `src/ui.js` | Root component, holds reducer state, renders Display and Keypad |\n| `Display` | `src/ui.js` | Shows `display` string, styled with groovy theme |\n| `Keypad` | `src/ui.js` | Renders 0-9, ., +, -, *, /, =, C buttons; dispatches actions |\n| `calcReducer` | `src/calc.js` | Pure function: (state, action) => new state. Actions: DIGIT, DECIMAL, OPERATOR, EQUALS, CLEAR |\n| `applyOperator` | `src/calc.js` | Pure function: (left, op, right) => number or throws on /0 |\n| `keyboardMap` | `src/calc.js` | Maps `keydown` event to action types |\n\n# Data flow\n\n1. User clicks button or presses key \u2192 `keydown` listener on `document` maps to action.\n2. Action dispatched to `calcReducer`.\n3. Reducer computes new state (pure function).\n4. React re-renders Display and Keypad with new state.\n5. Display shows `state.display`.\n\n# Observable behaviors\n\n| ID | Trigger | Expected result | Failure behavior | Verification |\n|---|---|---|---|---|\n| B-1 | Digit key (0-9) or button click | Digit appended to display | Wrong digit shown | Automated keyboard/click test |\n| B-2 | Operator key (+, -, *, /) or button | Operator recorded, left operand stored | Wrong operation or crash | Input 2+2, verify 4 |\n| B-3 | Enter/= key or button | Result computed and displayed | NaN, Infinity, no output | Input 9/3, verify 3 |\n| B-4 | Escape or C button | Display resets to 0, all state cleared | Partial clear or no action | Automated keypress/click test |\n| B-5 | Decimal point (.) key or button | Decimal appended, at most one per number | Multiple decimals allowed | Input 1.5+2.5, verify 4 |\n| B-6 | Page loads | 1970s groovy theme applied | Plain white/default styles | Automated CSS property check |\n\n# Domain invariants\n\n| ID | Invariant | Scope | Enforcement point | Automated test | Violation impact |\n|---|---|---|---|---|---|\n| I-1 | Display never shows NaN or Infinity | All states | `calcReducer` converts NaN/Infinity to \"Error\" | `test(\"division by zero shows Error\")` | User sees NaN/Infinity |\n| I-2 | At most one decimal point per number | Per-number input | `decimalEntered` flag in reducer | `test(\"only one decimal per number\")` | Invalid number like \"1.2.3\" |\n| I-3 | Division by zero sets error flag | `/` operator | `applyOperator` returns sentinel | `test(\"division by zero sets error\")` | Crash or Infinity |\n| I-4 | Chained operations use result as left operand | After = pressed | Reducer sets `leftOperand = result` | `test(\"chained operation\")` | Wrong computation |\n| I-5 | Consecutive operators: last wins | Operator input | Reducer replaces `pendingOperator` | `test(\"consecutive operators last wins\")` | Wrong operator used |\n| I-6 | Leading operator treated as 0 left operand | Initial state | Reducer uses 0 when `leftOperand` is null | `test(\"leading operator\")` | NaN or no-op |\n| I-7 | Invalid keypress ignored | Keyboard input | `keyboardMap` returns null for non-mapped keys | `test(\"letter key ignored\")` | Unexpected character in display |\n| I-8 | Background uses defined groovy palette | Page load | CSS in `index.html` | `test(\"groovy theme CSS properties\")` | Plain white background |\n\n# Failure handling\n\n| Failure | Mechanism | User-visible result |\n|---|---|---|\n| Division by zero | `applyOperator` returns `{ error: true }` | Display shows \"Error\" |\n| Overflow (Number.MAX_VALUE * 2) | JavaScript returns Infinity; reducer converts to \"Error\" | Display shows \"Error\" |\n| Invalid keypress | `keyboardMap` returns null; no dispatch | Nothing happens |\n| Consecutive operators | Reducer replaces pending operator | Last operator wins |\n| Leading operator | Reducer treats as 0 op right | Computes correctly |\n\n# Concurrency model\n\nSingle-threaded React synchronous rendering. No async operations, no timers, no network requests. No concurrency concerns.\n\n# Automated-test strategy\n\n**Framework**: Playwright (`@playwright/test`). Tests run against a local static file server (`npx serve` or Python http.server).\n\n**Test file**: `tests/calculator.test.js` \u2014 one file covering all behaviors.\n\n**Fixture**: Playwright `page` fixture loading `http://localhost:3000/index.html`.\n\n**Assertions**: `await expect(page.locator(...)).toHaveText(...)` for display values; `await expect(page.locator(...)).toHaveCSS(...)` for theme properties.\n\n**Defect injections**: A separate script `tests/injections/run.js` creates scratch copies of the source, applies one mutation each, runs the specific test that must fail, and reports pass/fail. Mutations are independent, run in parallel.\n\n**Protected verification paths**:\n- `index.html` (app shell)\n- `src/calc.js` (calculator logic)\n- `src/ui.js` (React components)\n- `tests/calculator.test.js` (test suite)\n- `tests/injections/` (defect injection runner and mutations)\n- `playwright.config.js` (test config)\n\n**Generated outputs** (outside protected paths):\n- `test-results/`\n- `playwright-report/`\n- `node_modules/`\n- `package-lock.json`",
+    "sections": [
+      {
+        "id": "s1",
+        "heading": "Defect injections",
+        "blocks": [
+          {
+            "id": "s1.1",
+            "kind": "table",
+            "columns": [
+              "ID",
+              "Defect",
+              "Injected file",
+              "Test that must fail",
+              "Expected failure"
+            ],
+            "rows": [
+              {
+                "id": "s1.1.r1",
+                "cells": [
+                  "D-1",
+                  "Remove division-by-zero check in `applyOperator`",
+                  "`src/calc.js`",
+                  "`division by zero shows Error`",
+                  "Test sees \"Infinity\" not \"Error\""
+                ]
+              },
+              {
+                "id": "s1.1.r2",
+                "cells": [
+                  "D-2",
+                  "Remove decimal guard in reducer",
+                  "`src/calc.js`",
+                  "`only one decimal per number`",
+                  "Test sees \"1.2.3\" not \"1.23\""
+                ]
+              },
+              {
+                "id": "s1.1.r3",
+                "cells": [
+                  "D-3",
+                  "Change groovy background color to `#fff`",
+                  "`index.html`",
+                  "`groovy theme CSS properties`",
+                  "Test sees white not burnt orange"
+                ]
+              },
+              {
+                "id": "s1.1.r4",
+                "cells": [
+                  "D-4",
+                  "Make `=` do nothing (remove EQUALS case)",
+                  "`src/calc.js`",
+                  "`Enter computes result`",
+                  "Display unchanged after ="
+                ]
+              },
+              {
+                "id": "s1.1.r5",
+                "cells": [
+                  "D-5",
+                  "Make C button not clear error flag",
+                  "`src/calc.js`",
+                  "`clear resets error state`",
+                  "Error persists after clear"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "s2",
+        "heading": "Parallel verification groups",
+        "blocks": [
+          {
+            "id": "s2.1",
+            "kind": "table",
+            "columns": [
+              "Group",
+              "Commands",
+              "Shared resources",
+              "Rationale"
+            ],
+            "rows": [
+              {
+                "id": "s2.1.r1",
+                "cells": [
+                  "1",
+                  "`npx playwright test`",
+                  "Port 3000 (server)",
+                  "Sequential: tests need the server"
+                ]
+              },
+              {
+                "id": "s2.1.r2",
+                "cells": [
+                  "2",
+                  "`node tests/injections/run.js`",
+                  "Port 3000 (server), scratch dirs",
+                  "Sequential with group 1: both need server; injection runner uses its own port per scratch copy"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s2.2",
+            "kind": "prose",
+            "text": "Both groups share the server port. Run group 1 first, then group 2. Each injection scratch copy uses a unique port (3001, 3002, ...) so they run in parallel within group 2.\n\n# Manual-test strategy"
+          },
+          {
+            "id": "s2.3",
+            "kind": "table",
+            "columns": [
+              "Check",
+              "How",
+              "When"
+            ],
+            "rows": [
+              {
+                "id": "s2.3.r1",
+                "cells": [
+                  "Visual theme matches 1970s groovy aesthetic",
+                  "Open page in browser, verify colors, font, background pattern",
+                  "After implementation"
+                ]
+              },
+              {
+                "id": "s2.3.r2",
+                "cells": [
+                  "Keyboard input feels responsive",
+                  "Type digits and operators rapidly",
+                  "After implementation"
+                ]
+              },
+              {
+                "id": "s2.3.r3",
+                "cells": [
+                  "Button layout is usable at narrow widths",
+                  "Resize browser to 320px width",
+                  "After implementation"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s2.4",
+            "kind": "prose",
+            "text": "# Implementation order"
+          }
+        ]
+      },
+      {
+        "id": "s3",
+        "heading": "Step 1: Scaffold \u2014 Owns: `package.json`, `playwright.config.js`, `tests/calculator.test.js`, `tests/injections/run.js`, `tests/injections/mutations.js`, `.gitignore`",
+        "blocks": [
+          {
+            "id": "s3.1",
+            "kind": "prose",
+            "text": "Create project manifest with `@playwright/test` dev dependency. Write Playwright config (chromium only, webServer starting `npx serve .` on port 3000). Write `.gitignore` (already present). Do not write the test suite or injection runner yet \u2014 they depend on source files created in later steps."
+          }
+        ]
+      },
+      {
+        "id": "s4",
+        "heading": "Step 2: Calculator logic \u2014 Owns: `src/calc.js`",
+        "blocks": [
+          {
+            "id": "s4.1",
+            "kind": "prose",
+            "text": "Implement `calcReducer`, `applyOperator`, `keyboardMap` as pure functions. No React, no DOM. Exports: `initialState`, `calcReducer`, `applyOperator`, `keyboardMap`."
+          }
+        ]
+      },
+      {
+        "id": "s5",
+        "heading": "Step 3: UI components \u2014 Owns: `src/ui.js`, `index.html`",
+        "blocks": [
+          {
+            "id": "s5.1",
+            "kind": "prose",
+            "text": "Write `index.html` loading React, ReactDOM, Babel standalone from CDN with `integrity` and `crossorigin=\"anonymous\"` attributes on each script tag. Include a `<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com;\">` in the `<head>`. Write `App`, `Display`, `Keypad` React components using `useReducer(calcReducer, initialState)`. Attach `keydown` listener on `document` in `useEffect`. Style with the groovy 1970s theme: background radial-stripe pattern using burnt orange `#CC5500`, mustard `#D4AF37`, avocado `#7A9A01`, chocolate brown `#5C3A21`, cream `#FFFDD0`. Font stack: `'Georgia', 'Times New Roman', serif` for display; `'Arial Rounded MT Bold', 'Helvetica Rounded', sans-serif` for buttons."
+          }
+        ]
+      },
+      {
+        "id": "s6",
+        "heading": "Step 3b: Test suite and injection runner \u2014 Owns: `tests/calculator.test.js`, `tests/injections/run.js`, `tests/injections/mutations.js`",
+        "blocks": [
+          {
+            "id": "s6.1",
+            "kind": "prose",
+            "text": "Write the full test suite covering B-1 through B-6, MC-1 through MC-10, and all invariants I-1 through I-8. Write the defect injection runner and mutation definitions. These files depend on src/calc.js and index.html which are now created."
+          }
+        ]
+      },
+      {
+        "id": "s7",
+        "heading": "Step 4: Launch metadata \u2014 Owns: `.uncle/launch.json`",
+        "blocks": [
+          {
+            "id": "s7.1",
+            "kind": "prose",
+            "text": "Write `{\"kind\":\"webpage\",\"command\":[\"npx\",\"serve\",\".\"],\"url\":\"http://127.0.0.1:3000\"}`.\n\nWrite the defect injection runner `tests/injections/run.js` and mutation definitions `tests/injections/mutations.js`. These mutate `src/calc.js` and `index.html`, which now exist after Steps 2 and 3.\n\n# Requirement traceability"
+          },
+          {
+            "id": "s7.2",
+            "kind": "rows",
+            "row_kind": "traceability",
+            "rows": [
+              {
+                "requirement": "",
+                "behaviors": [],
+                "invariants": [],
+                "components": [],
+                "tests": [],
+                "manual": [],
+                "id": "s7.2.r1"
+              },
+              {
+                "requirement": "MC-1",
+                "behaviors": [
+                  "B-6",
+                  "B-7",
+                  "CSP",
+                  "SRI"
+                ],
+                "invariants": [
+                  "I-8",
+                  "I-9",
+                  "CSP",
+                  "SRI"
+                ],
+                "components": [
+                  "App",
+                  "index.html"
+                ],
+                "tests": [
+                  "renders calculator UI",
+                  "repeated equals uses last operator",
+                  "CSP meta tag present",
+                  "SRI attributes on CDN scripts",
+                  "CDN scripts resolve",
+                  "overflow shows Error"
+                ],
+                "manual": [
+                  "Visual inspection",
+                  "Verify CSP meta tag in index.html",
+                  "Verify SRI attributes on CDN script tags",
+                  "SRI integrity check",
+                  "CDN fallback message visible when offline"
+                ],
+                "id": "MC-1"
+              },
+              {
+                "requirement": "MC-2",
+                "behaviors": [
+                  "B-1"
+                ],
+                "invariants": [
+                  "\u2014"
+                ],
+                "components": [
+                  "`calcReducer` + `keyboardMap`"
+                ],
+                "tests": [
+                  "digit input via keyboard"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-2"
+              },
+              {
+                "requirement": "MC-3",
+                "behaviors": [
+                  "B-1"
+                ],
+                "invariants": [
+                  "\u2014"
+                ],
+                "components": [
+                  "Keypad"
+                ],
+                "tests": [
+                  "digit input via button click"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-3"
+              },
+              {
+                "requirement": "MC-4",
+                "behaviors": [
+                  "B-2",
+                  "B-3",
+                  "B-7"
+                ],
+                "invariants": [
+                  "I-4",
+                  "I-5",
+                  "I-6",
+                  "I-9"
+                ],
+                "components": [
+                  "`calcReducer` + `applyOperator`"
+                ],
+                "tests": [
+                  "2+2=4",
+                  "9/3=3",
+                  "chained operation",
+                  "consecutive operators",
+                  "repeated equals repeats last operation"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-4"
+              },
+              {
+                "requirement": "MC-5",
+                "behaviors": [
+                  "B-4"
+                ],
+                "invariants": [
+                  "I-3"
+                ],
+                "components": [
+                  "calcReducer"
+                ],
+                "tests": [
+                  "Escape or 'c' key clears display"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-5"
+              },
+              {
+                "requirement": "MC-6",
+                "behaviors": [
+                  "B-4"
+                ],
+                "invariants": [
+                  "I-3"
+                ],
+                "components": [
+                  "Keypad"
+                ],
+                "tests": [
+                  "C button clears display and error flag"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-6"
+              },
+              {
+                "requirement": "MC-7",
+                "behaviors": [
+                  "B-3"
+                ],
+                "invariants": [
+                  "\u2014"
+                ],
+                "components": [
+                  "calcReducer"
+                ],
+                "tests": [
+                  "Enter computes result"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-7"
+              },
+              {
+                "requirement": "MC-8",
+                "behaviors": [
+                  "B-6"
+                ],
+                "invariants": [
+                  "I-8"
+                ],
+                "components": [
+                  "`index.html` CSS"
+                ],
+                "tests": [
+                  "groovy theme CSS properties",
+                  "CSP meta tag present",
+                  "SRI attributes on CDN scripts"
+                ],
+                "manual": [
+                  "Visual inspection",
+                  "Verify CSP meta tag in index.html",
+                  "Verify SRI attributes on CDN script tags",
+                  "SRI integrity check"
+                ],
+                "id": "MC-8"
+              },
+              {
+                "requirement": "MC-9",
+                "behaviors": [
+                  "\u2014"
+                ],
+                "invariants": [
+                  "I-1",
+                  "I-3"
+                ],
+                "components": [
+                  "applyOperator"
+                ],
+                "tests": [
+                  "division by zero shows Error",
+                  "overflow shows scientific notation"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-9"
+              },
+              {
+                "requirement": "MC-10",
+                "behaviors": [
+                  "B-5",
+                  "B-7"
+                ],
+                "invariants": [
+                  "I-2",
+                  "I-9"
+                ],
+                "components": [
+                  "calcReducer"
+                ],
+                "tests": [
+                  "decimal point input",
+                  "only one decimal per number",
+                  "repeated equals uses last operator",
+                  "overflow shows Error"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-10"
+              },
+              {
+                "requirement": "",
+                "behaviors": [],
+                "invariants": [],
+                "components": [],
+                "tests": [],
+                "manual": [],
+                "id": "s7.2.r12"
+              }
+            ]
+          },
+          {
+            "id": "s7.3",
+            "kind": "prose",
+            "text": "# Explicit non-goals"
+          },
+          {
+            "id": "s7.4",
+            "kind": "list",
+            "ordered": false,
+            "items": [
+              {
+                "id": "s7.4.i1",
+                "depth": 0,
+                "text": "Scientific functions (sin, cos, log, sqrt, etc.)"
+              },
+              {
+                "id": "s7.4.i2",
+                "depth": 0,
+                "text": "Memory buttons (MC, MR, M+, M-)"
+              },
+              {
+                "id": "s7.4.i3",
+                "depth": 0,
+                "text": "History/expression log"
+              },
+              {
+                "id": "s7.4.i4",
+                "depth": 0,
+                "text": "Responsive design beyond basic mobile fit"
+              },
+              {
+                "id": "s7.4.i5",
+                "depth": 0,
+                "text": "Accessibility compliance beyond keyboard support"
+              },
+              {
+                "id": "s7.4.i6",
+                "depth": 0,
+                "text": "Server-side rendering or persistence"
+              },
+              {
+                "id": "s7.4.i7",
+                "depth": 0,
+                "text": "Unit conversion or non-arithmetic features"
+              },
+              {
+                "id": "s7.4.i8",
+                "depth": 0,
+                "text": "Percentage button"
+              },
+              {
+                "id": "s7.4.i9",
+                "depth": 0,
+                "text": "Backspace/delete key"
+              },
+              {
+                "id": "s7.4.i10",
+                "depth": 0,
+                "text": "Build tooling, bundler, or transpiler pipeline"
+              },
+              {
+                "id": "s7.4.i11",
+                "depth": 0,
+                "text": "CSS framework or preprocessor"
+              },
+              {
+                "id": "s7.4.i12",
+                "depth": 0,
+                "text": "Linting or formatting configuration"
+              }
+            ]
+          },
+          {
+            "id": "s7.5",
+            "kind": "prose",
+            "text": "# Risks and unresolved questions"
+          },
+          {
+            "id": "s7.6",
+            "kind": "table",
+            "columns": [
+              "Risk",
+              "Impact",
+              "Mitigation"
+            ],
+            "rows": [
+              {
+                "id": "s7.6.r1",
+                "cells": [
+                  "Babel standalone adds ~2s parse time on slow devices",
+                  "Delayed initial render",
+                  "Acceptable for a calculator; no build step tradeoff"
+                ]
+              },
+              {
+                "id": "s7.6.r2",
+                "cells": [
+                  "CDN failure (React, Babel, ReactDOM)",
+                  "App doesn't load",
+                  "Include fallback message; user must refresh"
+                ]
+              },
+              {
+                "id": "s7.6.r3",
+                "cells": [
+                  "`npx serve` not available",
+                  "Tests fail",
+                  "Use Python `http.server` as fallback in Playwright webServer config"
+                ]
+              },
+              {
+                "id": "s7.6.r4",
+                "cells": [
+                  "Playwright browser download fails in CI",
+                  "Tests cannot run",
+                  "Document manual test steps as fallback"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s7.7",
+            "kind": "prose",
+            "text": "Add SRI attributes to CDN script tags in Step 3 and add a risk row for CDN compromise.\n\nNo unresolved questions. All design decisions resolved within the requirements."
+          }
+        ]
+      }
+    ]
+  },
+  "scope": {
+    "ids": [],
+    "gaps": [
+      "tests/calculator.test.js",
+      "tests/injections/run.js",
+      "playwright.config.js",
+      "tests/injections/mutations.js"
+    ],
+    "ownership": true,
+    "problem": "\n\n## Plan structure error (binding)\n\nThe driver rejected the plan you just wrote: it has a protected verification path with no owning implementation step.\n\nThese Protected verification paths do not exist yet and no implementation step names them in its `Owns:`:\n\n- `tests/calculator.test.js`\n- `tests/injections/run.js`\n- `playwright.config.js`\n- `tests/injections/mutations.js`\n\nFix it one of two ways: add each path to the `Owns:` of the step that creates it (a reconcile step's `Owns: *` does not count), or, if nothing will create a path, remove it from Protected verification paths. Only list a path as protected when it already exists or a step explicitly owns it. Return only edit ops for these paths and steps; never the complete plan."
+  },
+  "packet": {
+    "schema": "uncle.artifact/v1",
+    "kind": "updated-plan-edit-ops-packet",
+    "dispositions": [],
+    "ops": [
+      {
+        "op": "set_step",
+        "id": "step-3",
+        "fields": {
+          "owns": "./tests/calculator.test.js, ./tests/injections/run.js, ./playwright.config.js, ./tests/injections/mutations.js"
+        }
+      }
+    ],
+    "commands_replace": []
+  },
+  "automatic_ops": []
+}

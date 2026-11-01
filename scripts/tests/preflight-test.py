@@ -26,6 +26,13 @@ node a.js | node b.js; python3 checks.py || printf failure
 """
         self.assertEqual(preflight.prerequisites(commands), ['bash', 'node', 'npx', 'python3', 'shasum'])
 
+    def test_grouped_install_probes_use_driver_runtime_checks(self):
+        command = "(node -e 'process.exit(0)' && npm ls --depth=0) || npm install\nnode probe.mjs || (./node_modules/.bin/playwright install chromium && node probe.mjs)"
+        self.assertEqual(preflight.prerequisites(command), ['node', 'npm'])
+        for malformed in ('(node a.js', 'node a.js)', '(node a.js) node b.js', '()'):
+            with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                preflight.prerequisites(malformed)
+
     def test_hidden_commands_and_malformed_syntax_fall_back(self):
         for command in ('node $(touch sentinel)', 'echo `touch sentinel`',
                         'node a.js &', 'node a.js &&', 'node a.js >',

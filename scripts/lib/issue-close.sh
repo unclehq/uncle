@@ -75,6 +75,31 @@ state_origin_agree() {
         return 0
     fi
 
+    # This process was launched for one issue (STAGEGATE_ORIGIN_REPO/ISSUE) and the state file names that same issue, so the state
+    # is right and only `origin` has been overwritten by something else (issue 116: a fixture's `owner/repo 42` landed in a live
+    # worktree). Normal operation cannot produce that, but the launch binding is authoritative and was not read from the file, so
+    # restore the file from the copy the writer kept (or from the binding alone, which reads as an unverified `curl` origin and
+    # fails closed at the close gate) and say so loudly. Any other disagreement is still refused, below.
+    if [[ -n "${STAGEGATE_ORIGIN_REPO:-}" && "${STAGEGATE_ORIGIN_ISSUE:-}" == "$prefix" ]]; then
+        local bound="$origin_file.bound" restored
+        if [[ -s "$bound" && "$(origin_field "$bound" 2)" == "$prefix" && "$(origin_field "$bound" 1)" == "$STAGEGATE_ORIGIN_REPO" ]]; then
+            restored="$(head -n 1 "$bound")"
+        else
+            restored="$(printf '%s\t%s' "$STAGEGATE_ORIGIN_REPO" "$prefix")"
+        fi
+        {
+            date -u '+%Y-%m-%dT%H:%M:%SZ'
+            echo "origin_file: $origin_file"
+            echo "found:       $(head -n 1 "$origin_file" 2>/dev/null | tr '\t' ' ')"
+            echo "restored:    $(printf '%s' "$restored" | tr '\t' ' ')"
+            echo "mtime:       $(stat -f %Sm "$origin_file" 2>/dev/null || stat -c %y "$origin_file" 2>/dev/null)"
+        } >> "$(dirname "$origin_file")/origin-tamper.log" 2>/dev/null || true
+        echo "WARNING: $origin_file named issue $origin_issue, but this run is bound to issue $prefix and the state agrees."
+        echo "Something else overwrote it; restoring the binding for issue $prefix (details in origin-tamper.log)."
+        printf '%s\n' "$restored" > "$origin_file"
+        return 0
+    fi
+
     echo "Refusing to act on corrupt workflow state: $state_file is bound to issue"
     echo "$prefix but $origin_file names issue $origin_issue."
     echo "One of the two was hand-edited. Reconcile them, or clear both with:"

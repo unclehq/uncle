@@ -108,6 +108,13 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 raw="$work/events.jsonl"
 status_file="${UNCLE_STATUS_FILE:-}"
+schema_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/runner_schema.py"
+schema_active=0
+if [[ -n "${UNCLE_OUTPUT_SCHEMA_FILE:-}" ]] && python3 -B "$schema_helper" prepare "$work/schema.json"; then
+    schema_active=1
+    args+=(--output-schema "$work/schema.json" --output-last-message "$work/answer.json")
+    prompt+=$'\n\nDeliver the complete JSON object as your final answer, following the supplied output schema.\nThe runner saves that answer to the required delivery file; this replaces any instruction to Write that file.\nUse null for optional fields that do not apply. Do not wrap the answer in Markdown.\n'
+fi
 
 stage="${UNCLE_STATUS_STAGE:-}"
 stage_index="${UNCLE_STATUS_STAGE_INDEX:-0}"
@@ -192,6 +199,15 @@ result="$(jq -R -s -c --argjson exit "$codex_status" --arg model "$model" '
 
 # Context exhaustion is recoverable: name it so the driver can offer a
 # different model and replay the stage.
+if [[ "$schema_active" == 1 && "$codex_status" == 0 ]] \
+    && [[ "$(printf '%s' "$result" | jq -r '.is_error')" == false ]]; then
+    if python3 -B "$schema_helper" deliver "$work/answer.json" > "$work/delivery.json"; then
+        result="$(printf '%s' "$result" | jq -c --slurpfile output "$work/delivery.json" '.structured_output = $output[0]')"
+    else
+        result="$(printf '%s' "$result" | jq -c '.is_error = "true" | .subtype = "error_during_execution" | .error_detail = "Codex returned no valid schema-checked object"')"
+    fi
+fi
+
 if [[ "$(printf '%s' "$result" | jq -r '.is_error // "true"')" == "true" ]] \
     && grep -qiE 'context (length|window)|maximum context|out of (tokens|context)|token limit|too many tokens|context_length_exceeded' "$raw"; then
     result="$(printf '%s' "$result" | jq -c '.subtype = "context_length_exceeded"')"

@@ -26,3 +26,11 @@ instead ("every key in A-2"), so the number cannot disagree with its own enumera
 appear, write the items out and count them one by one before you write the number. A plan once said
 "19 keys (digits, decimal, four operators, equals, clear, backspace)" for a list that adds up to 18; a test
 copied the 19, and the correct implementation failed it.
+
+Use current stable test tooling resolved at install time (`latest` or a `^` range
+based on the current release), including Playwright, Vite and Vitest when used;
+never pin an old Playwright or an old Node. Keep the installed Node: do not
+install or switch Node versions. If `package.json` sets `engines.node`, its
+range must accept the installed Node major. Record resolved versions in the
+lockfile; reuse a compatible installation. If an approved plan conflicts,
+report it through the existing review/repair path; do not silently edit it.

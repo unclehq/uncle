@@ -80,8 +80,15 @@ run_case app PARALLEL_BUILDER_SUPPORTS_MERGE=1 WORKFLOW_IMPLEMENT_MERGE_APP=1
 check "mode 1: scaffold, one application worker and the test steps run" test "$(steps_run "$TMP/app")" == "1 2 5 6"
 check "mode 1: the application worker owns every application file" test "$(owned_of "$TMP/app" 2)" == "src/calc.js src/App.jsx src/main.jsx src/styles.css"
 
-# Mode 2, the default: two workers -- the application, and everything that builds and verifies it.
-run_case on PARALLEL_BUILDER_SUPPORTS_MERGE=1
+# Default keeps separate unit and browser-test workers alongside implementation.
+run_case default PARALLEL_BUILDER_SUPPORTS_MERGE=1
+check "default: independent test workers run alongside scaffold and app" test "$(steps_run "$TMP/default")" == "1 2 5 6"
+check "default: unit tests own only their declared file" test "$(owned_of "$TMP/default" 5)" == "tests/calc.test.js"
+check "default: browser tests own only their declared file" test "$(owned_of "$TMP/default" 6)" == "e2e/theme.spec.js"
+check "default: test workers receive shared contract guidance" grep -q 'targeted contract read' "$TMP/default/.uncle/workflow/parallel/prompts/step-5.md"
+
+# Explicit mode 2: two workers -- the application, and everything that builds and verifies it.
+run_case on PARALLEL_BUILDER_SUPPORTS_MERGE=1 WORKFLOW_IMPLEMENT_MERGE_APP=2
 p="$TMP/on/.uncle/workflow/parallel/prompts"
 check "default: the group runs" test "$(cat "$TMP/on/rc")" == 0
 check "default: two workers run" test "$(steps_run "$TMP/on")" == "1 2"

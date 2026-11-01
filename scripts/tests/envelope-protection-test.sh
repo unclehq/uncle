@@ -79,7 +79,7 @@ branch = text[text.index('        IMPLEMENT)', dispatch_start):text.index('     
 runs = [m.start() for m in re.finditer(r'run_(?:claude|stepwise_implementation) ', branch)]
 begins = [m.start() for m in re.finditer(r'envelope_guard_begin', branch)]
 ends = [m.start() for m in re.finditer(r'envelope_guard_end', branch)]
-if not (len(runs) == len(begins) == len(ends) == 3 and all(b < r < e for b, r, e in zip(begins, runs, ends))):
+if not (len(runs) == len(begins) == len(ends) == 4 and all(b < r < e for b, r, e in zip(begins, runs, ends))):
     print('FAIL: not every implementation agent run is wrapped by the envelope guard', runs, begins, ends)
     raise SystemExit(1)
 if 'envelope_invalidate IMPLEMENT' not in branch:

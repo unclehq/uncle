@@ -117,6 +117,13 @@ class Checks(unittest.TestCase):
         self.assertEqual([row.split('\t', 1)[0] for row in
                           (self.root/'results').read_text().splitlines()], ['0', '1', '125'])
         self.assertIn('earlier build, unit, or browser command failed', (self.root/'log').read_text())
+    def test_mutations_wait_for_baseline_even_if_plan_groups_them_together(self):
+        result = self.run_checks(['sleep .2; exit 1 # playwright test',
+                                  'touch mutation-ran # mutation test'], '1 2\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root/'mutation-ran').exists())
+        self.assertEqual([row.split('\t')[0] for row in (self.root/'results').read_text().splitlines()], ['1','125'])
+
     def test_browser_suites_default_to_one_failure_but_keep_the_reported_command(self):
         r=self.run_checks(["printf '%s' \"$*\" > args # playwright test"], '')
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -133,6 +140,62 @@ class Checks(unittest.TestCase):
         self.assertEqual(parallel_checks.execution_command('(npx vitest run) & (PORT=4180 npx playwright test) & wait'),
                          '(npx vitest run) & (PORT=4180 npx playwright test --max-failures=1) & wait')
         self.assertEqual(parallel_checks.execution_command('npx vitest run'), 'npx vitest run')
+    def test_npm_wrapper_uses_the_actual_script_and_preserves_other_runners(self):
+        import parallel_checks, json
+        from unittest.mock import patch
+        project = self.root / 'calculator'
+        project.mkdir()
+        (project / 'package.json').write_text(json.dumps({'scripts': {
+            'test:browser': 'playwright test', 'test': 'node --test',
+            'other': 'pytest', 'chain': 'playwright test && echo done'}}))
+        with patch('parallel_checks.Path.cwd', return_value=self.root):
+            command = 'npm --prefix calculator run test:browser'
+            self.assertEqual(parallel_checks.execution_command(command), command + ' -- --max-failures=1')
+            self.assertIn('mutation controls', parallel_checks.prerequisite_skip('node mutation.mjs', False, False, True))
+            self.assertIn('playwright test', parallel_checks.command_evidence(command))
+            for name in ('test', 'other', 'chain', 'missing'):
+                command = 'npm --prefix calculator run ' + name
+                self.assertEqual(parallel_checks.execution_command(command), command)
+            command = 'npm --prefix calculator run test:browser && echo done'
+            self.assertEqual(parallel_checks.execution_command(command), command)
+
+    def test_failed_npm_browser_wrapper_skips_mutations_and_keeps_evidence(self):
+        import json
+        from unittest.mock import patch
+        (self.root/'package.json').write_text(json.dumps({'scripts': {'test:browser': 'playwright test'}}))
+        binary = self.root/'npm'
+        binary.write_text('#!/bin/sh\nprintf "args: %s\\n" "$*"\nexit 1\n')
+        binary.chmod(0o755)
+        with patch.dict(os.environ, PATH=str(self.root)+os.pathsep+os.environ['PATH']):
+            result = self.run_checks(['npm run test:browser', 'touch mutation-ran # mutation test'], '')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root/'mutation-ran').exists())
+        self.assertIn('args: run test:browser -- --max-failures=1', (self.root/'log').read_text())
+        self.assertEqual((self.root/'results').read_text().splitlines()[0], '1\tnpm run test:browser')
+
+    def test_output_is_visible_before_command_finishes(self):
+        import shlex
+        (self.root/'commands').write_text("echo startup-failure; while ! test -f release; do sleep .1; done\n")
+        (self.root/'groups').write_text('')
+        child = subprocess.Popen([sys.executable, '-B', os.environ['UNCLE_TEST_ROOT']+'/scripts/lib/parallel_checks.py',
+                                  '--commands','commands','--groups','groups','--out','results','--log','log','--jobs','2'],
+                                 cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if (self.root/'log').exists() and 'startup-failure\n' in (self.root/'log').read_text():
+                    break
+                time.sleep(.05)
+            else:
+                self.fail('command output was buffered until completion')
+            self.assertIsNone(child.poll())
+        finally:
+            (self.root/'release').touch()
+            out, err = child.communicate(timeout=10)
+        self.assertEqual(child.returncode, 0, err)
+        self.assertIn('RUNNING', out)
+        self.assertEqual((self.root/'log').read_text().count('\nstartup-failure\n'), 1)
+
     def test_missing_browser_root_is_reported_as_an_unrunnable_application(self):
         r=self.run_checks(["printf '%s\\n' '#root element(s) not found element(s) not found' >&2; exit 1 # playwright test"], '')
         self.assertEqual(r.returncode, 0, r.stderr)

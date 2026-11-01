@@ -69,14 +69,34 @@ FAIL sends the row to an automatic repair stage, which can only change source,
 tests and its own reports. Use FAIL only for a defect that edit can correct: a
 test that is absent, an assertion that does not measure the requirement, a
 failing driver command, or a regression from the baseline. Do not use FAIL when
-you merely could not confirm something (a test file you did not open, a defect
-injection nobody ran, evidence older than the current green check), when the
+you merely could not confirm something (a test file you did not open, evidence
+older than the current green check), when the
 only remedy is a person's judgment or sign-off (BLOCKED-HUMAN), or when the
 evidence is out of date because the checks now pass (re-read green-check.md and
 grade the current result). Those are NOT RUN or BLOCKED-HUMAN with the exact
 evidence needed, and the run continues to the final audit carrying them. A
 repair that cannot change a row's outcome is wasted work and hides the real
 finding.
+
+A new or changed test of a critical requirement that has no recorded defect
+injection (the test run against a deliberately broken copy, failing, then passing
+once restored) is a FAIL on NEGATIVE: the repair stage can run that mutation and
+record it in CHANGE_TEST_REPORT.md, so it is correctable by edit and is not NOT RUN.
+
+The evidence packet lists some files as "missing or unreadable" that a change to an
+existing codebase never produces: UPDATED_PROJECT_PLAN.md (the change flow's plan is
+CHANGE_PLAN.md), verification.manifest, TEST_CHANGES.diff (written only on a repair
+pass), MANUAL_CHECKLIST.md, VERIFICATION_REPORT.md, DEFECTS.md and checklist-driver-checks
+(all written after this stage). Their absence is expected, not a blocker and not a
+reason for NOT RUN. Grade COVERAGE and INTEGRITY from CHANGE_PLAN.md, the diff and
+green-check.md.
+
+NOT RUN is for evidence that cannot be obtained, not for evidence you chose not
+to read. You have Read, Glob and Grep: open the changed test files, the failing
+test names in .uncle/workflow/logs/green-check.log and the plan's Verification
+commands block before grading a row, and grade what they show. A row left NOT RUN
+only because you did not open a readable file is a review defect, and the driver
+will send it back to you.
 
 Add required rows for any other findings blocking this stage. Missing test coverage or
 incorrect assertions are FAIL, with concrete repair instructions. Missing

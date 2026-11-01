@@ -399,11 +399,11 @@ class CaptureStream(unittest.TestCase):
                 self.assertEqual(transport.turn_output_tokens(64512), 1200)
             server = self.serve()
             agent.run_document(server.values, 'Go', self.root, SCHEMA, 'updated_plan_edit_ops_packet', 64512)
-            self.assertEqual(server.requests[-1]['max_tokens'], 2300)
+            self.assertEqual(server.requests[-1]['max_tokens'], 2300 + 32768)
             agent.run_document(server.values, 'Go', self.root, SCHEMA, 'updated_plan_edit_ops_packet', 64512, explore_first=False)
-            self.assertEqual(server.requests[-1]['max_tokens'], 2400)
+            self.assertEqual(server.requests[-1]['max_tokens'], 2400 + 32768)
         self.assertEqual(transport.turn_output_tokens(64512), 32768)
-        self.assertEqual(transport.turn_output_tokens(64512, 'review_worker_packet'), 4096)
+        self.assertEqual(transport.turn_output_tokens(64512, 'review_worker_packet'), 32768)
 
     def test_requirements_investigation_uses_canonical_validator(self):
         headings = ('Required functionality', 'Optional functionality', 'Constraints', 'User-visible behaviors',

@@ -103,7 +103,8 @@ sys.exit(1 if problems else 0)
 PY
 check "every set_state REPAIR is behind a guard" test $? == 0
 check "the REPAIR handler carries a disabled-repair route" grep -q "Repair is disabled for new application builds; \$(basename" "$SCRIPT"
-check "repair off: a failed test review or driver check still reaches the checklists" grep -q 'TEST_REVIEW.md|green-check.md) set_state MANUAL_CHECKLIST' "$SCRIPT"
+# A failed test review or driver check reaches the checklists first; once they have run (checklist-ran) it goes to the audit instead.
+check "repair off: a failed test review or driver check still reaches the checklists" grep -q 'then set_state FINAL_AUDIT; else set_state MANUAL_CHECKLIST; fi' "$SCRIPT"
 check "a checklist FAIL goes to the audit when repair is off" grep -q "checklist acceptance recorded a FAIL; repair is disabled" "$SCRIPT"
 
 [[ "$fails" == 0 ]] && echo "no-repair-test.sh: all checks passed" || { echo "no-repair-test.sh: $fails failure(s)"; exit 1; }

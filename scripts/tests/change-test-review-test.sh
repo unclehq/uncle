@@ -60,6 +60,8 @@ repair_count="$(grep -v '^\s*#' "$ROOT/scripts/change-workflow.sh" | grep -c 'se
 [[ -s "$ROOT/prompts/change/test-review.md" ]] && ok || bad "prompt-exists" "prompts/change/test-review.md is missing"
 grep -Fq 'CHANGE_TEST_REPORT.md' "$ROOT/prompts/change/test-review.md" \
     && ok || bad "prompt-targets-change-report" "prompts/change/test-review.md does not reference CHANGE_TEST_REPORT.md"
+grep -Fq 'NOT RUN is for evidence that cannot be obtained' "$ROOT/prompts/change/test-review.md" \
+    && ok || bad "prompt-forbids-unread-not-run" "prompts/change/test-review.md lets a reviewer leave a row NOT RUN because it did not open a readable file"
 grep -Fq 'AUTOMATED_TEST_REPORT.md' "$ROOT/prompts/change/test-review.md" \
     && bad "prompt-leaked-app-doc" "prompts/change/test-review.md still references the app-family AUTOMATED_TEST_REPORT.md" \
     || ok

@@ -78,6 +78,13 @@ evidence needed, and the run continues to the final audit carrying them. A
 repair that cannot change a row's outcome is wasted work and hides the real
 finding.
 
+NOT RUN is for evidence that cannot be obtained, not for evidence you chose not
+to read. You have Read, Glob and Grep: open the changed test files, the failing
+test names in .uncle/workflow/logs/green-check.log and the plan's Verification
+commands block before grading a row, and grade what they show. A row left NOT RUN
+only because you did not open a readable file is a review defect, and the driver
+will send it back to you.
+
 Add required rows for any other findings blocking this stage. Missing test coverage or
 incorrect assertions are FAIL, with concrete repair instructions. Missing
 external prerequisites are BLOCKED; unknown results are NOT RUN. If approved

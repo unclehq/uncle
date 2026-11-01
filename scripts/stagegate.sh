@@ -329,6 +329,7 @@ on_exit() {
     if declare -f workflow_model_cancel > /dev/null; then workflow_model_cancel; fi
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
     if declare -f early_checklist_cancel > /dev/null; then early_checklist_cancel; fi
+    if declare -f manual_checklist_draft_cancel > /dev/null; then manual_checklist_draft_cancel; fi
     if declare -f early_execute_cancel > /dev/null; then early_execute_cancel; fi
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
@@ -3276,8 +3277,14 @@ run_test_review_panel() {
 
 run_manual_checklist_panel() {
     local directory="$STATE_DIR/manual-checklist-panel" lens prompt output pid
+    # `draft` is the same panel run early, while the code is still being written (manual_checklist_draft_start): it reads only what
+    # exists before implementation and writes MANUAL_CHECKLIST_DRAFT.json, which manual_checklist_reconcile later compares with the build.
+    local mode="${1:-final}" target="$STATE_DIR/documents/MANUAL_CHECKLIST.json" tag=""
     local -a pids=() pid_lenses=()
     [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 0
+    if [[ "$mode" == draft ]]; then
+        directory="$STATE_DIR/manual-checklist-draft-panel"; target="$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json"; tag="draft-"
+    fi
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     # A new application has nothing to regress: the regressions lens wrote a third copy of the
     # behavior checks (MC-400s repeating the MC-100s and MC-200s), about a third of a 42-check list.
@@ -3296,9 +3303,11 @@ run_manual_checklist_panel() {
             inputs='`.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
             printf '\n## Early speculative checklist\n\n`TEST_REVIEW.json` is intentionally not an input because it is being produced concurrently. Build checks from the approved plan, adversarial review, current tree, and driver evidence only. This packet is discarded unless the finished test review passes unchanged.\n' >> "$prompt"
         fi
+        [[ "$mode" != draft ]] || inputs='`.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
         printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, %s, plus the completed driver record `.uncle/workflow/green-check.tsv`. Do not inspect any rendered Markdown view or enumerate directories.\n\nTreat the driver record as authoritative for dependency, build, unit, and automated-browser commands: cite it rather than proposing those commands again. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$range" >> "$prompt"
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
-            > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
+        [[ "$mode" != draft ]] || python3 -B "$ROOT/scripts/lib/checklist_draft_prompt.py" "$prompt" || return 1
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-${tag}$lens" < /dev/null ) \
+            > "$LOG_DIR/manual-checklist-worker-${tag}$lens.log" 2>&1 &
         pids+=("$!")
         pid_lenses+=("$lens")
     done
@@ -3310,7 +3319,7 @@ run_manual_checklist_panel() {
             echo "Manual-checklist worker $lens returned an invalid packet; retrying that worker once."
             printf '\n## Required retry\n\nYour preceding response was rejected because it was not one complete `manual-checklist-worker-packet` JSON object. Do not ask a question, discuss prior checklist documents, or return Markdown/prose. Produce the assigned lens packet now, even if its checks overlap a prior rendered report.\n' >> "$prompt"
             rm -f "$output"
-            UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens-retry" < /dev/null || true
+            UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-${tag}$lens-retry" < /dev/null || true
             python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$output" || return 1
         fi
         index=$((index + 1))
@@ -3319,7 +3328,11 @@ run_manual_checklist_panel() {
     # question after seeing a stale rendered checklist.  Validate each compact
     # packet independently and give only that worker one explicit correction;
     # healthy packets stay intact and the full panel is never needlessly rerun.
-    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" $lenses || return 1
+    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" $lenses || return 1
+    if [[ "$mode" == draft ]]; then
+        python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$target" || return 1
+        return 0
+    fi
     python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" \
         "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
         --proposed "$STATE_DIR/documents/MANUAL_CHECKLIST_PROPOSED.json" \
@@ -3327,6 +3340,76 @@ run_manual_checklist_panel() {
     python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || return 1
     cp "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
+}
+
+# --- the checklist draft and its reconciliation --------------------------------------------------------------------------------
+# Manual-checklist writing is slow and does not depend on the code: its inputs are the approved requirements, plan and adversarial review.
+# So it starts when implementation starts (manual_checklist_draft_start), by reviewers who never see the code, and after implementation a
+# short reconciliation compares the draft with the build and the driver's results (manual_checklist_reconcile). The edits are applied
+# deterministically (checklist_reconcile.py), so the draft stays the independent part of the review. Anything unusual (a stale draft,
+# a draft that failed, a packet the rules refuse, WORKFLOW_CHECKLIST_DRAFT=0) falls back to the full panel, exactly as before.
+MANUAL_DRAFT_PID=""
+
+manual_checklist_draft_fingerprint() {
+    local file
+    for file in REQUIREMENTS_INTERPRETATION PROJECT_PLAN UPDATED_PROJECT_PLAN ADVERSARIAL_REVIEW; do
+        [[ -s "$STATE_DIR/documents/$file.json" ]] || return 1
+        printf '%s %s\n' "$file" "$(hash_file "$STATE_DIR/documents/$file.json")"
+    done | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.read().encode()).hexdigest())'
+}
+
+manual_checklist_draft_start() {
+    [[ "${WORKFLOW_CHECKLIST_DRAFT:-1}" == 1 && "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 && -z "$MANUAL_DRAFT_PID" ]] || return 0
+    local fingerprint
+    fingerprint="$(manual_checklist_draft_fingerprint)" || return 0
+    if [[ -s "$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json" && "$(cat "$STATE_DIR/manual-checklist-draft.done" 2>/dev/null)" == "$fingerprint" ]]; then
+        return 0     # a resumed run: the draft for these exact inputs is already here
+    fi
+    rm -f "$STATE_DIR/manual-checklist-draft.done" "$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json"
+    echo "Drafting the manual checklist from the approved plan while the code is written."
+    ( run_manual_checklist_panel draft && printf '%s\n' "$fingerprint" > "$STATE_DIR/manual-checklist-draft.done" ) \
+        > "$LOG_DIR/manual-checklist-draft.log" 2>&1 &
+    MANUAL_DRAFT_PID=$!
+}
+
+manual_checklist_draft_cancel() {
+    [[ -n "$MANUAL_DRAFT_PID" ]] || return 0
+    python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "$MANUAL_DRAFT_PID" > /dev/null 2>&1 || true
+    MANUAL_DRAFT_PID=""
+}
+
+# Succeeds when a draft exists for the plan and review as they are now.
+manual_checklist_draft_usable() {
+    if [[ -n "$MANUAL_DRAFT_PID" ]]; then wait "$MANUAL_DRAFT_PID" 2>/dev/null || true; MANUAL_DRAFT_PID=""; fi
+    local fingerprint
+    fingerprint="$(manual_checklist_draft_fingerprint)" || return 1
+    [[ -s "$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json" && "$(cat "$STATE_DIR/manual-checklist-draft.done" 2>/dev/null)" == "$fingerprint" ]]
+}
+
+manual_checklist_reconcile() {
+    [[ "${WORKFLOW_CHECKLIST_DRAFT:-1}" == 1 && "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 1
+    manual_checklist_draft_usable || { echo 'No usable checklist draft; running the full checklist panel.'; return 1; }
+    local directory="$STATE_DIR/manual-checklist-reconcile" packet
+    rm -rf "$directory"; mkdir -p "$directory"
+    packet="$directory/reconcile.json"
+    cp "$ROOT/prompts/manual-checklist-reconcile.md" "$directory/prompt.md"
+    echo 'Reconciling the checklist draft with the build and the driver results.'
+    ( UNCLE_NONINTERACTIVE=1 run_codex_review "$directory/prompt.md" "$packet" manual-checklist-review-worker-reconcile < /dev/null ) \
+        > "$LOG_DIR/manual-checklist-worker-reconcile.log" 2>&1 || true
+    if ! python3 -B "$ROOT/scripts/lib/checklist_reconcile.py" apply "$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json" "$packet" \
+            "$directory/final.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_RECONCILIATION.json"; then
+        echo 'The reconciliation could not be applied; running the full checklist panel.' >&2
+        return 1
+    fi
+    cp "$directory/final.json" "$STATE_DIR/documents/MANUAL_CHECKLIST.json"
+    python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" \
+        "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
+        --proposed "$STATE_DIR/documents/MANUAL_CHECKLIST_PROPOSED.json" \
+        --scope "$STATE_DIR/documents/MANUAL_CHECKLIST_DRIVER_SCOPE.json" || return 1
+    python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || return 1
+    python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || return 1
+    cp "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
+    echo "Checklist reconciled: $(python3 -c "import json,sys; a=json.load(open(sys.argv[1])); print('%d draft checks, %d dropped, %d modified, %d added' % (a['draft_checks'], len(a['dropped']), len(a['modified']), len(a['added'])))" "$STATE_DIR/documents/MANUAL_CHECKLIST_RECONCILIATION.json")."
 }
 
 # Checklist work consumes a completed driver green-check. The browser/server
@@ -4669,7 +4752,7 @@ run_stage() {
             require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
             ;;
         MANUAL_CHECKLIST)
-            run_manual_checklist_panel
+            manual_checklist_reconcile || run_manual_checklist_panel
             # Only the canonical packet proves a panel completed. A rendered
             # view can survive a prior run or a user edit and is never an
             # execution input.
@@ -5543,6 +5626,8 @@ while true; do
                 set_state TEST_REVIEW
                 continue
             fi
+            # The checklist does not depend on the code: draft it now, beside implementation, from the approved plan (best effort).
+            manual_checklist_draft_start
             # Nothing may read or write the tree while the preview is still
             # writing it -- including the verification baseline captured below.
             preview_build_wait

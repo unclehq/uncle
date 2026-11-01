@@ -174,6 +174,13 @@ gated_prompt() {
     case "$log_name" in
         *-worker-*)
             local worker_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
+            # The checklist reconciler inspects the built source on purpose (it checks the draft's selectors, files and commands against
+            # the build), so it keeps its own prompt rather than the compact contract that forbids exploratory reads.
+            if [[ "$log_name" == manual-checklist-review-worker-reconcile ]]; then
+                cp "$prompt_file" "$worker_prompt" || return 1
+                printf '%s\n' "$worker_prompt"
+                return 0
+            fi
             local worker_inputs='the canonical JSON prerequisite artifacts named in your assigned prompt'
             local worker_files=''
             case "$log_name" in

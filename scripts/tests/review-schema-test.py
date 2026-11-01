@@ -47,7 +47,7 @@ class Helper(unittest.TestCase):
 
     def test_the_allowlist_is_the_read_only_review_packets_only(self):
         self.assertEqual(review_schema.KINDS, {'adversarial-review-worker-packet', 'manual-checklist-worker-packet',
-                                               'test-review-worker-packet', 'final-audit-worker-packet',
+                                               'manual-checklist-reconcile-packet', 'test-review-worker-packet', 'final-audit-worker-packet',
                                                'updated-plan-worker-packet'})
 
 

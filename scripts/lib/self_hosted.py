@@ -550,6 +550,21 @@ REVIEWER_SCHEMAS = {
                          'exclusive_resources': {'type': 'array', 'items': {'type': 'string', 'maxLength': 120}, 'maxItems': 6},
                          'depends_on': {'type': 'array', 'items': {'type': 'string', 'maxLength': 60}, 'maxItems': 10}},
                         ['id', 'exact_action', 'expected_result'], max_items=24)}, closed=False),
+    # The reconciler's edits to the independent checklist draft (checklist_reconcile.py): every edit carries a reason, an edit to a check
+    # names only fields a reconciler may change, and an added check is numbered by the driver.
+    'manual-checklist-reconcile-packet': _envelope('manual-checklist-reconcile-packet', {
+        'drop': _rows({'id': _str(60), 'reason': _str(400)}, ['id', 'reason'], max_items=40),
+        'modify': _rows({'id': _str(60), 'reason': _str(400),
+                         'fields': _obj({'section': _str(120), 'exact_action': _str(700), 'expected_result': _str(700),
+                                         'evidence_to_capture': _str(500), 'required': {'type': 'boolean'},
+                                         'exclusive_resources': {'type': 'array', 'items': {'type': 'string', 'maxLength': 120}, 'maxItems': 6},
+                                         'depends_on': {'type': 'array', 'items': {'type': 'string', 'maxLength': 60}, 'maxItems': 10}},
+                                        [], closed=True)}, ['id', 'reason', 'fields'], max_items=40),
+        'add': _rows({'section': _str(120), 'exact_action': _str(700), 'expected_result': _str(700), 'evidence_to_capture': _str(500),
+                      'required': {'type': 'boolean'}, 'reason': _str(400),
+                      'exclusive_resources': {'type': 'array', 'items': {'type': 'string', 'maxLength': 120}, 'maxItems': 6},
+                      'depends_on': {'type': 'array', 'items': {'type': 'string', 'maxLength': 60}, 'maxItems': 10}},
+                     ['exact_action', 'expected_result', 'evidence_to_capture', 'required', 'reason'], max_items=20)}, closed=False),
     # A lens owns one to three rows (ORACLE and NEGATIVE share one); evidence is a short paragraph.
     'test-review-worker-packet': _envelope('test-review-worker-packet', {
         'rows': _rows({'id': _str(60), 'status': ACCEPTANCE_ROW_STATUS, 'evidence': _str(800)},

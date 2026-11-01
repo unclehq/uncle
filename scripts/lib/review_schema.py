@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Read-only review packets only. A worker that executes checks or inspects the machine (checklist-execution, preflight) needs its tools,
 # and the plan writers answer through their own schemas.
-KINDS = frozenset({'adversarial-review-worker-packet', 'manual-checklist-worker-packet', 'test-review-worker-packet',
-                   'final-audit-worker-packet', 'updated-plan-worker-packet'})
+KINDS = frozenset({'adversarial-review-worker-packet', 'manual-checklist-worker-packet', 'manual-checklist-reconcile-packet',
+                   'test-review-worker-packet', 'final-audit-worker-packet', 'updated-plan-worker-packet'})
 
 
 def schema_for(prompt_text):

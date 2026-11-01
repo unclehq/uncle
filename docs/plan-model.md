@@ -300,7 +300,7 @@ Full test run (252 test files, 3 at a time, 2026-10-27): 213 pass, 38 fail, 1 sk
 needs a live server). The same run on a pristine export of HEAD (248 files) fails the same 38 tests, so the working
 tree adds no failure; the four new test files pass. The 38 are not caused by this work: several extract shell
 functions from the drivers that no longer exist under those names (`command not found`), some need a logged-in
-`claude` or an installed `cline`. They are worth their own cleanup.
+`claude`. They are worth their own cleanup.
 
 ## noinit: the first real run of ops (hosted Claude)
 

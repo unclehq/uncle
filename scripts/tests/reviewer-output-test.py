@@ -69,7 +69,7 @@ class ReviewerOutput(unittest.TestCase):
         self.assertTrue(module.looks_like_document(payload))
 
     def test_every_parent_artifact_family_is_accepted_by_shared_runner_normalization(self):
-        # Claude, Kimi, Cline, and native Codex all call check() before the
+        # Claude, Kimi, and native Codex all call check() before the
         # driver receives a reviewer response.  Parent artifacts must be
         # accepted as canonical JSON here; only a panel path gets --packet.
         for kind in ('adversarial-review', 'updated-project-plan',

@@ -31,7 +31,14 @@ SUBDIR = 'supervision'
 EFFORTS = ('none', 'low', 'medium', 'high')
 ACTIONS = ('steer', 'retry', 'ask', 'none')
 TRIGGERS = ('validation', 'recurrence', 'steering', 'overrun')
-SUPPORTED_RUNNERS = ('claude', 'cline', 'codex', 'kimi', 'self-hosted')
+SUPPORTED_RUNNERS = ('claude', 'codex', 'kimi', 'self-hosted')
+
+
+def unsupported_runner_message(runner):
+    runner = re.sub(r'[\x00-\x1f\x7f]', '', str(runner))[:64]
+    return ("uncle: runner '%s' is not supported (Cline support was removed). "
+            "Set it to claude, codex, kimi or self-hosted with 'uncle' -> Configure." % runner)
+
 PROPOSAL_KEYS = ('schema', 'diagnosis', 'evidence', 'action', 'target_stage', 'attempt',
                  'run_id', 'template_id', 'rationale')
 MAX_DIAGNOSIS = 2000
@@ -141,6 +148,7 @@ def parse_value(key, raw):
             raise ValueError('supervision.%s must be a finite positive dollar amount' % key)
         return value
     raise ValueError('unknown control kind')
+
 
 
 def format_value(key, value):

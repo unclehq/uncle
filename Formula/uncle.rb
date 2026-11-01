@@ -71,7 +71,7 @@ class Uncle < Formula
       Run `uncle` from any directory. The first time you run it in a project,
       it opens the Configure screen to set up the project.
 
-      Workflow stages run through an external agent CLI (cline, claude, kimi,
+      Workflow stages run through an external agent CLI (claude, kimi,
       or codex); install and configure at least one before starting a workflow.
     EOS
   end

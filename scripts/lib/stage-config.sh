@@ -26,12 +26,6 @@ UNCLE_REVIEWER_STAGES=" adversarial-review test-review manual-checklist final-au
 # screen's idea of what a stage will run matches what the driver actually runs.
 UNCLE_DEFAULT_RUNNER="claude"
 UNCLE_DEFAULT_EFFORT="low"
-UNCLE_DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
-UNCLE_DEFAULT_CLINE_USAGE_MODEL="deepseek/deepseek-v4-flash"
-# Free models cost nothing under either billing, so they are offered in both
-# lists and say nothing about which purse a stage spends. Kept in step with
-# uncle_tui.py's MODEL_CATALOG_FREE by tui-config-test.sh.
-UNCLE_CLINE_FREE_MODELS="deepseek/deepseek-v4-flash z-ai/glm-5.3-flash poolside/laguna-s-2.1"
 
 uncle_config_file() {
     printf '%s' "${UNCLE_CONFIG:-${PROJECT_ROOT:-$PWD}/.uncle/config}"
@@ -60,7 +54,7 @@ uncle_config_get() {
 # The preview is deliberately not a Configure row: it is an implementation
 # shortcut, not an independently approved stage.  It therefore inherits the
 # first configured model stage, including that stage's runner.  Looking up the
-# model alone is unsafe: `local/foo` belongs to OpenCode, not to Cline.
+# model alone is unsafe: `local/foo` belongs to OpenCode, not to another runner.
 uncle_first_configured_model_stage() {
     local file line key value
     file="$(uncle_config_file)"
@@ -123,7 +117,7 @@ uncle_config_stage() {
             ;;
         # The classifier is a small judgment call: it runs where the supervisor runs unless classify-change.* is configured,
         # and falls back to the stage that planned the build when the supervisor's runner is not installed (so a Codex-only,
-        # Kimi-only, Cline or self-hosted setup classifies too).
+        # Kimi-only or self-hosted setup classifies too).
         classify-change) uncle_classify_config_stage ;;
         plan-executability) printf 'adversarial-review' ;;
         plan-recovery) printf 'updated-plan' ;;
@@ -180,6 +174,41 @@ uncle_stage_side() {
     esac
 }
 
+# Rejects a runner value dispatch cannot run (the removed cline, a typo, or an
+# empty value). Two messages (removal text only for cline); never falls back to another
+# runner. Python twins hold the same text (uncle_tui.py, supervisor_runner.py).
+uncle_unsupported_runner() {
+    local r
+    r="$(printf '%s' "${1-}" | LC_ALL=C tr -d '\000-\037\177')"
+    r="${r:0:64}"
+    printf "uncle: runner '%s' is not supported (Cline support was removed). Set it to claude, codex, kimi or self-hosted with 'uncle' -> Configure.\n" "$r" >&2
+    return 1
+}
+
+# Start-of-run check of every saved runner key (global `runner`, any
+# `<stage>.runner`: primary, reviewer, checklist and `supervision.runner`). Rejects the removed
+# cline runner or any unknown value before any stage or agent starts.
+uncle_validate_config_runners() {
+    local file line key value rc=0
+    file="$(uncle_config_file)"
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | tr -s '[:space:]' ' ')"
+        line="${line# }"
+        key="${line%% *}"
+        [[ "$key" == runner || "$key" == *.runner ]] || continue
+        value="${line#* }"
+        [[ "$line" == *" "* ]] || continue
+        value="${value%% *}"
+        case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
+            ""|claude|codex|kimi|self-hosted|opencode|aider) ;;
+            *) uncle_unsupported_runner "$value" || rc=1 ;;
+        esac
+    done < "$file"
+    return "$rc"
+}
+
 # The CLI that runs one stage. The sides are not interchangeable: an agent
 # stage writes code, a reviewer stage must stay read-only, and codex has no
 # agent shim.
@@ -191,7 +220,7 @@ uncle_runner_cmd() {
             kimi)   printf '%s' "$root/scripts/reviewer-kimi.sh" ;;
             codex)  printf 'codex' ;;
             claude) printf '%s' "$root/scripts/reviewer-claude.sh" ;;
-            *)      printf '%s' "$root/scripts/reviewer-cline.sh" ;;
+            *)      uncle_unsupported_runner "$runner"; return 1 ;;
         esac
         return 0
     fi
@@ -200,14 +229,14 @@ uncle_runner_cmd() {
         claude) printf 'claude' ;;
         kimi)   printf '%s' "$root/scripts/agent-kimi.sh" ;;
         codex)  printf '%s' "$root/scripts/agent-codex.sh" ;;
-        *)      printf '%s' "$root/scripts/agent-cline.sh" ;;
+        *)      uncle_unsupported_runner "$runner"; return 1 ;;
     esac
 }
 
 # Only executable regular PATH files count; never execute a discovery probe.
 uncle_installed_runners() {
     local binary runner rest dir found
-    for binary in claude codex kimi cline opencode; do
+    for binary in claude codex kimi opencode; do
         rest="${PATH-}:"
         found=false
         while [[ "$rest" == *:* ]]; do
@@ -231,7 +260,7 @@ uncle_installed_runners() {
 }
 
 uncle_no_runner() {
-    echo 'uncle: no agents installed. Install claude, codex, kimi, cline, or opencode and add its executable to PATH.' >&2
+    echo 'uncle: no agents installed. Install claude, codex, kimi, or opencode and add its executable to PATH.' >&2
     return 1
 }
 
@@ -324,57 +353,7 @@ uncle_stage_model() {
         printf '%s' "$v"
         return 0
     fi
-    [[ "$runner" == "cline" ]] || return 0
-    v="$(uncle_stage_key "$stage" model)"
-    [[ -n "$v" ]] || v="$(uncle_config_get "$stage")"
-    if [[ -z "$v" && "$(uncle_stage_side "$stage")" == "reviewer" ]]; then
-        v="$(uncle_config_get reviewer)"
-    fi
-    [[ -n "$v" ]] || v="$(uncle_config_get model)"
-    if [[ -z "$v" ]]; then
-        # No model configured: the default depends on how the stage is paid
-        # for, because the two billings are two different model catalogues.
-        if [[ "$(uncle_stage_billing "$stage")" == "cline-usage" ]]; then
-            v="$UNCLE_DEFAULT_CLINE_USAGE_MODEL"
-        else
-            v="$UNCLE_DEFAULT_CLINE_MODEL"
-        fi
-    fi
-    printf '%s' "$v"
-}
-
-# How a cline stage is paid for: clinepass | cline-usage. Default clinepass.
-#
-# Not a flag: within cline's default provider the modelType prefix decides, so
-# `cline-pass/kimi-k3` spends the subscription and a vendor-prefixed `kimi-k3`
-# spends usage billing. An explicit model therefore settles this on its own,
-# and it wins over the setting -- the id is what cline actually receives, and a
-# setting that disagreed with it would describe a run that never happened.
-uncle_stage_billing() {
-    local stage v model
-    stage="$(uncle_config_stage "$1")"
-    case "$stage" in implementation-step-*) stage=implementation ;; esac
-    model="$(uncle_stage_key "$stage" model)"
-    [[ -n "$model" ]] || model="$(uncle_config_get "$stage")"
-    if [[ -n "$model" ]]; then
-        # A free model is not evidence either way: it runs under both.
-        case " $UNCLE_CLINE_FREE_MODELS " in
-            *" $model "*) model="" ;;
-        esac
-    fi
-    if [[ -n "$model" ]]; then
-        case "$model" in
-            cline-pass/*) printf 'clinepass' ;;
-            *)            printf 'cline-usage' ;;
-        esac
-        return 0
-    fi
-    v="$(uncle_stage_key "$stage" billing)"
-    [[ -n "$v" ]] || v="$(uncle_config_get billing)"
-    case "$(printf '%s' "${v:-clinepass}" | tr '[:upper:]' '[:lower:]')" in
-        cline-usage|usage|usage-based|cline_usage) printf 'cline-usage' ;;
-        *)                                        printf 'clinepass' ;;
-    esac
+    return 0
 }
 
 uncle_stage_cmd() {

@@ -40,7 +40,6 @@ Install and configure every client selected in **Configure → Configure stages*
 
 | Runner | Required executable | Setup |
 |---|---|---|
-| Cline | `cline` | Configure its provider, credentials, and model access. Cline is Uncle's default runner. |
 | Claude | `claude` | Authenticate the Claude Code client. |
 | Codex | `codex` | Authenticate the Codex client. |
 | Kimi | `kimi` | Authenticate the Kimi client. |
@@ -103,7 +102,7 @@ disables them only if that otherwise-identical request succeeds. Rejections
 are remembered per Base URL for the runner process, independently of effort
 and schema support. The stage log records applied top-level key names and one
 warning when options are disabled, without recording option values. This
-setting does not affect Claude, Codex, Kimi, or Cline.
+setting does not affect Claude, Codex, or Kimi.
 
 For DeepSeek on vLLM, a server-specific example is:
 
@@ -150,7 +149,7 @@ writers run with at most four workers per pool. Set `self-hosted.stage-jobs 1`
 in `.uncle/config`, or `WORKFLOW_SELF_HOSTED_STAGE_JOBS=1`, for a server that
 serves one request at a time. Values 1–8 are accepted; the environment overrides
 the config and invalid values warn and use 4. This changes only self-hosted
-planning; Claude, Codex, Kimi and Cline retain their existing scheduling.
+planning; Claude, Codex and Kimi retain their existing scheduling.
 Project-plan sections wait for their outline when needed, retain one retry,
 and assemble in canonical order. Updated-plan reviews with at least five
 findings use two findings per writer; conflicting edits still go through the
@@ -221,7 +220,7 @@ rare enough that four concurrent copies of every stage are not worth their cost.
 It remains available: Uncle can race several isolated candidates per stage
 attempt and promote the first to pass validation, to absorb an occasional
 malformed, stalled, or slow response from a local model. This applies only to `self-hosted`-runner stages; it never
-adds concurrent requests for `claude`, `codex`, `kimi`, or `cline`.
+adds concurrent requests for `claude`, `codex`, or `kimi`.
 
 `WORKFLOW_SELF_HOSTED_CANDIDATES` sets how many candidates race per stage
 attempt (default 1, no racing); a per-stage override is available as

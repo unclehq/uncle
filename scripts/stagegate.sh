@@ -307,6 +307,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+uncle_validate_config_runners || exit 1
 . "$ROOT/scripts/lib/acceptance.sh"
 . "$ROOT/scripts/lib/acceptance-gate.sh"
 . "$ROOT/scripts/lib/repair-limit.sh"
@@ -879,7 +880,7 @@ stage_setting() {
 # Same lookup, but only an *unset* variable falls back. A stage configured
 # with an empty model is asking for no model at all: claude, kimi, and codex
 # have their own defaults, and passing one uncle invented for them is worse
-# than passing none. Only cline needs to be told, and it is told explicitly.
+# than passing none.
 stage_setting_opt() {
     local kind="$1"
     local stage="$2"

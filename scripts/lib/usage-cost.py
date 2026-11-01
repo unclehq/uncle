@@ -44,7 +44,8 @@ def enrich(record):
     if any(not isinstance(rates.get(k), (int, float)) or not math.isfinite(rates[k]) or rates[k] < 0 for k, _ in keys):
         raise ValueError('All four model rates must be finite nonnegative USD per million tokens')
     values = {k: record[field] for k, field in keys}
-    # Codex/Cline input includes cache reads; Claude/Kimi use disjoint buckets.
+    # Historical ledger rows with runner 'cline' are tolerated as an opaque runner label (SB9).
+    # Codex input includes cache reads; Claude/Kimi use disjoint buckets.
     if record.get('input_includes_cache'):
         values['input'] -= values['cache_read'] + values['cache_write']
     if any(not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 for v in values.values()):

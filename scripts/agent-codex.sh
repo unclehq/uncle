@@ -62,7 +62,7 @@ done
 
 # A tier name from the driver's built-in defaults is not a codex model id.
 # Treat it as "no model given" so codex uses the model it is configured with,
-# which is the same rule the cline shim follows.
+# which is the same rule the other shims follow.
 case "$model" in
     opus|sonnet|kimi|kimi:*) model="" ;;
 esac

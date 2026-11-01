@@ -9,7 +9,7 @@
 #
 # It runs on the supervisor's runner and model by default (supervision.runner/model/effort in .uncle/config), or on
 # classify-change.runner/model/effort when those are set. When the supervisor's runner is not installed it uses the stage that
-# planned the build, so a Codex-only, Kimi-only, Cline or self-hosted setup classifies too. The answer is read from a delivery
+# planned the build, so a Codex-only, Kimi-only or self-hosted setup classifies too. The answer is read from a delivery
 # file or from the runner's final text, so no runner needs a special protocol.
 #
 # Fail-open by design: a runner that fails, answers badly, or is disabled yields the deterministic profile and the build goes

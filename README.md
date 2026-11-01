@@ -15,7 +15,7 @@ agents. Describe what you want, and it plans, implements, independently
 reviews, verifies, and ships it — a live preview on screen in seconds, a
 complete, verified application in minutes.
 
-Use Claude, Codex, self-hosted models, Cline, Kimi, or the agents you already have.
+Use Claude, Codex, self-hosted models, Kimi, or the agents you already have.
 Uncle coordinates the work while keeping implementation, independent
 review, verification, human authority, and publication separate.
 
@@ -100,7 +100,9 @@ Coding agents can write code. They should not be trusted to approve their own wo
 Uncle separates the people and agents doing the work from the system establishing the integrity of the change.
 
 * **Work with Uncle while it works.** Ask questions, provide context, redirect implementation, or discuss failures without leaving the terminal.
-* **Use the agents you already have.** Uncle works with Cline, Claude, Codex, Kimi, self-hosted models, and other coding agents.
+* **Use the agents you already have.** Uncle works with Claude, Codex, Kimi, self-hosted models, and other coding agents.
+
+Note: Cline support was removed. If a saved runner is `cline`, switch it to claude, codex, kimi or self-hosted with `uncle` -> Configure.
 * **Independent review.** The agent that writes the code does not approve its own implementation.
 * **Human authority.** Consequential decisions remain explicit human approval gates.
 * **Pinned intent.** Approved specifications and plans are cryptographically identified so they cannot silently change.

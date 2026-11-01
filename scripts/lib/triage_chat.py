@@ -4,7 +4,7 @@ The runner is the agent-side shim of the configured `triage.runner`, launched
 with the same flags the drivers use for an agent stage and the prompt on
 stdin. Its stream-json goes to `.uncle/workflow/logs/triage-<n>.jsonl`; the
 reply is the last `assistant` text event in that stream, which every shim
-produces (claude natively; codex, cline, and kimi through their translators).
+produces (claude natively; codex and kimi through their translators).
 The `result` event is read only for its error flag.
 """
 import json

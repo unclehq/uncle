@@ -293,7 +293,7 @@ ensure_checklist_runner() {
         echo "screen, so the run would return here unchanged."
         echo
         echo "Change it in .uncle/config (\`$stage.runner\`, \`$stage.network\`)"
-        echo "or from \`uncle\` -> Configure. cline, claude, and kimi are not"
+        echo "or from \`uncle\` -> Configure. claude and kimi are not"
         echo "sandboxed; codex needs \`$stage.network true\` for a port and"
         echo "cannot do GUI work at all."
 

@@ -128,7 +128,7 @@ Each has a test that fails without the fix.
 | | Passed | Failed | Skipped |
 |---|---:|---:|---:|
 | `b03a324` (upstream) | 108 | 23 | 1 |
-| `brian-handoff` | 135 | 0 | 1 (`cline` not installed) |
+| `brian-handoff` | 135 | 0 | 1 (runner not installed) |
 
 Most failures were stale harnesses: tests copied functions out of the drivers
 with `extract_fns`, and refactors had made those functions call helpers that

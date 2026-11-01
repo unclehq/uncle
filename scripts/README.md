@@ -488,7 +488,6 @@ One shim per runner per side, and the side is the difference that matters:
 
 | Runner | Agent stage | Reviewer stage |
 |---|---|---|
-| `cline` | `agent-cline.sh` (act mode) | `reviewer-cline.sh` (plan mode) |
 | `claude` | `claude` | `reviewer-claude.sh` |
 | `kimi` | `agent-kimi.sh` | `reviewer-kimi.sh` (ReadFile, Glob, Grep only) |
 | `codex` | `agent-codex.sh` (`--sandbox workspace-write`) | `codex` (`--sandbox read-only`) |
@@ -704,8 +703,7 @@ individual stage back with e.g. `WORKFLOW_MODEL_BASELINE=sonnet`.
 
 `uncle` (repo root) is an interactive launcher for the three drivers. The model,
 reasoning effort, and per-stage overrides are set in the Configure menu (menu
-option 4) and persisted to `.uncle/config`; when a driver runs they are exported
-as `UNCLE_CLINE_MODEL`/`UNCLE_CLINE_EFFORT`, and
+option 4) and persisted to `.uncle/config`; when a driver runs
 `WORKFLOW_AGENT_CMD`/`WORKFLOW_REVIEWER_CMD` are set to the matching shims. When
 stdin and stdout are real terminals it opens a full-screen TUI (`uncle_tui.py`);
 otherwise it falls back to a line menu. `uncle --runs` lists the runs across
@@ -716,11 +714,11 @@ config is `STAGE VALUE` lines:
 
 | Key | Meaning |
 |---|---|
-| `runner` | `cline` (default), `claude`, `kimi`, `codex`, or `self-hosted` (OpenCode) — picks the agent/reviewer commands |
-| `model` | fallback model id for cline agent stages (`UNCLE_CLINE_MODEL`); empty = cline default |
+| `runner` | `claude` (default), `kimi`, `codex`, or `self-hosted` (OpenCode) — picks the agent/reviewer commands |
+| `model` | fallback model id for agent stages; empty = runner default |
 | `effort` | reasoning effort (`high`/`medium`/`low`) |
-| `reviewer` | fallback model id for cline reviewer stages (`UNCLE_CLINE_REVIEWER_MODEL`) |
-| `<stage>` | model id for that stage (`WORKFLOW_MODEL_<STAGE>`), in its runner's own form — `modelType/model` for cline, the vendor's own id for claude, codex, or kimi; empty = runner default |
+| `reviewer` | fallback model id for reviewer stages |
+| `<stage>` | model id for that stage (`WORKFLOW_MODEL_<STAGE>`), in its runner's own form — the vendor's own id for claude, codex, or kimi; empty = runner default |
 
 Valid stage keys: `requirements`, `project-plan`, `updated-plan`,
 `preflight`, `implementation`, `repair`, `execute-checklist`, `change-plan`,
@@ -758,25 +756,6 @@ signing key or a gitsign/cosign setup), appends both to the commit tree, and
 refuses before any git write when the policy says so. Handoffs without an
 `envelopes/` directory (fixtures and journals from before this existed) keep
 the previous behavior.
-
-### agent-cline.sh / reviewer-cline.sh
-
-The cline runner (the `uncle` default). `agent-cline.sh` translates the drivers'
-`claude -p` flag set onto `cline` and rewrites cline's `--json` NDJSON
-(`agent_event` / `content_end` / `usage` / `run_result`) into the stream-json
-schema the drivers render and cost. `reviewer-cline.sh` translates `codex exec`
-onto `cline -p`; plan mode enforces read-only, and the review text and token
-totals come from `run_result` (falling back to a `done` event).
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `WORKFLOW_CLINE_CMD` | `cline` | cline binary for both shims |
-| `UNCLE_CLINE_MODEL` | (none) | cline model id for agent stages; overrides the driver `--model` |
-| `UNCLE_CLINE_REVIEWER_MODEL` | (none) | cline model id for reviewer stages |
-| `UNCLE_CLINE_EFFORT` | `medium` | reasoning effort (`none`/`low`/`medium`/`high`/`xhigh`) |
-
-Both are covered by `scripts/tests/agent-cline-test.sh` and
-`scripts/tests/reviewer-cline-test.sh`.
 
 Kimi reviewer stages use the current Kimi Code CLI Markdown agents (`--agent-file`).
 The reviewer uses `lib/kimi/reviewer.md` with an explicit read-only tool list.
@@ -821,7 +800,7 @@ or launch a separate homepage conversation. Delivery acknowledgment appears in
 chat; a draft is retained when no active session is ready. Stage transitions do
 not forward messages to a different stage automatically.
 
-Native transports are Codex app-server, Claude stream-json, Cline SDK steering,
+Native transports are Codex app-server, Claude stream-json,
 Kimi server (or legacy Wire), and OpenCode server. The locally installed runner
 must provide that interface. Token and reported cost updates continue in the
 stage sidebar, including follow-up turns; unavailable provider costs remain

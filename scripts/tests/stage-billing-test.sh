@@ -1,79 +1,22 @@
 #!/usr/bin/env bash
-# Which purse a cline stage spends.
-#
-# cline takes no billing flag: within its default provider the modelType
-# prefix decides, so `cline-pass/kimi-k3` and a vendor-prefixed `kimi-k3` are
-# two purchases of the same model. That makes the model id authoritative and
-# the setting a default -- and it means a setting that disagrees with an
-# explicit model must lose, or the config would describe a run that never
-# happened.
+# SB9: a historical ledger row with runner=cline and a clinepass billing field
+# still parses and is counted through the generic path (no exception, no drop).
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-. "$ROOT/scripts/lib/stage-config.sh"
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
-UNCLE_CONFIG="$work/config"
-
-eq() { [ "$2" = "$3" ] || { echo "FAIL $1: expected '$3', got '$2'" >&2; exit 1; }; }
-
-# Absent, unset, and unrecognized all mean the subscription: that is what the
-# tool has always done, and a silent switch to metered billing is not a default.
-for value in "" garbage clinepass CLINEPASS; do
-    printf 'requirements.runner cline\nrequirements.billing %s\n' "$value" > "$UNCLE_CONFIG"
-    eq "billing '$value'" "$(uncle_stage_billing requirements)" clinepass
-done
-printf 'requirements.runner cline\n' > "$UNCLE_CONFIG"
-eq "no billing line" "$(uncle_stage_billing requirements)" clinepass
-eq "default model follows it" "$(uncle_stage_model requirements)" cline-pass/deepseek-v4-pro
-
-# Every spelling an operator is likely to write for the metered side.
-for value in cline-usage usage usage-based CLINE-USAGE; do
-    printf 'requirements.runner cline\nrequirements.billing %s\n' "$value" > "$UNCLE_CONFIG"
-    eq "billing '$value'" "$(uncle_stage_billing requirements)" cline-usage
-done
-eq "its default model differs" "$(uncle_stage_model requirements)" deepseek/deepseek-v4-flash
-
-# A global key is the fallback; a stage key wins over it.
-printf 'requirements.runner cline\nbilling cline-usage\n' > "$UNCLE_CONFIG"
-eq "global billing" "$(uncle_stage_billing requirements)" cline-usage
-printf 'requirements.runner cline\nrequirements.billing clinepass\nbilling cline-usage\n' > "$UNCLE_CONFIG"
-eq "stage beats global" "$(uncle_stage_billing requirements)" clinepass
-
-# An explicit model is what cline actually receives, so it decides.
-printf 'requirements.runner cline\nrequirements.model anthropic/claude-opus-5\n' > "$UNCLE_CONFIG"
-eq "a paid vendor id means usage billing" "$(uncle_stage_billing requirements)" cline-usage
-printf 'requirements.runner cline\nrequirements.model cline-pass/kimi-k3\n' > "$UNCLE_CONFIG"
-eq "a cline-pass id means the subscription" "$(uncle_stage_billing requirements)" clinepass
-
-# ... including when the billing line disagrees with it, in both directions.
-printf 'requirements.runner cline\nrequirements.billing cline-usage\nrequirements.model cline-pass/kimi-k3\n' > "$UNCLE_CONFIG"
-eq "the model wins over the setting" "$(uncle_stage_billing requirements)" clinepass
-eq "and the model is still passed through" "$(uncle_stage_model requirements)" cline-pass/kimi-k3
-printf 'requirements.runner cline\nrequirements.billing clinepass\nrequirements.model anthropic/claude-opus-5\n' > "$UNCLE_CONFIG"
-eq "the model wins the other way too" "$(uncle_stage_billing requirements)" cline-usage
-
-# A legacy bare "<stage> <model>" line is a model, so it decides too.
-printf 'requirements.runner cline\nrequirements anthropic/claude-opus-5\n' > "$UNCLE_CONFIG"
-eq "a legacy bare model line decides" "$(uncle_stage_billing requirements)" cline-usage
-
-# A free model runs under either billing, so it decides nothing: the setting
-# still holds, and switching billing must not be read as a contradiction.
-printf 'requirements.runner cline\nrequirements.model poolside/laguna-s-2.1\n' > "$UNCLE_CONFIG"
-eq "a free model leaves the default alone" "$(uncle_stage_billing requirements)" clinepass
-printf 'requirements.runner cline\nrequirements.billing cline-usage\nrequirements.model poolside/laguna-s-2.1\n' > "$UNCLE_CONFIG"
-eq "a free model keeps usage billing" "$(uncle_stage_billing requirements)" cline-usage
-eq "and is still what runs" "$(uncle_stage_model requirements)" poolside/laguna-s-2.1
-printf 'requirements.runner cline\nrequirements.billing clinepass\nrequirements.model z-ai/glm-5.3-flash\n' > "$UNCLE_CONFIG"
-eq "a free model keeps the subscription setting" "$(uncle_stage_billing requirements)" clinepass
-
-# Step variants inherit the parent stage's setting.
-printf 'implementation.runner cline\nimplementation.billing cline-usage\n' > "$UNCLE_CONFIG"
-eq "step variants inherit" "$(uncle_stage_billing implementation-step-3)" cline-usage
-
-# Codex accepts a configured model; billing remains irrelevant to it.
-printf 'requirements.runner codex\nrequirements.billing cline-usage\nrequirements.model gpt-6.1-terra\n' > "$UNCLE_CONFIG"
-eq "a codex stage receives its configured model" "$(uncle_stage_model requirements)" "gpt-6.1-terra"
-printf 'requirements.runner codex\nrequirements.billing cline-usage\n' > "$UNCLE_CONFIG"
-eq "an unconfigured codex stage uses the runner default" "$(uncle_stage_model requirements)" ""
-
-echo 'stage-billing-test.sh: defaults, spellings, global fallback, and model-wins-over-setting passed'
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+fail() { echo "FAIL: $*" >&2; exit 1; }
+mkdir -p "$TMP/p/.uncle/workflow/metrics"
+M="$TMP/p/.uncle/workflow/metrics"
+rec() { printf '{"kind":"agent","stage":"%s","elapsed_seconds":%s,"input_tokens":%s,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":0,"reported_cost_usd":%s,"runner":"%s","billing":"%s"}\n' "$@"; }
+rec implementation 5 100 0.5 scripts/agent-claude.sh none > "$M/1.json"
+rec implementation 6 200 0.25 scripts/agent-codex.sh none > "$M/2.json"
+rec historical-cline-row 7 300 0.125 scripts/agent-cline.sh clinepass > "$M/3.json"
+# usage-cost.py on a historical cline row: exit 0, row kept, reported cost preserved
+cp "$M/3.json" "$TMP/row.json"
+python3 "$ROOT/scripts/lib/usage-cost.py" "$TMP/row.json" || fail 'usage-cost.py rejected historical cline row'
+[[ "$(jq -r '.cost_status' "$TMP/row.json")" == reported ]] || fail 'cline row not aggregated as reported'
+[[ "$(jq -r '.runner' "$TMP/row.json")" == scripts/agent-cline.sh ]] || fail 'row mutated'
+out="$(bash "$ROOT/scripts/performance-report.sh" "$TMP/p" 2>&1)" || fail 'performance-report.sh failed'
+grep -q 'historical-cline-row | 1 ' <<<"$out" || fail 'cline row dropped from report'
+grep -q '| agent | implementation | 2 | 11 | 2/2 | 300 |' <<<"$out" || fail 'non-cline totals changed'
+echo 'stage-billing-test: passed'

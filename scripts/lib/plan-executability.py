@@ -130,7 +130,7 @@ def manifest(root, plan):
                                             'UNCLE_STEERING', 'UNCLE_CONFIG', 'UNCLE_SELF_HOSTED_MODEL'))}}
     # Record hashes, never executable contents or credentials, for selected commands.
     result['commands'] = {v: file_hash(v) for k, v in result['settings'].items() if '_CMD' in k}
-    result['discovery'] = {name: shutil.which(name) for name in ('codex', 'claude', 'cline')}
+    result['discovery'] = {name: shutil.which(name) for name in ('codex', 'claude')}
     result['digest'] = digest(result)
     return result
 

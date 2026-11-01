@@ -7,7 +7,7 @@ set -euo pipefail
 # Each stage resolves its own command and its own model. The property that
 # matters most is the empty model: a stage configured with no model must be
 # invoked with no --model flag at all, because claude, kimi, and codex have
-# their own defaults and only cline needs to be told. A stage that names a
+# their own defaults and only a runner with no default model needs to be told. A stage that names a
 # model must still get it.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory() as tmp:
         functions = "\n".join(match.group(0) for name in names
             for match in re.finditer(r"^" + name + r"\(\) \{.*?^}", source, re.M | re.S))
         for config in ("", "implementation.effort high\n"):
-            for binary in ("claude", "cline"):
+            for binary in ("claude",):
                 (bindir / binary).write_text("")
                 (bindir / binary).chmod(0o755)
             (bindir / "config").write_text(config)
@@ -86,14 +86,12 @@ with tempfile.TemporaryDirectory() as tmp:
                                     capture_output=True, text=True)
             assert result.returncode == 0, (driver, result.stderr)
             assert result.stdout == "claude|", (driver, config, result.stdout)
-        (bindir / "cline").unlink()
         (bindir / "config").write_text("")
         result = subprocess.run(["/bin/bash", "-c", script], env=env,
                                 capture_output=True, text=True)
         assert result.returncode != 0 and not result.stdout, (driver, result)
         assert "Install claude" in result.stderr and "PATH" in result.stderr
         for saved, expected in (
-            ("implementation.runner cline\n", str(root / "scripts/agent-cline.sh") + "|cline-pass/deepseek-v4-pro"),
             ("runner opencode\nself-hosted.model vendor/model\n", str(root / "scripts/agent-self-hosted.sh") + "|vendor/model"),
             ("runner aider\nself-hosted.model vendor/model\n", str(root / "scripts/agent-self-hosted.sh") + "|vendor/model"),
         ):
@@ -196,11 +194,11 @@ rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md"
 (cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     UNCLE_PROJECT_ROOT="$PROJ" \
     WORKFLOW_AGENT_CMD="$TMP/agent-global" \
-    WORKFLOW_MODEL_PROJECT_PLAN=cline-pass/kimi-k3 \
+    WORKFLOW_MODEL_PROJECT_PLAN=vendor/kimi-k3 \
     WORKFLOW_SPECULATE=0 \
     bash "$ROOT/scripts/stagegate.sh" > /dev/null 2>&1) || true
 check_contains "stagegate: a set model is passed" \
-    "--model cline-pass/kimi-k3" "$(cat "$ARGV")"
+    "--model vendor/kimi-k3" "$(cat "$ARGV")"
 
 # --- change-workflow: planning reaches its configured runner ----------------
 #
@@ -229,7 +227,7 @@ if command -v git > /dev/null 2>&1; then
     out="$(cd "$CPROJ" && echo n | ARGV_LOG="$ARGV" \
         UNCLE_PROJECT_ROOT="$CPROJ" \
         WORKFLOW_AGENT_CMD="$TMP/agent-global" \
-        WORKFLOW_MODEL_CHANGE_PLAN=cline-pass/glm-5.3 \
+        WORKFLOW_MODEL_CHANGE_PLAN=vendor/glm-5.3 \
         WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
         bash "$ROOT/scripts/change-workflow.sh" 2>&1)" || true
     # Same declined-gate exit-status issue as the stagegate.sh captures above.
@@ -238,7 +236,7 @@ if command -v git > /dev/null 2>&1; then
     check_absent "change: driver baseline does not launch a phantom agent stage" \
         "STAGE " "$(cat "$ARGV")"
     check_contains "change: combined spec+plan stage ran on the global command" \
-        "--model cline-pass/glm-5.3" "$spec_argv"
+        "--model vendor/glm-5.3" "$spec_argv"
 else
     echo "NOTE skipped change-workflow cases: git is not available"
 fi
@@ -271,19 +269,19 @@ run_reread() {
 # distinct stage used elsewhere, whose own model-lookup alias to
 # "project-plan" (see stage_model()) runs the opposite direction from what a
 # reader might guess and does not apply here.
-printf 'project-plan.runner cline\nproject-plan.model cline-pass/kimi-k3\nproject-plan.effort high\n' \
+printf 'project-plan.runner claude\nproject-plan.model vendor/kimi-k3\nproject-plan.effort high\n' \
     > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
-check_contains "config: model comes from the file" "--model cline-pass/kimi-k3" "$argv"
+check_contains "config: model comes from the file" "--model vendor/kimi-k3" "$argv"
 check_contains "config: effort comes from the file" "--effort high" "$argv"
 
 # The same driver, the same command line, a different config file.
-printf 'project-plan.runner cline\nproject-plan.model cline-pass/glm-5.3\nproject-plan.effort low\n' \
+printf 'project-plan.runner claude\nproject-plan.model vendor/glm-5.3\nproject-plan.effort low\n' \
     > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
-check_contains "config: an edited model is picked up" "--model cline-pass/glm-5.3" "$argv"
+check_contains "config: an edited model is picked up" "--model vendor/glm-5.3" "$argv"
 check_contains "config: an edited effort is picked up" "--effort low" "$argv"
-check_absent "config: the old model is gone" "cline-pass/kimi-k3" "$argv"
+check_absent "config: the old model is gone" "vendor/kimi-k3" "$argv"
 
 # A kimi runner still gets an explicit --model: kimi's own shell accepts
 # "kimi" as a dispatch token that carries the real provider id separately
@@ -293,7 +291,7 @@ argv="$(run_reread)"
 check_contains "config: a kimi stage gets the dispatch token" "--model kimi" "$argv"
 
 # An explicit variable still outranks the file.
-printf 'project-plan.runner cline\nproject-plan.model cline-pass/kimi-k3\n' \
+printf 'project-plan.runner claude\nproject-plan.model vendor/kimi-k3\n' \
     > "$CPROJ2/.uncle/config"
 : > "$ARGV"
 rm -rf "$CPROJ2/.uncle/workflow" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"
@@ -341,7 +339,7 @@ DOC
 done
 EOF
 chmod +x "$TMP/config-reviewer"
-printf 'adversarial-review.runner cline\nadversarial-review.model vendor/reviewer\nadversarial-review.effort low\n' > "$RPROJ/.uncle/config"
+printf 'adversarial-review.runner claude\nadversarial-review.model vendor/reviewer\nadversarial-review.effort low\n' > "$RPROJ/.uncle/config"
 printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
     ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null 2>&1

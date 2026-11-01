@@ -385,8 +385,8 @@ class RequestOptions(unittest.TestCase):
         # fixture commits, external CLIs, credentials, or network are needed.
         script = 'source scripts/lib/stage-config.sh\n' + '\n'.join(
             'uncle_stage_runner implementation\nuncle_stage_model implementation %s\nuncle_stage_effort implementation' % runner
-            for runner in ('claude', 'codex', 'kimi', 'cline'))
-        for runner in ('claude', 'codex', 'kimi', 'cline'):
+            for runner in ('claude', 'codex', 'kimi'))
+        for runner in ('claude', 'codex', 'kimi'):
             self.config.write_text('implementation.runner %s\nimplementation.model fixture-model\n'
                                    'implementation.effort medium\n' % runner)
             base = subprocess.run(['bash', '-c', script], cwd=ROOT, env=dict(os.environ),

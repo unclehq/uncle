@@ -211,7 +211,7 @@ class T2MissingEvidence(Fixture):
         self.unavailable('Implementation agent')
 
     def test_wrong_stage_is_not_identity(self):
-        self.totals([dict(kind='reviewer', stage='manual-checklist', runner='cline', model='m',
+        self.totals([dict(kind='reviewer', stage='manual-checklist', runner='codex', model='m',
                           speculative=False, process_exit=0, reported_error=False, ended_at=200),
                      dict(kind='agent', stage='implementation-step-2', runner='claude', model='m',
                           speculative=False, process_exit=0, reported_error=False, ended_at=100)])

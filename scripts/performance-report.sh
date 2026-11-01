@@ -12,11 +12,12 @@ else
 find "$dir" -name '*.json' -type f -exec cat {} + | jq -s -r '
     def known: map(select(type == "number")) | if length == 0 then "Unavailable" else (add|tostring) end;
     def money: map(select(type == "number")) | if length == 0 then "Unavailable" else ((add * 1000000 | round) / 1000000 | tostring) end;
-    def cell: tostring | gsub("\\|"; "&#124;") | gsub("[\\r\\n]"; " ");
+    def cell: tostring | gsub("[\\x00-\\x1f\\x7f]"; "") | gsub("\\|"; "&#124;") | .[0:64];
     def token_total:
         if (.reported_total_tokens|type) == "number" then .reported_total_tokens
         elif ([.input_tokens,.output_tokens]|all(type == "number")) then
-            if (.input_includes_cache or ((.runner // "") | test("(agent|reviewer)-cline[.]sh$"))) then .input_tokens + .output_tokens
+            # Historical ledger rows with runner 'cline' are tolerated as an opaque runner label (SB9).
+            if .input_includes_cache then .input_tokens + .output_tokens
             elif ([.cache_read_tokens,.cache_write_tokens]|all(type == "number")) then
                 .input_tokens + .output_tokens + .cache_read_tokens + .cache_write_tokens
             else null end

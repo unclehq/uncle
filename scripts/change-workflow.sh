@@ -188,8 +188,7 @@ mkdir -p "$APPROVAL_DIR" "$LOG_DIR"
 # Each is keyed by the stage's log name first, because that is what `uncle`
 # writes and what stagegate.sh already uses; the older key stays as a fallback
 # so an existing environment keeps working. A variable that is *set and empty*
-# means "pass no model": claude, kimi, and codex have their own defaults, and
-# only cline needs to be told which model to run.
+# means "pass no model": claude, kimi, and codex have their own defaults.
 MODEL_CHANGE_PLAN="${WORKFLOW_MODEL_CHANGE_PLAN-opus}"
 MODEL_BASELINE="${WORKFLOW_MODEL_BASELINE-${MODEL_CHANGE_PLAN}}"
 MODEL_CHANGE_SPEC="${WORKFLOW_MODEL_CHANGE_SPEC-kimi}"
@@ -421,6 +420,7 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+uncle_validate_config_runners || exit 1
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
 . "$ROOT/scripts/lib/early-baseline.sh"

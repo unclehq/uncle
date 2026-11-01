@@ -5751,6 +5751,7 @@ while true; do
                 continue
             fi
             if [[ ! -e "$STATE_DIR/test-mutation-evidence-attempted" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
+                && [[ "${WORKFLOW_MUTATION_EVIDENCE_REPAIR:-0}" == 1 ]] \
                 && python3 -B "$ROOT/scripts/lib/test_review_route.py" --mutation-evidence-gap "$STATE_DIR/documents/TEST_REVIEW.json"; then
                 touch "$STATE_DIR/test-mutation-evidence-attempted" "$STATE_DIR/test-evidence-reconcile"
                 echo 'Test review found missing mutation evidence; running one implementation-owned evidence reconciliation before re-review.'
@@ -5921,6 +5922,7 @@ while true; do
                 continue
             fi
             if [[ ! -e "$STATE_DIR/test-mutation-evidence-attempted" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
+                && [[ "${WORKFLOW_MUTATION_EVIDENCE_REPAIR:-0}" == 1 ]] \
                 && python3 -B "$ROOT/scripts/lib/test_review_route.py" --mutation-evidence-gap "$STATE_DIR/documents/TEST_REVIEW.json"; then
                 touch "$STATE_DIR/test-mutation-evidence-attempted" "$STATE_DIR/test-evidence-reconcile"
                 echo 'Repair reclassified as missing mutation evidence; running one implementation-owned evidence reconciliation.'

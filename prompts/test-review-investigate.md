@@ -123,3 +123,10 @@ contradictions without a repeated narrated compliance sweep.
 Write the complete investigation once. Do not count bytes repeatedly, remove
 detail to hit a size guide, or emit a status report instead of the
 investigation. Keep the six-row summary last.
+
+## Mutation checks are informational
+
+Mutation (defect-injection) evidence is reported but never blocks the run: the NEGATIVE row, `tests/mutations`, and any command
+whose name says mutation, defect or inject. Grade the NEGATIVE row honestly (PASS, FAIL or NOT RUN, with the evidence) and record
+a mutation gap as a nonblocking finding (`Blocks` NO). Do not ask for a repair, a waiver, a plan change or a rerun because of it,
+and never make it a reason for a NOT READY verdict. The driver documents failing mutation commands and moves on.

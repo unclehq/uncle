@@ -467,6 +467,7 @@ on_exit() {
     if declare -f progress_end > /dev/null; then progress_end; fi
     if declare -f cleanup_bg > /dev/null; then cleanup_bg; fi
     if declare -f change_checklist_draft_cancel > /dev/null; then change_checklist_draft_cancel; fi
+    if [[ -n "${PREFLIGHT_BG_PID:-}" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then kill "$PREFLIGHT_BG_PID" 2>/dev/null || true; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     if declare -f release_lock > /dev/null; then release_lock; fi
     uncle_title_end
@@ -3450,6 +3451,67 @@ change_run_test_review_panel() {
     cp "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
 }
 
+# --- prerequisite probe, as in stagegate.sh -------------------------------------------------------------------------------------------
+# Cheap runtime probes over the plan's verification commands (scripts/lib/preflight.py: each recognised runtime started with --version,
+# the shell structure inspected, no command executed). It runs beside implementation by default (WORKFLOW_PREFLIGHT_BLOCKING=1 runs it
+# first and stops on a failure) and its result is collected before the implementation gate. A probe that cannot be settled without a
+# model is recorded as a BLOCKED-SETUP row for the audit; this driver does not spend a model call to diagnose it.
+PREFLIGHT_BLOCKING="${WORKFLOW_PREFLIGHT_BLOCKING:-0}"
+PREFLIGHT_BG_PID=""
+
+change_preflight_run() {
+    local commands="$STATE_DIR/preflight.commands" report="$STATE_DIR/documents/PREFLIGHT_REPORT.json" why
+    rm -f "$report" .uncle/docs/PREFLIGHT_REPORT.md
+    verify_commands .uncle/docs/CHANGE_PLAN.md > "$commands" 2>/dev/null || true
+    if [[ ! -s "$commands" ]]; then
+        python3 -B - "$report" <<'PY'
+import json, sys
+rows = [{'id': 'PF-RUNTIME', 'required': True, 'status': 'N/A', 'evidence': 'The change plan names no verification commands, so there is no runtime to probe.'}]
+json.dump({'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report', 'narrative': 'No verification commands to probe.', 'rows': rows}, open(sys.argv[1], 'w'), indent=2)
+PY
+    elif python3 -B "$ROOT/scripts/lib/preflight.py" "$commands" "$report" 2> "$STATE_DIR/preflight.err"; then
+        echo "Preflight: runtime checks passed without a model call."
+    else
+        why="$(tr '\n' ' ' < "$STATE_DIR/preflight.err")"
+        python3 -B - "$report" "$why" <<'PY'
+import json, sys
+rows = [{'id': 'PF-RUNTIME', 'required': True, 'status': 'BLOCKED-SETUP', 'evidence': sys.argv[2].strip() or 'The runtime probe could not settle the prerequisites.'}]
+json.dump({'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report', 'narrative': 'Deterministic runtime probes could not confirm the environment.', 'rows': rows}, open(sys.argv[1], 'w'), indent=2)
+PY
+        echo "Preflight: the runtime probe did not confirm the environment: $why"
+    fi
+    python3 "$ROOT/scripts/lib/acceptance_context.py" --validate-json "$report" || return 1
+    python3 "$ROOT/scripts/lib/acceptance_context.py" --render "$report" .uncle/docs/PREFLIGHT_REPORT.md || return 1
+}
+
+# Collect the probe started beside implementation. A result other than PASS is recorded for the audit and the supervisor; it never
+# stops the run here, because implementation already ran without waiting for it.
+change_preflight_collect() {
+    [[ -e "$STATE_DIR/preflight-backgrounded" ]] || return 0
+    local status="" result=""
+    if [[ -n "$PREFLIGHT_BG_PID" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then
+        echo
+        echo "Waiting for the prerequisite probe started before implementation..."
+        wait "$PREFLIGHT_BG_PID" 2>/dev/null || true
+    fi
+    PREFLIGHT_BG_PID=""
+    rm -f "$STATE_DIR/preflight-backgrounded"
+    [[ -s "$STATE_DIR/preflight-bg.status" ]] && status="$(cat "$STATE_DIR/preflight-bg.status")"
+    [[ -s "$STATE_DIR/documents/PREFLIGHT_REPORT.json" ]] && result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/PREFLIGHT_REPORT.json")"
+    snapshot_preflight_capabilities "$STATE_DIR/documents/PREFLIGHT_REPORT.json" 2>/dev/null || true
+    if [[ "$status" == 0 && ( "$result" == PASS || "$result" == BLOCKED-HUMAN ) ]]; then
+        echo "Prerequisites confirmed (probed alongside implementation)."
+        return 0
+    fi
+    echo
+    echo "Prerequisite probe did not confirm this environment: ${result:-no report}."
+    echo "Implementation ran without waiting for it; weigh this with the diff. Log: $LOG_DIR/preflight.background.log"
+    record_nonblocking_failure PREFLIGHT_REPORT.json "the prerequisite probe did not confirm the environment: ${result:-no report}"
+    supervision_validation_failed preflight .uncle/docs/PREFLIGHT_REPORT.md \
+        "Prerequisite probe did not confirm the environment: ${result:-no report}." 0 || true
+    return 0
+}
+
 BG_PID=""
 BG_LABEL=""
 BG_START=0
@@ -4197,6 +4259,38 @@ while true; do
                 --dispositions .uncle/docs/CHANGE_PLAN.md ${plan_review_input[@]+"${plan_review_input[@]}"} \
                 --approval CHANGE_PLAN ADVERSARIAL_REVIEW --reapprovals \
                 --producer-stage updated-change-plan --producer-kind agent
+            set_state PREFLIGHT
+            ;;
+
+        PREFLIGHT)
+            verify_approval .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN
+            if [[ "$PREFLIGHT_BLOCKING" != 1 ]]; then
+                : > "$STATE_DIR/preflight-backgrounded"
+                rm -f "$STATE_DIR/preflight-bg.status"
+                echo
+                echo "Probing prerequisites in the background; implementation starts now."
+                echo "A problem is reported through the supervisor, not by stopping here."
+                (
+                    status=0
+                    change_preflight_run || status=$?
+                    printf '%s\n' "$status" > "$STATE_DIR/preflight-bg.status"
+                ) > "$LOG_DIR/preflight.background.log" 2>&1 < /dev/null &
+                PREFLIGHT_BG_PID=$!
+                set_state MODULE_INTERFACES
+                continue
+            fi
+            rm -f "$STATE_DIR/preflight-backgrounded"
+            change_preflight_run || exit 1
+            preflight_result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/PREFLIGHT_REPORT.json")"
+            snapshot_preflight_capabilities "$STATE_DIR/documents/PREFLIGHT_REPORT.json" 2>/dev/null || true
+            case "$preflight_result" in
+                PASS|BLOCKED-HUMAN) ;;
+                *)
+                    echo "Prerequisite probe did not confirm this environment ($preflight_result); see .uncle/docs/PREFLIGHT_REPORT.md." >&2
+                    triage_stop_reason "$STATE_DIR" human
+                    exit 1
+                    ;;
+            esac
             set_state MODULE_INTERFACES
             ;;
 
@@ -4367,6 +4461,7 @@ REPAIR
             ;;
 
         WAIT_IMPLEMENT_APPROVAL)
+            change_preflight_collect
             # The approval and verification envelope must describe completed
             # checks, not a previous result or a still-running background job.
             wait_green_check_bg || exit $?

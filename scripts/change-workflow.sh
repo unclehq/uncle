@@ -5002,7 +5002,13 @@ PY
             audit_validate_status=0
             final_audit_validate require_file "${STAGEGATE_RUN_ID:--}" || audit_validate_status=$?
             [[ "$audit_validate_status" != 2 ]] || continue
-            if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine bind || exit 1; fi
+            if git rev-parse --verify HEAD >/dev/null 2>&1; then
+                # Say why: this used to exit with no stop reason at all, and the triage bundle read "stop reason: MISSING".
+                change_pr_engine bind || {
+                    printf '%s\n' 'audit binding: the files, origin, HEAD or branch changed while the final audit ran; rerun FINAL_AUDIT' > "$STATE_DIR/stop-reason"
+                    exit 1
+                }
+            fi
             # The audit claim: pass only for a READY verdict. An override
             # recorded later never rewrites it; release reads this file.
             audit_result=fail

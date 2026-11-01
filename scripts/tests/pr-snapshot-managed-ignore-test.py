@@ -56,5 +56,14 @@ class ManagedIgnore(unittest.TestCase):
         self.assertNotEqual(NS['snapshot'](True), before)
 
 
+class BindFailureIsExplained(unittest.TestCase):
+    def test_the_driver_records_why_a_failed_bind_stopped_it(self):
+        driver = (ROOT / 'scripts/change-workflow.sh').read_text()
+        block = driver.split('        VALIDATE_AUDIT)', 1)[1].split('\n        WAIT_AUDIT_OVERRIDE)', 1)[0]
+        bind = block.split('change_pr_engine bind', 1)[1].split('fi\n', 1)[0]
+        self.assertIn('stop-reason', bind)
+        self.assertIn('rerun FINAL_AUDIT', bind)
+
+
 if __name__ == '__main__':
     unittest.main()

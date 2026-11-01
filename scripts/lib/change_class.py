@@ -75,6 +75,57 @@ RISK = re.compile(
     r'sandbox\w*|sql injection|command injection|code injection|prompt injection|sanitiz\w*|redact\w*|payment\w*|billing|'
     r'delet\w+|destroy\w*|migrat\w+|race condition|deadlock|publish\w*|approval gate|attest\w*|force[- ]push)\b')
 
+# A keyword is a signal about what a change *does*. These keep it from firing on prose that only mentions it:
+#  * a sentence that says the thing is out of scope ("Payment processing is out of scope"; "backspace/delete ... not required");
+#  * `delete` beside a UI-key word (a calculator's delete key, "delete the last digit"), which is not data deletion.
+# Everything else still counts, including optional features: an optional payment flow is still a payment flow.
+EXCLUDED_CLAUSE = re.compile(r'(?i)\b(not required|out of scope|not in scope|non-?goals?|excluded from)\b')
+UI_KEY_NEAR_DELETE = re.compile(r'(?i)\b(backspace|keys?|button|buttons|keystroke|characters?|digits?|clear entry|cursor)\b')
+SENTENCE_BREAK = re.compile(r'[.\n;|]')
+
+
+def risk_hits_in(text):
+    """The risk keywords this text means (lowercased), after dropping out-of-scope mentions and a delete key."""
+    found = set()
+    for match in RISK.finditer(text):
+        start, end = match.span()
+        left = max((m.end() for m in SENTENCE_BREAK.finditer(text, 0, start)), default=0)
+        right = SENTENCE_BREAK.search(text, end)
+        clause = text[left:right.start() if right else len(text)]
+        if EXCLUDED_CLAUSE.search(clause):
+            continue
+        word = match.group(1).lower()
+        if word.startswith('delet') and UI_KEY_NEAR_DELETE.search(text[max(0, start - 30):end + 30]):
+            continue
+        found.add(word)
+    return found
+
+
+# What the model may and may not waive. A keyword the driver matched is only a hint about meaning, so the model can say a hit
+# is benign and why. But the security-critical words stand whatever the model says: only the context rules above and the
+# driver's own checks can lower scrutiny for those.
+NEVER_WAIVE = re.compile(
+    r'(?i)^(secur\w*|auth(?:entication|orization|orize)?|password\w*|secret\w*|.*tokens?|credential\w*|encrypt\w*|crypto\w*|'
+    r'signing|signature\w*|gpg|privilege\w*|sql injection|command injection|code injection|prompt injection|payment\w*|billing|'
+    r'approval gate|attest\w*|force[- ]push)$')
+
+
+def apply_waivers(f, source):
+    """(features with the waived hits removed, the waivers that were honoured). `source` is the model's proposal or a stored
+    class record: {'waived_risk_hits': [{'hit': ..., 'reason': ...}]}. A waiver needs a real reason, a hit that was actually
+    found, and a word that is not security-critical."""
+    waived, seen = [], set()
+    entries = (source or {}).get('waived_risk_hits')
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        hit, reason = str(entry.get('hit', '')).strip().lower(), str(entry.get('reason', '')).strip()
+        if hit in f['risk_hits'] and hit not in seen and len(reason) >= 10 and not NEVER_WAIVE.match(hit):
+            waived.append({'hit': hit, 'reason': reason[:200]})
+            seen.add(hit)
+    return dict(f, risk_hits=[h for h in f['risk_hits'] if h not in seen]), waived
+
+
 TEST_PATH = re.compile(r'(^|/)(tests?|e2e|specs?|__tests__|cypress)(/|$)|\.(test|spec)\.[A-Za-z]+$|[-_]test\.[A-Za-z]+$', re.I)
 DOC_PATH = re.compile(r'(^|/)(docs?|documentation)/|\.(md|markdown|txt|rst)$|(^|/)(README|CHANGELOG|LICENSE)[^/]*$', re.I)
 SCAFFOLD_PATH = re.compile(r'(^|/)(package(-lock)?\.json|pyproject\.toml|requirements\.txt|\.gitignore|\.github/.*|'
@@ -190,7 +241,7 @@ def features(family, project, plan):
     kinds = {'test': 0, 'docs': 0, 'scaffold': 0, 'app': 0}
     for path in owned:
         kinds[kind_of(path)] += 1
-    hits = sorted({m.group(1).lower() for m in RISK.finditer(request + '\n' + criteria_text(family, project) + '\n' + '\n'.join(owned))})
+    hits = sorted(risk_hits_in(request + '\n' + criteria_text(family, project) + '\n' + '\n'.join(owned)))
     directories = {path.rsplit('/', 1)[0] if '/' in path else '' for path in owned}
     return {
         'family': family, 'request_chars': len(request), 'plan_chars': len(plan_text), 'steps': steps,
@@ -273,14 +324,16 @@ def merge(cls_floor, cls_model):
 
 
 def build(family, project, plan, proposal, source, note=''):
-    f = features(family, project, plan)
-    floor = deterministic_class(f)
+    features_found = features(family, project, plan)
     proposal = proposal if isinstance(proposal, dict) else None
+    f, waived = apply_waivers(features_found, proposal)     # what the class is judged on; `features` keeps what was matched
+    floor = deterministic_class(f)
     cls = merge(floor, proposal.get('class') if proposal else None)
     result = {
         'schema': 'uncle.artifact/v1', 'kind': 'change-class', 'family': family, 'class': cls, 'source': source,
         'floor_class': floor, **profile(cls, f, proposal),
-        'rationale': str((proposal or {}).get('rationale') or note)[:300], 'features': f,
+        'rationale': str((proposal or {}).get('rationale') or note)[:300], 'waived_risk_hits': waived,
+        'features': features_found,
     }
     return result
 
@@ -330,7 +383,12 @@ PROMPT_FOOTER = '''
 
 Reply with one JSON object and nothing else. If you can write files, also write the same object to the delivery path.
 
-`{"schema":"uncle.artifact/v1","kind":"change-class","class":"docs|test-only|small|standard|large|risky","adversarial_lenses":["requirements","regression","security","testability"],"edit_slice":2,"rationale":"one sentence"}`
+`{"schema":"uncle.artifact/v1","kind":"change-class","class":"docs|test-only|small|standard|large|risky","adversarial_lenses":["requirements","regression","security","testability"],"edit_slice":2,"waived_risk_hits":[{"hit":"delete","reason":"why this match is benign"}],"rationale":"one sentence"}`
+
+`risk_hits` in the features are words the driver matched, not findings. If a hit is plainly benign in this request (a "delete" key
+on a calculator, not deleting data), list it in `waived_risk_hits` with a concrete reason and the class is judged without it.
+Hits for security-critical words (secrets, credentials, tokens, authentication, encryption, signing, payments, approval gates,
+attestation, force-push, injection) cannot be waived; do not list them. Leave `waived_risk_hits` empty when unsure.
 
 The driver clamps your answer: it can raise the class but never lower it below the features, it always keeps the lenses the
 features require, and it gives every standard, large or risky plan all four lenses. Trim lenses and raise `edit_slice` only
@@ -364,7 +422,11 @@ def recheck(family, project, plan):
         return ''
     if current not in CLASSES:
         return ''
-    f = features(family, project, plan)
+    try:
+        stored = json.loads(_read(Path(project) / OUTPUT))
+    except ValueError:
+        stored = {}
+    f, _ = apply_waivers(features(family, project, plan), stored)    # a waiver the model gave stands for the plan too
     floor = deterministic_class(f)
     if CLASSES.index(floor) <= CLASSES.index(current):
         return ''

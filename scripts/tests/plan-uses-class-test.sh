@@ -49,5 +49,23 @@ put '{"family": "app", "class": "standard"}'
 change_class_plan_single && bad "a standard app must keep the sectioned plan"
 put '{"family": "change", "class": "small"}'
 change_class_plan_single && bad "a change request is not planned by the application planner"
+
+# --- the budget reaches the real plan prompt (project-plan is a synthesis stage with its own early return) ------------------
+printf '# Project plan prompt\nWrite the plan.\n' > "$work/plan-prompt.md"
+composed() {   # the prompt gated_prompt builds for the plan stage, run for real
+    env -i PATH="$PATH" HOME="$HOME" bash --norc --noprofile -c "
+        ROOT='$ROOT'; STATE_DIR='$work/p/.uncle/workflow'; LOG_DIR='$work/logs'; mkdir -p \"\$LOG_DIR\"
+        . '$ROOT/scripts/lib/gates.sh'; . '$ROOT/scripts/lib/change-class-stage.sh'
+        cd '$work/p'
+        f=\$(gated_prompt '$work/plan-prompt.md' project-plan agent) && cat \"\$f\""
+}
+put '{"family": "app", "class": "small"}'
+[[ "$(composed)" == *"Build class (binding)"* ]] || bad "a small application's plan prompt has no budget"
+[[ "$(composed)" == *"at most 12 implementation steps and 30 owned files"* ]] || bad "the budget paragraph does not state the limits"
+put '{"family": "app", "class": "standard"}'
+[[ "$(composed)" == *"Build class (binding)"* ]] && bad "a standard application's plan prompt must not get the small budget"
+rm -f .uncle/workflow/change-class.json
+[[ "$(composed)" == *"Build class (binding)"* ]] && bad "no classification must mean no budget"
+[[ "$(WORKFLOW_CLASSIFY=0 composed)" == *"Write the plan."* ]] || bad "the plan prompt itself must still be composed"
 [[ $fail == 0 ]] && echo "plan-uses-class-test.sh: ok"
 exit $fail

@@ -272,6 +272,10 @@ one revision from those inputs; do not conduct a second investigation pass.
 Return/write the one authoritative artifact requested by the stage prompt.
 The driver performs structural validation, rendering, approval, and gates.
 SYNTHESIS_JSON
+            # project-plan is a synthesis stage and returns here, so the class budget is added here too (see below).
+            case "$log_name" in
+                project-plan) declare -F change_class_budget >/dev/null && change_class_budget ;;
+            esac
         } > "$synthesis_prompt"
         printf '%s\n' "$synthesis_prompt"
         return 0

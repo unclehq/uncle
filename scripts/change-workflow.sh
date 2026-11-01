@@ -3775,7 +3775,19 @@ while true; do
                 snapshot_untracked "$UNTRACKED_BASELINE"
             fi
 
-            if [[ -s "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" ]] && implementation_has_changes && implementation_complete; then
+            if [[ -s "$STATE_DIR/acceptance-repair-request.md" ]]; then
+                echo "Repairing the rows the independent review rejected."
+                compose_implementation_prompt \
+                    prompts/change/implement-change.md \
+                    "$STATE_DIR/implement-change.resolved.md"
+                { printf '\n## Review repair (binding)\n\n'; cat "$STATE_DIR/acceptance-repair-request.md"; } \
+                    >> "$STATE_DIR/implement-change.resolved.md"
+                rm -f "$STATE_DIR/acceptance-repair-request.md"
+                envelope_guard_begin
+                run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
+                    "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
+                envelope_guard_end
+            elif [[ -s "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" ]] && implementation_has_changes && implementation_complete; then
                 echo "Existing implementation delivery accepted; continuing to verification."
             elif [[ "$plan_status" == 22 ]]; then
                 echo 'Verification-only resume finished; checking delivery.'

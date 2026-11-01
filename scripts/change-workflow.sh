@@ -3172,7 +3172,7 @@ run_checklist_panel() {
         local range
         case "$lens" in coverage) range='MC-100 through MC-199';; invariants) range='MC-200 through MC-299';; resources) range='MC-300 through MC-399';; regressions) range='MC-400 through MC-499';; esac
         local inputs
-        if [[ "$kind" == base || "$kind" == draft ]]; then
+        if [[ "$kind" == draft ]]; then
             inputs='`.uncle/workflow/documents/BASELINE_REPORT.json`, `.uncle/workflow/documents/CHANGE_SPEC.json`, `.uncle/workflow/documents/CHANGE_PLAN.json`, and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
         else
             inputs='`.uncle/workflow/documents/BASELINE_REPORT.json`, `.uncle/workflow/documents/CHANGE_SPEC.json`, `.uncle/workflow/documents/CHANGE_PLAN.json`, `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, `.uncle/workflow/documents/IMPLEMENTATION_NOTES.json`, `.uncle/workflow/documents/CHANGE_TEST_REPORT.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`'
@@ -3216,7 +3216,6 @@ run_checklist_panel() {
         fi
     done
     local target="$STATE_DIR/documents/MANUAL_CHECKLIST.json"
-    [[ "$kind" == base ]] && target="$STATE_DIR/documents/MANUAL_CHECKLIST.base.json"
     [[ "$kind" == draft ]] && target="$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json"
     python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" $checklist_lenses || return 1
     if [[ "$kind" == draft ]]; then
@@ -3227,16 +3226,7 @@ run_checklist_panel() {
         --proposed "${target%.json}.proposed.json" \
         --scope "${target%.json}.driver-scope.json" || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$target" || return 1
-    # Both kinds need their rendered view on disk. The delta pass owns the
-    # operator-facing document; the base pass owns the working copy that
-    # wait_codex_bg requires, that the CHECKLIST state requires again, and
-    # that manual-checklist-context.py feeds to the delta pass. Rendering only
-    # the delta view left the base fast path with no view at all.
-    if [[ "$kind" == base ]]; then
-        python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$target" "$STATE_DIR/MANUAL_CHECKLIST.base.md" || return 1
-    else
-        python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$target" .uncle/docs/MANUAL_CHECKLIST.md || return 1
-    fi
+    python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$target" .uncle/docs/MANUAL_CHECKLIST.md || return 1
     cp "$target" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
     CHECKLIST_PANEL_PROMPT="$target"
     CHECKLIST_PANEL_DIRECT=1

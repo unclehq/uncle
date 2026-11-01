@@ -243,7 +243,7 @@ def _run_checks(args):
                 record(command, time.monotonic() - started, 125, args.log)
                 return 125, log
             if command in skip:
-                # Done in the background against this exact manifest (verify_prewarm.py).
+                # Recorded as already run in the background against this exact manifest (state/prewarm/results.tsv).
                 output.write(b"PREWARMED: ran in the background during implementation and succeeded.\n")
                 record(command, time.monotonic() - started, 0, args.log)
                 return 0, log

@@ -547,6 +547,8 @@ def read_resolutions(path, narrative=None):
     else:
         rows = []
         for answer in sorted(path.glob('resolutions-*.json')):
+            if re.search(r'-r[0-9]+\.json$', answer.name):
+                continue  # Retained attempts are evidence, never current resolutions.
             rows += read_json(answer).get('resolutions') or []
         value = {}
     if narrative is not None:
@@ -626,6 +628,8 @@ def check_resolutions(plan_path, directory):
     groups = json.loads(Path(directory, 'conflicts.json').read_text(encoding='utf-8'))
     answers = {}
     for answer in sorted(Path(directory).glob('resolutions-*.json')):
+        if re.search(r'-r[0-9]+\.json$', answer.name):
+            continue  # Retained attempts are evidence, never current resolutions.
         try:
             for row in read_resolutions(answer, narrative).get('resolutions') or []:
                 if isinstance(row, dict) and isinstance(row.get('group'), str):

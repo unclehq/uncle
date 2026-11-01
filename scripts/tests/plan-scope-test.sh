@@ -443,6 +443,42 @@ check_eq "own-line: Depends on is not ownership" "0" "$(plan_step_owns "$OWNLINE
 check_eq "own-line: the same-line form still works" "4	src/App.jsx" "$(plan_step_owns "$OWNLINE" | grep '^4	')"
 check_eq "own-line: an Owns outside the sequence is not read" "0" "$(plan_step_owns "$OWNLINE" | grep -c 'not-a-step' || true)"
 
+# Heading steps whose fields are bold paragraphs, not bullets ("**Owns:** `a`",
+# "**Owns (additional):** `b`", "**Depends on:** Step 1"). A DeepSeek plan used
+# exactly this layout; every step read as owning nothing and the run stopped at
+# the approval gate with six correctly owned test files reported as unowned.
+BOLDFIELDS="$TMP/bold-fields.md"
+cat > "$BOLDFIELDS" <<'EOF'
+## 12. Implementation order
+
+### Step 1: Project scaffold
+
+- Write `vite.config.js`
+
+**Owns:** `package.json`, `vite.config.js`
+
+**Owns (additional):** `.eslintrc.cjs`
+
+**Verify:** Run `npx vitest run` before Step 2.
+
+### Step 2: Reducer
+
+**Owns:** `src/calc.js`, `src/calc.test.js`
+
+**Depends on:** Step 1
+
+## 13. Requirement traceability
+
+**Owns:** `not-a-step.js`
+EOF
+check_eq "bold fields: step 1 owns its Owns and Owns (additional) files, not its Verify command" "1	package.json
+1	vite.config.js
+1	.eslintrc.cjs" "$(plan_step_owns "$BOLDFIELDS" | grep '^1	')"
+check_eq "bold fields: step 2 owns its files" "2	src/calc.js
+2	src/calc.test.js" "$(plan_step_owns "$BOLDFIELDS" | grep '^2	')"
+check_eq "bold fields: a bold Depends on is an edge" "2	1" "$(plan_step_depends "$BOLDFIELDS")"
+check_eq "bold fields: an Owns outside the sequence is not read" "0" "$(plan_step_owns "$BOLDFIELDS" | grep -c 'not-a-step' || true)"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "plan-scope-test.sh: $FAILED of $COUNT checks failed"
     exit 1

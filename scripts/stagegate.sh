@@ -307,6 +307,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+. "$ROOT/scripts/lib/model-jobs.sh"
 . "$ROOT/scripts/lib/acceptance.sh"
 . "$ROOT/scripts/lib/acceptance-gate.sh"
 . "$ROOT/scripts/lib/repair-limit.sh"
@@ -328,6 +329,7 @@ declare -f finished_extras > /dev/null || finished_extras() { :; }
 # bundled too; cancel_speculation is defined further down.
 on_exit() {
     local rc=$?
+    if declare -f workflow_model_cancel > /dev/null; then workflow_model_cancel; fi
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
     if declare -f early_checklist_cancel > /dev/null; then early_checklist_cancel; fi
     if declare -f early_execute_cancel > /dev/null; then early_execute_cancel; fi
@@ -753,18 +755,21 @@ plan_structure_feedback() {
     printf 'The driver rejected the plan you just wrote: it has %s.\n\n' "$problem"
     case "$problem" in
         'a protected verification path with no owning implementation step')
-            gaps="$(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" "$plan" "$PWD" "${STATE_DIR:-.uncle/workflow}" 2>/dev/null | sed 's/^/- `/; s/$/`/')"
+            # The checker exits 1 when it finds gaps -- the case being reported here.
+            # Under errexit and pipefail that status ended the driver before the
+            # one-retry below could send the plan back (runs 11 and 12).
+            gaps="$(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" "$plan" "$PWD" "${STATE_DIR:-.uncle/workflow}" 2>/dev/null | sed 's/^/- `/; s/$/`/' || true)"
             printf 'These Protected verification paths do not exist yet and no implementation step names them in its `Owns:`:\n\n%s\n\n' "$gaps"
-            printf 'Fix it one of two ways: add each path to the `Owns:` of the step that creates it (a reconcile step'"'"'s `Owns: *` does not count), or, if nothing will create a path, remove it from Protected verification paths. Only list a path as protected when it already exists or a step explicitly owns it. Return the complete corrected plan.\n'
+            printf 'Fix it one of two ways: add each path to the `Owns:` of the step that creates it (a reconcile step'"'"'s `Owns: *` does not count), or, if nothing will create a path, remove it from Protected verification paths. Only list a path as protected when it already exists or a step explicitly owns it. Return only edit ops for these paths and steps; never the complete plan.\n'
             ;;
         'verification commands that run files under .uncle/')
-            printf '`.uncle/config` is uncle'"'"'s own configuration file and `.uncle/` is driver state, so nothing can be created under `.uncle/config/` or `.uncle/tests/`. Put the test runner config and the tests in the project tree (for example `playwright.config.js` and `tests/` at the project root), name them in the `Owns:` of the step that creates them, list them under Protected verification paths, and point the Verification commands at those paths. Return the complete corrected plan.\n' ;;
+            printf '`.uncle/config` is uncle'"'"'s own configuration file and `.uncle/` is driver state, so nothing can be created under `.uncle/config/` or `.uncle/tests/`. Put the test runner config and the tests in the project tree (for example `playwright.config.js` and `tests/` at the project root), name them in the `Owns:` of the step that creates them, list them under Protected verification paths, and point the Verification commands at those paths. Return only edit ops for these paths and steps; never the complete plan.\n' ;;
         'no Verification commands block')
             printf 'The plan needs `## Verification commands` with one fenced block of shell commands, one per line, and nothing else in it.\n' ;;
         'no Protected verification paths block')
             printf 'The plan needs a heading with the words "protected" and "paths", then one fenced block of repository-relative paths, one per line.\n' ;;
         *)
-            printf 'Correct that and return the delivery again in the same shape: dispositions and a patch against the base plan, not the whole plan.\n' ;;
+            printf 'Correct that and return the delivery again in the same shape: edit ops against the current plan, not the whole plan.\n' ;;
     esac
 }
 
@@ -1611,7 +1616,7 @@ run_claude() {
     cmd="$(stage_agent_cmd "$runner_stage")" || return 1
     model="$(stage_model "$log_name")"
     effort="$(stage_effort "$log_name")"
-    turns="$(stage_turns "$log_name")"
+    turns="${UNCLE_WORKER_MAX_TURNS:-$(stage_turns "$log_name")}"
     local no_thinking=0
     if uncle_stage_thinking_off "$log_name"; then
         no_thinking=1
@@ -1651,14 +1656,16 @@ run_claude() {
 
     # Forced JSON: the driver names a JSON Schema, Claude must answer through a schema-validated
     # StructuredOutput call, and the validated object is what the driver reads -- never chat text,
-    # never a file the model may forget to write.  Only the direct Claude CLI can do this; a driver asks
-    # `stage_supports_structured_output` first and keeps its file contract for every other runner.
+    # never a file the model may forget to write. Codex adapters enforce their final-answer schema and
+    # deliver the restored object themselves, retaining the file contract when enforcement is unavailable.
     local -a schema_args=()
     if [[ -n "${UNCLE_OUTPUT_SCHEMA_FILE:-}" ]]; then
         # Direct, or through native_stage.py (steering sessions, i.e. every run under the TUI): the flag
         # reaches the same Claude process, and native_stage reports its validated object on the result event.
         if [[ "${cmd##*/}" == claude && "$UNCLE_RESOLVED_RUNNER" == claude && -n "${UNCLE_STRUCTURED_OUTPUT_PATH:-}" ]]; then
             schema_args=(--json-schema "$(cat "$UNCLE_OUTPUT_SCHEMA_FILE")")
+        elif [[ "$UNCLE_RESOLVED_RUNNER" == codex && "${cmd##*/}" == agent-codex.sh ]]; then
+            : # Codex adapters constrain the final answer and deliver the restored object.
         else
             echo "Stage $log_name asked for schema-checked output, which this runner cannot give." >&2
             return 1
@@ -1669,6 +1676,10 @@ run_claude() {
     status_stage_context "$log_name" "${model:-}" act
 
     while true; do
+        case "$log_name" in
+            updated-plan*|updated-change-plan*|preflight*)
+                (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/${log_name}.jsonl") || return 1 ;;
+        esac
         echo
         echo "Launching agent ($cmd): $log_name"
         echo "Model: ${model:-(runner default)} (effort: $effort, max turns: $turns)"
@@ -1812,7 +1823,7 @@ STRUCTURED_OUTPUT_CONTRACT
             # count is not a decision an operator needs to make; double it
             # once, unattended or not, the same bounded-retry shape
             # self_hosted.py already uses for an output-token ceiling.
-            if [[ -z "$turns_retried" ]] && grep -qiE 'maximum number of turns|max.?turns' "$log"; then
+            if [[ -z "${UNCLE_WORKER_MAX_TURNS:-}" && -z "$turns_retried" ]] && grep -qiE 'maximum number of turns|max.?turns' "$log"; then
                 turns_retried=1
                 local larger_turns=$((turns * 2))
                 [[ "$larger_turns" -le 200 ]] || larger_turns=200
@@ -1829,7 +1840,7 @@ STRUCTURED_OUTPUT_CONTRACT
 
         if [[ "${#schema_args[@]}" -gt 0 ]]; then
             if ! python3 -B "$ROOT/scripts/lib/structured_output.py" extract "$LOG_DIR/${log_name}.jsonl" "$UNCLE_STRUCTURED_OUTPUT_PATH"; then
-                if [[ -z "$artifact_retried" ]]; then
+                if [[ -z "${UNCLE_WORKER_MAX_TURNS:-}" && -z "$artifact_retried" ]]; then
                     artifact_retried=1
                     echo "Stage $log_name returned no schema-checked object; retrying once."
                     continue
@@ -2166,6 +2177,10 @@ run_codex_review() {
     local status=0
     local started retry_answer empty_retried="" schema_error=""
     while true; do
+        case "$log_name" in
+            updated-plan*|preflight*)
+                (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/${log_name}.log") || return 1 ;;
+        esac
         started="$SECONDS"
         local reviewer_candidates raced=0
         reviewer_candidates="$(self_hosted_candidate_count "$log_name")"
@@ -2343,12 +2358,21 @@ run_adversarial_review_panel() {
         plan_input="$directory/plan-view.json"
         plan_input_note=' That file is the plan as JSON: sections of blocks, with rows, list items and steps that each have an `id`. Cite those ids.'
     fi
+    local slices
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    slices="$(python3 -B "$ROOT/scripts/lib/adversarial_slices.py" count "$(workflow_model_runner adversarial-review REVIEWER)")" || return 1
+    # Slices replace the four whole lenses; a build class that trims the lens set keeps whole lenses.
+    if [[ "$slices" -gt 1 && "$lenses" == "requirements regression security testability" ]]; then
+        . "$ROOT/scripts/lib/adversarial-slices.sh"
+        run_adversarial_review_slices "$directory" "$plan_input" \
+            "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json" "$slices" new || return 1
+    else
     for lens in $lenses; do
         prompt="$directory/prompts/$lens.md"
         output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
         printf '\n## Canonical inputs (binding)\n\nRead only `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json` and `%s`.%s\n\n## Assigned review lens\n\nFocus only on **%s**.\n' "$plan_input" "$plan_input_note" "$lens" >> "$prompt"
-        ( run_adversarial_review_lens "$directory" "$lens" ) \
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter adversarial-review REVIEWER || exit 1; run_adversarial_review_lens "$directory" "$lens" ) \
             > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
@@ -2359,6 +2383,7 @@ run_adversarial_review_panel() {
         fi
     done
     [[ "$failed" == 0 ]] || return 1
+    fi
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected $lenses || return 1
     # Worker packets are already validated, complete, and deduplicated by
     # stable finding ID.  Rendering them directly makes the collated JSON the
@@ -2370,6 +2395,7 @@ run_adversarial_review_panel() {
 }
 
 run_updated_plan_panel() {
+    (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_stage updated-plan) || return 1
     local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
     local -a pids=()
     [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
@@ -2385,7 +2411,7 @@ run_updated_plan_panel() {
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "${lens%%-*}" >> "$prompt"
         [[ -z "$ids" ]] || printf '\nYour findings: %s. Report only these finding IDs.\n' "${ids//,/, }" >> "$prompt"
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan REVIEWER || exit 1; UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done < <(python3 -B "$ROOT/scripts/lib/updated_plan_slices.py" "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json")
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan worker failed; canonical packet validation will stop the panel.' >&2; done
@@ -2432,20 +2458,70 @@ updated_plan_warm_prefix() {
 
 updated_plan_launch_writer() {
     local directory="$1" delivery="$2" name="$3" ids="$4" owner="$5" schema_file=""
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    workflow_archive_attempt "$LOG_DIR/updated-plan-worker-edits-$name.log" "$LOG_DIR/updated-plan-worker-edits-$name.jsonl" "$directory/$name.json" || return 1
     # The plan model (docs/plan-model.md): writers edit it by id.  WORKFLOW_UPDATED_PLAN_OPS=0 keeps the text patches.
     local helper="$ROOT/scripts/lib/updated_plan_edits.py" schema_command=edit
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; schema_command=edit-ops; fi
     UNCLE_PLAN_JSON="$STATE_DIR/documents/PROJECT_PLAN.json" python3 -B "$helper" prompt "$UPDATED_PLAN_PROMPT" "$ids" "$directory/prompts/$name.md" $owner || return 1
     echo "Updated-plan edit writer $name: ${ids//,/, }"
-    if [[ "$delivery" == hosted ]]; then
+    if [[ "$delivery" == hosted || "$schema_command" == edit-ops ]]; then
         mkdir -p "$directory/schemas"
         schema_file="$directory/schemas/$name.json"
-        python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner || return 1
+        local scope_args=()
+        [[ "$schema_command" != edit-ops ]] || scope_args=(--scope "$directory/prompts/$name.scope.json")
+        if [[ "$schema_command" == edit-ops ]] && stage_uses_self_hosted updated-plan AGENT; then scope_args+=(--attempt "${UNCLE_UPDATED_PLAN_SCHEMA_ATTEMPT:-first}"); fi
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner ${scope_args[@]+"${scope_args[@]}"} || return 1
     fi
+    local writer_turns answer_tokens
+    read -r writer_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" budget "$ids" "$(. "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_granularity updated-plan)")
+    [[ -n "$writer_turns" && -n "$answer_tokens" ]] || return 1
+    (( writer_turns > 0 )) || writer_turns=""
     rm -f "$directory/$name.json"
-    ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
-      UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-        run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) \
+    ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$schema_file" ]] || export UNCLE_WORKER_SCHEMA_FILE="$schema_file"; [[ "$delivery" != hosted || -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
+      export UNCLE_UPDATED_PLAN_ATTEMPTS_DIR="$directory" UNCLE_UPDATED_PLAN_FINDINGS="$ids"
+      export UNCLE_WORKER_MAX_TURNS="$writer_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
+      local writer_status=0
+      trap 'writer_status=$?; if [[ "$writer_status" != 0 ]]; then workflow_writer_failure "updated-plan-worker-edits-$name" "$writer_status"; fi; workflow_model_leave; exit "$writer_status"' EXIT
+      ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+        workflow_model_writer updated-plan run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) || writer_status=$?
+      if [[ "$writer_status" == 124 || "$writer_status" == 137 ]]; then exit "$writer_status"; fi
+      if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then
+          if [[ ! -s "$directory/$name.json" ]]; then
+              python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name.jsonl" "$directory/$name.json" 2>/dev/null || true
+          fi
+          python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" capture "$directory/$name.json" || exit "$((writer_status == 0 ? 1 : writer_status))"
+          local validation_status=0
+          if stage_uses_self_hosted updated-plan AGENT; then
+              python3 -B "$helper" check-writer "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/$name.json" "$ids" 2> "$directory/prompts/$name.rejection" || validation_status=$?
+          fi
+          [[ "$validation_status" == 0 || "$validation_status" == 5 ]] || exit "$validation_status"
+          if [[ "$validation_status" == 5 ]]; then
+              cat "$directory/prompts/$name.rejection" >&2
+              workflow_writer_failure "updated-plan-worker-edits-$name" "$validation_status" "schema rejection"
+              workflow_archive_attempt "$directory/$name.json" "$LOG_DIR/updated-plan-worker-edits-$name-retry.jsonl" || exit 1
+              cp "$directory/prompts/$name.md" "$directory/prompts/$name.retry.md"
+              printf '\n\n## Your previous answer was rejected\n\n' >> "$directory/prompts/$name.retry.md"
+              cat "$directory/prompts/$name.rejection" >> "$directory/prompts/$name.retry.md"
+              python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner --scope "$directory/prompts/$name.scope.json" --attempt retry || exit 1
+              rm -f "$directory/$name.json"
+              writer_status=0
+              ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                UNCLE_UPDATED_PLAN_CHEAP_RETRY=1 workflow_model_writer updated-plan run_claude "$directory/prompts/$name.retry.md" "updated-plan-worker-edits-$name-retry" ) || writer_status=$?
+              if [[ "$writer_status" == 124 || "$writer_status" == 137 ]]; then exit "$writer_status"; fi
+              if [[ ! -s "$directory/$name.json" ]]; then
+                  python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name-retry.jsonl" "$directory/$name.json" 2>/dev/null || true
+              fi
+              python3 -B "$helper" capture "$directory/$name.json" || exit "$((writer_status == 0 ? 1 : writer_status))"
+              python3 -B "$helper" check-writer "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/$name.json" "$ids" 2> "$directory/prompts/$name.rejection" || {
+                  cat "$directory/prompts/$name.rejection" >&2
+                  workflow_writer_failure "updated-plan-worker-edits-$name" 5 "schema rejection"
+                  exit 5
+              }
+          fi
+      else
+          [[ "$writer_status" == 0 ]] || exit "$writer_status"
+      fi ) \
         > "$LOG_DIR/updated-plan-worker-edits-$name.log" 2>&1 &
 }
 
@@ -2455,7 +2531,7 @@ run_updated_plan_edit_writers() {
     local -a pids=() names=()
     . "$ROOT/scripts/lib/model-jobs.sh"
     local jobs
-    jobs="$(workflow_model_jobs updated-plan)"
+    jobs="$(workflow_writer_jobs updated-plan)"
     [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; resolve_command=resolve-ops; fi
     # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
@@ -2482,8 +2558,13 @@ run_updated_plan_edit_writers() {
             return 1
             ;;
     esac
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    workflow_terminal_failure && return 1
+    workflow_archive_attempt "$directory" || return 1
     [[ -f "${UPDATED_PLAN_PROMPT:-}" ]] || return 1
     rm -rf "$directory"; mkdir -p "$directory/prompts"
+    cp "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/base-plan.json" || return 1
+    printf '%s\n' "${helper##*/}" > "$directory/merge-helper"
     python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
     [[ -s "$directory/slices.tsv" ]] || return 1
     local -a ids_of=() owner_of=() started=() hedge=() finished=()
@@ -2575,7 +2656,7 @@ run_updated_plan_edit_writers() {
         done
         echo "Updated-plan edit writer(s) ${failed_names[*]} failed; asking again, one finding at a time."
         pids=(); names=()
-        local rows
+        local rows retry_ids=()
         rows="$(python3 -B "$helper" resplit "$directory/slices.tsv" "${failed_names[@]}")" || return 1
         while IFS=$'\t' read -r name ids; do
             [[ -n "$name" ]] || continue
@@ -2584,15 +2665,50 @@ run_updated_plan_edit_writers() {
                 retry_owner=owner
             fi
             workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
-            updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || {
+            UNCLE_UPDATED_PLAN_CHEAP_RETRY="$(stage_uses_self_hosted updated-plan AGENT && echo 1)" \
+            UNCLE_UPDATED_PLAN_SCHEMA_ATTEMPT=retry updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || {
                 workflow_model_drain "$jobs" ${pids[@]+"${pids[@]}"}; return 1
             }
-            pids+=("$!"); names+=("$name")
+            pids+=("$!"); names+=("$name"); retry_ids+=("$ids")
         done <<< "$rows"
+        local again=()
         for pid in "${!pids[@]}"; do
-            wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete again." >&2; failed=1; }
+            wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete again." >&2; again+=("$pid"); }
         done
-        [[ "$failed" == 0 ]] || return 1
+        if [[ "${#again[@]}" -gt 0 ]]; then
+            # Every packet that landed is kept. A finding that failed twice gets one last try by the
+            # other delivery path (schema-first <-> tool loop) before the whole stage is redone: in
+            # run 14 two such findings discarded eighteen good packets and restarted the stage twice.
+            local previous="${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST-}" had_previous=0 last_pids=() last_names=() index
+            [[ -n "${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST+x}" ]] && had_previous=1
+            if stage_uses_self_hosted updated-plan AGENT; then export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=off
+            elif [[ "${previous:-on}" == off ]]; then export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=on
+            else export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=off; fi
+            echo "Updated-plan edit writer(s) failed again; one last try each by the other delivery path."
+            for index in "${again[@]}"; do
+                workflow_model_slot "$jobs" ${last_pids[@]+"${last_pids[@]}"}
+                updated_plan_launch_writer "$directory" "$delivery" "${names[$index]}" "${retry_ids[$index]}" "$([[ "${names[$index]}" == 1 || "${names[$index]}" == 1-1 ]] && echo owner)" || failed=1
+                last_pids+=("$!"); last_names+=("${names[$index]}")
+            done
+            for index in "${!last_pids[@]}"; do
+                wait "${last_pids[$index]}" || {
+                    echo "Updated-plan edit writer ${last_names[$index]} did not complete by either path." >&2
+                    python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" writer "$directory" "${last_names[$index]}" updated-plan || failed=1
+                }
+            done
+            if [[ "$had_previous" == 1 ]]; then export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST="$previous"
+            else unset WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST; fi
+        fi
+        if [[ "$failed" != 0 ]]; then
+            if stage_uses_self_hosted updated-plan AGENT; then
+                : > "$STATE_DIR/updated-plan-writers-exhausted"
+                printf '%s\n' 'updated-plan: writer attempts exhausted' > "$STATE_DIR/stop-reason"
+                echo 'Updated-plan writer attempts exhausted; completed packets retained for diagnosis.' >&2
+            else
+                workflow_writer_exhausted updated-plan
+            fi
+            return 1
+        fi
     fi
     # When the specialists ran beside the writers (run_updated_plan_decide), one reconciler checks their corrections
     # against what the writers decided, while the merge and the resolvers run; its edits are added last.
@@ -2614,53 +2730,118 @@ run_updated_plan_edit_writers() {
         # Only the overlapping edits go to a model, with the text around them; the rest stays mechanical.
         echo "Updated-plan edits overlap; one small resolver call per overlapping group, all at once."
         local group_prompt group_id resolver_failed=0
+        local resolver_granularity
+        resolver_granularity="$(. "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_granularity updated-plan)" || return 1
         pids=(); names=()
         for group_prompt in "$directory"/prompts/resolve-*.md; do
             group_id="${group_prompt##*/resolve-}"; group_id="${group_id%.md}"
             local resolver_schema=""
-            if [[ "$delivery" == hosted ]]; then
+            if [[ "$delivery" == hosted || "$resolve_command" == resolve-ops ]]; then
                 resolver_schema="$directory/schemas/resolve-$group_id.json"
                 mkdir -p "$directory/schemas"
-                python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" || return 1
+                local scope_args=()
+                [[ "$resolve_command" != resolve-ops ]] || scope_args=(--scope "$directory/prompts/resolve-$group_id.scope.json")
+                if [[ "$resolve_command" == resolve-ops ]] && stage_uses_self_hosted updated-plan AGENT; then scope_args+=(--attempt first); fi
+                python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" ${scope_args[@]+"${scope_args[@]}"} || return 1
             fi
             workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
-            ( [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+            ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$resolver_schema" ]] || export UNCLE_WORKER_SCHEMA_FILE="$resolver_schema"; [[ "$delivery" != hosted || -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+              export UNCLE_UPDATED_PLAN_ATTEMPTS_DIR="$directory"
+              export UNCLE_UPDATED_PLAN_FINDINGS="$(python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" group-ids "$directory" "$group_id")"
+              if [[ "$resolver_granularity" == small ]]; then
+                  local resolver_turns answer_tokens
+                  read -r resolver_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-budget "$directory" "$group_id")
+                  [[ -n "$resolver_turns" && -n "$answer_tokens" ]] || exit 1
+                  (( resolver_turns > 0 )) || resolver_turns=""
+                  export UNCLE_WORKER_MAX_TURNS="$resolver_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
+              fi
               UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                run_claude "$group_prompt" "updated-plan-worker-resolve-$group_id" ) \
+                workflow_model_writer updated-plan run_claude "$group_prompt" "updated-plan-worker-resolve-$group_id" ) \
                 > "$LOG_DIR/updated-plan-worker-resolve-$group_id.log" 2>&1 &
             pids+=("$!"); names+=("$group_id")
         done
         for pid in "${!pids[@]}"; do
-            wait "${pids[$pid]}" || { echo "Updated-plan resolver ${names[$pid]} did not complete." >&2; resolver_failed=1; }
+            wait "${pids[$pid]}" || {
+                local resolver_status=$?
+                workflow_writer_failure "updated-plan-worker-resolve-${names[$pid]}" "$resolver_status"
+                echo "Updated-plan resolver ${names[$pid]} did not complete." >&2
+                resolver_failed=1
+                rm -f "$directory/resolutions-${names[$pid]}.json"
+            }
         done
-        [[ "$resolver_failed" == 0 ]] || return 1
+        resolver_failed=0
         # A resolver answer that cannot be applied (text quoted from the wrong place) gets one more try, for that
         # group only, with the reason -- a few seconds, against the full single call.
         local bad_groups
         if ! bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then
             echo "Updated-plan resolver answer(s) could not be applied; asking again: $(echo $bad_groups)"
-            pids=(); names=()
-            for group_id in $bad_groups; do
-                local retry_schema=""
-                [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
-                workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
-                ( [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
-                  UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                    run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
-                    > "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" 2>&1 &
-                pids+=("$!"); names+=("$group_id")
+            # Keep successful groups; only a still-invalid small resolver gets the other delivery path.
+            local resolver_attempt
+            for resolver_attempt in retry alternate; do
+                resolver_failed=0
+                pids=(); names=()
+                for group_id in $bad_groups; do
+                    local retry_schema=""
+                    [[ "$delivery" != hosted && "$resolve_command" != resolve-ops ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
+                    if [[ "$resolve_command" == resolve-ops ]] && stage_uses_self_hosted updated-plan AGENT; then
+                        local schema_attempt=first
+                        [[ ! -f "$directory/prompts/resolve-$group_id.validator-rejected" ]] || schema_attempt=retry
+                        python3 -B "$ROOT/scripts/lib/worker_schemas.py" resolve-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$retry_schema" --scope "$directory/prompts/resolve-$group_id.scope.json" --attempt "$schema_attempt" || return 1
+                    fi
+                    workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
+                    if [[ -s "$directory/prompts/resolve-$group_id.validator-rejected" ]]; then
+                        workflow_writer_failure "updated-plan-worker-resolve-$group_id" 5 "schema rejection" "$directory/prompts/resolve-$group_id.validator-rejected"
+                    fi
+                    workflow_archive_attempt "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.jsonl" "$directory/resolutions-$group_id.json" || return 1
+                    ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_WORKER_SCHEMA_FILE="$retry_schema"; [[ "$delivery" != hosted || -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+                      export UNCLE_UPDATED_PLAN_ATTEMPTS_DIR="$directory"
+                      export UNCLE_UPDATED_PLAN_FINDINGS="$(python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" group-ids "$directory" "$group_id")"
+                      if [[ "$resolver_granularity" == small ]]; then
+                          local resolver_turns answer_tokens
+                          read -r resolver_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-budget "$directory" "$group_id")
+                          [[ -n "$resolver_turns" && -n "$answer_tokens" ]] || exit 1
+                          (( resolver_turns > 0 )) || resolver_turns=""
+                          export UNCLE_WORKER_MAX_TURNS="$resolver_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
+                          if [[ "$resolver_attempt" == alternate ]]; then
+                              local alternate_mode
+                              alternate_mode="$(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-fallback-mode)" || exit 1
+                              export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST="$alternate_mode"
+                          fi
+                      fi
+                      UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                        workflow_model_writer updated-plan run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
+                        > "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" 2>&1 &
+                    pids+=("$!"); names+=("$group_id")
+                done
+                for pid in "${!pids[@]}"; do
+                    wait "${pids[$pid]}" || {
+                        local resolver_status=$?
+                        workflow_writer_failure "updated-plan-worker-resolve-${names[$pid]}-retry" "$resolver_status"
+                        echo "Updated-plan resolver retry ${names[$pid]} did not complete." >&2
+                        resolver_failed=1
+                        rm -f "$directory/resolutions-${names[$pid]}.json"
+                    }
+                done
+                if [[ "$resolver_granularity" != small ]]; then
+                    break
+                fi
+                if bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then break; fi
+                if [[ "$resolver_attempt" == alternate ]]; then break; fi
             done
-            for pid in "${!pids[@]}"; do
-                wait "${pids[$pid]}" || { echo "Updated-plan resolver retry ${names[$pid]} did not complete." >&2; resolver_failed=1; }
-            done
-            [[ "$resolver_failed" == 0 ]] || return 1
         fi
         [[ -z "$reconcile_pid" ]] || wait "$reconcile_pid" 2>/dev/null || true
-        UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || return 1
+        if ! bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then
+            for group_id in $bad_groups; do
+                workflow_writer_failure "updated-plan-worker-resolve-$group_id-retry" 5 "schema rejection" "$directory/prompts/resolve-$group_id.retry.md"
+            done
+            UNCLE_LATE_OPS="$late_ops" python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" resolvers "$directory" "$bad_groups" updated-plan "$STATE_DIR/documents/PROJECT_PLAN.json" "$helper" || { workflow_writer_exhausted updated-plan; return 1; }
+        else
+            UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || { workflow_writer_exhausted updated-plan; return 1; }
+        fi
     elif [[ "$merge_status" != 0 ]]; then
         return 1
     fi
-    python3 "$ROOT/scripts/lib/publish_agent_artifact.py" updated-plan "$LOG_DIR/updated-plan.jsonl" . "$directory/merged.json" || return 1
+    workflow_publish_updated_plan updated-plan "$directory" || return 1
 }
 
 # The specialists' corrections, checked once against what the deciders wrote.  Runs in the background: it waits for the
@@ -2681,12 +2862,11 @@ updated_plan_start_reconcile() {
             "$UPDATED_PLAN_PROMPT" "$directory/slices.tsv" "$directory" "$STATE_DIR/documents/UPDATED_PLAN_WORKERS.json" \
             "$directory/prompts/reconcile.md" || exit 0
         local schema_file=""
-        if [[ "$delivery" == hosted ]]; then
-            mkdir -p "$directory/schemas"
-            schema_file="$directory/schemas/reconcile.json"
-            python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" || exit 0
-        fi
-        [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$late"
+        mkdir -p "$directory/schemas"
+        schema_file="$directory/schemas/reconcile.json"
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" --scope "$directory/prompts/reconcile.scope.json" || exit 0
+        [[ -z "$schema_file" ]] || export UNCLE_WORKER_SCHEMA_FILE="$schema_file"; [[ "$delivery" != hosted || -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$late"
+        . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan || exit 1
         UNCLE_WORKER_PACKET_PATH="$late" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
             run_claude "$directory/prompts/reconcile.md" updated-plan-worker-reconcile
     ) > "$LOG_DIR/updated-plan-worker-reconcile.log" 2>&1 &
@@ -2713,15 +2893,15 @@ run_updated_plan_decide() {
         prompt="$directory/prompts/$lens.md"
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$directory/$lens.json" "updated-plan-review-worker-$lens" < /dev/null ) \
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan REVIEWER || exit 1; UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$directory/$lens.json" "updated-plan-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         UPDATED_PLAN_ADVISOR_PIDS+=("$!")
     done
     run_updated_plan_edit_writers || status=$?
     # Stop any specialist still running (a failed decide falls back to the specialist round, which reuses these files).
     for pid in ${UPDATED_PLAN_ADVISOR_PIDS[@]+"${UPDATED_PLAN_ADVISOR_PIDS[@]}"}; do
-        pkill -P "$pid" 2>/dev/null || true
-        kill "$pid" 2>/dev/null || true
+        python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
     done
     UPDATED_PLAN_ADVISOR_PIDS=()
     return "$status"
@@ -2735,31 +2915,74 @@ run_updated_plan_decide() {
 # authoritative source for its own rows; unlike the review panels there is no
 # separate synthesis agent to fall back on, so any worker failure fails the
 # whole panel and the caller falls back to the single-agent investigation.
+run_preflight_readonly_worker() {
+    local prompt="$1" worker="$2" output="$3" scratch status=0 source="$PWD"
+    if [[ -n "${4:-}" ]]; then
+        scratch="$4"
+        python3 -B "$ROOT/scripts/lib/preflight_readonly.py" prepare "$PWD" "$scratch" > /dev/null || return 1
+    else
+        scratch="$(python3 -B "$ROOT/scripts/lib/preflight_readonly.py" prepare "$PWD")" || return 1
+    fi
+    ( cd "$scratch" && UNCLE_PREFLIGHT_READONLY=1 UNCLE_CONFIG="${UNCLE_CONFIG:-$source/.uncle/config}" \
+      UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "$worker" "Read,Glob,Grep,Bash" ) || status=$?
+    if grep -q 'read-only preflight refused' "$LOG_DIR/$worker.jsonl" "$LOG_DIR/$worker.log" 2>/dev/null; then
+        : > "$STATE_DIR/preflight-readonly-violation"
+        printf '%s: read-only preflight violation\n' "$worker" > "$STATE_DIR/stop-reason"
+        status=1
+    fi
+    if ! python3 -B "$ROOT/scripts/lib/preflight_readonly.py" check "$scratch" "$worker"; then
+        printf '%s: read-only preflight violation; refusing worker output.\n' "$worker" >&2
+        : > "$STATE_DIR/preflight-readonly-violation"
+        printf '%s: read-only preflight violation\n' "$worker" > "$STATE_DIR/stop-reason"
+        status=1
+    fi
+    python3 -B "$ROOT/scripts/lib/preflight_readonly.py" remove "$scratch" || status=1
+    return "$status"
+}
+
 run_preflight_investigation_panel() {
-    local directory="$STATE_DIR/preflight-panel" lens prompt output pid
-    local -a pids=()
+    local directory="$STATE_DIR/preflight-panel" lens prompt output pid scratch
+    local -a pids=() names=() done_workers=() scratches=()
     [[ "${WORKFLOW_PREFLIGHT_PANEL:-1}" == 1 ]] || return 1
-    local tools; tools="$(stage_tools preflight-investigate)"
+    (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure) && return 1
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     echo "Preflight investigation panel: launching 3 workers in parallel (tooling, data, reviewers); browser follows serially."
     for lens in tooling data reviewers; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/preflight-investigate-worker.md" "$prompt"
         printf '\n## Assigned lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        if [[ "$lens" == data ]]; then
-            printf '\nAlso write the pre-implementation input files that `Files the plan says to create` requires you to derive -- this lens, and only this lens, owns that work.\n' >> "$prompt"
-        fi
-        ( UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "preflight-worker-$lens" "$tools" ) \
+        scratch="$(python3 -B "$ROOT/scripts/lib/preflight_readonly.py" allocate "$PWD")" || return 1
+        scratches+=("$scratch")
+        ( run_preflight_readonly_worker "$prompt" "preflight-worker-$lens" "$output" "$scratch" ) \
             > "$LOG_DIR/preflight-worker-$lens.log" 2>&1 &
-        pids+=("$!")
+        pids+=("$!"); names+=("$lens"); done_workers+=(0)
     done
-    for pid in "${pids[@]}"; do
-        wait "$pid" || { echo 'Preflight worker failed; falling back to the single-agent investigation.' >&2; return 1; }
+    local left=3 index sibling
+    while (( left > 0 )); do
+        for index in "${!pids[@]}"; do
+            [[ "${done_workers[index]}" == 0 ]] || continue
+            if ! kill -0 "${pids[index]}" 2>/dev/null; then
+                if ! wait "${pids[index]}"; then
+                    echo "Preflight worker preflight-worker-${names[index]} failed; refusing its output." >&2
+                    for sibling in "${!pids[@]}"; do
+                        [[ "$sibling" == "$index" || "${done_workers[sibling]}" == 1 ]] && continue
+                        python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "${pids[sibling]}" 2>/dev/null || true
+                        wait "${pids[sibling]}" 2>/dev/null || true
+                    done
+                    for scratch in "${scratches[@]}"; do
+                        python3 -B "$ROOT/scripts/lib/preflight_readonly.py" remove "$scratch" || true
+                    done
+                    return 1
+                fi
+                done_workers[index]=1; left=$((left - 1))
+            fi
+        done
+        (( left == 0 )) || sleep 0.1
     done
     prompt="$directory/prompts/browser.md"; output="$directory/browser.json"
     cp "$ROOT/prompts/preflight-investigate-worker.md" "$prompt"
     printf '\n## Assigned lens\n\nFocus only on **browser**.\n' >> "$prompt"
-    UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "preflight-worker-browser" "$tools" \
+    run_preflight_readonly_worker "$prompt" "preflight-worker-browser" "$output" \
         > "$LOG_DIR/preflight-worker-browser.log" 2>&1 \
         || { echo 'Preflight browser worker failed; falling back to the single-agent investigation.' >&2; return 1; }
     python3 "$ROOT/scripts/lib/preflight_worker_packets.py" "$directory" "$STATE_DIR/documents/PREFLIGHT_REPORT.json" \
@@ -2823,6 +3046,7 @@ run_updated_plan_compact() {
         ( run_claude "$UPDATED_PLAN_PROMPT" updated-plan ) || compact_status=$?
     fi
     [[ "$compact_status" == 0 ]] && return 0
+    if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then return "$compact_status"; fi
     # A self-hosted model can fail the compact path's strict patch contract
     # (replace_text only matches text already in the base plan) the same way
     # on every retry and every resumed process -- nothing about restarting
@@ -2849,7 +3073,7 @@ run_updated_plan_compact() {
 run_updated_plan_adaptive() {
     local count threshold slice directory fast_merge=1 jobs=0 writer_status=0
     . "$ROOT/scripts/lib/model-jobs.sh"
-    jobs="$(workflow_model_jobs updated-plan)"
+    jobs="$(workflow_model_capacity updated-plan)"
     if [[ "$jobs" != 0 ]]; then fast_merge=0; fi
     [[ "${WORKFLOW_UPDATED_PLAN_COMPACT:-1}" == 1 ]] || return 1
     count="$(python3 -B - "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" <<'PY'
@@ -2866,8 +3090,9 @@ PY
     # response (rather than the sum), without the 20-way request burst of a
     # one-finding fan-out.
     threshold="${WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD:-5}"
-    # Findings per writer: an explicit setting wins, then the build class (small builds batch more), then 2.
-    slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-$(python3 -B "$ROOT/scripts/lib/change_class.py" get . edit_slice 2)}"
+    # Findings per writer: an explicit setting wins, then the build class (small builds batch more), then the
+    # runner granularity default (small units for self-hosted).
+    slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-$(python3 -B "$ROOT/scripts/lib/change_class.py" get . edit_slice "$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import updated_plan_ops as o; print(o.option("group-size", int(sys.argv[2])))' "$ROOT/scripts/lib" "$(workflow_model_group_size updated-plan)")")}"
     if [[ "$count" =~ ^[0-9]+$ && "$threshold" =~ ^[0-9]+$ && "$slice" =~ ^[0-9]+$ ]] \
         && (( count >= threshold && slice > 0 && jobs != 1 )); then
         ensure_project_plan_json || return 1
@@ -2886,6 +3111,7 @@ PY
         # path exists and this function parses/merges it before publication.
         WORKFLOW_UPDATED_PLAN_EDIT_SLICE="$slice" WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file WORKFLOW_UPDATED_PLAN_FAST_MERGE="$fast_merge" WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT=1 WORKFLOW_PREFIX_WARM_SECONDS=0 \
             run_updated_plan_edit_writers || writer_status=$?
+        if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then cat "$STATE_DIR/stop-reason" >&2; return 1; fi
         if [[ "$writer_status" != 0 && "$jobs" != 0 ]]; then
             echo 'Updated-plan batches failed validation or delivery; falling back to the compact writer.'
             run_updated_plan_compact
@@ -2922,6 +3148,9 @@ run_test_review_investigate() {
     : > "$directory/investigate-started"
     : > "$directory/investigate.pids"
     printf '%s' "$current" > "$directory/investigate.fingerprint"
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    local jobs
+    jobs="$(workflow_model_capacity test-review REVIEWER)" || return 1
     for lens in coverage assertions oracle; do
         prompt="$directory/prompts/investigate-$lens.md"
         cp "$ROOT/prompts/change/test-review-worker-investigate.md" "$prompt"
@@ -2930,7 +3159,7 @@ run_test_review_investigate() {
         else
             printf 'Focus only on **%s**.\n' "$(upper "$lens")" >> "$prompt"
         fi
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$directory/investigate-$lens.md" "test-review-worker-$lens-investigate" < /dev/null ) \
+        ( workflow_model_enter test-review REVIEWER "$jobs" || exit 1; UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$directory/investigate-$lens.md" "test-review-worker-$lens-investigate" < /dev/null ) \
             > "$LOG_DIR/test-review-worker-$lens-investigate.log" 2>&1 &
         echo "$!" >> "$directory/investigate.pids"
     done
@@ -2976,7 +3205,7 @@ run_test_review_panel() {
         else
             printf '\n## Assigned acceptance-gate row\n\nFocus only on **%s**. Use exactly this id, "%s", in your JSON output -- never substitute a different row name from the investigation above.\n' "$(upper "$lens")" "$(upper "$lens")" >> "$prompt"
         fi
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens" < /dev/null ) \
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter test-review REVIEWER || exit 1; UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/test-review-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
@@ -2990,7 +3219,8 @@ run_test_review_panel() {
         if ! python3 -B "$ROOT/scripts/lib/test_review_packets.py" validate "$output" "$lens"; then
             echo "Test-review worker $lens returned an invalid packet; retrying that worker once."
             rm -f "$output"
-            UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens-retry" < /dev/null || true
+            ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter test-review REVIEWER || exit 1
+              UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens-retry" < /dev/null ) || true
         fi
     done
     python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || return 1
@@ -3773,6 +4003,7 @@ run_project_plan_sections_bounded() {
             name="${pending[$next]}"
             echo "Project plan section worker: $name"
             (
+                . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter project-plan || exit 1
                 project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || exit 1
                 project_plan_section_settle "$name" "$directory" "$delivery"
             ) &
@@ -3793,7 +4024,7 @@ run_project_plan_sections() {
     gated=" $(python3 -B "$helper" gate) "
     . "$ROOT/scripts/lib/model-jobs.sh"
     local jobs
-    jobs="$(workflow_model_jobs project-plan)"
+    jobs="$(workflow_model_capacity project-plan)"
     # Forced, schema-checked JSON wherever the runner can enforce it.
     if stage_supports_structured_output project-plan-section-outline; then
         delivery=hosted
@@ -3810,7 +4041,7 @@ run_project_plan_sections() {
         while IFS= read -r phase; do
             for name in $phase; do
                 echo "Project plan section worker: $name"
-                ( project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
+                ( workflow_model_enter project-plan AGENT "$jobs" || exit 1; project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
                 pids+=("$!"); names+=("$name")
             done
             if [[ "$gate" == 1 ]]; then
@@ -3877,6 +4108,14 @@ project_plan_sections_enabled() {
 # Every stage's actual work, with no state transitions and no approval checks,
 # so a stage can be run either in the foreground or speculatively.
 run_stage() {
+    if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then
+        cat "$STATE_DIR/stop-reason" >&2
+        return 1
+    fi
+    case "$1" in
+        UPDATED_PLAN) (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_stage updated-plan) || return 1 ;;
+        PREFLIGHT) (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_stage preflight) || return 1 ;;
+    esac
     case "$1" in
         DERIVE_BRIEF)
             run_claude prompts/derive-brief.md derive-brief
@@ -4038,6 +4277,13 @@ run_stage() {
             python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             ;;
         UPDATED_PLAN)
+            if [[ -s "$STATE_DIR/updated-plan-structure-feedback.md" ]]; then
+                . "$ROOT/scripts/lib/updated-plan-repair.sh"
+                run_updated_plan_structure_repair "$STATE_DIR/documents/UPDATED_PROJECT_PLAN.json" \
+                    "$(cat "$STATE_DIR/updated-plan-structure-feedback.md")" updated-plan || return 1
+                rm -f "$STATE_DIR/updated-plan-structure-feedback.md"
+                return 0
+            fi
             # A review with findings falls through to the normal collated
             # worker panel; a clean review needs no worker calls at all.
             if run_updated_plan_fast_path; then
@@ -4073,6 +4319,7 @@ run_stage() {
                 echo 'Updated plan: written by deciding writers and checked by the specialists.'
                 return 0
             fi
+            if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then cat "$STATE_DIR/stop-reason" >&2; return 1; fi
             run_updated_plan_panel || return 1
             # The panel has already collated every specialist finding into
             # canonical JSON. Every runner gets the sealed compact prompt;
@@ -4084,6 +4331,7 @@ run_stage() {
                 single_call=1   # a rejected plan is repaired by one call that sees the whole problem
             fi
             if [[ "$single_call" == 1 ]] || ! run_updated_plan_edit_writers; then
+                if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then cat "$STATE_DIR/stop-reason" >&2; return 1; fi
                 # Forced JSON here too: the whole-plan call answers through a schema-checked StructuredOutput
                 # call (hosted Claude) or the local grammar, never free text the driver has to dig a plan out of.
                 if stage_supports_structured_output updated-plan; then
@@ -4101,6 +4349,7 @@ run_stage() {
             ;;
         IMPLEMENT)
             green_background_cancel
+            implementation_scaffold_template .uncle/docs/UPDATED_PROJECT_PLAN.md || return $?
             parallel_status=0
             run_parallel_application_implementation || parallel_status=$?
             if [[ "$parallel_status" != 0 ]]; then
@@ -4136,6 +4385,7 @@ run_stage() {
                 else
                     run_claude prompts/implement.md implementation
                 fi
+                implementation_fast_check serial || return $?
                 # A serial implementation agent can finish code while omitting
                 # one or both reports.  Ingest a valid JSON-first test report
                 # when one was supplied, but never spend a second model turn
@@ -4192,6 +4442,7 @@ run_stage() {
                     if run_preflight_investigation_panel; then
                         echo 'Preflight investigation panel: canonical JSON collated from parallel worker packets.'
                     else
+                        (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure) && exit 1
                         preflight_investigation=".uncle/workflow/preflight-investigation.md"
                         rm -f "$preflight_investigation"
                         run_claude prompts/preflight-investigate.md preflight-investigate
@@ -4612,7 +4863,7 @@ spec_stage=""
 cancel_speculation() {
     if [[ -n "$spec_pid" ]] && kill -0 "$spec_pid" 2>/dev/null; then
         echo "Cancelling speculative $spec_stage..."
-        kill "$spec_pid" 2>/dev/null || true
+        python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "$spec_pid" 2>/dev/null || true
         wait "$spec_pid" 2>/dev/null || true
     fi
     spec_pid=""
@@ -4627,6 +4878,10 @@ speculate() {
     gate_file="$(canonical_artifact_path "$view")"
 
     [[ "$WORKFLOW_SPECULATE" == "1" ]] || return 0
+    if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then
+        cat "$STATE_DIR/stop-reason" >&2
+        return 1
+    fi
     [[ -z "$spec_pid" ]] || return 0
     [[ -s "$gate_file" ]] || return 0
 
@@ -4642,7 +4897,9 @@ speculate() {
 
     # Fully detached from this terminal: the gate prompt owns stdin, and stage
     # output would otherwise interleave with it.
-    UNCLE_SPECULATIVE=true run_stage "$stage" > "$LOG_DIR/${stage}.speculative.log" 2>&1 < /dev/null &
+    (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/${stage}.speculative.log") || return 1
+    : > "$LOG_DIR/${stage}.speculative.log"
+    UNCLE_SPECULATIVE=true run_stage "$stage" >> "$LOG_DIR/${stage}.speculative.log" 2>&1 < /dev/null &
     spec_pid=$!
     spec_stage="$stage"
 }
@@ -4683,6 +4940,10 @@ adopt_speculation() {
     fi
 
     if [[ "$status" -ne 0 ]]; then
+        if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then
+            cat "$STATE_DIR/stop-reason" >&2
+            exit "$status"
+        fi
         echo "Speculative $stage failed (status $status). Running it again."
         echo "Log: $LOG_DIR/${stage}.speculative.log"
         # A reviewer that exits nonzero can still have written an invalid
@@ -4722,6 +4983,9 @@ adopt_speculation() {
 
     echo "Adopted speculative $stage — inputs unchanged since it started."
     echo "Log: $LOG_DIR/${stage}.speculative.log"
+    if [[ "$stage" == UPDATED_PLAN ]]; then
+        python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" report-plan "$artifact" || return 1
+    fi
     return 0
 }
 
@@ -4769,7 +5033,13 @@ run_gated_stage() {
     local gate_file="$2"
     local artifact="$3"
 
-    adopt_speculation "$stage" "$gate_file" "$artifact" && return 0
+    if [[ "$stage" != UPDATED_PLAN || ! -s "$STATE_DIR/updated-plan-structure-feedback.md" ]]; then
+        adopt_speculation "$stage" "$gate_file" "$artifact" && return 0
+    fi
+    if (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_terminal_failure); then
+        cat "$STATE_DIR/stop-reason" >&2
+        return 1
+    fi
     run_stage "$stage"
 }
 
@@ -4778,7 +5048,7 @@ python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" "$DOCUMENT_BUDGET_SOU
 
 # A stop reason belongs to the run that recorded it. Left in place, a
 # previous "human" stop would silence the triage bundle on this run's failure.
-rm -f "$STATE_DIR/stop-reason"
+rm -f "$STATE_DIR/stop-reason" "$STATE_DIR/updated-plan-writers-exhausted" "$STATE_DIR/preflight-readonly-violation"
 
 # A fresh run (no state file yet) drops any stale start stamp; a resume keeps it.
 [[ -e "$STATE_FILE" ]] || finished_extras reset
@@ -5009,7 +5279,7 @@ while true; do
                     echo 'tasked with creating them (a Reconcile step'"'"'s Owns: * does not'
                     echo 'count; name the file explicitly in the step that creates it):'
                     python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" \
-                        .uncle/docs/UPDATED_PROJECT_PLAN.md "$PWD" "$STATE_DIR" 2>/dev/null | sed 's/^/  /'
+                        .uncle/docs/UPDATED_PROJECT_PLAN.md "$PWD" "$STATE_DIR" 2>/dev/null | sed 's/^/  /' || true
                 fi
                 # Nobody is asked to approve a plan the next stage would reject, and a
                 # dead stop here ended unattended runs for good. Give the planner the
@@ -5070,6 +5340,7 @@ while true; do
                 echo
                 echo "Probing prerequisites in the background; implementation starts now."
                 echo "A problem is reported through the supervisor, not by stopping here."
+                (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/preflight.background.log") || exit 1
                 (
                     status=0
                     run_stage PREFLIGHT || status=$?

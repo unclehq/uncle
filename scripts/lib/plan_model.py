@@ -10,12 +10,14 @@ for plans written before the model did (and for none written after).  Nothing he
 """
 import copy
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plan_patch import split_sections
+import plan_steps
 
 # row_kind -> [(field, rendered column title, is_list, aliases)].  The first field is the row's key.
 # An alias is a column title with everything but letters and digits removed, lowercased.
@@ -89,10 +91,7 @@ ROW_KINDS = {
 ID_VALUE = re.compile(r'^[A-Z]{1,4}-?\d+[A-Za-z]?$')
 TABLE_SEPARATOR = re.compile(r'^\|?[\s:|-]+\|[\s:|-]*$')
 LIST_ITEM = re.compile(r'^(\s*)([-*+]|\d+\.)\s+(.*)$')
-STEP_HEAD = re.compile(r'^\*\*(.+?)\*\*\s*(?:[—–:-]+\s*)?(.*)$', re.S)
-OWNS = re.compile(r'^\s*(?:[-*]\s*)?\**Owns:?\**\s*(.*)$', re.I)
-DEPENDS = re.compile(r'^\s*(?:[-*]\s*)?\**Depends on:?\**\s*(.*)$', re.I)
-INLINE_OWNS = re.compile(r'(?:^|\s)\**Owns:\**\s+((?:`[^`]+`(?:,\s*)?)+)(?:\s*\**Depends on:\**\s*([\w ,]*?))?\s*\.?$')     # a step on one line: "... Owns: `a`, `b` Depends on: 2"
+
 
 
 class PlanError(ValueError):
@@ -178,7 +177,7 @@ def make_row(kind, mapping, headers, cells, serial):
     return row
 
 
-def parse_blocks(body, section_id):
+def parse_blocks(body, section_id, allow_steps=True):
     lines = body.split('\n')
     blocks, i, count = [], 0, [0]
 
@@ -230,7 +229,7 @@ def parse_blocks(body, section_id):
                     end += 1     # a blank line between two items of one list
                 else:
                     break
-            blocks.append(parse_list([l for l in lines[i:end] if l.strip()], new_id()))
+            blocks.append(parse_list([l for l in lines[i:end] if l.strip()], new_id(), allow_steps=allow_steps))
             i = end
         else:
             end = i
@@ -243,7 +242,13 @@ def parse_blocks(body, section_id):
     return blocks
 
 
-def parse_list(lines, block_id):
+def parse_list(lines, block_id, allow_steps=True):
+    steps = plan_steps.extract_body('\n'.join(lines))[0] if allow_steps else []
+    if steps and any(step['owns'] for step in steps):
+        for step in steps:
+            for key in ('_task', '_line', '_heading', '_heading_line'):
+                step.pop(key, None)
+        return {'id': block_id, 'kind': 'steps', 'items': steps}
     items = []
     for line in lines:
         match = LIST_ITEM.match(line)
@@ -251,30 +256,6 @@ def parse_list(lines, block_id):
             items.append({'indent': len(match.group(1)), 'marker': match.group(2), 'lines': [match.group(3)]})
         elif items:
             items[-1]['lines'].append(line.strip())
-    one_line = [INLINE_OWNS.search(item['lines'][0]) for item in items]
-    if items and items[0]['marker'][0].isdigit() and sum(1 for f in one_line if f) * 2 >= len(items):
-        for item, found in zip(items, one_line):       # "N. **Title** -- text Owns: `a` Depends on: 2" reads like the three-line form
-            if found and not any(OWNS.match(l) for l in item['lines'][1:]):
-                item['lines'] = ([item['lines'][0][:found.start()], 'Owns: ' + found.group(1)]
-                                 + (['Depends on: ' + found.group(2)] if (found.group(2) or '').strip() else []) + item['lines'][1:])
-    owns = sum(1 for item in items if any(OWNS.match(l) for l in item['lines'][1:]))
-    if items and items[0]['marker'][0].isdigit() and owns:
-        steps = []
-        for item in items:
-            number = int(item['marker'][:-1])
-            head = STEP_HEAD.match(item['lines'][0])
-            title, text = (head.group(1).strip(), head.group(2).strip()) if head else ('', item['lines'][0])
-            step_owns, depends = [], []
-            for extra in item['lines'][1:]:
-                if OWNS.match(extra):
-                    step_owns = [owned for owned in map(owned_path, re.split(r',\s*', OWNS.match(extra).group(1))) if owned]
-                elif DEPENDS.match(extra):
-                    depends = [int(n) for n in re.findall(r'\d+', DEPENDS.match(extra).group(1))]
-                else:
-                    text += '\n' + extra
-            steps.append({'id': 'step-%d' % number, 'number': number, 'title': title, 'text': text.strip(),
-                          'owns': step_owns, 'depends_on': depends})
-        return {'id': block_id, 'kind': 'steps', 'items': steps}
     ordered = bool(items) and items[0]['marker'][0].isdigit()
     base = min((item['indent'] for item in items), default=0)
     out = []
@@ -288,9 +269,78 @@ def parse_list(lines, block_id):
     return {'id': block_id, 'kind': 'list', 'ordered': ordered, 'items': out}
 
 
+def implementation_blocks(body, section_id):
+    steps, prefix = plan_steps.extract_body(body)
+    if not steps:
+        return parse_blocks(body, section_id, allow_steps=False)
+    blocks = parse_blocks(prefix, section_id, allow_steps=False)
+    for step in steps:
+        for key in ('_task', '_line', '_heading', '_heading_line'):
+            step.pop(key, None)
+    blocks.append({'id': '%s.%d' % (section_id, len(blocks) + 1), 'kind': 'steps', 'items': steps})
+    return blocks
+
+
+def heading_steps(narrative):
+    return plan_steps.extract(narrative)
+
+
+def steps_of(model):
+    steps = [step for section in model['sections'] for block in section['blocks']
+             if block['kind'] == 'steps' for step in block['items']]
+    return steps or heading_steps(render(model))
+
+
+def dependency_list(value):
+    if isinstance(value, list) and all(type(n) is int and n >= 0 for n in value):
+        return value[:]
+    if isinstance(value, str) and re.fullmatch(r'\s*(?:\d+(?:\s*,\s*\d+)*)?\s*', value):
+        return [int(n) for n in re.findall(r'\d+', value)]
+    raise PlanError('depends_on: use step numbers as an integer array or comma-separated list')
+
+
+def protected_paths(value):
+    if isinstance(value, str):
+        return [line.strip() for line in value.splitlines() if line.strip()]
+    if isinstance(value, list) and all(isinstance(p, str) for p in value):
+        return value[:]
+    raise PlanError('protected_verification_paths: use paths, one per line or a string array')
+
+
+def with_protected(model, plan):
+    if 'protected_verification_paths' in plan:
+        model = dict(model, protected_verification_paths=protected_paths(plan['protected_verification_paths']))
+    return model
+
+
+def ownership_errors(model, root=None):
+    from step_groups import covers
+    errors = []
+    specific = [set(s.get('owns', [])) - {'*'} for s in steps_of(model)]
+    for path in protected_paths(model.get('protected_verification_paths', [])):
+        if not valid_path(path.rstrip('/')):
+            errors.append('protected_verification_paths: replace %r with a repository-relative path' % path)
+        elif root is not None and (Path(root) / path).exists():
+            continue
+        elif any(covers(owned, path) or (path.endswith('/') and any(p.startswith(path) for p in owned))
+                 for owned in specific):
+            continue
+        elif root is not None:
+            errors.append('protected path %r has no creator; set_step <creator-id> owns: add %s' % (path, path))
+    return errors
+
+
+def valid_path(path):
+    return (isinstance(path, str) and bool(path) and not re.search(r'[\s`,;\\]', path)
+            and not path.startswith(('/', '-', '~')) and not path.endswith('/')
+            and not any(p in ('', '.', '..') for p in path.split('/'))
+            and path != '.git' and not path.startswith('.git/'))
+
+
 def import_markdown(narrative):
     """The model for a plan that exists only as Markdown (legacy plans)."""
-    preamble, sections = split_sections(narrative)
+    preamble, sections = plan_steps.split_for_model(narrative)
+    has_implementation = bool(plan_steps.sections(narrative))
     title = ''
     match = re.match(r'^#\s+(.*)$', preamble.split('\n', 1)[0]) if preamble else None
     intro = preamble
@@ -299,8 +349,11 @@ def import_markdown(narrative):
     model = {'title': title, 'intro': intro, 'sections': []}
     for number, section in enumerate(sections, 1):
         sid = 's%d' % number
-        model['sections'].append({'id': sid, 'heading': section['heading'][3:].strip(),
-                                  'blocks': parse_blocks(section['body'], sid)})
+        implementation = re.search(r'Implementation (?:order|sequence|steps|plan)', section['heading'], re.I)
+        blocks = (implementation_blocks(section['body'], sid) if implementation else
+                  parse_blocks(section['body'], sid, allow_steps=not has_implementation))
+        model['sections'].append({'id': sid, 'heading': re.sub(r'^#+\s*', '', section['heading']).strip(),
+                                  'blocks': blocks})
     return dedupe(model)
 
 
@@ -399,7 +452,7 @@ def index(model):
     return found
 
 
-def validate(model):
+def validate(model, root='.'):
     """(errors, warnings).  Errors make the plan unusable; warnings are things a person should look at."""
     errors, warnings, seen = [], [], set()
     for section in model['sections']:
@@ -407,33 +460,52 @@ def validate(model):
             if node['id'] in seen:
                 errors.append('id %r is used twice' % node['id'])
             seen.add(node['id'])
-    for section in model['sections']:
-        for block in section['blocks']:
-            if block['kind'] != 'steps':
-                continue
-            numbers = {s['number'] for s in block['items']}
-            graph = {s['number']: s['depends_on'] for s in block['items']}
-            for step in block['items']:
-                if not step['owns']:
-                    warnings.append('step %d owns no files' % step['number'])
-                for dep in step['depends_on']:
-                    if dep not in numbers or dep == step['number']:
-                        errors.append('step %d depends on %r, which is not another step' % (step['number'], dep))
-            state = {}
+    steps = steps_of(model)
+    numbers, graph = set(), {}
+    for step in steps:
+        number = step.get('number')
+        if type(number) is not int or number < 0:
+            errors.append('%s number: use a nonnegative integer' % step['id'])
+            continue
+        if number in numbers:
+            errors.append('%s number %d is used twice; renumber this step and its references' % (step['id'], number))
+        numbers.add(number)
+        owned = step.get('owns')
+        if not isinstance(owned, list):
+            errors.append('%s owns: use a file/glob array' % step['id'])
+        else:
+            if not owned:
+                warnings.append('step %d owns no files' % number)
+            for token in owned:
+                if not valid_path(token) or (root is not None and (Path(root) / token).is_dir()):
+                    errors.append('%s owns: replace %s with a file or glob (directory/**)' % (step['id'], repr(token)[:96]))
+        deps = step.get('depends_on')
+        if not isinstance(deps, list) or any(type(d) is not int for d in deps):
+            errors.append('%s depends_on: use an integer array' % step['id'])
+        else:
+            graph[number] = deps
+    for number, deps in graph.items():
+        for dep in deps:
+            if dep not in numbers or dep == number:
+                errors.append('step %d depends on %r, which is not another step; set_step step-%d depends_on: remove %s'
+                              % (number, dep, number, dep))
+    state = {}
 
-            def visit(n, path=()):
-                if state.get(n) == 1:
-                    errors.append('steps depend on each other in a cycle: %s' % ' -> '.join(map(str, path + (n,))))
-                    return
-                if state.get(n) == 2:
-                    return
-                state[n] = 1
-                for dep in graph.get(n, []):
-                    if dep in numbers and dep != n:
-                        visit(dep, path + (n,))
-                state[n] = 2
-            for n in graph:
-                visit(n)
+    def visit(n):
+        state[n] = 1
+        for dep in graph.get(n, []):
+            if dep not in numbers or dep == n:
+                continue
+            if state.get(dep) == 1:
+                errors.append('dependency cycle; set_step step-%d depends_on: remove %d' % (n, dep))
+            elif state.get(dep) != 2:
+                visit(dep)
+        state[n] = 2
+    for n in graph:
+        if n not in state:
+            visit(n)
+    if not errors:
+        errors.extend(ownership_errors(model, root))
     return errors, warnings
 
 
@@ -448,6 +520,10 @@ def next_id(model, prefix):
 
 
 def op_keys(op):
+    if op.get('op') == 'insert_step':
+        references = [op.get('after'), op.get('before')] + op['new']['depends_on']
+        return ({(op['list'], 'insert:' + op.get('_step_key', 'new'))}
+                | {(key, 'reference') for key in references if key and key != 'end'})
     """What an op touches, for conflict detection: (id, field) pairs; field '*' means all of it."""
     name = op.get('op')
     if name == 'set_fields':
@@ -496,6 +572,8 @@ def conflicts(model, ops_by_writer):
         return False
 
     def clash(a, b):
+        if a.get('op') == b.get('op') == 'insert_step':
+            return False
         for ka, fa in op_keys(a):
             for kb, fb in op_keys(b):
                 if ka == kb and (fa == fb or '*' in (fa, fb)):
@@ -513,9 +591,16 @@ def conflicts(model, ops_by_writer):
                 entries.append((writer, op))
     groups = []
     for writer, op in entries:
-        hit = [g for g in groups if any(clash(op, other) and writer != w for w, other in g)]
+        hit = [g for g in groups if any((clash(op, other) and writer != w)
+                                       or (writer == w and new_step_packets(op) & new_step_packets(other))
+                                       for w, other in g)]
         groups = [g for g in groups if g not in hit] + [[item for g in hit for item in g] + [(writer, op)]]
     return [g for g in groups if len({w for w, _ in g}) > 1]
+
+
+def new_step_packets(op):
+    references = [op.get('_step_key')] + op.get('depends_on', [])
+    return {ref.rsplit(':', 1)[0] for ref in references if isinstance(ref, str) and ref.startswith('new:')}
 
 
 def fresh_ids(model, section_id, block):
@@ -539,12 +624,44 @@ def locate(model, key):
     return where[key]
 
 
-def apply_ops(model, ops):
+def apply_ops(model, ops, root=None, normalize_new=True):
     """A new model with every op applied; the first op that names something missing raises PlanError."""
+    root = Path.cwd() if root is None else root
+    # An edit answers for what it changes: a quirk the plan already had (run 12's
+    # nested "1." read as a second step 1) must not block an unrelated fix.
+    already = set(validate(model, root=root)[0])
     model = copy.deepcopy(model)
+    additions = [op for op in ops if op.get('op') == 'insert_step']
+    step_numbers = {s['id']: s['number'] for s in steps_of(model)}
+    next_number = max(step_numbers.values(), default=0) + 1
+    for offset, op in enumerate(additions):
+        key = op.get('_step_key', 'new:%d' % (offset + 1))
+        if key in step_numbers:
+            raise PlanError('duplicate new step reference %s' % key)
+        step_numbers[key] = next_number + offset
+    tails = {}
+    new_index = 0
     for op in ops:
         name = op.get('op')
-        if name == 'set_fields':
+        if name == 'insert_step':
+            new_index += 1
+            key = op.get('_step_key', 'new:%d' % new_index)
+            rows = locate(model, op['list'])[0]['items']
+            new = copy.deepcopy(op['new'])
+            deps = new.get('depends_on', [])
+            if any(dep not in step_numbers for dep in deps):
+                raise PlanError('new step depends_on must name an existing step id or new:N in this packet')
+            new.update(id=key, number=step_numbers[key], depends_on=[step_numbers[dep] for dep in deps])
+            if op.get('before'):
+                position = rows.index(locate(model, op['before'])[0])
+            elif op.get('after') == 'end':
+                position = len(rows)
+            else:
+                anchor = tails.get((op['list'], op.get('after')), op.get('after'))
+                position = rows.index(locate(model, anchor)[0]) + 1 if anchor else 0
+                tails[(op['list'], op.get('after'))] = key
+            rows.insert(position, new)
+        elif name == 'set_fields':
             row = locate(model, op['id'])[0]
             for field, value in (op.get('fields') or {}).items():
                 if field not in row and field != 'extra':
@@ -561,7 +678,12 @@ def apply_ops(model, ops):
                 raise PlanError('%s is not a step' % op['id'])
             for field in ('title', 'text', 'owns', 'depends_on'):
                 if field in op:
-                    node[field] = op[field]
+                    value = op[field]
+                    if field == 'depends_on':
+                        if any(isinstance(dep, str) and dep not in step_numbers for dep in value):
+                            raise PlanError('step depends_on must name an existing step or new:N in this packet')
+                        value = [step_numbers[dep] if isinstance(dep, str) else dep for dep in value]
+                    node[field] = value
         elif name == 'delete':
             node, parent, _ = locate(model, op['id'])
             parent.remove(node)
@@ -598,16 +720,18 @@ def apply_ops(model, ops):
                 fresh['blocks'].append(fresh_ids(model, fresh['id'], block))
         else:
             raise PlanError('unknown op %r' % name)
-    errors, _ = validate(model)
+    errors = [e for e in validate(model, root=root)[0] if e not in already]
     if errors:
-        raise PlanError('; '.join(errors))
+        raise PlanError(errors[0])
+    if additions and normalize_new:
+        model = renumber_steps(model, root, assign_ids=True)
     return model
 
 
 # ---- flat ops (what a model writes) -------------------------------------------------------------------
 
 FIELD_NAMES = sorted({f[0] for fields in ROW_KINDS.values() for f in fields})
-OP_NAMES = ('set_fields', 'set_text', 'set_step', 'insert_row', 'insert_item', 'insert_block', 'delete', 'insert_section')
+OP_NAMES = ('set_fields', 'set_text', 'set_step', 'insert_row', 'insert_item', 'insert_step', 'insert_block', 'delete', 'insert_section')
 
 
 def split_list(text):
@@ -667,6 +791,8 @@ def typed_op(model, flat):
     name = flat.get('op')
     if name not in OP_NAMES:
         raise PlanError('unknown op %r' % name)
+    if name == 'insert_step':
+        return new_step_op(model, flat)
     if name in ('set_fields', 'set_text', 'set_step', 'delete'):
         node = locate(model, flat.get('id') or '')[0]
         if name == 'delete':
@@ -679,11 +805,21 @@ def typed_op(model, flat):
                 raise PlanError('a step has the fields title, text, owns and depends_on')
             op = {'op': 'set_step', 'id': flat['id']}
             for field, value in fields.items():
-                op[field] = split_list(value) if field == 'owns' else [int(n) for n in re.findall(r'\d+', value)] if field == 'depends_on' else value
+                if field == 'depends_on' and ((isinstance(value, list) and any(isinstance(v, str) for v in value))
+                                             or (isinstance(value, str) and re.search(r'(?:step-|new:)', value))):
+                    if isinstance(value, list):
+                        if any(type(dep) is not int and not isinstance(dep, str) for dep in value):
+                            raise PlanError('depends_on: use step numbers, existing step ids or new:N')
+                        op[field] = value[:]
+                    else:
+                        op[field] = split_list(value)
+                else:
+                    op[field] = split_list(value) if field == 'owns' else dependency_list(value) if field == 'depends_on' else value
             return op
         block = block_of(model, node)
         if block['kind'] != 'rows':
-            raise PlanError('%s is not a typed row; use set_text for prose and list items' % flat['id'])
+            detail = 'use set_text' if 'text' in node else 'its fields are ' + ', '.join(k for k in node if k != 'id')
+            raise PlanError('%s is not a typed row; %s' % (flat['id'], detail))
         specs = {f[0]: f for f in ROW_KINDS[block['row_kind']]}
         out = {}
         for field, value in fields.items():
@@ -697,16 +833,18 @@ def typed_op(model, flat):
         block = locate(model, flat.get('target') or '')[0]
         new = flat.get('new') or {}
         if name == 'insert_row':
-            if block['kind'] != 'rows':
+            if block.get('kind') != 'rows':
                 raise PlanError('%s is not a typed rows block' % flat['target'])
             return {'op': 'insert_row', 'block': flat['target'], 'after': after, 'row': typed_row(block['row_kind'], new)}
-        if block['kind'] == 'steps':
+        if block.get('kind') == 'steps':
+            if 'id' not in new and 'number' not in new:
+                return new_step_op(model, dict(flat, op='insert_step'))
             number = int(new.get('number') or 0)
             if number < 1 or new.get('id') != 'step-%d' % number:
                 raise PlanError('a new step needs a number and the id step-<number>')
             item = {'id': new['id'], 'number': number, 'title': new.get('title', ''), 'text': new.get('text', ''),
-                    'owns': split_list(new.get('owns')), 'depends_on': [int(n) for n in re.findall(r'\d+', new.get('depends_on') or '')]}
-        elif block['kind'] == 'list':
+                    'owns': split_list(new.get('owns')), 'depends_on': dependency_list(new.get('depends_on') or '')}
+        elif block.get('kind') == 'list':
             item = {'id': new.get('id') or '', 'depth': 0, 'text': new.get('text', '')}
         else:
             raise PlanError('%s is neither a list nor steps' % flat['target'])
@@ -716,6 +854,51 @@ def typed_op(model, flat):
         return {'op': 'insert_block', 'section': flat['target'], 'after': after, 'block': typed_block(flat.get('block') or {})}
     return {'op': 'insert_section', 'after': flat.get('after') or '', 'heading': flat.get('heading') or '',
             'blocks': [typed_block(b) for b in flat.get('blocks') or []]}
+
+
+def new_step_op(model, flat):
+    new = flat.get('new') or {}
+    if set(new) - {'title', 'text', 'owns', 'depends_on'}:
+        raise PlanError('a new step has title, text, owns and depends_on; the driver assigns its id and number')
+    if 'after' in flat and 'before' in flat:
+        raise PlanError('a new step needs only one placement: after, before, or after end')
+    after, before = flat.get('after'), flat.get('before')
+    if after is None and before is None:
+        raise PlanError('a new step needs after or before (after end appends)')
+    blocks = [b for s in model['sections'] for b in s['blocks'] if b['kind'] == 'steps']
+    if flat.get('target'):
+        blocks = [b for b in blocks if b['id'] == flat['target']]
+    anchor = before or (after if after != 'end' else None)
+    if anchor:
+        blocks = [b for b in blocks if any(s['id'] == anchor for s in b['items'])]
+    if not blocks or (anchor and len(blocks) != 1):
+        raise PlanError('new step placement must name an existing implementation step')
+    block = blocks[-1] if after == 'end' else blocks[0]
+    deps = split_list(new.get('depends_on', []))
+    existing = {s['id'] for s in steps_of(model)}
+    if any(dep not in existing and not re.fullmatch(r'new:[1-9][0-9]*', dep) for dep in deps):
+        raise PlanError('new step depends_on must name an existing step id or new:N in this packet')
+    return dict(op='insert_step', list=block['id'], **({'before': before} if before else {'after': after}),
+                new={'title': new.get('title', ''), 'text': new.get('text', ''),
+                     'owns': split_list(new.get('owns', [])), 'depends_on': deps})
+
+
+def namespace_steps(ops, packet):
+    """Packet-local new:N references stay distinct when parallel packets are combined."""
+    count = 0
+    result = copy.deepcopy(ops)
+    for op in result:
+        if op.get('op') == 'insert_step':
+            count += 1
+            op['_step_key'] = 'new:%s:%d' % (packet, count)
+            op['new']['depends_on'] = ['new:%s:%s' % (packet, dep[4:]) if dep.startswith('new:') else dep
+                                       for dep in op['new']['depends_on']]
+        elif op.get('op') == 'set_step' and 'depends_on' in op:
+            op['depends_on'] = ['new:%s:%s' % (packet, dep[4:]) if isinstance(dep, str) and dep.startswith('new:') else dep
+                                for dep in op['depends_on']]
+        elif op.get('op') == 'invalid' and op.get('flat', {}).get('op') == 'insert_step':
+            count += 1
+    return result
 
 
 # ---- authoring: a worker's flat blocks -> typed sections -----------------------------------------------
@@ -772,7 +955,7 @@ def authored_block(flat, block_id):
                 raise PlanError('a step needs a number')
             steps.append({'id': 'step-%d' % number, 'number': number, 'title': flat_step.get('title', ''),
                           'text': flat_step.get('text', ''), 'owns': split_list(flat_step.get('owns')),
-                          'depends_on': [int(n) for n in re.findall(r'\d+', flat_step.get('depends_on') or '')]})
+                          'depends_on': dependency_list(flat_step.get('depends_on') or '')})
         if not steps:
             raise PlanError('a steps block has no steps')
         return {'id': block_id, 'kind': 'steps', 'items': steps}
@@ -828,7 +1011,7 @@ def authored_section(heading, flat_blocks, section_id):
     return {'id': section_id, 'heading': heading, 'blocks': blocks}
 
 
-def model_from_flat(flat_sections, title=''):
+def model_from_flat(flat_sections, title='', root=None, stage=None):
     """A model from sections written as flat blocks, in any order and under any headings (a change plan)."""
     sections = []
     for n, row in enumerate(flat_sections, 1):
@@ -842,10 +1025,157 @@ def model_from_flat(flat_sections, title=''):
     if not sections:
         raise PlanError('the plan has no sections')
     model = dedupe({'title': title, 'intro': '', 'sections': sections})
+    if renumber_enabled({}, root or Path.cwd(), stage):
+        model = renumber_steps(model, root or Path.cwd())
     errors, _ = validate(model)
     if errors:
         raise PlanError('; '.join(errors))
     return model
+
+
+def records_enabled(root=None):
+    """Runner-neutral migration switch, using the existing config parser and precedence."""
+    value = os.environ.get('WORKFLOW_PLAN_RECORDS')
+    if value is None:
+        path = os.environ.get('UNCLE_CONFIG') or str(Path(root or Path.cwd()) / '.uncle/config')
+        if not Path(path).is_file():
+            return True
+        from self_hosted_http import _config_values
+        value = _config_values(path).get('workflow.plan-records', '1')
+    if value.strip().lower() not in ('0', '1', 'false', 'true'):
+        raise PlanError('workflow.plan-records: use 0 or 1')
+    return value.strip().lower() in ('1', 'true')
+
+
+def renumber_steps(model, root=None, assign_ids=False):
+    """Repair only numbering, leaving ambiguous references for the normal correction round."""
+    steps = steps_of(model)
+    if not steps or (not assign_ids and all(step.get('number') == n for n, step in enumerate(steps, 1))):
+        return model
+    if any(type(step.get('number')) is not int or step['number'] < 0 for step in steps):
+        return model
+    revised = copy.deepcopy(model)
+    for position, step in enumerate(steps_of(revised), 1):
+        deps = step.get('depends_on')
+        if not isinstance(deps, list) or any(type(dep) is not int for dep in deps):
+            return model
+        mapped = []
+        for dep in deps:
+            targets = [n for n, old in enumerate(steps, 1) if old['number'] == dep and n != position]
+            if len(targets) != 1:
+                return model
+            mapped.append(targets[0])
+        step['number'], step['depends_on'] = position, mapped
+        if assign_ids:
+            step['id'] = 'step-%d' % position
+    return model if validate(revised, root=root)[0] else revised
+
+
+def renumber_narrative(narrative, before, after):
+    """Change only step markers and Depends on numbers; unfamiliar layouts fall back."""
+    fields = ('number', 'title', 'text', 'owns', 'depends_on')
+    original_steps = steps_of(before)
+    imported_steps = steps_of(import_markdown(narrative))
+    if [[s.get(f) for f in fields] for s in original_steps] != [[s.get(f) for f in fields] for s in imported_steps]:
+        return None
+    headings = list(re.finditer(r'^## .+$', narrative, re.M))
+    if len(headings) != len(before['sections']):
+        return None
+    edits = []
+    for index, section in enumerate(before['sections']):
+        old = [s for b in section['blocks'] if b['kind'] == 'steps' for s in b['items']]
+        if not old:
+            continue
+        new = [s for b in after['sections'][index]['blocks'] if b['kind'] == 'steps' for s in b['items']]
+        start = headings[index].end()
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(narrative)
+        body = narrative[start:end]
+        pattern = r'^[ \t]*(\d+)\.[ \t]+'
+        if re.search(r'Implementation (?:order|sequence|steps|plan)', section['heading'], re.I) and re.search(
+                r'^#{3,6}\s+(?:Step\s+)?\d+[:.)-]\s*', body, re.M | re.I):
+            pattern = r'^#{3,6}\s+(?:Step\s+)?(\d+)[:.)-]\s*'
+        markers = list(re.finditer(pattern, body, re.M | re.I))
+        if len(markers) != len(old):
+            return None
+        for n, (marker, previous, revised) in enumerate(zip(markers, old, new)):
+            if int(marker[1]) != previous['number']:
+                return None
+            edits.append((start + marker.start(1), start + marker.end(1), str(revised['number'])))
+            stop = markers[n + 1].start() if n + 1 < len(markers) else len(body)
+            chunk = body[marker.end():stop]
+            refs = list(re.finditer(r'(?im)\bDepends on:?\**[ \t]*([\d ,]+)', chunk))
+            if len(refs) > 1 or (bool(refs) != bool(previous['depends_on'])):
+                return None
+            if refs:
+                ref = refs[0]
+                digits = list(re.finditer(r'\d+', ref[1]))
+                if [int(d[0]) for d in digits] != previous['depends_on']:
+                    return None
+                for digit, value in zip(digits, revised['depends_on']):
+                    offset = start + marker.end() + ref.start(1)
+                    edits.append((offset + digit.start(), offset + digit.end(), str(value)))
+    for start, end, value in sorted(edits, reverse=True):
+        narrative = narrative[:start] + value + narrative[end:]
+    return narrative
+
+
+def plan_stage(plan, name=''):
+    if Path(name).stem == 'UPDATED_PROJECT_PLAN':
+        return 'updated-plan'
+    if Path(name).stem == 'PROJECT_PLAN':
+        return 'project-plan'
+    if plan.get('kind') == 'change-plan':
+        return 'updated-change-plan' if 'dispositions' in plan else 'change-plan'
+    return 'updated-plan' if 'dispositions' in plan else 'project-plan'
+
+
+def renumber_enabled(plan, root, stage=None):
+    from self_hosted import config_stage
+    from self_hosted_http import _config_values
+    from unit_scheduler import granularity, option
+    config = _config_values(os.environ.get('UNCLE_CONFIG') or str(Path(root) / '.uncle/config'))
+    stage = stage or os.environ.get('UNCLE_STATUS_STAGE') or plan_stage(plan)
+    parent = config_stage(stage, config)
+    runner = config.get(parent + '.runner', config.get('runner', 'claude'))
+    if runner not in ('self-hosted', 'opencode', 'aider') or granularity('self-hosted', stage, config) != 'small':
+        return False
+    value = option('self-hosted', stage, 'plan-renumber', 'on', config)
+    if value not in ('on', 'off', '1', '0', 'true', 'false'):
+        raise PlanError('self-hosted.plan-renumber must be on or off')
+    return value in ('on', '1', 'true')
+
+
+def publish_records(plan, root='.', model=None, stage=None):
+    """Validate and retain records on a plan write; leave legacy untyped plans alone.
+
+    Also usable by the edit-op merger after it has chosen its protected paths:
+    result = publish_records(result, model=new_model).
+    """
+    from plan_step_recovery import normalize_publication
+    narrative = plan.get('narrative')
+    if isinstance(narrative, str) and model is None and 'sections' not in plan:
+        normalized = normalize_publication(narrative, root, stage or plan_stage(plan))
+        if normalized != narrative:
+            plan = dict(plan, narrative=normalized)
+            model = import_markdown(normalized)
+    if not records_enabled(root):
+        return plan
+    model = with_protected(model_of(plan) if model is None else model, plan)
+    if not steps_of(model) and not plan.get('sections'):
+        return plan
+    if renumber_enabled(plan, root, stage):
+        revised = renumber_steps(model, root)
+        if revised is not model:
+            if not plan.get('narrative'):
+                model = revised
+            else:
+                narrative = renumber_narrative(plan['narrative'], model, revised)
+                if narrative is not None:
+                    plan, model = dict(plan, narrative=narrative), revised
+    errors, _ = validate(model, root=root)
+    if errors:
+        raise PlanError(errors[0])
+    return dict(plan, **{key: model[key] for key in ('title', 'intro', 'sections')})
 
 
 def consistent(plan):
@@ -856,9 +1186,9 @@ def consistent(plan):
 
 
 def model_of(plan):
-    """The model of a plan JSON: its `sections` when they agree with its narrative, else the narrative imported."""
-    if plan.get('sections') and (not plan.get('narrative') or consistent(plan)):
-        return {'title': plan.get('title', ''), 'intro': plan.get('intro', ''), 'sections': plan['sections']}
+    """Canonical sections are authoritative; import the narrative only for legacy plans."""
+    if 'sections' in plan:
+        return with_protected({'title': plan.get('title', ''), 'intro': plan.get('intro', ''), 'sections': plan['sections']}, plan)
     return import_markdown(plan.get('narrative') or '')
 
 
@@ -869,15 +1199,17 @@ def sidecar(plan_path):
 
 
 def load_model(plan_path):
-    """The model of a plan JSON file: its sidecar when that still agrees with the narrative, else the narrative imported."""
+    """Canonical sections, else a matching legacy sidecar, else the narrative imported."""
     import collections
     plan = json.loads(Path(plan_path).read_text(encoding='utf-8'))
+    if 'sections' in plan:
+        return model_of(plan)
     try:
         model = json.loads(sidecar(plan_path).read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return model_of(plan)
     if collections.Counter(words(render(model))) == collections.Counter(words(plan.get('narrative') or '')):
-        return model
+        return with_protected(model, plan)
     return model_of(plan)
 
 
@@ -905,7 +1237,8 @@ def attach(plan_path, model_path):
     if before != after:
         raise PlanError('the authored model differs from the narrative: lost %s, added %s'
                         % (dict((before - after).most_common(5)), dict((after - before).most_common(5))))
-    errors, _ = validate(model)
+    model = with_protected(model, plan)
+    errors, _ = validate(model, root=Path.cwd())
     if errors:
         raise PlanError('the authored model does not validate: %s' % '; '.join(errors))
     sidecar(plan_path).write_text(json.dumps(model, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')

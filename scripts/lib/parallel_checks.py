@@ -18,6 +18,7 @@ import time
 from verification_manifest import manifest
 from shell_syntax import syntax_command
 import check_reuse
+from browser_install import prepare
 
 
 # These are prerequisites, not an attempt to infer arbitrary application test
@@ -203,25 +204,35 @@ def _run_checks(args):
                     record(command, time.monotonic() - started, 0, args.log)
                     return 0, log
                 return 125, log
-            with lock:
-                if halted.is_set():
-                    output.write(b"NOT RUN: protected verification inputs changed.\n")
-                    return 125, log
-                check_env = dict(os.environ)
-                for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG',
-                            'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
-                            'DOCUMENT_BUDGET_SOURCE', 'UNCLE_STEERING', 'UNCLE_SUPERVISION_HOST'):
-                    check_env.pop(key, None)
-                if invoked != command:
-                    output.write(f"EXECUTION: {invoked}\n".encode('utf-8'))
-                argv = syntax_command(invoked, args.jobs) or [bash_executable(), '-o', 'pipefail', '-c', invoked]
-                child = start_check(argv, env=check_env,
-                                    stdout=output, stderr=subprocess.STDOUT)
-                children.add(child)
-            status = wait_check(child, timeout, output)
-            with lock:
-                finish_check(child)
-                children.discard(child)
+            check_env = dict(os.environ)
+            try:
+                with prepare(command, output, check_env, halted):
+                    with lock:
+                        if halted.is_set():
+                            output.write(b"NOT RUN: protected verification inputs changed.\n")
+                            return 125, log
+                        for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG',
+                                    'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
+                                    'DOCUMENT_BUDGET_SOURCE', 'UNCLE_STEERING', 'UNCLE_SUPERVISION_HOST'):
+                            check_env.pop(key, None)
+                        if invoked != command:
+                            output.write(f"EXECUTION: {invoked}\n".encode('utf-8'))
+                        argv = syntax_command(invoked, args.jobs) or [bash_executable(), '-o', 'pipefail', '-c', invoked]
+                        output.flush()
+                        child = start_check(argv, env=check_env,
+                                            stdout=output, stderr=subprocess.STDOUT)
+                        children.add(child)
+                    try:
+                        status = wait_check(child, timeout, output, cancelled=halted)
+                    finally:
+                        with lock:
+                            kill_tree(child)
+                            child.wait()
+                            finish_check(child)
+                            children.discard(child)
+            except (OSError, ValueError) as error:
+                output.write((str(error) + '\n').encode())
+                status = 126
             intact()  # Check each command, even if a peer later restores bytes.
         if status != 0 and E2E.search(command) and browser_application_unrunnable(log):
             with log.open('ab') as output:
@@ -272,7 +283,7 @@ def _run_checks(args):
                         for chunk in iter(lambda: source.read(1024 * 1024), b""):
                             combined.write(chunk)
                     combined.flush()
-                    label = 'INVALID' if halted.is_set() else ('PASS' if status == 0 else ('SKIP' if status == 125 else f'FAIL({status})'))
+                    label = 'INVALID' if halted.is_set() else ('PASS' if status == 0 else ('SKIP' if status == 125 else ('STALLED' if status == 123 else f'FAIL({status})')))
                     print(f"  {label}      {commands[i]}", flush=True)
                 if halted.is_set():
                     Path(args.integrity_log).write_bytes(("\n".join(violations) + "\n").encode("utf-8"))

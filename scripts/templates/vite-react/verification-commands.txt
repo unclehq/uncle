@@ -1,0 +1,5 @@
+npm install
+npm run test:unit
+npm run build
+npx --no-install playwright install chromium
+npm run test:e2e

@@ -469,7 +469,7 @@ class SelfHostedHttp(unittest.TestCase):
         server = self.serve(PLAN, tool_script=[self.call('list_dir', {}), {'role': 'assistant', 'content': 'done'}])
         http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, usage={})
         turns = [body for _path, body in server.requests if body.get('tools')]
-        self.assertEqual({body['max_tokens'] for body in turns}, {32768})
+        self.assertEqual({body['max_tokens'] for body in turns}, {65536})
         with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS': '2048'}):
             self.assertEqual(http_transport.turn_output_tokens(64512), 2048)
         self.assertEqual(http_transport.turn_output_tokens(1000), 1000)
@@ -652,6 +652,7 @@ class SelfHostedHttp(unittest.TestCase):
             (connection,) = pool.http1.values()
             self.assertNotEqual(connection.sock.getsockopt(socket_module.SOL_SOCKET, socket_module.SO_KEEPALIVE), 0)
 
+    @patch.dict(os.environ, WORKFLOW_SELF_HOSTED_LEARNED_BUDGETS='off')
     def test_the_model_is_warned_when_three_turns_are_left(self):
         # A repair stage spent all 40 turns probing, ended with an empty message, and the run stopped.
         seen = []
@@ -729,6 +730,7 @@ class SelfHostedHttp(unittest.TestCase):
         with patch.object(http_transport, 'http2_available', lambda: False):
             self.assertFalse(http_transport.wants_http2('https'))
 
+    @patch.dict(os.environ, WORKFLOW_SELF_HOSTED_RESULT_REUSE='off')
     def test_falls_back_to_json_object_then_prompt_only(self):
         server = self.serve(PLAN, reject={'structured_outputs', 'guided_json'})
         server.reject = set()
@@ -935,13 +937,13 @@ class SelfHostedHttp(unittest.TestCase):
             with self.assertRaisesRegex(OutputTruncated, r'ended with: \(only whitespace\)'):
                 self.plan(server, explore_first=False)
 
-    def test_worker_packets_get_a_small_closing_cap(self):
+    def test_review_packets_keep_a_generous_closing_cap(self):
         server = self.serve({'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review-worker-packet', 'findings': []})
         http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                              final_schema=artifact_schema('adversarial-review-worker-packet'),
                              final_name='adversarial_review_worker_packet')
-        # Both paths honor the small packet ceiling.
-        self.assertEqual(self.final(server)['max_tokens'], 4096)
+        # Judgment packets reserve separate answer and reasoning allowances.
+        self.assertEqual(self.final(server)['max_tokens'], 65536)
 
     def test_a_worker_packet_asks_for_compact_json_and_retries_with_the_full_cap(self):
         server = self.serve({'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review-worker-packet', 'findings': []})
@@ -955,7 +957,7 @@ class SelfHostedHttp(unittest.TestCase):
             http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                                  final_schema=artifact_schema('adversarial-review-worker-packet'),
                                  final_name='adversarial_review_worker_packet')
-        self.assertEqual([(m, l) for m, l, _ in caps], [('json_schema', 4096), ('prompt', 4096)])
+        self.assertEqual([(m, l) for m, l, _ in caps], [('json_schema', 32768), ('prompt', 32768)])
         self.assertIn('Write it compactly', caps[0][2])
 
     def test_a_server_that_keeps_looping_on_whitespace_skips_the_grammar_for_packets(self):
@@ -1021,13 +1023,12 @@ class SelfHostedHttp(unittest.TestCase):
         server = self.serve(PLAN)
         http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                              final_schema=artifact_schema('plan'), final_name='plan')
-        # The first, grammar-constrained try is capped at 16k (the largest real answer is about 10k);
-        # only the retry without the grammar gets the full 32768.
-        self.assertEqual(self.final(server)['max_tokens'], 16384)
+        # The answer cap and reasoning reserve are independent on both attempts.
+        self.assertEqual(self.final(server)['max_tokens'], 65536)
         with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_FINAL_OUTPUT_TOKENS': '2048'}):
             http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                                  final_schema=artifact_schema('plan'), final_name='plan')
-        self.assertEqual(self.final(server)['max_tokens'], 2048)
+        self.assertEqual(self.final(server)['max_tokens'], 2048 + 32768)
 
     def test_reviewer_kind_comes_from_the_prompts_contract(self):
         self.assertEqual(reviewer_artifact_kind('x `{"schema":"uncle.artifact/v1","kind":"final-audit","findings":[]}`'), 'final-audit')

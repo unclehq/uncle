@@ -334,7 +334,7 @@ green_run() {
         # Bound the command (WORKFLOW_CHECK_TIMEOUT_SECONDS, default 900): a check that
         # waits forever used to stall the run with no output at all.
         if [[ -f "$GREEN_LIB_DIR/run_check.py" ]] && command -v python3 >/dev/null 2>&1; then
-            check_command=(python3 -B "$GREEN_LIB_DIR/run_check.py" -- "${check_command[@]}")
+            check_command=(python3 -B "$GREEN_LIB_DIR/run_check.py" --config "${UNCLE_CONFIG:-$PWD/.uncle/config}" --shell-command "$cmd" -- "${check_command[@]}")
         fi
         env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "${check_command[@]}" < /dev/null >> "$log" 2>&1 || status=$?
         perf_record check "$cmd" "$((SECONDS-started))" "$status"
@@ -344,6 +344,8 @@ green_run() {
 
         if [[ "$status" -eq 0 ]]; then
             printf '  PASS      %s\n' "$cmd"
+        elif [[ "$status" -eq 123 ]]; then
+            printf '  STALLED   %s\n' "$cmd"
         else
             printf '  FAIL(%s)   %s\n' "$status" "$cmd"
         fi

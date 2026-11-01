@@ -325,6 +325,17 @@ class Prompt(unittest.TestCase):
 
 
 class Schemas(unittest.TestCase):
+    def properties(self, schema):
+        properties = {}
+        for variant in schema['anyOf']:
+            for key, value in variant['properties'].items():
+                target = properties.setdefault(key, {})
+                if 'enum' in value:
+                    target.setdefault('enum', []).extend(value['enum'])
+                if 'properties' in value:
+                    target.setdefault('properties', {}).update(value['properties'])
+        return properties
+
     def test_the_writer_schema_lists_the_ids_and_has_no_text_patch(self):
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp, 'plan.json')
@@ -334,7 +345,7 @@ class Schemas(unittest.TestCase):
             schema = json.loads(out.read_text())
         self.assertEqual(schema['properties']['kind'], {'const': WS.EDIT_OPS_KIND})
         self.assertNotIn('patch', schema['properties'])
-        item = schema['properties']['ops']['items']['properties']
+        item = self.properties(schema['properties']['ops']['items'])
         self.assertIn('B-1', item['id']['enum'])
         self.assertIn('step-2', item['id']['enum'])
         self.assertNotIn('B-9', item['id']['enum'])
@@ -354,7 +365,38 @@ class Schemas(unittest.TestCase):
             out = Path(tmp, 'schema.json')
             self.assertEqual(WS.main(['resolve-ops', str(plan), str(out)]), 0)
             schema = json.loads(out.read_text())
-        self.assertIn('B-2', schema['properties']['resolutions']['items']['properties']['ops']['items']['properties']['id']['enum'])
+        item = self.properties(schema['properties']['resolutions']['items']['properties']['ops']['items'])
+        self.assertIn('B-2', item['id']['enum'])
+
+
+class NewStepIsolation(unittest.TestCase):
+    def insertion(self, title, deps=None):
+        return {'op': 'insert_step', 'after': 'step-1',
+                'new': {'title': title, 'text': 'Implement.', 'owns': ['src/' + title + '.js'],
+                        'depends_on': deps if deps is not None else ['step-1']}}
+
+    def test_one_invalid_new_step_packet_preserves_other_packets_and_their_order(self):
+        model = pm.import_markdown(NARRATIVE)
+        attributed = []
+        for name, flat in [('first', self.insertion('first')), ('bad', self.insertion('bad', ['new:1'])),
+                           ('last', self.insertion('last'))]:
+            attributed.extend(({name}, op) for op in ops.ops_of({'ops': [flat]}, model, name))
+        revised, dropped = ops.apply_leniently(model, attributed)
+        revised = pm.renumber_steps(revised, assign_ids=True)
+        self.assertEqual([step['title'] for step in pm.steps_of(revised)], ['Scaffold', 'first', 'last', 'Core'])
+        self.assertEqual([writers for _, _, writers in dropped], [{'bad'}])
+        self.assertEqual(pm.validate(revised)[0], [])
+
+    def test_lenient_merge_keeps_new_step_and_existing_dependency_edit_atomic(self):
+        model = pm.import_markdown(NARRATIVE)
+        packet = {'ops': [self.insertion('first'),
+                          {'op': 'set_step', 'id': 'step-2', 'fields': {'depends_on': [1, 'new:1']}}]}
+        attributed = [({'first'}, op) for op in ops.ops_of(packet, model, 'first')]
+        revised, dropped = ops.apply_leniently(model, attributed)
+        revised = pm.renumber_steps(revised, assign_ids=True)
+        self.assertEqual(dropped, [])
+        self.assertEqual(pm.steps_of(revised)[2]['depends_on'], [1, 2])
+        self.assertEqual(pm.validate(revised)[0], [])
 
 
 class Reconcile(Base):

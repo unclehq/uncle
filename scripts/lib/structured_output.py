@@ -76,6 +76,8 @@ def recover(log):
                 index = text.find('{', index + 1)
                 continue
             if isinstance(value, dict) and value.get('schema') == 'uncle.artifact/v1' and value.get('kind'):
+                if value['kind'] in ('updated-plan-edit-ops-packet', 'updated-plan-resolution-ops-packet'):
+                    return value  # first packet in this delivery; the merge still validates it
                 found = value
             index = text.find('{', end)
         if found is not None:

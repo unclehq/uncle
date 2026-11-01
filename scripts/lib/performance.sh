@@ -7,43 +7,11 @@
 PERF_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 perf_record() (
     [[ "${WORKFLOW_METRICS:-1}" == 1 && -n "${STATE_DIR:-}" ]] || exit 0
-    local kind="$1" stage="$2" elapsed="$3" status="$4"
-    local log="${5:-/dev/null}" runner="${6:-}" model="${7:-}" effort="${8:-}"
-    local dir="$STATE_DIR/metrics" tmp
     local timing_dir="${UNCLE_TIMING_DIR:-}"
-    [[ -d "$dir" ]] || mkdir -p "$dir" || exit 0
-    tmp="$(mktemp "$dir/.pending.XXXXXX")" || exit 0
-    [[ -f "$log" ]] || log=/dev/null
-    if jq -R -s -c --arg kind "$kind" --arg stage "$stage" \
-        --arg runner "$runner" --arg model "$model" --arg effort "$effort" \
-        --arg log "$log" --arg state "${state:-}" --arg run_id "${timing_dir##*/}" \
-        --argjson elapsed "$elapsed" --argjson exit_code "$status" \
-        --argjson ended "$(date +%s)" \
-        --argjson speculative "${UNCLE_SPECULATIVE:-false}" '
-        [split("\n")[] | fromjson? | select(type == "object" and .type == "result")] as $results
-        | ($results[-1] // {}) as $r
-        | [scan("tokens used[\\r\\n ]+([0-9,]+)") | .[0] | gsub(","; "") | tonumber] as $totals
-        | {schema:1, kind:$kind, stage:$stage, workflow_state:$state, run_id:$run_id,
-           runner:$runner, model:($r.model // $model), effort:$effort, speculative:$speculative,
-           ended_at:$ended, started_at:($ended-$elapsed), elapsed_seconds:$elapsed,
-           process_exit:$exit_code, reported_error:$r.is_error,
-           turns:($r.num_turns // null), input_tokens:($r.usage.input_tokens // null),
-           output_tokens:($r.usage.output_tokens // null),
-           reported_total_tokens:($r.usage.total_tokens // $totals[-1] // null),
-           cache_read_tokens:($r.usage.cache_read_input_tokens // $r.usage.cached_input_tokens // null),
-           cache_write_tokens:($r.usage.cache_creation_input_tokens // $r.usage.cache_write_input_tokens // null),
-           reported_cost_usd:($r.total_cost_usd // null),
-           usage_scope:($r.usage_scope // "last reported result"),
-           usage_source:($r.usage_source // null),
-           input_includes_cache:($r.input_includes_cache // false),
-           log:$log}
-    ' "$log" > "$tmp"; then
-        # One process prices the record, publishes it as $tmp.json, and refreshes the session totals.
-        python3 "$PERF_LIB_DIR/usage-cost.py" "$tmp" --finish "$STATE_DIR" || true
-        [[ ! -e "$tmp" ]] || mv "$tmp" "$tmp.json"
-    else
-        rm -f "$tmp"
-    fi
+    # One process builds, prices and publishes the record and refreshes the session totals (it was jq, mktemp, date, usage-cost.py and
+    # session-totals.py). Arguments: kind stage elapsed status [log runner model effort]. Never fails the workflow.
+    python3 "$PERF_LIB_DIR/perf_record.py" "$STATE_DIR" "$1" "$2" "$3" "$4" "${5:-/dev/null}" "${6:-}" "${7:-}" "${8:-}" \
+        "${state:-}" "${timing_dir##*/}" "${UNCLE_SPECULATIVE:-false}" || true
     exit 0
 )
 

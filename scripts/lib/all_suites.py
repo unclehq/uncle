@@ -56,6 +56,10 @@ def run(jobs, shard=None, list_only=False):
     update = os.environ.get('UNCLE_UPDATE_SUITE_WEIGHTS') == '1'   # read before isolation clears UNCLE_* variables
     isolate_git()
     os.environ.setdefault('UNCLE_MODEL_REFRESH', '0')
+    # Suites with a thread pool of their own (close-flow's PR-handoff cases, the gates groups) read this. Left at their defaults
+    # (up to 16 threads each) they put far more than one process per core to work and slow every other suite in the pool: capped at 2
+    # a full run took 344 s instead of 376 s and about 13% less CPU; at 1 it took 347 s.
+    os.environ.setdefault('WORKFLOW_TEST_JOBS', '2')
     weights = read_weights()
     commands = ordered(build_commands(), weights)
     if shard:

@@ -389,7 +389,9 @@ implementation_fast_check() { printf '%s\\n' "$1" >> checks; return 7; }
         self.assertIn('implementation_fast_check "group-$*"', shared)
         change = (LIB.parent / 'change-workflow.sh').read_text()
         step = change.split('run_stepwise_implementation() {', 1)[1].split('recover_missing_implementation_reports()', 1)[0]
-        self.assertLess(step.index('implementation_fast_check "step-$i"'), step.index('printf \'%s\\n\' "$i" > "$done_file"'))
+        # A step skipped as verification-only records its checkpoint early (no code changed, nothing to check);
+        # the checkpoint after real work is the last one, and the fast check must come before it.
+        self.assertLess(step.index('implementation_fast_check "step-$i"'), step.rindex('printf \'%s\\n\' "$i" > "$done_file"'))
         for driver, plan in [('stagegate.sh', 'UPDATED_PROJECT_PLAN'), ('change-workflow.sh', 'CHANGE_PLAN')]:
             text = (LIB.parent / driver).read_text()
             self.assertIn('implementation_scaffold_template .uncle/docs/' + plan + '.md', text)

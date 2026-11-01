@@ -159,6 +159,21 @@ class StartError(ValueError):
 ATTESTATION = None
 
 
+def ignore_rules_without_uncles_own(content):
+    """.gitignore as the audit saw it, minus the entries uncle manages (scripts/lib/uncle_gitignore.py).
+
+    Something in a run (a test that normalizes the checkout's ignore file, a first-run refresh) can append `.uncle` to a tracked
+    .gitignore while the audit is under way. That is uncle's own bookkeeping, not a change to the project, and counting it as one
+    made `bind` refuse the finished audit ('Files ... changed during audit; rerun FINAL_AUDIT') for a change nobody made. Every
+    other line of the file still counts. Only the comparison snapshots use this; the commit tree (audit=True) keeps the exact bytes.
+    """
+    lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from uncle_gitignore import strip_managed
+    return (strip_managed(content.decode('utf-8', 'replace')) + '\n').encode('utf-8')
+
+
 def attestation():
     # Imported only when sealing or rendering, so a bare load of this engine
     # (pr-reconcile-test.py) needs no library path.
@@ -577,6 +592,8 @@ def snapshot(audit=False, excludes=(), attestation=False):
             elif path.is_file():
                 mode = '100755' if path.stat().st_mode & 0o100 else '100644'
                 content = None if b'\n' not in raw else path.read_bytes()
+                if not audit and name == '.gitignore':
+                    content = ignore_rules_without_uncles_own(path.read_bytes())
             else:
                 raise ValueError('Submodules/nested repositories cannot be bound; use a supported tree.')
             if content is None:

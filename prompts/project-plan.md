@@ -348,3 +348,13 @@ install or switch Node versions. If `package.json` sets `engines.node`, its
 range must accept the installed Node major. Record resolved versions in the
 lockfile; reuse a compatible installation. If an approved plan conflicts,
 report it through the existing review/repair path; do not silently edit it.
+
+## Launch metadata (`.uncle/launch.json`)
+
+The driver reads this file to start the project, and rejects anything else at the end of the stage. It is JSON with a `kind` of
+`webpage`, `command` or `none`, and a `command` that is an argument array, never one string:
+
+    {"kind": "webpage", "command": ["npx", "vite", "--host", "127.0.0.1", "--port", "5173", "--strictPort"], "url": "http://127.0.0.1:5173"}
+
+Use `"kind": "command"` with only `command` for a terminal program, and `"kind": "none"` when there is nothing to launch. A check
+script you write for this file must check these same rules (`kind` present, `command` an array).

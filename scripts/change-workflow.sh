@@ -3356,6 +3356,97 @@ change_repair_next_stage() {
     fi
 }
 
+# --- the test-review lens panel, as in stagegate.sh ------------------------------------------------------------------------------------
+# One investigation worker per lens starts at once, beside the wait for the green check (it never opens a result file); when the results
+# are published one finalize worker per lens judges its rows from them; the driver collates the packets and renders TEST_REVIEW.md.
+# The worker prompts are the app driver's, with the new-application document names mapped to this driver's.
+change_test_review_lenses() {
+    change_class_panel test_review_lenses 'coverage assertions oracle' WORKFLOW_TEST_REVIEW_LENSES
+}
+
+change_test_review_prompt() {   # <template> <out>
+    sed -e 's#\.uncle/docs/UPDATED_PROJECT_PLAN\.md#.uncle/docs/CHANGE_PLAN.md#g' \
+        -e 's#\.uncle/docs/AUTOMATED_TEST_REPORT\.md#.uncle/docs/CHANGE_TEST_REPORT.md#g' "$1" > "$2"
+}
+
+change_run_test_review_investigate() {
+    local directory="$STATE_DIR/test-review-panel" lens prompt current jobs
+    [[ "${WORKFLOW_TEST_REVIEW_PANEL:-1}" == 1 && "${WORKFLOW_TEST_REVIEW_PRESTART:-1}" == 1 ]] || return 0
+    # One-shot per tree, not per run: a repair that changes source and re-enters TEST_REVIEW gets a fresh investigation.
+    current="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" 2>/dev/null)"
+    if [[ -e "$directory/investigate-started" && -n "$current" \
+            && "$current" == "$(cat "$directory/investigate.fingerprint" 2>/dev/null)" ]]; then
+        return 0
+    fi
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    : > "$directory/investigate-started"; : > "$directory/investigate.pids"
+    printf '%s' "$current" > "$directory/investigate.fingerprint"
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    jobs="$(workflow_model_capacity test-review REVIEWER)" || return 1
+    for lens in $(change_test_review_lenses); do
+        prompt="$directory/prompts/investigate-$lens.md"
+        change_test_review_prompt "$ROOT/prompts/change/test-review-worker-investigate.md" "$prompt"
+        if [[ "$lens" == oracle ]]; then
+            printf 'Focus only on **ORACLE** and **NEGATIVE**: whether expected values are independently grounded, and whether critical tests target a representative defect.\n' >> "$prompt"
+        else
+            printf 'Focus only on **%s**.\n' "$(printf '%s' "$lens" | tr '[:lower:]' '[:upper:]')" >> "$prompt"
+        fi
+        ( workflow_model_enter test-review REVIEWER "$jobs" || exit 1; UNCLE_NONINTERACTIVE=1 run_codex "$prompt" "$directory/investigate-$lens.md" "test-review-worker-$lens-investigate" "" < /dev/null ) \
+            > "$LOG_DIR/test-review-worker-$lens-investigate.log" 2>&1 &
+        echo "$!" >> "$directory/investigate.pids"
+    done
+}
+
+change_run_test_review_panel() {
+    local directory="$STATE_DIR/test-review-panel" lens prompt output pid upper
+    local -a pids=()
+    [[ "${WORKFLOW_TEST_REVIEW_PANEL:-1}" == 1 ]] || return 0
+    change_run_test_review_investigate
+    if [[ -s "$directory/investigate.pids" ]]; then
+        while IFS= read -r pid; do
+            [[ -n "$pid" ]] || continue
+            wait "$pid" 2>/dev/null || echo 'Test-review investigation worker failed; the finalize pass will judge from results alone.' >&2
+        done < "$directory/investigate.pids"
+    fi
+    mkdir -p "$directory/prompts"
+    for lens in $(change_test_review_lenses); do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
+        upper="$(printf '%s' "$lens" | tr '[:lower:]' '[:upper:]')"
+        change_test_review_prompt "$ROOT/prompts/change/test-review-worker-finalize.md" "$prompt"
+        # The investigation is model output, not driver text: only a Markdown report starting with a heading is pasted in.
+        if [[ -s "$directory/investigate-$lens.md" ]] && head -n 5 "$directory/investigate-$lens.md" | grep -qE '^[[:space:]]*#'; then
+            cat "$directory/investigate-$lens.md" >> "$prompt"
+        else
+            printf '(No usable investigation: it either did not complete before results were ready, or did not return the required plain-text report. Judge from the plan, source, and results alone.)\n' >> "$prompt"
+        fi
+        if [[ "$lens" == oracle ]]; then
+            printf '\n## Assigned acceptance-gate rows\n\nFocus only on **ORACLE** and **NEGATIVE**: whether expected values are independently grounded, and whether critical tests have evidence of failing for a representative defect. Use exactly these ids, "ORACLE" and "NEGATIVE", in your JSON output.\n' >> "$prompt"
+        else
+            printf '\n## Assigned acceptance-gate row\n\nFocus only on **%s**. Use exactly this id, "%s", in your JSON output -- never substitute a different row name from the investigation above.\n' "$upper" "$upper" >> "$prompt"
+        fi
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter test-review REVIEWER || exit 1; UNCLE_NONINTERACTIVE=1 run_codex "$prompt" "$output" "test-review-worker-$lens" "" < /dev/null ) \
+            > "$LOG_DIR/test-review-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in ${pids[@]+"${pids[@]}"}; do
+        wait "$pid" || echo 'Test-review worker failed; canonical packet validation will stop the panel.' >&2
+    done
+    # A bad response is isolated to its lens: retry that one worker once, never the healthy siblings.
+    for lens in $(change_test_review_lenses); do
+        output="$directory/$lens.json"; prompt="$directory/prompts/$lens.md"
+        if ! python3 -B "$ROOT/scripts/lib/test_review_packets.py" validate "$output" "$lens"; then
+            echo "Test-review worker $lens returned an invalid packet; retrying that worker once."
+            rm -f "$output"
+            ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter test-review REVIEWER || exit 1
+              UNCLE_NONINTERACTIVE=1 run_codex "$prompt" "$output" "test-review-worker-$lens-retry" "" < /dev/null ) || true
+        fi
+    done
+    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" $(change_test_review_lenses) || return 1
+    python3 "$ROOT/scripts/lib/acceptance_context.py" --validate-json "$STATE_DIR/documents/TEST_REVIEW.json" || return 1
+    python3 "$ROOT/scripts/lib/acceptance_context.py" --render "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md || return 1
+    cp "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
+}
+
 BG_PID=""
 BG_LABEL=""
 BG_START=0
@@ -4361,6 +4452,8 @@ REPAIR
             # ADVERSARIAL_REVIEW/VALIDATE_ADVERSARIAL_REVIEW pair (a single
             # reviewer call, not app's multi-lens worker panel; see the item 1
             # report for that scope decision) rather than a byte-for-byte port.
+            # The plan/source half of the review starts now and runs while the green check is awaited.
+            change_run_test_review_investigate
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi
@@ -4381,12 +4474,18 @@ REPAIR
             fi
             # Whatever canonical review exists now predates the one about to be written, so it must not stand in for it
             # (a leftover from an earlier attempt, or a file another process put there).
-            rm -f "$STATE_DIR/documents/TEST_REVIEW.json"
-            run_codex \
-                "$test_review_prompt" \
-                "$PROJECT_ROOT/.uncle/docs/TEST_REVIEW.md" \
-                test-review \
-                "$CODEX_EFFORT_REVIEW"
+            rm -f "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md
+            # The lens panel is the normal path; one reviewer call remains for a panel that is off or could not complete.
+            if [[ ! -s "$STATE_DIR/test-review-format-retry.md" ]] && change_run_test_review_panel && [[ -s .uncle/docs/TEST_REVIEW.md ]]; then
+                echo 'Test-review fast path: merged authoritative worker rows without parent synthesis.'
+            else
+                rm -f "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md
+                run_codex \
+                    "$test_review_prompt" \
+                    "$PROJECT_ROOT/.uncle/docs/TEST_REVIEW.md" \
+                    test-review \
+                    "$CODEX_EFFORT_REVIEW"
+            fi
             set_state VALIDATE_TEST_REVIEW
             ;;
 

@@ -456,6 +456,7 @@ on_exit() {
     if declare -f workflow_model_cancel > /dev/null; then workflow_model_cancel; fi
     if declare -f progress_end > /dev/null; then progress_end; fi
     if declare -f cleanup_bg > /dev/null; then cleanup_bg; fi
+    if declare -f change_checklist_draft_cancel > /dev/null; then change_checklist_draft_cancel; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     if declare -f release_lock > /dev/null; then release_lock; fi
     uncle_title_end
@@ -3162,6 +3163,8 @@ checklist_worker_codex() {
 
 run_checklist_panel() {
     local kind="$1" source="$2" directory="$STATE_DIR/checklist-$1-panel" lens prompt output pid checklist_lenses
+    # `draft` is the same panel run early, beside implementation (change_checklist_draft_start): it reads only what exists before the code
+    # changes and writes MANUAL_CHECKLIST_DRAFT.json, which change_checklist_reconcile later compares with the finished change.
     checklist_lenses="$(change_class_panel checklist_lenses 'coverage invariants resources regressions' WORKFLOW_CHECKLIST_LENSES)"
     local serial_workers=0
     local -a pids=()
@@ -3186,12 +3189,15 @@ run_checklist_panel() {
         local range
         case "$lens" in coverage) range='MC-100 through MC-199';; invariants) range='MC-200 through MC-299';; resources) range='MC-300 through MC-399';; regressions) range='MC-400 through MC-499';; esac
         local inputs
-        if [[ "$kind" == base ]]; then
+        if [[ "$kind" == base || "$kind" == draft ]]; then
             inputs='`.uncle/workflow/documents/BASELINE_REPORT.json`, `.uncle/workflow/documents/CHANGE_SPEC.json`, `.uncle/workflow/documents/CHANGE_PLAN.json`, and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
         else
             inputs='`.uncle/workflow/documents/BASELINE_REPORT.json`, `.uncle/workflow/documents/CHANGE_SPEC.json`, `.uncle/workflow/documents/CHANGE_PLAN.json`, `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, `.uncle/workflow/documents/IMPLEMENTATION_NOTES.json`, `.uncle/workflow/documents/CHANGE_TEST_REPORT.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`'
         fi
-        if [[ "$serial_workers" == 1 ]]; then
+        if [[ "$kind" == draft ]]; then
+            printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nNever require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s** for the draft pass. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$range" >> "$prompt"
+            python3 -B "$ROOT/scripts/lib/checklist_draft_prompt.py" "$prompt" || return 1
+        elif [[ "$serial_workers" == 1 ]]; then
             local input_path
             printf '\n## Canonical inputs (inlined, binding)\n\nThe canonical JSON artifacts are reproduced below in full. Do not call Read, Glob, Grep, or List: everything you need is here. Your only tool call is one Write of the packet.\n' >> "$prompt"
             for input_path in $(printf '%s' "$inputs" | grep -o '\.uncle/workflow/[A-Za-z_./-]*\.json') .uncle/workflow/green-check.tsv; do
@@ -3228,7 +3234,12 @@ run_checklist_panel() {
     done
     local target="$STATE_DIR/documents/MANUAL_CHECKLIST.json"
     [[ "$kind" == base ]] && target="$STATE_DIR/documents/MANUAL_CHECKLIST.base.json"
+    [[ "$kind" == draft ]] && target="$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json"
     python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" $checklist_lenses || return 1
+    if [[ "$kind" == draft ]]; then
+        python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$target" || return 1
+        return 0
+    fi
     python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" "$target" \
         --proposed "${target%.json}.proposed.json" \
         --scope "${target%.json}.driver-scope.json" || return 1
@@ -3246,6 +3257,80 @@ run_checklist_panel() {
     cp "$target" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
     CHECKLIST_PANEL_PROMPT="$target"
     CHECKLIST_PANEL_DIRECT=1
+}
+
+# --- the checklist draft and its reconciliation -------------------------------------------------------------------------------
+# The checklist's inputs before implementation (baseline, change spec, plan, adversarial review) do not depend on the code, so the lens
+# panel starts when implementation starts, by reviewers who never see the change. After implementation a short reconciliation compares
+# that draft with the finished change and the driver's results; its edits are applied deterministically (checklist_reconcile.py).
+# Anything unusual (a stale or failed draft, a refused packet, a self-hosted endpoint, WORKFLOW_CHECKLIST_DRAFT=0) falls back to the
+# full panel after implementation, exactly as before.
+CHECKLIST_DRAFT_PID=""
+
+change_checklist_draft_fingerprint() {
+    local file
+    for file in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN ADVERSARIAL_REVIEW; do
+        [[ -s "$STATE_DIR/documents/$file.json" ]] || return 1
+        printf '%s %s\n' "$file" "$(hash_file "$STATE_DIR/documents/$file.json")"
+    done | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.read().encode()).hexdigest())'
+}
+
+change_checklist_draft_start() {
+    [[ "${WORKFLOW_CHECKLIST_DRAFT:-1}" == 1 && "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 && "$PARALLEL_CHECKLIST" == 1 \
+       && -z "$CHECKLIST_DRAFT_PID" ]] || return 0
+    # one weak endpoint cannot serve implementation and four lenses at once
+    [[ "$(uncle_stage_runner manual-checklist)" != self-hosted ]] || return 0
+    local fingerprint
+    fingerprint="$(change_checklist_draft_fingerprint)" || return 0
+    if [[ -s "$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json" && "$(cat "$STATE_DIR/manual-checklist-draft.done" 2>/dev/null)" == "$fingerprint" ]]; then
+        return 0
+    fi
+    rm -f "$STATE_DIR/manual-checklist-draft.done" "$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json"
+    echo "Drafting the manual checklist from the approved plan while the change is implemented."
+    ( cd "$PROJECT_ROOT" && run_checklist_panel draft prompts/change/manual-checklist.md \
+        && printf '%s\n' "$fingerprint" > "$STATE_DIR/manual-checklist-draft.done" ) \
+        > "$LOG_DIR/manual-checklist-draft.log" 2>&1 &
+    CHECKLIST_DRAFT_PID=$!
+}
+
+change_checklist_draft_cancel() {
+    [[ -n "$CHECKLIST_DRAFT_PID" ]] || return 0
+    python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "$CHECKLIST_DRAFT_PID" > /dev/null 2>&1 || true
+    CHECKLIST_DRAFT_PID=""
+}
+
+change_checklist_draft_usable() {
+    if [[ -n "$CHECKLIST_DRAFT_PID" ]]; then wait "$CHECKLIST_DRAFT_PID" 2>/dev/null || true; CHECKLIST_DRAFT_PID=""; fi
+    local fingerprint
+    fingerprint="$(change_checklist_draft_fingerprint)" || return 1
+    [[ -s "$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json" && "$(cat "$STATE_DIR/manual-checklist-draft.done" 2>/dev/null)" == "$fingerprint" ]]
+}
+
+# Succeeds, leaving the canonical checklist and its views in place, when the draft could be reconciled; otherwise the caller runs the full panel.
+change_checklist_reconcile() {
+    [[ "${WORKFLOW_CHECKLIST_DRAFT:-1}" == 1 && "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 && "$PARALLEL_CHECKLIST" == 1 ]] || return 1
+    change_checklist_draft_usable || { echo 'No usable checklist draft; running the full checklist panel.'; return 1; }
+    local directory="$STATE_DIR/manual-checklist-reconcile" packet
+    rm -rf "$directory"; mkdir -p "$directory"
+    packet="$directory/reconcile.json"
+    cp "$ROOT/prompts/manual-checklist-reconcile.md" "$directory/prompt.md"
+    printf '\n## This is a change to an existing application\n\nThe approved documents are `BASELINE_REPORT.json`, `CHANGE_SPEC.json` and `CHANGE_PLAN.json` in `.uncle/workflow/documents/`; read `IMPLEMENTATION_NOTES.json` and `CHANGE_TEST_REPORT.json` there too. Read only the files the change touched in the source; behavior the change preserves is still checked as the draft wrote it.\n' >> "$directory/prompt.md"
+    echo 'Reconciling the checklist draft with the finished change and the driver results.'
+    ( cd "$PROJECT_ROOT" && UNCLE_NONINTERACTIVE=1 run_codex "$directory/prompt.md" "$packet" manual-checklist-review-worker-reconcile "$CODEX_EFFORT_CHECKLIST" < /dev/null ) \
+        > "$LOG_DIR/manual-checklist-worker-reconcile.log" 2>&1 || true
+    if ! python3 -B "$ROOT/scripts/lib/checklist_reconcile.py" apply "$STATE_DIR/documents/MANUAL_CHECKLIST_DRAFT.json" "$packet" \
+            "$directory/final.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_RECONCILIATION.json"; then
+        echo 'The reconciliation could not be applied; running the full checklist panel.' >&2
+        return 1
+    fi
+    local target="$STATE_DIR/documents/MANUAL_CHECKLIST.json"
+    cp "$directory/final.json" "$target"
+    python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" "$target" \
+        --proposed "${target%.json}.proposed.json" --scope "${target%.json}.driver-scope.json" || return 1
+    python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$target" || return 1
+    python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$target" .uncle/docs/MANUAL_CHECKLIST.md || return 1
+    cp "$target" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
+    echo "Checklist reconciled: $(python3 -c "import json,sys; a=json.load(open(sys.argv[1])); print('%d draft checks, %d dropped, %d modified, %d added' % (a['draft_checks'], len(a['dropped']), len(a['modified']), len(a['added'])))" "$STATE_DIR/documents/MANUAL_CHECKLIST_RECONCILIATION.json")."
 }
 
 BG_PID=""
@@ -4026,6 +4111,9 @@ while true; do
                 snapshot_untracked "$UNTRACKED_BASELINE"
             fi
 
+            # The checklist does not depend on the code: draft it now, beside implementation, from the approved plan (best effort).
+            change_checklist_draft_start
+
             if [[ -s "$STATE_DIR/acceptance-repair-request.md" ]]; then
                 echo "Repairing the rows the independent review rejected."
                 compose_implementation_prompt \
@@ -4329,7 +4417,11 @@ REPAIR
                 # One canonical checklist after implementation.  It receives
                 # every authoritative report directly; there is no base/delta
                 # handoff and therefore no second worker panel.
-                run_checklist_panel full prompts/change/manual-checklist.md
+                if change_checklist_reconcile; then
+                    CHECKLIST_PANEL_DIRECT=1
+                else
+                    run_checklist_panel full prompts/change/manual-checklist.md
+                fi
                 if [[ "${CHECKLIST_PANEL_DIRECT:-0}" == 1 ]]; then
                     echo 'Manual-checklist fast path: merged authoritative worker packets without parent synthesis.'
                     # The only thing this path saves is the parent synthesis

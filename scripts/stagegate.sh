@@ -1355,12 +1355,14 @@ route_unrunnable_application() {
             return 0    # already carried to the audit; let the audit run
         fi
         printf '%s\n' "$run_id" > "$recorded"
-        # There is nothing for the checklist to drive, so it is skipped, not failed: the audit reads the ledger.
-        record_nonblocking_failure green-check 'the application cannot render or its test runner did not execute tests; repair is disabled, so browser and checklist work was not started'
+        # The verdict above comes from reading the verification log, not from loading the page, so it is a reason to flag the build
+        # and never a reason to skip the checklists: manual-checklist and execute-checklist are how the application is actually
+        # looked at. Record the failure once for the audit and carry on; a checklist that cannot drive the app reports BLOCKED or
+        # FAIL rows, which is evidence the audit can read, where skipping them left it none.
+        record_nonblocking_failure green-check 'the verification log says the application cannot render or its test runner did not execute tests; repair is disabled, so the checklists still run to observe it directly'
         record_test_failure_disposition || true
-        echo 'The application cannot render or its configured test runner did not execute tests. Repair is disabled for new application builds: browser/checklist work is skipped and the failure goes to the final audit.'
-        set_state FINAL_AUDIT
-        return 2
+        echo 'The verification log says the application cannot render or its test runner executed no tests. Repair is disabled for new application builds: the failure is recorded for the final audit and the checklists still run.'
+        return 0
     fi
     if [[ "${UNATTENDED:-0}" == 1 && ! -e "$marker" ]]; then
         touch "$marker"
@@ -5854,7 +5856,13 @@ while true; do
                     echo "Repair is disabled for new application builds; $(basename "$repair_source") is carried to the final audit as unresolved evidence."
                     record_nonblocking_failure "$(basename "$repair_source")" 'repair is disabled; the failure remains unresolved'
                     record_test_failure_disposition || true
-                    set_state FINAL_AUDIT
+                    # A failed test review or driver check comes before the checklists, which are how the application is actually
+                    # observed: they still run, and their rows go to the audit with the failure. Anything later (the checklist's
+                    # own report) has had them already.
+                    case "$(basename "$repair_source")" in
+                        TEST_REVIEW.md|green-check.md) set_state MANUAL_CHECKLIST ;;
+                        *) set_state FINAL_AUDIT ;;
+                    esac
                     continue
                 fi
                 echo 'Automatic repair is not eligible for this failure.'

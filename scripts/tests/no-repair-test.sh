@@ -53,8 +53,8 @@ route() {   # env assignments... -> "rc state-list ledger-lines"
         echo \"\$rc \$(tr '\\n' ',' < \"\$STATE_DIR/states\") \$(tr '\\n' ',' < \"\$STATE_DIR/ledger\")\"")"
     printf '%s' "$out"
 }
-check "repair off: the unrunnable app goes to the audit, not to REPAIR" test "$(route 'WORKFLOW_REPAIR=0' 'UNATTENDED=1')" == "2 FINAL_AUDIT, green-check,"
-check "repair off: the same in an attended run" test "$(route 'WORKFLOW_REPAIR=0' 'UNATTENDED=0')" == "2 FINAL_AUDIT, green-check,"
+check "repair off: the unrunnable app is recorded for the audit and the checklists still run (no state change)" test "$(route 'WORKFLOW_REPAIR=0' 'UNATTENDED=1')" == "0  green-check,"
+check "repair off: the same in an attended run" test "$(route 'WORKFLOW_REPAIR=0' 'UNATTENDED=0')" == "0  green-check,"
 check "repair on: an unattended run still schedules its one repair" test "$(route 'WORKFLOW_REPAIR=1' 'UNATTENDED=1')" == "2 REPAIR, "
 check "repair on: an attended run still stops for a person" test "$(route 'WORKFLOW_REPAIR=1' 'UNATTENDED=0')" == "1  "
 
@@ -89,11 +89,11 @@ final_audit_loop() {   # run-id [env assignments...] -> "iterations rc ledger-li
         echo \"\$result \$(wc -l < \"\$STATE_DIR/ledger\" | tr -d ' ')\""
 }
 rm -rf "$TMP/loop-state"
-check "repair off: FINAL_AUDIT stops asking to go round again (2 passes, returns 0), recording once" test "$(final_audit_loop run-1 'WORKFLOW_REPAIR=0' 'UNATTENDED=1')" == "2 0 1"
+check "repair off: FINAL_AUDIT stops asking to go round again (1 pass, returns 0), recording once" test "$(final_audit_loop run-1 'WORKFLOW_REPAIR=0' 'UNATTENDED=1')" == "1 0 1"
 check "repair off: a second pass in the same run adds nothing and does not loop" test "$(final_audit_loop run-1 'WORKFLOW_REPAIR=0' 'UNATTENDED=1')" == "1 0 1"
-check "repair off: a new run records its own failure once, then also stops" test "$(final_audit_loop run-2 'WORKFLOW_REPAIR=0' 'UNATTENDED=1')" == "2 0 2"
+check "repair off: a new run records its own failure once, then also stops" test "$(final_audit_loop run-2 'WORKFLOW_REPAIR=0' 'UNATTENDED=1')" == "1 0 2"
 rm -rf "$TMP/loop-state"
-check "repair off: with no run stamp it still terminates and records once" test "$(final_audit_loop none 'WORKFLOW_REPAIR=0' 'UNATTENDED=1')" == "2 0 1"
+check "repair off: with no run stamp it still terminates and records once" test "$(final_audit_loop none 'WORKFLOW_REPAIR=0' 'UNATTENDED=1')" == "1 0 1"
 rm -rf "$TMP/loop-state"
 check "repair on: the original one-repair-then-stop behaviour is unchanged (no endless loop either)" test "$(final_audit_loop run-1 'WORKFLOW_REPAIR=1' 'UNATTENDED=1' | cut -d' ' -f1)" -le 3
 
@@ -115,6 +115,7 @@ sys.exit(1 if problems else 0)
 PY
 check "every set_state REPAIR is behind a guard" test $? == 0
 check "the REPAIR handler carries a disabled-repair route" grep -q "Repair is disabled for new application builds; \$(basename" "$SCRIPT"
+check "repair off: a failed test review or driver check still reaches the checklists" grep -q 'TEST_REVIEW.md|green-check.md) set_state MANUAL_CHECKLIST' "$SCRIPT"
 check "a checklist FAIL goes to the audit when repair is off" grep -q "checklist acceptance recorded a FAIL; repair is disabled" "$SCRIPT"
 
 [[ "$fails" == 0 ]] && echo "no-repair-test.sh: all checks passed" || { echo "no-repair-test.sh: $fails failure(s)"; exit 1; }

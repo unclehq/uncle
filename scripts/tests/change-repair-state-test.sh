@@ -73,6 +73,37 @@ grep -q 'state=FINAL_AUDIT' <<< "$out"                || bad "an ineligible repa
 out="$(go none 0 runnable .uncle/docs/TEST_REVIEW.md WORKFLOW_AUTO_REPAIR_ATTEMPTS=0)"
 grep -q 'agent:' <<< "$out" && bad "with no passes allowed nothing is repaired"
 
+
+# once the checklist has run, spent passes go to the audit, never back through a checklist that already ran
+out="$(go 1 6 runnable .uncle/docs/TEST_REVIEW.md)"
+mkproj_marker() { :; }
+dir="$work/ran"; mkdir -p "$dir/.uncle/workflow/logs"; : > "$dir/.uncle/workflow/checklist-ran"; : > "$dir/.uncle/workflow/logs/green-check.log"
+got="$(cd "$dir" && env -i PATH="$PATH" bash --norc --noprofile -c "ROOT='$ROOT'; STATE_DIR='.uncle/workflow'; LOG_DIR='.uncle/workflow/logs'; $nextfn; change_repair_next_stage")"
+[[ "$got" == FINAL_AUDIT ]] || bad "after the checklist ran, the next stage must be FINAL_AUDIT, got '$got'"
+
+# VALIDATE_CHECKLIST: a driver command that still fails is repaired before the audit; with no pass left it goes to the audit
+vc="$(awk '/^        VALIDATE_CHECKLIST\)/{p=1;next} p&&/^        [A-Z_]+\)$/{exit} p{print}' "$CW" | awk '/: > "\$STATE_DIR\/checklist-ran"/{p=1} p{print} p&&/^            fi$/{exit}')"
+[[ -n "$vc" ]] || bad "could not extract the regression routing from VALIDATE_CHECKLIST"
+route() {   # <repair-count> <regressions> -> state=… and whether the marker was written
+    local dir="$work/vc$((++n))"; mkdir -p "$dir/s"; printf '%s\n' "$1" > "$dir/s/repair-count"
+    ( cd "$dir" && env -i PATH="$PATH" bash --norc --noprofile -c "
+        STATE_DIR='s'; GREEN_CHECK=1; GREEN_CLASS='s/g.tsv'; GREEN_MD='s/green-check.md'; WORKFLOW_AUTO_REPAIR_ATTEMPTS=2
+        printf 'PASS\tnpm ci\n' > s/g.tsv
+        green_regressions() { echo $2; }
+        record_nonblocking_failure() { echo \"nonblocking:\$1\"; }
+        record_test_failure_disposition() { :; }
+        set_state() { echo \"state=\$1\"; }
+        for _ in 1; do
+        $vc
+        echo fell-through; done; [[ -e s/checklist-ran ]] && echo marked; cat s/repair-source 2>/dev/null" 2>&1 )
+}
+out="$(route 0 1)"
+grep -q 'state=REPAIR' <<< "$out" && grep -q 'marked' <<< "$out" && grep -q 'green-check.md' <<< "$out" || bad "a remaining regression with passes left should repair: $out"
+out="$(route 2 1)"
+grep -q 'state=FINAL_AUDIT' <<< "$out" && grep -q 'nonblocking:green-check' <<< "$out" || bad "a remaining regression with no pass left should go to the audit: $out"
+out="$(route 0 0)"
+grep -q 'fell-through' <<< "$out" && ! grep -q 'state=' <<< "$out" || bad "no regression: fall through to the acceptance routing: $out"
+
 # the driver sends failing acceptance rows here, and nowhere else
 grep -q "'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS' REPAIR" "$CW" || bad "VALIDATE_TEST_REVIEW does not route to REPAIR"
 grep -q "acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT '' REPAIR" "$CW" || bad "VALIDATE_CHECKLIST does not route to REPAIR"

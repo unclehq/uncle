@@ -3349,7 +3349,10 @@ change_checklist_reconcile() {
 # cannot be built, served or tested has nothing for the checklist to observe, so it goes straight to the final audit; anything else still
 # gets the checklist, which is how the change is actually looked at.
 change_repair_next_stage() {
-    if python3 -B "$ROOT/scripts/lib/failure_severity.py" unrunnable "$LOG_DIR/green-check.log"; then
+    # Once the checklist has run (VALIDATE_CHECKLIST marks it) there is nothing left to observe: on to the audit.
+    if [[ -e "$STATE_DIR/checklist-ran" ]]; then
+        printf FINAL_AUDIT
+    elif python3 -B "$ROOT/scripts/lib/failure_severity.py" unrunnable "$LOG_DIR/green-check.log"; then
         printf FINAL_AUDIT
     else
         printf CHECKLIST
@@ -4557,6 +4560,7 @@ REPAIR
             esac
             # The tree changed, so the review and the verification both describe another tree: discard the review and verify again.
             echo 'Repair changed the tree; invalidating the test review and verifying again.'
+            rm -f "$STATE_DIR/checklist-ran"
             rm -f .uncle/docs/TEST_REVIEW.md "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
             python3 -B "$ROOT/scripts/lib/completion_preview.py" --normalize "$PWD" || exit 1
             start_green_check_bg
@@ -4789,6 +4793,22 @@ PY
             recover_missing_checklist_reports || exit $?
             python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.render_from_json('.')" || exit 1
             require_file "$STATE_DIR/documents/EXECUTE_CHECKLIST.json"
+            : > "$STATE_DIR/checklist-ran"
+            # A driver verification command that still fails is repaired before the audit, whatever the checklist said; once the two
+            # passes are spent it goes to the audit as unresolved evidence (stagegate.sh's VALIDATE_CHECKLIST does the same).
+            if [[ "${GREEN_CHECK:-0}" == 1 && -s "${GREEN_CLASS:-/nonexistent}" && "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
+                if [[ "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" -ge "${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-2}" ]]; then
+                    echo 'Driver verification still fails and no repair pass remains; continuing to final audit with the failure recorded as unresolved evidence.'
+                    record_nonblocking_failure green-check 'driver verification failed after the checklist; no repair pass remains'
+                    record_test_failure_disposition || true
+                    set_state FINAL_AUDIT
+                else
+                    echo 'Driver verification shows a real regression; repairing before final audit.'
+                    printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
+                    set_state REPAIR
+                fi
+                continue
+            fi
             # uncle consolidation item 3: this used to go straight to
             # FINAL_AUDIT with no routing for a failing checklist result at
             # all -- change-workflow.sh has no REPAIR state (confirmed: zero

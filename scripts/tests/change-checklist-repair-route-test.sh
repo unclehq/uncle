@@ -26,14 +26,16 @@ else bad "uses-shared-acceptance-transition" "VALIDATE_CHECKLIST does not call t
 if printf '%s' "$vc_block" | tr '\n' ' ' | grep -q "acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT.*REPAIR"; then ok
 else bad "fail-routes-to-repair" "VALIDATE_CHECKLIST does not pass REPAIR as acceptance_transition's repair_target (the change driver has a REPAIR state like stagegate.sh's; acceptance_transition still accepts IMPLEMENT for a family without one, which the functional checks below exercise)"; fi
 
-if printf '%s' "$vc_block" | grep -q 'set_state FINAL_AUDIT$'; then
+if printf '%s' "$vc_block" | grep -q '^            set_state FINAL_AUDIT$'; then
     bad "no-bare-advance" "VALIDATE_CHECKLIST still unconditionally set_state FINAL_AUDIT with no acceptance routing"
 else
     ok
 fi
 
+# The driver has a REPAIR state (like stagegate.sh's); every set_state REPAIR must have it to land in.
 repair_count="$(grep -v '^\s*#' "$ROOT/scripts/change-workflow.sh" | grep -c 'set_state REPAIR' || true)"
-[[ "$repair_count" == 0 ]] && ok || bad "no-repair-state-invented" "change-workflow.sh now has $repair_count set_state REPAIR call site(s) -- it has no REPAIR state to receive them"
+if [[ "$repair_count" == 0 ]] || grep -qE '^        REPAIR\)$' "$ROOT/scripts/change-workflow.sh"; then ok
+else bad "repair-state-exists" "change-workflow.sh has $repair_count set_state REPAIR call site(s) but no REPAIR state to receive them"; fi
 
 bash -n "$ROOT/scripts/change-workflow.sh" && ok || bad "syntax" "change-workflow.sh fails bash -n"
 

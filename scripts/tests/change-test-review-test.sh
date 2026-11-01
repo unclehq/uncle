@@ -49,13 +49,15 @@ grep -Fq '. "$ROOT/scripts/lib/acceptance-gate.sh"' "$ROOT/scripts/change-workfl
 grep -Fq '. "$ROOT/scripts/lib/acceptance-gate.sh"' "$ROOT/scripts/stagegate.sh" \
     && ok || bad "stagegate-sources-shared-lib" "stagegate.sh does not source acceptance-gate.sh (should still, after the move)"
 
-# --- (c) FAIL routes to IMPLEMENT, not a nonexistent REPAIR state -----------
+# --- (c) FAIL routes to the REPAIR state -----------
 
-if printf '%s' "$vtr_block" | tr '\n' ' ' | grep -q "acceptance_transition .uncle/docs/TEST_REVIEW.md CHECKLIST.*IMPLEMENT"; then ok
-else bad "fail-routes-to-implement" "VALIDATE_TEST_REVIEW does not pass IMPLEMENT as acceptance_transition's repair_target"; fi
+if printf '%s' "$vtr_block" | tr '\n' ' ' | grep -q "acceptance_transition .uncle/docs/TEST_REVIEW.md CHECKLIST.*REPAIR"; then ok
+else bad "fail-routes-to-repair" "VALIDATE_TEST_REVIEW does not pass REPAIR as acceptance_transition's repair_target"; fi
 
+# The driver has a REPAIR state (like stagegate.sh's); every set_state REPAIR must have it to land in.
 repair_count="$(grep -v '^\s*#' "$ROOT/scripts/change-workflow.sh" | grep -c 'set_state REPAIR' || true)"
-[[ "$repair_count" == 0 ]] && ok || bad "no-repair-state-invented" "change-workflow.sh now has $repair_count set_state REPAIR call site(s) -- it has no REPAIR state to receive them"
+if [[ "$repair_count" == 0 ]] || grep -qE '^        REPAIR\)$' "$ROOT/scripts/change-workflow.sh"; then ok
+else bad "repair-state-exists" "change-workflow.sh has $repair_count set_state REPAIR call site(s) but no REPAIR state to receive them"; fi
 
 [[ -s "$ROOT/prompts/change/test-review.md" ]] && ok || bad "prompt-exists" "prompts/change/test-review.md is missing"
 grep -Fq 'CHANGE_TEST_REPORT.md' "$ROOT/prompts/change/test-review.md" \

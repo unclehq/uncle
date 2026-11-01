@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# The change driver has a REPAIR state like stagegate.sh's: eligibility, one focused pass, the judge's verdicts, and where an exhausted repair goes.
+set -u
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CW="$ROOT/scripts/change-workflow.sh"
+work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+fail=0
+bad() { echo "FAIL: $1" >&2; fail=1; }
+
+body="$(awk '/^        REPAIR\)/{p=1;next} p&&/^        [A-Z_]+\)$/{exit} p{print}' "$CW")"
+nextfn="$(awk '/^change_repair_next_stage\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$CW")"
+[[ -n "$body" && -n "$nextfn" ]] || bad "could not extract the REPAIR state"
+
+n=0
+go() {   # <repair-count|none> <judge rc> <unrunnable|runnable> [repair-source] [env...] -> what the state did
+    n="$(( $(cat "$work/n" 2>/dev/null || echo 0) + 1 ))"; echo "$n" > "$work/n"
+    local dir="$work/p$n"; echo "$dir" > "$work/last"; mkdir -p "$dir/.uncle/workflow/documents" "$dir/.uncle/workflow/logs" "$dir/.uncle/docs"
+    local src="${4:-.uncle/docs/TEST_REVIEW.md}"
+    printf '%s\n' "$src" > "$dir/.uncle/workflow/repair-source"
+    [[ "$1" == none ]] || printf '%s\n' "$1" > "$dir/.uncle/workflow/repair-count"
+    : > "$dir/.uncle/docs/TEST_REVIEW.md"; echo '{}' > "$dir/.uncle/workflow/documents/TEST_REVIEW.json"; echo '{}' > "$dir/.uncle/workflow/documents/IMPLEMENTATION_NOTES.json"
+    [[ "$3" == unrunnable ]] && echo 'error when starting dev server' > "$dir/.uncle/workflow/logs/green-check.log" || : > "$dir/.uncle/workflow/logs/green-check.log"
+    ( cd "$dir" && env -i PATH="$PATH" HOME="$HOME" "${@:5}" bash --norc --noprofile -c "
+        ROOT='$ROOT'; STATE_DIR='.uncle/workflow'; LOG_DIR='.uncle/workflow/logs'; GREEN_BG_PID=''
+        WORKFLOW_AUTO_REPAIR_ATTEMPTS=\${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-2}; BUDGET_IMPLEMENT=5; MODEL_IMPLEMENT=m
+        require_file() { [[ -s \"\$1\" ]]; }
+        record_nonblocking_failure() { echo \"nonblocking:\$1\"; }
+        record_test_failure_disposition() { :; }
+        set_state() { echo \"state=\$1\"; }
+        plan_before_write() { echo \"plan_before:\$1\"; return 0; }
+        plan_after_write() { return 0; }
+        plan_revise() { :; }
+        repair_begin() { REPAIR_PROMPT=prompt.md; }
+        envelope_invalidate() { :; }; envelope_guard_begin() { :; }; envelope_guard_end() { :; }
+        run_claude() { echo \"agent:\$2\"; }
+        recover_missing_implementation_reports() { return 0; }
+        repair_judge() { return $2; }
+        start_green_check_bg() { echo green-restarted; }
+        python3() { case \"\$*\" in *completion_preview*) return 0;; esac; command python3 \"\$@\"; }
+        $nextfn
+        for _ in 1; do case REPAIR in REPAIR)
+        $body
+        esac; done; echo end" 2>&1 )
+}
+
+out="$(go none 0 runnable)"
+grep -q 'agent:repair' <<< "$out"                     || bad "no repair pass ran: $out"
+grep -q 'plan_before:repair-1' <<< "$out"             || bad "the plan was not told about the repair"
+grep -q 'green-restarted' <<< "$out" && grep -q 'state=TEST_REVIEW' <<< "$out" || bad "a repair that changed the tree should verify again and re-review: $out"
+LAST="$(cat "$work/last")"
+[[ ! -e "$LAST/.uncle/workflow/documents/TEST_REVIEW.json" && ! -e "$LAST/.uncle/docs/TEST_REVIEW.md" ]] || bad "the stale review was kept"
+[[ "$(cat "$LAST/.uncle/workflow/repair-count")" == 1 ]] || bad "the pass was not counted"
+
+out="$(go 1 0 runnable)"
+grep -q 'plan_before:repair-2' <<< "$out" || bad "the second pass should be counted as 2"
+
+out="$(go 0 3 runnable)"
+grep -q 'state=' <<< "$out" && bad "a no-op pass (judge 3) should re-enter REPAIR without setting a state: $out"
+grep -q 'green-restarted' <<< "$out" && bad "judge 3 must not restart verification: $out"
+
+out="$(go 1 6 runnable)"
+grep -q 'state=CHECKLIST' <<< "$out"                  || bad "spent passes with a runnable application go to the checklist: $out"
+out="$(go 1 6 unrunnable)"
+grep -q 'state=FINAL_AUDIT' <<< "$out"                || bad "spent passes with an unrunnable application go to the audit: $out"
+
+out="$(go 2 0 runnable)"
+grep -q 'agent:' <<< "$out" && bad "no pass may run once two are spent: $out"
+grep -q 'state=CHECKLIST' <<< "$out" && grep -q 'nonblocking:TEST_REVIEW.md' <<< "$out" || bad "an ineligible repair of the test review goes on as unresolved evidence: $out"
+out="$(go 2 0 unrunnable)"
+grep -q 'state=FINAL_AUDIT' <<< "$out"                || bad "ineligible and unrunnable: final audit: $out"
+out="$(go 2 0 runnable .uncle/docs/VERIFICATION_REPORT.md)"
+grep -q 'state=FINAL_AUDIT' <<< "$out"                || bad "an ineligible repair of the checklist report goes to the audit: $out"
+out="$(go none 0 runnable .uncle/docs/TEST_REVIEW.md WORKFLOW_AUTO_REPAIR_ATTEMPTS=0)"
+grep -q 'agent:' <<< "$out" && bad "with no passes allowed nothing is repaired"
+
+# the driver sends failing acceptance rows here, and nowhere else
+grep -q "'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS' REPAIR" "$CW" || bad "VALIDATE_TEST_REVIEW does not route to REPAIR"
+grep -q "acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT '' REPAIR" "$CW" || bad "VALIDATE_CHECKLIST does not route to REPAIR"
+grep -q '^REPAIR_BASE_PROMPT=prompts/change/repair.md' "$CW" || bad "the change driver does not name its own repair prompt"
+[[ -s "$ROOT/prompts/change/repair.md" ]] || bad "prompts/change/repair.md is missing"
+grep -q 'UPDATED_PROJECT_PLAN\|AUTOMATED_TEST_REPORT' "$ROOT/prompts/change/repair.md" && bad "the change repair prompt names new-application documents"
+[[ $fail == 0 ]] && echo "change-repair-state-test.sh: ok"
+exit $fail

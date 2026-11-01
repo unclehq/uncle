@@ -23,7 +23,10 @@ repair_begin() {
     # Self-hosted models get the investigate/format split's base prompt here;
     # a proprietary model gets the original single-pass prompt. Either way,
     # a driver-written retry brief appends on top of whichever base applies.
-    if stage_uses_self_hosted repair AGENT; then
+    # REPAIR_BASE_PROMPT: the change driver names its own (prompts/change/repair.md) and has no investigate/format split.
+    if [[ -n "${REPAIR_BASE_PROMPT:-}" ]]; then
+        base="$REPAIR_BASE_PROMPT"
+    elif stage_uses_self_hosted repair AGENT; then
         base="prompts/repair-investigate.md"
     else
         base="prompts/repair.md"

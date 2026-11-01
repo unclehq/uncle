@@ -75,6 +75,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 export UNCLE_UNATTENDED="$UNATTENDED"
+
+# Repair is a state of its own, as in stagegate.sh: a focused pass over the findings, judged on the files it changed. Two passes are all
+# there is. (stagegate.sh defaults an attended run to 0; this driver has always repaired twice attended or not, and keeps that.)
+WORKFLOW_REPAIR="${WORKFLOW_REPAIR:-1}"
+WORKFLOW_AUTO_REPAIR_ATTEMPTS="${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-2}"
+case "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" in
+    ''|*[!0-9]*) echo "WORKFLOW_AUTO_REPAIR_ATTEMPTS must be an integer from 0 to 100." >&2; exit 1 ;;
+esac
+[[ "$WORKFLOW_REPAIR" == 1 ]] || WORKFLOW_AUTO_REPAIR_ATTEMPTS=0
+REPAIR_BASE_PROMPT=prompts/change/repair.md
 # Kept for shared configuration; report/checklist failures are never routed
 # into an automatic repair in this driver.
 # A failed project verification command is important audit evidence, but it
@@ -3335,6 +3345,17 @@ change_checklist_reconcile() {
     echo "Checklist reconciled: $(python3 -c "import json,sys; a=json.load(open(sys.argv[1])); print('%d draft checks, %d dropped, %d modified, %d added' % (a['draft_checks'], len(a['dropped']), len(a['modified']), len(a['added'])))" "$STATE_DIR/documents/MANUAL_CHECKLIST_RECONCILIATION.json")."
 }
 
+# Where an exhausted or ineligible repair goes next. Severity decides, as in stagegate.sh's test_review_next_stage: an application that
+# cannot be built, served or tested has nothing for the checklist to observe, so it goes straight to the final audit; anything else still
+# gets the checklist, which is how the change is actually looked at.
+change_repair_next_stage() {
+    if python3 -B "$ROOT/scripts/lib/failure_severity.py" unrunnable "$LOG_DIR/green-check.log"; then
+        printf FINAL_AUDIT
+    else
+        printf CHECKLIST
+    fi
+}
+
 BG_PID=""
 BG_LABEL=""
 BG_START=0
@@ -4385,7 +4406,62 @@ REPAIR
             # every other "this needs fixing" signal in this driver already
             # uses, rather than a state that does not exist.
             acceptance_transition .uncle/docs/TEST_REVIEW.md CHECKLIST \
-                'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS' IMPLEMENT
+                'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS' REPAIR
+            ;;
+
+        REPAIR)
+            # A focused pass over what the failing report names, then judged on the files it changed (scripts/lib/repair-judge.sh).
+            # Shared with stagegate.sh; the change-specific parts are the prompt, the plan and the verification restart.
+            if [[ -n "$GREEN_BG_PID" ]] && kill -0 "$GREEN_BG_PID" 2>/dev/null; then
+                kill "$GREEN_BG_PID" 2>/dev/null || true
+                wait "$GREEN_BG_PID" 2>/dev/null || true
+            fi
+            GREEN_BG_PID=""
+            require_file "$STATE_DIR/repair-source"
+            repair_source="$(cat "$STATE_DIR/repair-source")"
+            repair_count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
+            case "$repair_count" in ''|*[!0-9]*) echo "Invalid repair-count; inspect $STATE_DIR/repair-count." >&2; exit 1 ;; esac
+            repair_count=$((10#$repair_count))
+            if [[ "$repair_count" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
+                # The passes are used up (or repair is off). The finding goes to the audit as unresolved evidence.
+                echo "The repair passes are used up for $(basename "$repair_source"); it is carried on as unresolved evidence."
+                record_nonblocking_failure "$(basename "$repair_source")" 'repair passes used up; the finding remains unresolved'
+                record_test_failure_disposition || true
+                case "$(basename "$repair_source")" in
+                    TEST_REVIEW.md|green-check.md) set_state "$(change_repair_next_stage)" ;;
+                    *) set_state FINAL_AUDIT ;;
+                esac
+                continue
+            fi
+            repair_count=$((repair_count + 1))
+            printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
+            plan_status=0
+            plan_before_write "repair-$repair_count" || plan_status=$?
+            case "$plan_status" in 0|22) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+            repair_begin || exit 1
+            envelope_invalidate IMPLEMENT
+            envelope_guard_begin
+            run_claude "$REPAIR_PROMPT" repair "${MODEL_REPAIR:-$MODEL_IMPLEMENT}" "" 200 "$BUDGET_IMPLEMENT"
+            envelope_guard_end
+            plan_status=0
+            plan_after_write || plan_status=$?
+            case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+            recover_missing_implementation_reports || exit $?
+            require_file "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json"
+            repair_status=0
+            repair_judge || repair_status=$?
+            case "$repair_status" in
+                0) ;;
+                3|5) continue ;;
+                6) set_state "$(change_repair_next_stage)"; continue ;;
+                *) exit 1 ;;
+            esac
+            # The tree changed, so the review and the verification both describe another tree: discard the review and verify again.
+            echo 'Repair changed the tree; invalidating the test review and verifying again.'
+            rm -f .uncle/docs/TEST_REVIEW.md "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
+            python3 -B "$ROOT/scripts/lib/completion_preview.py" --normalize "$PWD" || exit 1
+            start_green_check_bg
+            set_state TEST_REVIEW
             ;;
 
         CHECKLIST)
@@ -4623,7 +4699,7 @@ PY
             # REPAIR-worthy VERIFICATION_REPORT.md now re-enters IMPLEMENT,
             # the same destination every other "this needs fixing" signal in
             # this driver already uses.
-            acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT '' IMPLEMENT
+            acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT '' REPAIR
             ;;
 
         FINAL_AUDIT)

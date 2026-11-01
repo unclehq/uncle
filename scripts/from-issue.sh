@@ -109,6 +109,7 @@ write_origin() {
 
     mkdir -p "$STATE_DIR"
     printf '%s\t%s\t%s\n' "$OWNER/$REPO" "$ISSUE_NUM" "$fetch" > "$ORIGIN_FILE"
+    cp "$ORIGIN_FILE" "$ORIGIN_FILE.bound" 2>/dev/null || true   # the copy state_origin_agree restores from
 }
 
 run_issue_workflow() {

@@ -16,6 +16,22 @@ from uncle_tui import UncleTUI
 ESC, CTRL_B, CTRL_L, CTRL_R = 27, 2, 12, 18
 
 
+# These tests write the canonical workflow artifacts under the current directory (project='.'). Run from a scratch directory so
+# running one of them inside a live worktree (a model worker's narrow check, the baseline) can never overwrite that run's files.
+def setUpModule():
+    import os, tempfile
+    global _scratch, _previous_cwd
+    _scratch = tempfile.TemporaryDirectory(prefix='uncle-test-cwd-')
+    _previous_cwd = os.getcwd()
+    os.chdir(_scratch.name)
+
+
+def tearDownModule():
+    import os
+    os.chdir(_previous_cwd)
+    _scratch.cleanup()
+
+
 class Clock:
     def __init__(self):
         self.now = 100.0

@@ -525,7 +525,11 @@ set_state() {
 }
 
 get_state() {
-    state_read "$STATE_FILE" DERIVE_BRIEF
+    local state
+    state="$(state_read "$STATE_FILE" DERIVE_BRIEF)"
+    # The checklist state is MANUAL_CHECKLIST, as in stagegate.sh; a run saved under the old name resumes there.
+    [[ "$state" != CHECKLIST ]] || state=MANUAL_CHECKLIST
+    printf '%s' "$state"
 }
 
 # --- Single-writer lock -----------------------------------------------------
@@ -3356,7 +3360,7 @@ change_repair_next_stage() {
     elif python3 -B "$ROOT/scripts/lib/failure_severity.py" unrunnable "$LOG_DIR/green-check.log"; then
         printf FINAL_AUDIT
     else
-        printf CHECKLIST
+        printf MANUAL_CHECKLIST
     fi
 }
 
@@ -4636,7 +4640,7 @@ REPAIR
             # finding here re-enters IMPLEMENT directly, the same destination
             # every other "this needs fixing" signal in this driver already
             # uses, rather than a state that does not exist.
-            acceptance_transition .uncle/docs/TEST_REVIEW.md CHECKLIST \
+            acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST \
                 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS' REPAIR
             ;;
 
@@ -4700,7 +4704,7 @@ REPAIR
             set_state TEST_REVIEW
             ;;
 
-        CHECKLIST)
+        MANUAL_CHECKLIST)
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi
@@ -4816,7 +4820,7 @@ REPAIR
             # MANUAL_CHECKLIST.json/MANUAL_CHECKLIST_WORKERS.json before the
             # retry, matching this driver's original behavior exactly.
             validate_status=0
-            checklist_validate_manual_checklist CHECKLIST 0 \
+            checklist_validate_manual_checklist MANUAL_CHECKLIST 0 \
                 "The preceding .uncle/docs/MANUAL_CHECKLIST.md was rejected only for this required format.
 Write a new complete .uncle/docs/MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.
 Preserve every substantive check. Never drop or merge checks merely to make the document parse.
@@ -4837,7 +4841,7 @@ This is a new response: write the complete document text now, in this message. A
                 # that incorrectly made historical Git state a prerequisite.
                 echo 'Checklist contract requires unavailable commit history; regenerating the delta checklist from current-tree evidence.'
                 rm -f "$STATE_DIR/manual-checklist-format-retry.md"
-                set_state CHECKLIST
+                set_state MANUAL_CHECKLIST
                 continue
             fi
             if python3 - "$STATE_DIR/documents/MANUAL_CHECKLIST.json" <<'PY'

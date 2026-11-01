@@ -22,7 +22,7 @@ driver="$ROOT/scripts/change-workflow.sh"
 fail() { echo "checklist-delta-successor-test.sh: FAIL: $*" >&2; exit 1; }
 
 # The CHECKLIST state body, from its label to the next state label.
-body="$(awk '/^        CHECKLIST\)$/{p=1} p{print} p && /^        VALIDATE_MANUAL_CHECKLIST\)$/ && !/^        CHECKLIST\)$/{exit}' "$driver")"
+body="$(awk '/^        MANUAL_CHECKLIST\)$/{p=1} p{print} p && /^        VALIDATE_MANUAL_CHECKLIST\)$/ && !/^        MANUAL_CHECKLIST\)$/{exit}' "$driver")"
 [[ -n "$body" ]] || fail 'could not isolate the CHECKLIST state body'
 
 # Every set_state inside CHECKLIST, excluding the next label the awk consumed.

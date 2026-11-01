@@ -113,7 +113,7 @@ run_in "$project" 'change_checklist_draft_start; change_checklist_draft_cancel; 
 # --- the hooks ----------------------------------------------------------------------------------------------------------------------------------
 state_block() { awk -v s="        $1)" '$0 == s {buf=""; p=1; next} p && /^        [A-Z_]+\)$/ {p=0} p {buf = buf $0 "\n"} END {printf "%s", buf}' "$CW"; }
 state_block IMPLEMENT | grep -q 'change_checklist_draft_start' || bad "IMPLEMENT does not start the draft"
-state_block CHECKLIST | awk '/change_checklist_reconcile/{a=NR} /run_checklist_panel full/{b=NR} END{exit !(a && b && a<b)}' || bad "CHECKLIST must try the reconciliation before the full panel"
+state_block MANUAL_CHECKLIST | awk '/change_checklist_reconcile/{a=NR} /run_checklist_panel full/{b=NR} END{exit !(a && b && a<b)}' || bad "CHECKLIST must try the reconciliation before the full panel"
 fn on_exit | grep -q 'change_checklist_draft_cancel' || bad "an exiting driver does not stop a running draft"
 [[ $fail == 0 ]] && echo "change-checklist-draft-driver-test.sh: ok"
 exit $fail

@@ -60,13 +60,13 @@ grep -q 'state=' <<< "$out" && bad "a no-op pass (judge 3) should re-enter REPAI
 grep -q 'green-restarted' <<< "$out" && bad "judge 3 must not restart verification: $out"
 
 out="$(go 1 6 runnable)"
-grep -q 'state=CHECKLIST' <<< "$out"                  || bad "spent passes with a runnable application go to the checklist: $out"
+grep -q 'state=MANUAL_CHECKLIST' <<< "$out"                  || bad "spent passes with a runnable application go to the checklist: $out"
 out="$(go 1 6 unrunnable)"
 grep -q 'state=FINAL_AUDIT' <<< "$out"                || bad "spent passes with an unrunnable application go to the audit: $out"
 
 out="$(go 2 0 runnable)"
 grep -q 'agent:' <<< "$out" && bad "no pass may run once two are spent: $out"
-grep -q 'state=CHECKLIST' <<< "$out" && grep -q 'nonblocking:TEST_REVIEW.md' <<< "$out" || bad "an ineligible repair of the test review goes on as unresolved evidence: $out"
+grep -q 'state=MANUAL_CHECKLIST' <<< "$out" && grep -q 'nonblocking:TEST_REVIEW.md' <<< "$out" || bad "an ineligible repair of the test review goes on as unresolved evidence: $out"
 out="$(go 2 0 unrunnable)"
 grep -q 'state=FINAL_AUDIT' <<< "$out"                || bad "ineligible and unrunnable: final audit: $out"
 out="$(go 2 0 runnable .uncle/docs/VERIFICATION_REPORT.md)"
@@ -104,6 +104,14 @@ out="$(route 2 1)"
 grep -q 'state=FINAL_AUDIT' <<< "$out" && grep -q 'nonblocking:green-check' <<< "$out" || bad "a remaining regression with no pass left should go to the audit: $out"
 out="$(route 0 0)"
 grep -q 'fell-through' <<< "$out" && ! grep -q 'state=' <<< "$out" || bad "no regression: fall through to the acceptance routing: $out"
+
+# a run saved under the old checklist state name resumes at MANUAL_CHECKLIST, as stagegate.sh names it
+gs="$(awk '/^get_state\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$CW")"
+alias_of() { env -i PATH="$PATH" bash --norc --noprofile -c "STATE_FILE=x; state_read() { printf '%s' '$1'; }; $gs; get_state"; }
+[[ "$(alias_of CHECKLIST)" == MANUAL_CHECKLIST ]] || bad "a saved CHECKLIST state does not resume at MANUAL_CHECKLIST"
+[[ "$(alias_of MANUAL_CHECKLIST)" == MANUAL_CHECKLIST && "$(alias_of EXECUTE_CHECKLIST)" == EXECUTE_CHECKLIST ]] || bad "get_state changed a state that needed no alias"
+grep -qE '^        CHECKLIST\)$' "$CW" && bad "the driver still has a CHECKLIST state"
+grep -q "'manual-checklist':'MANUAL_CHECKLIST'" "$ROOT/scripts/lib/rerun_stage.py" || bad "rerun_stage does not name the checklist state MANUAL_CHECKLIST"
 
 # the driver sends failing acceptance rows here, and nowhere else
 grep -q "'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS' REPAIR" "$CW" || bad "VALIDATE_TEST_REVIEW does not route to REPAIR"

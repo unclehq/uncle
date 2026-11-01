@@ -25,7 +25,7 @@ n="$(grep -c '^        TEST_REVIEW)$' "$ROOT/scripts/change-workflow.sh" || true
 wia_line="$(grep -n '^        WAIT_IMPLEMENT_APPROVAL)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
 tr_line="$(grep -n '^        TEST_REVIEW)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
 wia_block="$(sed -n "${wia_line},${tr_line}p" "$ROOT/scripts/change-workflow.sh")"
-if printf '%s' "$wia_block" | grep -q 'set_state CHECKLIST'; then
+if printf '%s' "$wia_block" | grep -q 'set_state MANUAL_CHECKLIST'; then
     bad "wia-skips-test-review" "WAIT_IMPLEMENT_APPROVAL still transitions directly to CHECKLIST instead of through TEST_REVIEW"
 else
     ok
@@ -34,7 +34,7 @@ set_tr_count="$(printf '%s' "$wia_block" | grep -c 'set_state TEST_REVIEW' || tr
 [[ "$set_tr_count" -ge 2 ]] && ok || bad "wia-routes-test-review" "WAIT_IMPLEMENT_APPROVAL has $set_tr_count set_state TEST_REVIEW call site(s), expected at least 2 (diff-gate-disabled and normal approve paths)"
 
 vtr_line="$(grep -n '^        VALIDATE_TEST_REVIEW)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
-checklist_line="$(grep -n '^        CHECKLIST)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
+checklist_line="$(grep -n '^        MANUAL_CHECKLIST)$' "$ROOT/scripts/change-workflow.sh" | head -1 | cut -d: -f1)"
 [[ -n "$vtr_line" ]] && ok || bad "has-validate-state" "VALIDATE_TEST_REVIEW) case label missing"
 [[ -n "$checklist_line" && "$vtr_line" -lt "$checklist_line" ]] && ok || bad "validate-before-checklist" "VALIDATE_TEST_REVIEW does not precede CHECKLIST"
 
@@ -51,7 +51,7 @@ grep -Fq '. "$ROOT/scripts/lib/acceptance-gate.sh"' "$ROOT/scripts/stagegate.sh"
 
 # --- (c) FAIL routes to the REPAIR state -----------
 
-if printf '%s' "$vtr_block" | tr '\n' ' ' | grep -q "acceptance_transition .uncle/docs/TEST_REVIEW.md CHECKLIST.*REPAIR"; then ok
+if printf '%s' "$vtr_block" | tr '\n' ' ' | grep -q "acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST.*REPAIR"; then ok
 else bad "fail-routes-to-repair" "VALIDATE_TEST_REVIEW does not pass REPAIR as acceptance_transition's repair_target"; fi
 
 # The driver has a REPAIR state (like stagegate.sh's); every set_state REPAIR must have it to land in.

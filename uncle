@@ -39,7 +39,7 @@ esac
 cd "$ROOT"
 . "$ROOT/scripts/lib/stage-config.sh"
 
-# ANSI palette matching cline's CLI. Disabled when stdout is not a terminal or
+# ANSI palette. Disabled when stdout is not a terminal or
 # NO_COLOR is set, so piped/scripted output stays machine-readable.
 if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]]; then
     C_RESET=$'\033[0m'
@@ -65,7 +65,7 @@ Usage: uncle [-h|--help|--performance|--runs] [--unattended]
                     [--certificate-oidc-issuer URL]
 
 Interactive launcher for the governed-CI workflows. Picks one of the three
-drivers and runs the stages through `cline` using the model, reasoning effort,
+drivers and runs the stages through the configured runners using the model, reasoning effort,
 and per-stage overrides from `.uncle/config` (menu option 4).
 
   1) New application   -> ./scripts/stagegate.sh
@@ -210,8 +210,6 @@ done
 # the launcher has already cd'd into the install libexec, so without this the
 # TUI would key its per-project state off the install dir and write
 # .uncle/config to the wrong place. UNCLE_CONFIG wins if the caller sets it.
-CLINE_CONFIG="${CLINE_CONFIG:-$HOME/.cline/data/settings/providers.json}"
-CL_MODEL=""
 CL_EFFORT="medium"
 UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}"
 export UNCLE_CONFIG
@@ -298,7 +296,6 @@ fi
 # one for it.
 CONFIG_STAGE_SIDE_reviewer=" adversarial-review test-review manual-checklist final-audit "
 DEFAULT_EFFORT="low"
-DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
 
 stage_side() {
     case "$CONFIG_STAGE_SIDE_reviewer" in
@@ -334,7 +331,7 @@ runner_cmd() {
             kimi)   printf '%s' "$ROOT/scripts/reviewer-kimi.sh" ;;
             codex)  printf 'codex' ;;
             claude) printf '%s' "$ROOT/scripts/reviewer-claude.sh" ;;
-            *)      printf '%s' "$ROOT/scripts/reviewer-cline.sh" ;;
+            *)      uncle_unsupported_runner "$runner"; return 1 ;;
         esac
         return 0
     fi
@@ -342,7 +339,7 @@ runner_cmd() {
         claude) printf 'claude' ;;
         kimi)   printf '%s' "$ROOT/scripts/agent-kimi.sh" ;;
         codex)  printf '%s' "$ROOT/scripts/agent-codex.sh" ;;
-        *)      printf '%s' "$ROOT/scripts/agent-cline.sh" ;;
+        *)      uncle_unsupported_runner "$runner"; return 1 ;;
     esac
 }
 
@@ -468,100 +465,7 @@ launch() {
     return 0
 }
 
-choose_model() {
-    local models_file line n sel idx
-    models_file="$(mktemp)"
-    # `select(contains("/"))`: cline needs modelType/model, and providers.json
-    # can hold a stale display name as a provider's last-used model. Offering
-    # one here is how it ends up in .uncle/config and then in `cline -m`.
-    jq -r '.providers[]?.settings.model // empty | select(contains("/"))' \
-        "$CLINE_CONFIG" 2>/dev/null | sort -u > "$models_file" || true
-
-    while true; do
-        echo
-        printf 'Model (current: %s)\n' "${C_CYAN}${CL_MODEL:-cline default}${C_RESET}"
-        n=0
-        while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            n=$((n+1))
-            printf '  %s%d)%s %s\n' "$C_CYAN" "$n" "$C_RESET" "$line"
-        done < "$models_file"
-        printf '  %sc)%s custom model id\n' "$C_CYAN" "$C_RESET"
-
-        if (( n > 0 )); then
-            printf '%s' "Choice [1-$n/c/Enter=keep]: "
-        else
-            printf '%s' "Choice [c/Enter=keep]: "
-        fi
-        if ! read -r sel; then
-            echo
-            break
-        fi
-        sel="$(printf '%s' "$sel" | tr -d '[:space:]')"
-
-        case "$sel" in
-            "")
-                break ;;
-            c|C)
-                printf '%s' "Model id (modelType/model, e.g. cline-pass/kimi-k3): "
-                if read -r sel; then
-                    sel="$(printf '%s' "$sel" | tr -d '[:space:]')"
-                    if [[ -n "$sel" && "$sel" != */* ]]; then
-                        printf '%sNot a cline model id: %s (expected modelType/model)%s\n' \
-                            "$C_YELLOW" "$sel" "$C_RESET"
-                        continue
-                    fi
-                    CL_MODEL="$sel"
-                else
-                    echo
-                    CL_MODEL=""
-                fi
-                break ;;
-            *)
-                if [[ "$sel" =~ ^[0-9]+$ ]] && (( n > 0 && sel >= 1 && sel <= n )); then
-                    idx=0
-                    while IFS= read -r line; do
-                        [[ -z "$line" ]] && continue
-                        idx=$((idx+1))
-                        if (( idx == sel )); then
-                            CL_MODEL="$line"
-                            break
-                        fi
-                    done < "$models_file"
-                    break
-                fi
-                printf 'Unrecognized choice: %s\n' "$sel"
-                ;;
-        esac
-    done
-    rm -f "$models_file"
-    return 0
-}
-
-choose_effort() {
-    local sel
-    while true; do
-        printf '%s' "Performance [h]igh/[m]edium/[l]ow (current: ${C_CYAN}$CL_EFFORT${C_RESET}, Enter=keep): "
-        if ! read -r sel; then
-            echo
-            break
-        fi
-        sel="$(printf '%s' "$sel" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-        case "$sel" in
-            "") break ;;
-            h|high)   CL_EFFORT="high"; break ;;
-            m|medium) CL_EFFORT="medium"; break ;;
-            l|low)    CL_EFFORT="low"; break ;;
-            *) printf 'Unrecognized choice: %s\n' "$sel" ;;
-        esac
-    done
-    return 0
-}
-
 run_workflow() {
-    # UNCLE_CLINE_MODEL / UNCLE_CLINE_EFFORT are deliberately not exported:
-    # they are global overrides inside the cline shims and would win over the
-    # per-stage settings the drivers resolve from .uncle/config.
     local approval_name uncle_worktree
 
     # The run gets its own directory, so a second piece of work can start
@@ -599,10 +503,9 @@ run_workflow() {
 config_write_header() {
     cat <<'EOF'
 # Uncle per-stage config: every stage picks its own runner, reasoning effort,
-# and -- for a cline stage -- model.
+# and model.
 # Format: <stage>.runner | <stage>.effort | <stage>.model VALUE
-#   (VALUE = a runner name, a reasoning effort, or a cline model id in
-#   modelType/model form). Edit from `uncle` -> Configure, or by hand.
+#   (VALUE = a runner name, a reasoning effort, or a model id). Edit from `uncle` -> Configure, or by hand.
 EOF
 }
 
@@ -645,8 +548,8 @@ config_clear() {
     rm -f "$tmp"
 }
 
-# One stage at a time: pick the stage, then its runner, effort, and — only
-# when the runner is cline — its model. This is the fallback for a terminal the
+# One stage at a time: pick the stage, then its runner, effort, and
+# for self-hosted its model. This is the fallback for a terminal the
 # full-screen TUI cannot drive; both write the same file.
 configure_stage() {
     local stage="$1" side sel runner model effective
@@ -660,9 +563,6 @@ configure_stage() {
         if [[ "${effective}" == "self-hosted" ]]; then
             printf '  model     %s\n' "$(config_get "$stage.model")"
             printf 'Set [r]unner [m]odel, [a]pply Self hosted to all stages, [d]efaults, [q]back: '
-        elif [[ "${effective}" == "cline" ]]; then
-            printf '  model   %s\n' "$(config_get "$stage.model")"
-            printf '%s' "Set [${C_CYAN}r${C_RESET}]unner [${C_CYAN}e${C_RESET}]ffort [${C_CYAN}m${C_RESET}]odel, [${C_CYAN}d${C_RESET}]efaults, [${C_CYAN}q${C_RESET}]back: "
         else
             printf '  model   %s(runner default)%s\n' "$C_DIM" "$C_RESET"
             printf '%s' "Set [${C_CYAN}r${C_RESET}]unner [${C_CYAN}e${C_RESET}]ffort, [${C_CYAN}d${C_RESET}]efaults, [${C_CYAN}q${C_RESET}]back: "
@@ -682,8 +582,8 @@ configure_stage() {
                 case " $choices " in
                     *" $runner "*)
                         config_set "$stage.runner" "$runner"
-                        # Cline and self-hosted stages use an explicit model.
-                        [[ "$runner" == "cline" || "$runner" == "self-hosted" ]] || config_clear "$stage.model"
+                        # Self-hosted stages use an explicit model.
+                        [[ "$runner" == "self-hosted" ]] || config_clear "$stage.model"
                         ;;
                     *) printf '%sNot a %s runner: %s%s\n' "$C_YELLOW" "$side" "$runner" "$C_RESET" ;;
                 esac
@@ -730,13 +630,7 @@ PYKEYS
                     config_set "$stage.model" "$model"
                     continue
                 fi
-                [[ "$effective" == cline ]] || continue
-                choose_model
-                if [[ -n "$CL_MODEL" ]]; then
-                    config_set "$stage.model" "$CL_MODEL"
-                else
-                    config_clear "$stage.model"
-                fi
+                continue
                 ;;
             d)
                 config_clear "$stage.runner"
@@ -784,15 +678,8 @@ configure_stages_menu() {
             runner="$(uncle_stage_runner "$stage")"
             effort="$(uncle_stage_effort "$stage")"
             [[ -n "$effort" ]] || effort="$DEFAULT_EFFORT"
-            if [[ "$runner" == "cline" ]]; then
-                model="$(config_get "$stage.model")"
-                [[ -n "$model" ]] || model="$DEFAULT_CLINE_MODEL"
-                printf '  %s%2d)%s %-22s %s · %s · %s\n' \
-                    "$C_CYAN" "$n" "$C_RESET" "$stage" "$runner" "$model" "$effort"
-            else
-                printf '  %s%2d)%s %-22s %s · %s\n' \
-                    "$C_CYAN" "$n" "$C_RESET" "$stage" "$runner" "$effort"
-            fi
+            printf '  %s%2d)%s %-22s %s · %s\n' \
+                "$C_CYAN" "$n" "$C_RESET" "$stage" "$runner" "$effort"
         done
         echo
         printf '%s' "Stage to configure [${C_CYAN}1-$n${C_RESET}/${C_CYAN}q${C_RESET}]: "

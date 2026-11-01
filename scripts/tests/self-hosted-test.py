@@ -76,7 +76,7 @@ class SelfHosted(unittest.TestCase):
             self.assertEqual(settings(self.config, 'final-audit')['base_url'], 'http://localhost:9200/v1')
             with self.assertRaises(ValueError):
                 settings(self.config, 'requirements')
-        for selection, success in (('qwen', True), ('cline-only-model', False)):
+        for selection, success in (('qwen', True), ('unlisted-model', False)):
             result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/lib/self_hosted.py'),
                                      'choose-model', str(self.config)], input=selection+'\n',
                                     text=True,encoding='utf-8', capture_output=True)
@@ -201,9 +201,9 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
             'manual-checklist-delta': 'manual-checklist',
         }
         commands = {
-            'reviewer': {'self-hosted': 'reviewer-self-hosted.sh', 'cline': 'reviewer-cline.sh',
+            'reviewer': {'self-hosted': 'reviewer-self-hosted.sh',
                          'claude': 'reviewer-claude.sh', 'kimi': 'reviewer-kimi.sh', 'codex': 'codex'},
-            'agent': {'self-hosted': 'agent-self-hosted.sh', 'cline': 'agent-cline.sh',
+            'agent': {'self-hosted': 'agent-self-hosted.sh',
                       'claude': 'claude', 'kimi': 'agent-kimi.sh', 'codex': 'agent-codex.sh'},
         }
         for stage in dynamic_stages:

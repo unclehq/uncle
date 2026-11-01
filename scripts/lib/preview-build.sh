@@ -69,7 +69,7 @@ preview_snapshot_static() {
 # preview_build_model — use the selected preview stage model. `preview-build`
 # resolves to the first configured model stage in stage-config.sh, so its
 # runner and model stay paired (e.g. an OpenCode `local/...` model runs through
-# OpenCode rather than being handed to Cline). A dedicated environment override
+# OpenCode rather than being handed to another runner). A dedicated environment override
 # remains useful for one-off preview experiments.
 preview_build_model() {
     if [[ -n "${WORKFLOW_MODEL_PREVIEW_BUILD:-}" ]]; then
@@ -89,7 +89,7 @@ preview_build_model() {
         fi
     fi
     # `haiku` is a Claude CLI alias, not a portable cheap-preview model.  A
-    # configured Codex/Kimi/Cline preview with no explicit model must invoke
+    # configured Codex/Kimi preview with no explicit model must invoke
     # its runner without --model and let that runner select its own default.
     # Passing haiku to Codex fails before preview generation begins.
     if declare -f uncle_stage_runner > /dev/null 2>&1 \

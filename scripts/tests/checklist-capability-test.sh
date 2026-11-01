@@ -41,7 +41,7 @@ done
 checklist_runner_provides port codex false  && fail 'sandboxed codex cannot bind'
 checklist_runner_provides port codex true   || fail 'codex with network can bind'
 checklist_runner_provides gui  codex true   && fail 'no setting gives codex a screen'
-for runner in claude cline kimi; do
+for runner in claude kimi; do
     checklist_runner_provides port "$runner" false || fail "$runner can bind"
     checklist_runner_provides gui  "$runner" false || fail "$runner can drive a gui"
 done

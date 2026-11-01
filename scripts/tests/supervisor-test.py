@@ -840,14 +840,19 @@ class WorkerTests(unittest.TestCase):
             self.assertIn('unavailable', str(caught.exception))
         with self.assertRaises(ValueError) as caught:
             runner.build_command(sv.Config(dict(runner='unsupported-runner')), ROOT)
-        self.assertIn('not supported', str(caught.exception))
+        self.assertEqual(str(caught.exception), sv.unsupported_runner_message('unsupported-runner'))
 
-    def test_cline_supervisor_uses_the_configured_provider_model(self):
-        config = sv.Config(dict(runner='cline', model='cline-pass/kimi-k3', effort='low'))
-        argv, _, home = runner.build_command(config, ROOT)
-        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
-        self.assertEqual(argv[:3], [str(ROOT / 'scripts' / 'agent-cline.sh'), '--effort', 'low'])
-        self.assertEqual(argv[3:], ['--model', 'cline-pass/kimi-k3'])
+    def test_cline_and_unknown_supervisor_runners_are_rejected_without_fallback(self):
+        with self.assertRaises(ValueError) as caught:
+            runner.build_command(sv.Config(dict(runner='cline', model='x', effort='low')), ROOT)
+        self.assertIn('Cline support was removed', str(caught.exception))
+        self.assertIn('claude, codex, kimi or self-hosted', str(caught.exception))
+        with self.assertRaises(ValueError) as caught:
+            runner.build_command(sv.Config(dict(runner='bogus')), ROOT)
+        self.assertEqual(str(caught.exception),
+                         "uncle: runner 'bogus' is not supported (Cline support was removed). "
+                         "Set it to claude, codex, kimi or self-hosted with 'uncle' -> Configure.")
+        self.assertNotIn('cline', sv.SUPPORTED_RUNNERS)
 
     def test_codex_supervisor_uses_a_read_only_adapter(self):
         config = sv.Config(dict(runner='codex', model='gpt-5.4-codex', effort='high'))

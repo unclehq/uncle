@@ -85,7 +85,7 @@ class Issues(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, patch.object(tui,'_project_root',return_value=root):
             ui=tui.UncleTUI.__new__(tui.UncleTUI)
             ui.state='menu';ui._ensure_chat()
-            ui.chat_model=lambda: ('baseline','cline','model','medium')
+            ui.chat_model=lambda: ('baseline','claude','model','medium')
             # TD-4 (Issue 45): the chat worker is the supervisor's ChatRequest; assertions unchanged.
             with patch.object(tui,'ChatRequest') as request, patch.object(tui,'supervisor_command',return_value=(['fake-claude'],{},'/tmp/x')), patch.object(tui,'issue_context',return_value='Issue reference data') as lookup:
                 ui.send_home_chat('Explain #12')

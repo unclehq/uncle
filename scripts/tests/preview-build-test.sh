@@ -135,9 +135,9 @@ check "starts with a plan"                     test "$(cat "$TMP/with-plan/.uncl
 check "records the plan hash"                  test -s "$TMP/with-plan/.uncle/workflow/preview-build.plan"
 check "says it builds from the plan"           grep -q "preview from the plan" "$TMP/with-plan/.uncle/workflow/out"
 
-CONFIG_MODELS=$'project-plan.model cline-pass/kimi-k3\nimplementation.model anthropic/claude-opus-5'
+CONFIG_MODELS=$'project-plan.model vendor/kimi-k3\nimplementation.model anthropic/claude-opus-5'
 run_case configured-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$CONFIG_MODELS"
-check "preview uses the first configured model" test "$(cat "$TMP/configured-model/.uncle/workflow/model")" == cline-pass/kimi-k3
+check "preview uses the first configured model" test "$(cat "$TMP/configured-model/.uncle/workflow/model")" == vendor/kimi-k3
 
 SELF_HOSTED_MODEL=$'derive-brief.runner self-hosted\nderive-brief.model local/deepseek-v4-flash'
 run_case self-hosted-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$SELF_HOSTED_MODEL"

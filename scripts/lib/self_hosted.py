@@ -303,7 +303,7 @@ def output_token_limit(stage=''):
     """
     # Dynamic workers inherit the parent stage's size class as well as its
     # configured model. This keeps every self-hosted worker consistent with
-    # Claude, Cline, Codex, and Kimi through stage-config.sh.
+    # Claude, Codex, and Kimi through stage-config.sh.
     if '-review-worker-' in stage:
         stage = stage.split('-review-worker-', 1)[0]
     elif '-worker-' in stage:

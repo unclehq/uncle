@@ -23,7 +23,7 @@ check "the supervisor's effort is what the stage reads" test "$(uncle_stage_effo
 printf 'classify-change.runner kimi\nsupervision.model sonnet\n' > "$UNCLE_CONFIG"
 check "a classify-change setting wins over the supervisor" test "$(stage_for "$bin")" == classify-change
 check "...and routes to that runner" test "$(uncle_stage_runner classify-change)" == kimi
-# A Codex-only (or Kimi-only, Cline, self-hosted) machine has no claude: the stage that planned the build is used instead.
+# A Codex-only (or Kimi-only, self-hosted) machine has no claude: the stage that planned the build is used instead.
 printf 'supervision.model sonnet\nchange-plan.runner codex\nchange-plan.model gpt-6\n' > "$UNCLE_CONFIG"
 empty="$TMP/empty"; mkdir -p "$empty"
 check "no supervisor runner installed falls back to the planning stage" test "$(stage_for "$empty")" == change-plan

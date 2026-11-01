@@ -1,5 +1,5 @@
 """Native, bidirectional stage sessions with stage-scoped steering and usage."""
-import argparse
+import argparse, re
 import json
 import os
 from pathlib import Path
@@ -47,7 +47,7 @@ class Stage:
         # reads it from the result event this stage prints, exactly as it does from a direct Claude run.
         self.structured_output = None
         self.model = self.option('--model', '-m') or ''
-        self.effort = self.option('--effort') or os.environ.get('UNCLE_CLINE_EFFORT', 'low')
+        self.effort = self.option('--effort') or 'low'
         for i, arg in enumerate(args[:-1]):
             if arg == '-c' and args[i+1].startswith('model_reasoning_effort='):
                 self.effort = args[i+1].split('=', 1)[1]
@@ -249,13 +249,6 @@ class Stage:
                     args += ['--effort', self.effort]
             args += ['--input-format', 'stream-json', '--replay-user-messages']
             return [os.environ.get('WORKFLOW_CLAUDE_CMD', 'claude')] + args
-        if self.runner == 'cline':
-            binary = Path(shutil.which(os.environ.get('WORKFLOW_CLINE_CMD', 'cline')) or '').resolve()
-            for parent in binary.parents:
-                sdk = parent / 'node_modules/@cline/sdk/dist/index.js'
-                if sdk.is_file():
-                    return [shutil.which('node') or 'node', str(Path(__file__).with_name('cline-native.mjs')), str(sdk)]
-            raise ValueError('Installed Cline SDK not found; install the current npm Cline package')
         if self.runner == 'kimi':
             help_text = subprocess.run([os.environ.get('WORKFLOW_KIMI_CMD', 'kimi'), '--help'],
                                        capture_output=True, text=True, timeout=15).stdout
@@ -584,43 +577,6 @@ class Stage:
                 return outstanding <= 0 and not self.pending
         self.loop(handle,steer)
 
-    def cline(self, directory):
-        binary=Path(shutil.which(os.environ.get('WORKFLOW_CLINE_CMD','cline')) or '').resolve()
-        sdk=None
-        for parent in binary.parents:
-            candidate=parent/'node_modules/@cline/sdk/dist/index.js'
-            if candidate.is_file(): sdk=candidate;break
-        if sdk is None: raise ValueError('Installed Cline SDK not found; install the current npm Cline package')
-        self.spawn([shutil.which('node') or 'node',str(Path(__file__).with_name('cline-native.mjs')),str(sdk)])
-        self.rpc('start',{'prompt':self.prompt,'model':self.model,'effort':self.effort,'cwd':os.getcwd(),
-                          'mode':'act' if self.side=='agent' or self.delivery else 'plan',
-                          'turns':int(self.option('--max-turns') or 80)},'start')
-        def steer(text,id):
-            self.pending[id]=True
-            self.rpc('steer',{'text':text},id)
-        def handle(e):
-            if e.get('method')=='ready':
-                self.session=e['params']['sessionId'];self.ready(directory)
-            if e.get('method')=='agent_event':
-                p=e['params']
-                if p.get('type')=='content_end' and p.get('contentType')=='text':
-                    self.text(p.get('text',''));self.completed_answer(p.get('text',''),p.get('id'))
-                if p.get('type')=='error':
-                    self.status('chat_output',text='Cline: '+str(p.get('message') or p.get('error') or 'runner error'))
-                if p.get('type')=='usage': self.tokens(dict(input_tokens=p.get('totalInputTokens'),output_tokens=p.get('totalOutputTokens'),
-                    cache_read_input_tokens=p.get('totalCacheReadTokens'),cache_creation_input_tokens=p.get('totalCacheWriteTokens')),p.get('totalCost'))
-            if e.get('id')=='start':
-                if 'error' in e: raise ValueError(str(e['error']))
-                r=e.get('result',{});u=r.get('usage',{})
-                if r.get('text'):
-                    self.final_answer=r['text']
-                    if not self.answer: self.text(r['text'])
-                if u: self.tokens(dict(input_tokens=u.get('inputTokens'),output_tokens=u.get('outputTokens'),
-                    cache_read_input_tokens=u.get('cacheReadTokens'),cache_creation_input_tokens=u.get('cacheWriteTokens')),u.get('totalCost'))
-                if r.get('finishReason')!='completed': raise ValueError('Cline stage did not complete: '+str(r.get('text') or r.get('finishReason')))
-                return True
-        self.loop(handle,steer)
-
     def run(self):
         def interrupted(*_): raise KeyboardInterrupt
         signal.signal(signal.SIGTERM,interrupted)
@@ -685,7 +641,12 @@ class Stage:
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
-    parser.add_argument('--runner',required=True,choices=['codex','claude','kimi','cline','self-hosted'])
+    def _runner_arg(value):
+        # Text identical to uncle_unsupported_runner in stage-config.sh.
+        if value in ('codex','claude','kimi','self-hosted'): return value
+        value = re.sub(r'[\x00-\x1f\x7f]', '', value)[:64]
+        raise argparse.ArgumentTypeError("uncle: runner '%s' is not supported (Cline support was removed). Set it to claude, codex, kimi or self-hosted with 'uncle' -> Configure." % value)
+    parser.add_argument('--runner',required=True,type=_runner_arg)
     parser.add_argument('--side',required=True,choices=['agent','reviewer'])
     parser.add_argument('--stage',required=True)
     parser.add_argument('--prewarm', action='store_true',

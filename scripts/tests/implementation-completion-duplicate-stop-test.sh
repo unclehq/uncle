@@ -25,7 +25,7 @@ printf '%s\n' "$block" > "$temp/fn.sh"
 STATE_DIR="$temp/project/.uncle/workflow"
 mkdir -p "$STATE_DIR/documents" "$temp/project/.uncle/docs" "$temp/project/.uncle/workflow/waivers"
 cd "$temp/project"
-printf '{"schema":"uncle.artifact/v1","kind":"change-spec","acceptance_criteria":[{"id":"AC-3","criterion":"no Cline residue","verification":"bash scripts/tests/cline-removal-gate-test.sh"}]}' \
+printf '{"schema":"uncle.artifact/v1","kind":"change-spec","acceptance_criteria":[{"id":"AC-3","criterion":"no legacy runner residue","verification":"bash scripts/tests/runner-removal-gate-test.sh"}]}' \
     > "$STATE_DIR/documents/CHANGE_SPEC.json"
 printf '{"schema":"uncle.artifact/v1","kind":"implementation-notes","fragments":[{"schema":"uncle.artifact/v1","kind":"implementation-notes","deliveries":[{"id":"AC-3","status":"IMPLEMENTED","changed_code":"step2","observed_verification":"e"}]},{"schema":"uncle.artifact/v1","kind":"implementation-notes","deliveries":[{"id":"AC-3","status":"INCOMPLETE","changed_code":"step5","observed_verification":"e"}]}]}' \
     > "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json"

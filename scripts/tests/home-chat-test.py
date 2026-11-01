@@ -32,7 +32,7 @@ class HomeTests(unittest.TestCase):
         # integration keeps the UI, reply, composer and state assertions.
         with tempfile.TemporaryDirectory() as d:
             config = Path(d) / 'config'
-            config.write_text('derive-brief.runner cline\nderive-brief.model cline-pass/test\nderive-brief.effort high\n'
+            config.write_text('derive-brief.runner codex\nderive-brief.model gpt-test\nderive-brief.effort high\n'
                               'supervision.model sonnet\nsupervision.effort high\n')
             request, command = supervisor_worker()
             with patch.object(tui, '_project_root', return_value=d), patch.object(tui, 'CONFIG_PATH', str(config)), patch.object(tui, 'list_models', return_value=[]), patch.object(tui, 'default_model', return_value=''), patch.object(tui, 'read_keys', return_value={}), request as request, command as command:
@@ -49,10 +49,9 @@ class HomeTests(unittest.TestCase):
                 ui.handle_key(10)
                 argv, prompt, env = request.call_args.args[:3]
                 self.assertEqual(argv, ['fake-claude', '--bare'])
-                self.assertEqual(command.call_args.args[0].model, 'cline-pass/test')
+                self.assertEqual(command.call_args.args[0].model, 'gpt-test')
                 self.assertEqual(command.call_args.args[0].effort, 'high')
                 self.assertIn('Hello', prompt)
-                self.assertNotIn('UNCLE_CLINE_EFFORT', env)
                 self.assertEqual(ui.chat_composer, '')
                 request.return_value.events.put({'status': 'reply', 'elapsed': 1, 'exit': 0, 'usage': None, 'cost': None,
                                                  'log': '', 'reply': json.dumps({'schema': 1, 'reply': 'Hello from the configured model',
@@ -66,22 +65,22 @@ class HomeTests(unittest.TestCase):
         # homepage selector and a direct HomeRequest fixture (transport unchanged).
         with tempfile.TemporaryDirectory() as d:
             config = Path(d) / 'config'
-            config.write_text('derive-brief.runner cline\nderive-brief.model cline-pass/test\nderive-brief.effort high\n')
+            config.write_text('derive-brief.runner codex\nderive-brief.model gpt-test\nderive-brief.effort high\n')
             with patch.object(tui, '_project_root', return_value=d), patch.object(tui, 'CONFIG_PATH', str(config)), patch.object(tui, 'list_models', return_value=[]), patch.object(tui, 'default_model', return_value=''), patch.object(tui, 'read_keys', return_value={}):
                 ui = tui.UncleTUI(None)
                 stage, runner, model, effort = ui.homepage_model()
-                self.assertEqual((runner, model, effort), ('cline', 'cline-pass/test', 'high'))
+                self.assertEqual((runner, model, effort), ('codex', 'gpt-test', 'high'))
                 command = [tui.runner_command(runner, tui.REVIEWER), '--model', model]
-                env = dict(os.environ, UNCLE_CLINE_EFFORT=effort)
-                self.assertIn('cline-pass/test', command)
-                self.assertEqual(env['UNCLE_CLINE_EFFORT'], 'high')
+                env = dict(os.environ, FIXTURE_EFFORT=effort)
+                self.assertIn('gpt-test', command)
+                self.assertEqual(env['FIXTURE_EFFORT'], 'high')
             with patch.object(tui, 'HomeRequest') as request:
                 request.return_value.events = queue.Queue()
                 fixture = tui.HomeRequest(command, 'Hello', env)
                 command, prompt, env = request.call_args.args
-                self.assertIn('cline-pass/test', command)
+                self.assertIn('gpt-test', command)
                 self.assertIn('Hello', prompt)
-                self.assertEqual(env['UNCLE_CLINE_EFFORT'], 'high')
+                self.assertEqual(env['FIXTURE_EFFORT'], 'high')
                 self.assertIsNotNone(fixture)
 
     def test_homepage_model_uses_the_first_persisted_configured_runner(self):
@@ -249,7 +248,7 @@ class HomeTests(unittest.TestCase):
     def test_running_chat_tracks_live_stage_model(self):
         ui = tui.UncleTUI.__new__(tui.UncleTUI)
         ui.state = 'running'
-        ui.stage_runner = lambda stage: 'cline'
+        ui.stage_runner = lambda stage: 'claude'
         ui.stage_model = lambda stage: 'configured/' + stage
         ui.stage_effort = lambda stage: 'medium'
         ui.status_stage = 'implementation-step-2'
@@ -258,9 +257,9 @@ class HomeTests(unittest.TestCase):
         ui.status_effort = 'high'
         self.assertEqual(ui.chat_model(), ('implementation', 'codex', 'live-model', 'high'))
         ui.status_stage = 'final-audit'
-        ui.status_runner = 'cline'
+        ui.status_runner = 'claude'
         ui.status_model = 'audit-model'
-        self.assertEqual(ui.chat_model(), ('final-audit', 'cline', 'audit-model', 'high'))
+        self.assertEqual(ui.chat_model(), ('final-audit', 'claude', 'audit-model', 'high'))
         ui.status_stage = ''
         self.assertEqual(ui.chat_model(), ('', '', '', ''))
 
@@ -304,17 +303,17 @@ class HomeTests(unittest.TestCase):
             ui=tui.UncleTUI.__new__(tui.UncleTUI)
             ui._ensure_chat()
             ui.state = 'menu'
-            ui.stage_runner=lambda stage:'cline'
+            ui.stage_runner=lambda stage:'claude'
             ui.stage_model=lambda stage:'chosen-model'
             ui.stage_effort=lambda stage:'high'
-            self.assertEqual(ui.homepage_model(),(tui.CONFIG_STAGES[0],'cline','chosen-model','high'))
+            self.assertEqual(ui.homepage_model(),(tui.CONFIG_STAGES[0],'claude','chosen-model','high'))
             with patch.object(tui,'HomeRequest') as request:
                 stage,runner,model,effort=ui.homepage_model()
-                env=dict(os.environ,UNCLE_CLINE_REVIEWER_MODEL=model,UNCLE_CLINE_MODEL=model,UNCLE_CLINE_EFFORT=effort)
+                env=dict(os.environ,FIXTURE_REVIEWER_MODEL=model,FIXTURE_MODEL=model,FIXTURE_EFFORT=effort)
                 tui.HomeRequest([tui.runner_command(runner,tui.REVIEWER),'--model',model],'Read @notes.txt',env)
                 command,prompt,env=request.call_args.args
                 self.assertIn('chosen-model',command)
-                self.assertEqual(env['UNCLE_CLINE_REVIEWER_MODEL'],'chosen-model')
+                self.assertEqual(env['FIXTURE_REVIEWER_MODEL'],'chosen-model')
             request,worker=supervisor_worker()
             with request as request, worker:
                 request.return_value.events=queue.Queue()

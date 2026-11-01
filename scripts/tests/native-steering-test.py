@@ -89,24 +89,15 @@ class Handler(BaseHTTPRequestHandler):
   return self.answer({})
 HTTPServer(('127.0.0.1',port),Handler).serve_forever()
 '''
-CLINE_FAKE='''
-let callback,resolve;
-const host={subscribe(f){callback=f},async start(){return {sessionId:'same-session'}},
- async send(p){
-  if(p.delivery==='steer'){
-   if(p.sessionId!=='same-session')throw Error('wrong session');
-   callback({type:'agent_event',payload:{sessionId:'same-session',event:{type:'usage',totalInputTokens:150,totalOutputTokens:30,totalCacheReadTokens:15,totalCost:.02}}});
-   callback({type:'agent_event',payload:{sessionId:'same-session',event:{type:'content_end',contentType:'text',text:'Steered reply'}}});
-   setTimeout(()=>resolve({finishReason:'completed',usage:{inputTokens:150,outputTokens:30,cacheReadTokens:15,totalCost:.02}}),20);
-   return;
-  }
-  return new Promise(r=>{resolve=r});
- },async dispose(){}};
-export const ClineCore={async create(){return host}};
-export const getClineDefaultSystemPrompt=()=>'';
-'''
 
 class NativeTests(unittest.TestCase):
+ def test_cline_and_unknown_runners_are_rejected(self):
+  for runner in ('cline','Cline','zzz'):
+   with self.subTest(runner=runner):
+    r=subprocess.run([sys.executable,'-B',str(ROOT/'scripts/lib/native_stage.py'),'--runner',runner,'--side','agent','--stage','x','--','exec','t'],capture_output=True,text=True,stdin=subprocess.DEVNULL)
+    self.assertNotEqual(r.returncode,0)
+    self.assertIn("uncle: runner '%s' is not supported (Cline support was removed)"%runner,r.stderr)
+    self.assertIn('claude, codex, kimi or self-hosted',r.stderr)
  def test_readonly_reviewer_final_json_is_saved_by_adapter(self):
   fake_code = """#!/usr/bin/env python3
 import json, sys
@@ -172,7 +163,7 @@ for line in sys.stdin:
   sys.path.insert(0, str(ROOT))
   import uncle_tui
   for name, side in uncle_tui.STAGES:
-   for runner in ('claude', 'codex', 'kimi', 'cline', 'self-hosted'):
+   for runner in ('claude', 'codex', 'kimi', 'self-hosted'):
     with self.subTest(stage=name, side=side, runner=runner):
      stage = Stage(runner, side, name, [], prompt='Required stage task')
      self.assertIn('continue unfinished stage', stage.prompt)
@@ -255,14 +246,10 @@ for line in sys.stdin:
     finally:
      if child.poll() is None:child.kill();child.wait()
 
- def test_cline_and_http_sessions_steer_without_restart(self):
-  for runner in ('cline','self-hosted','kimi'):
+ def test_http_sessions_steer_without_restart(self):
+  for runner in ('self-hosted','kimi'):
    with self.subTest(runner=runner),tempfile.TemporaryDirectory() as d:
     root=Path(d);fake=root/'runner';fake.write_text(HTTP_FAKE);fake.chmod(0o755)
-    if runner=='cline':
-     sdk=root/'node_modules/@cline/sdk/dist';sdk.mkdir(parents=True)
-     (sdk/'index.js').write_text(CLINE_FAKE)
-     (sdk.parent/'package.json').write_text('{"type":"module"}')
     status=root/'events';status.touch()
     env=dict(os.environ,UNCLE_STATUS_FILE=str(status),PYTHONDONTWRITEBYTECODE='1',
              UNCLE_SELF_HOSTED_BASE_URL='http://localhost:9999/v1',UNCLE_SELF_HOSTED_MODEL='fake-model',UNCLE_SELF_HOSTED_API_KEY='fake')
@@ -339,7 +326,7 @@ for line in sys.stdin:
 
  def test_cumulative_usage_replaces_previous_snapshot(self):
   with tempfile.TemporaryDirectory() as d,patch.dict(os.environ,{'UNCLE_STATUS_FILE':str(Path(d)/'events')}):
-   stage=Stage('cline','agent','implementation',[],prompt='task')
+   stage=Stage('claude','agent','implementation',[],prompt='task')
    stage.tokens({'input_tokens':100,'output_tokens':20},.01)
    stage.tokens({'input_tokens':150,'output_tokens':30},.02)
    stage.tokens({'input_tokens':150,'output_tokens':30},.02)

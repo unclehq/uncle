@@ -89,7 +89,7 @@ class CompletionTests(unittest.TestCase):
                  "observed_verification": "runner-default-deny-test.sh passed"},
             ]},
             {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "deliveries": [
-                {"id": "AC-3", "status": "IMPLEMENTED", "changed_code": "cline-removal-gate-test.sh",
+                {"id": "AC-3", "status": "IMPLEMENTED", "changed_code": "legacy-removal-gate-test.sh",
                  "observed_verification": "gate test passed"},
             ]},
         ]}
@@ -98,7 +98,7 @@ class CompletionTests(unittest.TestCase):
         status, changed_code, observed = delivered["AC-3"]
         self.assertEqual(status, "IMPLEMENTED")
         self.assertIn("step 2", changed_code)
-        self.assertIn("cline-removal-gate-test.sh", changed_code)
+        self.assertIn("legacy-removal-gate-test.sh", changed_code)
         self.assertIn("runner-default-deny-test.sh", observed)
         self.assertIn("gate test passed", observed)
 

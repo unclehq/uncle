@@ -4,7 +4,7 @@ This guide gets you from zero to a running workflow in a few minutes.
 
 ## Prerequisites
 
-- `cline` CLI (for the `./uncle` launcher), or `claude` + `kimi` (the
+- `claude` CLI (for the `./uncle` launcher), or `claude` + `kimi` (the
   `scripts/agent-kimi.sh` default) — or set `WORKFLOW_AGENT_CMD` to any compatible CLI
 - `codex` CLI (or set `WORKFLOW_REVIEWER_CMD` to a compatible alternative)
 - `jq`

@@ -170,7 +170,7 @@ class Panel(unittest.TestCase):
 
     def test_no_cost_surface_for_any_cost_data(self):
         ui=self.ui();ui.session_stats['active']={}
-        for cost,model in ((0,'cline-pass/qwen3.8-max'),(.5,'x'),(0,'deepseek/deepseek-v4-flash')):
+        for cost,model in ((0,'vendor/qwen3.8-max'),(.5,'x'),(0,'deepseek/deepseek-v4-flash')):
             ui.session_stats['records'].append(dict(stage='implementation',started_at=1,elapsed_seconds=10,model=model,
                 input_tokens=1000,output_tokens=300,cache_read_tokens=0,cache_write_tokens=0,reported_cost_usd=cost))
         text='\n'.join(ui._session_panel_lines())

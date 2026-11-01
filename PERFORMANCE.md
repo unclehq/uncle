@@ -99,7 +99,7 @@ reasoning or waiting on an API. First-response latency starts when the observer
 starts and includes adapter/server startup for native runners. HTTP polling and
 CLI buffering limit timestamp precision.
 
-Native Codex, Claude, Cline, and Kimi wire tool events are paired by invocation
+Native Codex, Claude, and Kimi wire tool events are paired by invocation
 ID. OpenCode tools are observed through canonical polled tool states. Legacy
 streams are observed without modifying their bytes; normalized streams that
 omit IDs or tool results cannot provide paired durations. Kimi HTTP snapshots

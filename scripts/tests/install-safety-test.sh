@@ -20,7 +20,7 @@ grep -q 'write_env_script libexec/"uncle"' "$ROOT/Formula/uncle.rb" \
     && fail "the versioned keg path is back in the launcher"
 for runtime in uncle scripts/stagegate.sh scripts/change-workflow.sh scripts/from-issue.sh \
                scripts/agent-self-hosted.sh scripts/reviewer-self-hosted.sh \
-               scripts/reviewer-claude.sh scripts/reviewer-cline.sh scripts/reviewer-kimi.sh; do
+               scripts/reviewer-claude.sh scripts/reviewer-kimi.sh; do
     grep -q 'UNCLE_RUNTIME_ROOT' "$ROOT/$runtime" \
         || fail "$runtime must preserve the stable runtime root"
 done

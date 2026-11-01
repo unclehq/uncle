@@ -43,7 +43,8 @@ repair_begin() {
 # re-enters REPAIR -- either a partial pass (some findings changed, the
 # attempt counts, the rest are briefed) or a no-op pass (nothing changed, the
 # attempt is given back, one retry with the brief). 1: nothing changed twice
-# in a row; the run stops for a person.
+# in a row; with automatic repair on that spends the remaining passes and returns 6 (the caller goes to FINAL_AUDIT), otherwise
+# the run stops for a person.
 repair_judge() {
     local report unrepaired status=0 noops count
     report="$(cat "$STATE_DIR/repair-source")"
@@ -103,6 +104,14 @@ repair_judge() {
     printf '%s\n' "$count" > "$STATE_DIR/repair-count"
     noops="$(cat "$STATE_DIR/repair-noop-count" 2>/dev/null || printf 0)"
     case "$noops" in ''|*[!0-9]*) noops=0 ;; esac
+    if [[ "$noops" -ge 1 && "${WORKFLOW_REPAIR:-1}" == 1 && "${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-0}" -ge 1 ]]; then
+        # Two repair passes are all there is. A pass that changed nothing was still a pass: the findings stand (typically a protected
+        # file or an authority the repair may not touch), so the remaining attempts are spent and the final audit reads them.
+        echo "That is the second pass in a row that changed nothing. The repair passes are used up; the final audit will read what is still open."
+        printf '%s\n' "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" > "$STATE_DIR/repair-count"
+        rm -f "$STATE_DIR/repair-retry" "$STATE_DIR/repair-noop-count" "$STATE_DIR/REPAIR_BRIEF.md"
+        return 6
+    fi
     if [[ "$noops" -ge 1 ]]; then
         echo "That is the second pass in a row that changed nothing. Stopping for a person:"
         echo "resolve the findings in $report by hand, or set repair.model in .uncle/config"

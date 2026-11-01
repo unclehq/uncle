@@ -6106,6 +6106,7 @@ while true; do
                         fi
                         ;;
                     3|5) continue ;;
+                    6) set_state FINAL_AUDIT; continue ;;
                     *) exit 1 ;;
                 esac
             fi

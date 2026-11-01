@@ -198,22 +198,24 @@ implementation_incomplete_choice || status=$?
 echo "CHOICE_RETURNED $status"
 HARNESS
 
-# Prompt #1: an unevaluable (malformed) acceptance contract. Unattended must
-# repair it (return 3) rather than wait -- the rebuilt spec/plan still pass
-# through human_gate's own unattended path, so nothing here skips review.
+# Prompt #1: an unevaluable (malformed) acceptance contract. Planning runs once, so unattended must neither wait nor restart ANALYZE (a
+# second change-plan): it continues (return 2) and the final audit reads the unevaluated contract.
 printf 'not a well formed row\n' > "$ic/.uncle/workflow/implementation-completion.txt"
 touch "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" "$ic/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+: > "$ic/.uncle/workflow/hooks"
 out="$(cd "$ic" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
-check "ic-malformed-returns" "CHOICE_RETURNED 3" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
-if [[ -e "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" ]]; then
-    bad "ic-malformed-clears-approval" "the stale CHANGE_SPEC approval was not cleared"
+check "ic-malformed-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+if grep -q 'STATE ANALYZE' "$ic/.uncle/workflow/hooks"; then
+    bad "ic-malformed-never-replans" "an unevaluable contract sent the run back to ANALYZE (a second change-plan)"
 else ok; fi
+if [[ -e "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" && -e "$ic/.uncle/workflow/approvals/CHANGE_PLAN.sha256" ]]; then ok
+else bad "ic-malformed-keeps-approvals" "the approved spec and plan were discarded"; fi
 case "$out" in
-    *"repair"*"the acceptance contract"*"[repair/stop]"*) bad "ic-malformed-no-prompt" "the human prompt was printed anyway" ;;
+    *"[continue/stop]"*) bad "ic-malformed-no-prompt" "the human prompt was printed anyway" ;;
     *) ok ;;
 esac
 if grep -q "implementation-incomplete" "$ic/.uncle/workflow/unattended-gates" 2>/dev/null; then ok
-else bad "ic-malformed-ledger" "the repair decision was not written to the unattended ledger"; fi
+else bad "ic-malformed-ledger" "the decision was not written to the unattended ledger"; fi
 
 # Prompt #2: well-formed rows rejected after one automatic repair already ran.
 # Unattended must waive (return 2, terminating) rather than auto-retry, which
@@ -284,14 +286,21 @@ printf 'bad row\n' > "$ic/.uncle/workflow/implementation-completion.txt"
 touch "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" "$ic/.uncle/workflow/approvals/CHANGE_PLAN.sha256" \
     "$ic/.uncle/workflow/implementation-completion-repair"
 : > "$ic/.uncle/workflow/hooks"
-out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< repair 2>&1)"
-check "ic-attended-repair-order" "INVALIDATE CHANGE_SPEC
-STATE ANALYZE
-CHOICE_RETURNED 3" "$(cat "$ic/.uncle/workflow/hooks"; printf '%s' "$out" | grep '^CHOICE_RETURNED ')"
-for cleared in approvals/CHANGE_SPEC.sha256 approvals/CHANGE_PLAN.sha256 implementation-completion-repair; do
-    if [[ -e "$ic/.uncle/workflow/$cleared" ]]; then bad "ic-repair-clears-$cleared" "stale file remains"
-    else ok; fi
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< continue 2>&1)"
+check "ic-attended-continue" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep -o 'CHOICE_RETURNED [0-9]*' || printf 'no result; output: %s' "$out")"
+if grep -q 'STATE ANALYZE\|INVALIDATE' "$ic/.uncle/workflow/hooks"; then
+    bad "ic-attended-never-replans" "attended continue restarted planning"
+else ok; fi
+for kept in approvals/CHANGE_SPEC.sha256 approvals/CHANGE_PLAN.sha256; do
+    if [[ -e "$ic/.uncle/workflow/$kept" ]]; then ok; else bad "ic-continue-keeps-$kept" "the approval was discarded"; fi
 done
+# The old answer that rebuilt the plan is no longer offered: it is refused, and with no further answer the run stays pending.
+: > "$ic/.uncle/workflow/hooks"
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< repair 2>&1)"
+check "ic-attended-repair-refused" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep -o 'CHOICE_RETURNED [0-9]*')"
+if grep -q 'STATE ANALYZE' "$ic/.uncle/workflow/hooks"; then bad "ic-repair-never-replans" "'repair' restarted planning"; else ok; fi
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< stop 2>&1)"
+check "ic-attended-stop" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep -o 'CHOICE_RETURNED [0-9]*')"
 
 # --- the issue stays open ---------------------------------------------------
 

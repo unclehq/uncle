@@ -13,39 +13,23 @@
 # and the final audit reads both.
 change_implementation_incomplete_choice() {
     local completion="$STATE_DIR/implementation-completion.txt" ids="" answer
-    # A malformed acceptance contract is not an implementation failure.  There
-    # are no rows a person can waive and another implementation attempt reads
-    # exactly the same broken contract, so offering the normal choices creates
-    # an infinite, misleading prompt loop.  Send it back through the existing
-    # specification-and-plan approval path instead.
-    #
-    # [a-z]?: one optional trailing letter for a closely related sub-criterion
-    # (AC-4b) -- implementation-completion.py accepts the same id shape (issue
-    # 97: rejecting it here sent an otherwise-evaluable, ordinary rejected row
-    # through this same "cannot be evaluated" branch, a full ANALYZE restart,
-    # every time this one id recurred).
+    # A contract the driver cannot evaluate (the notes have no acceptance rows, or rows in another shape) is not an implementation
+    # failure: there are no rows a person can waive, and another attempt reads the same contract. It used to send the run back to
+    # ANALYZE, which runs the whole planning pass again -- a second change-plan, and with it a second adversarial review and updated
+    # plan, for a change that had nothing left to implement. Planning runs once. The run goes on with the rows as they are: the
+    # verification, the test review and the final audit read what is and is not delivered, and say so.
     if [[ -s "$completion" ]] && grep -qvE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
         echo
-        echo 'The approved acceptance contract cannot be evaluated; implementation cannot repair it.'
-        echo 'Repair rebuilds .uncle/docs/CHANGE_SPEC.md and .uncle/docs/CHANGE_PLAN.md from the request and baseline, then asks for approval again.'
+        echo 'The acceptance contract cannot be evaluated from the implementation notes: no acceptance rows could be read.'
+        sed 's/^/  /' "$completion"
+        echo 'Planning is not run again. The run continues; the final audit reads the unevaluated contract as it stands.'
         if [[ "${UNATTENDED:-0}" == 1 ]]; then
-            # Auto mode means human gates do not block progress. Repair is the
-            # corrective action here, not a concession like a waiver -- it
-            # rebuilds the contract and the rebuilt spec/plan still pass
-            # through human_gate's own unattended path, so nothing here skips
-            # review, it just avoids parking the run on a malformed contract
-            # nobody is present to answer for.
-            record_unattended_gate implementation-incomplete "repair the unevaluable acceptance contract without human review"
-            echo "Unattended: repairing the acceptance contract; no person authorized this."
-            rm -f "$APPROVAL_DIR/CHANGE_SPEC.sha256" "$APPROVAL_DIR/CHANGE_PLAN.sha256" \
-                "$STATE_DIR/implementation-completion-repair"
-            envelope_invalidate CHANGE_SPEC
-            set_state ANALYZE
-            return 3
+            record_unattended_gate implementation-incomplete "continued: the acceptance contract could not be evaluated; planning is not repeated"
+            return 2
         fi
         while true; do
             UNCLE_GATE_CLASS="sensitive:waiver"
-            gate_prompt "Repair the acceptance contract or stop? [repair/stop]: "
+            gate_prompt "Continue with the contract unevaluated, or stop? [continue/stop]: "
             UNCLE_GATE_CLASS=""
             if ! { if declare -f gate_read > /dev/null; then gate_read answer; else IFS= read -r answer; fi; }; then
                 echo
@@ -53,22 +37,12 @@ change_implementation_incomplete_choice() {
                 return 1
             fi
             case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
-                repair|r|retry)
-                    # `retry` remains an alias for people responding from an
-                    # older dialog, but it deliberately repairs the contract
-                    # instead of wasting another implementation attempt.
-                    rm -f "$APPROVAL_DIR/CHANGE_SPEC.sha256" "$APPROVAL_DIR/CHANGE_PLAN.sha256" \
-                        "$STATE_DIR/implementation-completion-repair"
-                    envelope_invalidate CHANGE_SPEC
-                    set_state ANALYZE
-                    echo 'Repairing the acceptance contract before implementation can continue.'
-                    return 3
-                    ;;
+                c|continue) return 2 ;;
                 s|stop|'')
                     echo "Run remains pending at IMPLEMENT."
                     return 1
                     ;;
-                *) echo "Answer repair or stop." ;;
+                *) echo "Answer continue or stop." ;;
             esac
         done
     fi

@@ -973,9 +973,12 @@ def prepare_structure_repair(plan_path, project, directory, problem):
     directory.mkdir(parents=True, exist_ok=True)
     plan = base.read_json(plan_path)
     model = plan_model_of(plan, plan_path)
-    name = Path(plan_path).stem + '.md'
+    # A publication rejection has not written a human-facing plan yet. Inspect
+    # this exact candidate privately rather than a stale published Markdown view.
+    view = directory / 'candidate-view.md'
+    view.write_text(plan.get('narrative') or pm.render(model), encoding='utf-8')
     protected = (plan.get('protected_verification_paths') or '').splitlines()
-    gaps = unowned_protected_paths(Path(project) / '.uncle/docs' / name, project, protected)
+    gaps = unowned_protected_paths(view, project, protected)
     operations, unresolved = ownership_ops(plan, model, gaps)
     if operations:
         plan, model = repair_plan(plan, model, operations)

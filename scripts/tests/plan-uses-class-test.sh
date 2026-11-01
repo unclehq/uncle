@@ -68,7 +68,7 @@ composed() {   # the prompt gated_prompt builds for the plan stage, run for real
 }
 put '{"family": "app", "class": "small"}'
 [[ "$(composed)" == *"Build class (binding)"* ]] || bad "a small application's plan prompt has no budget"
-[[ "$(composed)" == *"at most 12 implementation steps and 30 owned files"* ]] || bad "the budget paragraph does not state the limits"
+[[ "$(composed)" == *"at most 8 implementation steps and 15 owned files"* ]] || bad "the budget paragraph does not state the limits"
 put '{"family": "app", "class": "standard"}'
 [[ "$(composed)" == *"Build class (binding)"* ]] && bad "a standard application's plan prompt must not get the small budget"
 rm -f .uncle/workflow/change-class.json

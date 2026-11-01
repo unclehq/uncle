@@ -3,6 +3,7 @@ from process_tree import check_timeout, wait_check
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import glob
 import os
+import shutil
 from pathlib import Path
 import re
 import signal
@@ -57,6 +58,23 @@ def isolate_environment():
     for name in list(os.environ):
         if name.startswith(LEAKY_PREFIXES) and name not in KEEP_ENV and not name.startswith('UNCLE_TEST_'):
             del os.environ[name]
+    no_browser()
+
+
+def no_browser():
+    """A suite never opens a browser on the operator's machine.
+
+    The baseline and green-check runners execute these suites inside a live run, and the baseline starts beside the planning stage. A
+    test that drives stagegate.sh through its preview build, or the TUI's preview, would open a real tab there ('change-plan opened a
+    browser tab'): the preview build opens one by default, and clearing the launching run's WORKFLOW_* variables above also cleared
+    any WORKFLOW_PREVIEW_OPEN_BROWSER=0 it carried. Tests that check the opening replace webbrowser.open or set their own
+    environment, so they are unaffected.
+    """
+    os.environ['WORKFLOW_PREVIEW_OPEN_BROWSER'] = '0'
+    # Python's webbrowser honours $BROWSER, and its OS fallbacks (`open`, `xdg-open`) only run when webbrowser.open reports failure,
+    # which a command that exits 0 never does.
+    if os.name != 'nt':
+        os.environ['BROWSER'] = shutil.which('true') or 'true'
 
 
 # The files that bind a live workflow run to its issue. A suite has no business touching them, and when the runner is executing inside

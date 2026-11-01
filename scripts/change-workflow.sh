@@ -76,6 +76,10 @@ while [[ $# -gt 0 ]]; do
 done
 export UNCLE_UNATTENDED="$UNATTENDED"
 
+# A change request never opens a preview tab (uncle_tui.py's _early_preview_allowed says the same on its side). Everything this run starts,
+# an agent running a test that drives stagegate.sh included, inherits it.
+export WORKFLOW_PREVIEW_OPEN_BROWSER=0
+
 # Repair is a state of its own, as in stagegate.sh: a focused pass over the findings, judged on the files it changed. Two passes are all
 # there is. (stagegate.sh defaults an attended run to 0; this driver has always repaired twice attended or not, and keeps that.)
 WORKFLOW_REPAIR="${WORKFLOW_REPAIR:-1}"

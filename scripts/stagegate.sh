@@ -477,7 +477,11 @@ repair_exhausted() {
 # oracle included, still gets the checklists, which are how the application is actually observed in a browser; the audit then reads
 # their results beside the failure.
 test_review_next_stage() {
-    if repair_exhausted && [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]] \
+    # Once the checklist has run (VALIDATE_CHECKLIST marks it) the checklists are not run again: a repair that cannot proceed goes to
+    # the audit. Without this, REPAIR -> MANUAL_CHECKLIST -> VALIDATE_CHECKLIST -> REPAIR cycled with no agent call and no limit.
+    if [[ -e "$STATE_DIR/checklist-ran" ]]; then
+        printf FINAL_AUDIT
+    elif repair_exhausted && [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]] \
        && { ! declare -f green_application_not_runnable > /dev/null || green_application_not_runnable; }; then
         printf FINAL_AUDIT
     else
@@ -5943,7 +5947,8 @@ while true; do
                     # observed: they still run, and their rows go to the audit with the failure. Anything later (the checklist's
                     # own report) has had them already.
                     case "$(basename "$repair_source")" in
-                        TEST_REVIEW.md|green-check.md) set_state MANUAL_CHECKLIST ;;
+                        TEST_REVIEW.md|green-check.md)
+                            if [[ -e "$STATE_DIR/checklist-ran" ]]; then set_state FINAL_AUDIT; else set_state MANUAL_CHECKLIST; fi ;;
                         *) set_state FINAL_AUDIT ;;
                     esac
                     continue
@@ -6048,6 +6053,7 @@ while true; do
             run_green_check_auto || true
             plan_delivery_summary
             check_verification_inputs
+            rm -f "$STATE_DIR/checklist-ran"    # the tree changed: the checklists must observe it again
             set_state WAIT_IMPLEMENT_APPROVAL
             ;;
 
@@ -6129,6 +6135,7 @@ PY
             ;;
 
         VALIDATE_CHECKLIST)
+            : > "$STATE_DIR/checklist-ran"      # every route out of here has had the checklist run (see test_review_next_stage)
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi

@@ -139,11 +139,6 @@ def validate_json(project='.'):
             raise ValueError('invalid adversarial finding')
 
 
-def findings_json(project='.'):
-    """Structured findings for downstream workflow consumers."""
-    from pathlib import Path
-    return json.loads((Path(project)/'.uncle/workflow/documents/ADVERSARIAL_REVIEW.json').read_text(encoding='utf-8'))['findings']
-
 
 def render(project, family):
     root = Path(project).resolve()

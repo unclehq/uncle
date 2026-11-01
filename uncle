@@ -309,40 +309,6 @@ stage_env_var() {
         "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
 }
 
-effort_env_var() {
-    printf 'WORKFLOW_EFFORT_%s' \
-        "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
-}
-
-cmd_env_var() {
-    local prefix="WORKFLOW_AGENT_CMD_"
-    [[ "$(stage_side "$1")" == "reviewer" ]] && prefix="WORKFLOW_REVIEWER_CMD_"
-    printf '%s%s' "$prefix" \
-        "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
-}
-
-# The CLI that runs one stage. The two sides are not interchangeable: an agent
-# stage writes code, a reviewer stage must stay read-only, and codex has no
-# agent shim.
-runner_cmd() {
-    local runner="$1" side="$2"
-    if [[ "$side" == "reviewer" ]]; then
-        case "$runner" in
-            kimi)   printf '%s' "$ROOT/scripts/reviewer-kimi.sh" ;;
-            codex)  printf 'codex' ;;
-            claude) printf '%s' "$ROOT/scripts/reviewer-claude.sh" ;;
-            *)      uncle_unsupported_runner "$runner"; return 1 ;;
-        esac
-        return 0
-    fi
-    case "$runner" in
-        claude) printf 'claude' ;;
-        kimi)   printf '%s' "$ROOT/scripts/agent-kimi.sh" ;;
-        codex)  printf '%s' "$ROOT/scripts/agent-codex.sh" ;;
-        *)      uncle_unsupported_runner "$runner"; return 1 ;;
-    esac
-}
-
 # Read one stage's setting out of .uncle/config: `<stage>.<field> VALUE`.
 config_get() {
     local key="$1" line

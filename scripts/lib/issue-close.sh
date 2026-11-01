@@ -36,15 +36,6 @@ origin_fetch_method() {
     fi
 }
 
-# issue_close_timeout_cmd — `timeout`, `gtimeout`, or empty when neither exists.
-issue_close_timeout_cmd() {
-    if command -v timeout >/dev/null 2>&1; then
-        printf 'timeout'
-    elif command -v gtimeout >/dev/null 2>&1; then
-        printf 'gtimeout'
-    fi
-}
-
 # state_origin_agree <state_file> <origin_file>
 #
 # 0 when the state file's issue prefix and .uncle/workflow/origin's issue agree, when

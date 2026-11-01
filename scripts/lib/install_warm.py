@@ -145,16 +145,6 @@ def run(command, cwd, timeout):
         return 1
 
 
-def _kill_group(process):
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except OSError:
-        pass
-    try:
-        process.wait(timeout=5)
-    except Exception:
-        pass
-
 
 def usable(names):
     """The names npm knows, checked together.  One unknown name makes `npm install` of the lot fail and cache nothing."""

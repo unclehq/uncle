@@ -278,12 +278,6 @@ def render_adversarial(payload):
     rows += ['## Overall assessment', '', payload['overall_assessment'], '']
     return '\n'.join(rows)
 
-def parse_adversarial_response(text):
-    payload = json.loads(text)
-    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'adversarial-review':
-        raise ValueError('wrong adversarial-review JSON schema')
-    return payload
-
 REQUIREMENTS_SECTIONS = ('Required functionality', 'Optional functionality', 'Constraints',
                           'User-visible behaviors', 'System behaviors', 'Failure behaviors',
                           'Ambiguities', 'Assumptions', 'Explicit non-goals', 'Definition of done')
@@ -336,12 +330,6 @@ def render_final_audit(payload):
         raise ValueError('invalid final-audit verdict: ' + repr(verdict))
     rows.append(verdict)
     return '\n'.join(rows) + '\n'
-
-def parse_final_audit_response(text):
-    payload = json.loads(text)
-    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'final-audit':
-        raise ValueError('wrong final-audit JSON schema')
-    return payload
 
 ACCEPTANCE_STATUSES = ('PASS', 'FAIL', 'BLOCKED-SETUP', 'BLOCKED-HUMAN', 'BLOCKED-IMPOSSIBLE', 'NOT RUN', 'N/A')
 
@@ -614,6 +602,3 @@ def render_checklist(payload):
     if traceability and traceability.strip():
         out += ['## Traceability', '', traceability.strip(), '']
     return '\n'.join(out)
-
-def write_checklist(project, checks):
-    return write(project, 'MANUAL_CHECKLIST.md', {'schema':'uncle.artifact/v1', 'kind':'manual-checklist', 'checks':checks})

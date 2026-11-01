@@ -114,9 +114,6 @@ def filter_catalog(provider, catalog, taken=(), cap=CAP):
     return out
 
 
-def labels_for(catalog):
-    return {m["id"]: m["label"] for m in catalog}
-
 
 def merge(previous, refreshed):
     """Refreshed replaces previous wholesale unless empty."""
@@ -267,20 +264,6 @@ def fetch_claude(env=None, opener=None, which=shutil.which, timeout=CLAUDE_TIMEO
     except Exception as exc:
         return ("failed", [], "claude: %s" % type(exc).__name__)
 
-
-def refresh_all(fetchers, timeout=None):
-    """Run each fetcher (name -> callable) serially; never raises.
-
-    Returns {name: (status, catalog, reason)}. `timeout` is informational:
-    each fetcher enforces its own bound.
-    """
-    results = {}
-    for name, fn in fetchers.items():
-        try:
-            results[name] = fn()
-        except Exception as exc:
-            results[name] = ("failed", [], "%s: %s" % (name, type(exc).__name__))
-    return results
 
 
 GROUP_NAMES = {"claude": "Claude (live)", "codex": "Codex (live)", "kimi": "Kimi (live)"}

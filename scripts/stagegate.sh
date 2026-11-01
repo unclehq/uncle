@@ -3449,15 +3449,6 @@ early_checklist_fingerprint() {
         "$STATE_DIR/verification.manifest" 2>/dev/null
 }
 
-early_checklist_reusable() {
-    local current recorded
-    early_checklist_usable || return 1
-    [[ -s "$EARLY_CHECKLIST_FINGERPRINT_FILE" ]] || return 1
-    current="$(early_checklist_fingerprint)" || return 1
-    recorded="$(cat "$EARLY_CHECKLIST_FINGERPRINT_FILE")"
-    [[ -n "$current" && "$current" == "$recorded" ]]
-}
-
 early_checklist_start() {
     # Compatibility no-op for resumes carrying old marker files. Starting the
     # panel before green evidence exists duplicated browser/test work and made
@@ -3483,32 +3474,10 @@ early_execute_cancel() {
     rm -f "$EARLY_EXECUTE_PID_FILE" "$EARLY_EXECUTE_STATUS_FILE" "$EARLY_EXECUTE_OK_FILE"
 }
 
-early_checklist_join() {
-    [[ -n "$EARLY_CHECKLIST_PID" ]] || return 0
-    echo 'Waiting for the speculative MANUAL_CHECKLIST started during TEST_REVIEW...'
-    wait "$EARLY_CHECKLIST_PID" 2>/dev/null || true
-    EARLY_CHECKLIST_PID=""
-}
-
 early_checklist_usable() {
     [[ -e "$STATE_DIR/checklist-early.ok" ]] || return 1
     python3 -B "$ROOT/scripts/lib/checklist_document.py" --validate-json \
         "$STATE_DIR/documents/MANUAL_CHECKLIST.json" >/dev/null 2>&1 || return 1
-}
-
-early_execute_join() {
-    local pid=""
-    [[ -s "$EARLY_EXECUTE_PID_FILE" ]] || return 0
-    pid="$(cat "$EARLY_EXECUTE_PID_FILE")"
-    [[ "$pid" =~ ^[0-9]+$ ]] || return 0
-    echo 'Waiting for the speculative EXECUTE_CHECKLIST started during TEST_REVIEW...'
-    while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
-}
-
-early_execute_usable() {
-    [[ -e "$EARLY_EXECUTE_OK_FILE" ]] || return 1
-    [[ "$(cat "$EARLY_EXECUTE_STATUS_FILE" 2>/dev/null)" == 0 ]] || return 1
-    [[ -s "$STATE_DIR/documents/VERIFICATION_REPORT.json" && -s "$STATE_DIR/documents/DEFECTS.json" ]]
 }
 
 # `audit_review_call PROMPT NAME OUTPUT`: one final-audit lens on the reviewer runner (NAME is third on the command line for the deadline).

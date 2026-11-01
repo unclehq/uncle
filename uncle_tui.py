@@ -574,9 +574,6 @@ def stage_env_var(stage):
     return _env_name("WORKFLOW_MODEL_", stage)
 
 
-def stage_effort_var(stage):
-    return _env_name("WORKFLOW_EFFORT_", stage)
-
 
 def unsupported_runner_message(runner):
     runner = re.sub(r'[\x00-\x1f\x7f]', '', str(runner))[:64]
@@ -627,11 +624,6 @@ def runners_for(side):
             break
     return installed
 
-
-def stage_runner_var(stage):
-    prefix = ("WORKFLOW_REVIEWER_CMD_" if STAGE_SIDE.get(stage) == REVIEWER
-              else "WORKFLOW_AGENT_CMD_")
-    return _env_name(prefix, stage)
 
 
 def list_models():

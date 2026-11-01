@@ -29,9 +29,6 @@ _CHECK_HEADING = re.compile(r'^###\s+(MC-[A-Za-z0-9_-]+)\s*:', re.I)
 _CHECK_STATUS = re.compile(r'^\s*-\s+\*\*Status:\*\*\s+(PASS|FAIL|BLOCKED-(?:SETUP|HUMAN|IMPOSSIBLE)|NOT RUN|N/A)\s*$', re.I)
 
 
-def _role(cell, names):
-    return cell.strip().lower() in names
-
 
 def _table_at(lines, i):
     """(header_cells, row_start) if a Markdown table's header+separator sits

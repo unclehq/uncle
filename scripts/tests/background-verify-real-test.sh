@@ -32,7 +32,6 @@ WORKFLOW_GREEN_CHECK_REUSE=1
 awk '/^run_green_check\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"; . "$TMP/fn.sh"
 check_verification_inputs() { [[ "$(python3 -B "$ROOT/scripts/lib/verification_manifest.py" "$STATE_DIR/verification.paths" 2>/dev/null)" == "$(cat "$STATE_DIR/verification.manifest")" ]]; }
 parallel_groups_format_hint() { :; }
-early_checklist_start() { echo started >> "$STATE_DIR/early-started"; }
 record_nonblocking_failure() { printf '%s\t%s\n' "$1" "$2" >> "$STATE_DIR/nonblocking.tsv"; }
 record_test_failure_disposition() { :; }
 green_failed_ids() { :; }

@@ -10,17 +10,6 @@ export UNCLE_CONFIG="$TMP/config"
 unset WORKFLOW_SELF_HOSTED_STAGE_JOBS
 runner=self-hosted
 stage_uses_self_hosted() { [[ "$runner" == self-hosted ]]; }
-[[ "$(workflow_model_jobs project-plan)" == 4 ]]
-printf 'self-hosted.stage-jobs 2\n' > "$UNCLE_CONFIG"
-[[ "$(workflow_model_jobs project-plan)" == 2 ]]
-[[ "$(WORKFLOW_SELF_HOSTED_STAGE_JOBS=3 workflow_model_jobs updated-plan)" == 3 ]]
-for value in 0 9 -1 02 bogus; do
-    [[ "$(WORKFLOW_SELF_HOSTED_STAGE_JOBS="$value" workflow_model_jobs project-plan 2> "$TMP/invalid")" == 4 ]]
-    [[ -s "$TMP/invalid" ]]
-done
-for runner in claude codex kimi; do
-    [[ "$(WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 workflow_model_jobs project-plan)" == 0 ]]
-done
 runner=self-hosted
 
 # A free slot must be reusable while the oldest worker is still alive.

@@ -328,9 +328,7 @@ on_exit() {
     local rc=$?
     if declare -f workflow_model_cancel > /dev/null; then workflow_model_cancel; fi
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
-    if declare -f early_checklist_cancel > /dev/null; then early_checklist_cancel; fi
     if declare -f manual_checklist_draft_cancel > /dev/null; then manual_checklist_draft_cancel; fi
-    if declare -f early_execute_cancel > /dev/null; then early_execute_cancel; fi
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
@@ -3421,11 +3419,6 @@ manual_checklist_reconcile() {
 # Checklist work consumes a completed driver green-check. The browser/server
 # may be prewarmed while test review runs, but manual or execute workers never
 # run against a PENDING verification placeholder.
-EARLY_CHECKLIST_PID=""
-EARLY_CHECKLIST_FINGERPRINT_FILE="$STATE_DIR/checklist-early.fingerprint"
-EARLY_EXECUTE_PID_FILE="$STATE_DIR/execute-checklist.early.pid"
-EARLY_EXECUTE_STATUS_FILE="$STATE_DIR/execute-checklist.early.status"
-EARLY_EXECUTE_OK_FILE="$STATE_DIR/execute-checklist.early.ok"
 prewarm_checklist_browser() {
     [[ "${UNATTENDED:-0}" == 1 ]] || return 0
     [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]] || return 0
@@ -3435,49 +3428,6 @@ prewarm_checklist_browser() {
     # turning a compiler failure into browser worker churn.
     python3 -B "$ROOT/scripts/lib/app_server.py" prewarm "$PWD" "$STATE_DIR" \
         > "$LOG_DIR/app-server.prewarm.log" 2>&1 < /dev/null &
-}
-
-# The PID above only lives for this shell.  A test-review format retry, an
-# unattended resume, or a report-only reconciliation can re-enter
-# TEST_REVIEW after the speculative checklist has completed.  Keep a durable
-# identity for the packet so those control-flow retries do not spend the same
-# checklist workers a second time.  tree_fingerprint deliberately includes
-# untracked source/test files and excludes workflow artifacts, dependencies,
-# and Git metadata.
-early_checklist_fingerprint() {
-    python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" \
-        "$STATE_DIR/verification.manifest" 2>/dev/null
-}
-
-early_checklist_start() {
-    # Compatibility no-op for resumes carrying old marker files. Starting the
-    # panel before green evidence exists duplicated browser/test work and made
-    # its results impossible to ground in the driver verification result.
-    :
-}
-
-early_checklist_cancel() {
-    if [[ -n "$EARLY_CHECKLIST_PID" ]] && kill -0 "$EARLY_CHECKLIST_PID" 2>/dev/null; then
-        kill "$EARLY_CHECKLIST_PID" 2>/dev/null || true
-        wait "$EARLY_CHECKLIST_PID" 2>/dev/null || true
-    fi
-    EARLY_CHECKLIST_PID=""
-}
-
-early_execute_cancel() {
-    local pid=""
-    [[ -s "$EARLY_EXECUTE_PID_FILE" ]] && pid="$(cat "$EARLY_EXECUTE_PID_FILE")"
-    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" 2>/dev/null || true
-        while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
-    fi
-    rm -f "$EARLY_EXECUTE_PID_FILE" "$EARLY_EXECUTE_STATUS_FILE" "$EARLY_EXECUTE_OK_FILE"
-}
-
-early_checklist_usable() {
-    [[ -e "$STATE_DIR/checklist-early.ok" ]] || return 1
-    python3 -B "$ROOT/scripts/lib/checklist_document.py" --validate-json \
-        "$STATE_DIR/documents/MANUAL_CHECKLIST.json" >/dev/null 2>&1 || return 1
 }
 
 # `audit_review_call PROMPT NAME OUTPUT`: one final-audit lens on the reviewer runner (NAME is third on the command line for the deadline).

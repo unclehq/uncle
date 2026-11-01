@@ -205,9 +205,3 @@ issue_close_eligible() {
 
     return 0
 }
-
-# Compatibility entry point for older callers. Direct issue closing was removed.
-issue_close_if_ready() {
-    echo "Direct issue closing is disabled; issues remain open until PR merge."
-    return 0
-}

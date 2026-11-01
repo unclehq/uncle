@@ -417,7 +417,8 @@ def render_block(block):
     if kind == 'steps':
         out = []
         for step in block['items']:
-            head = ('**%s** — %s' % (step['title'], step['text']) if step['title'] else step['text']).rstrip(' —')
+            head = ('**%s**%s' % (step['title'], ' — ' + step['text'] if step['text'] else '')
+                    if step['title'] else step['text']).rstrip()
             first, *rest = head.split('\n')
             out.append('%d. %s' % (step['number'], first))
             out += ['   ' + line for line in rest]

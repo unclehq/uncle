@@ -105,3 +105,16 @@ itself lists, the list is right and the count is the defect. Do not change the i
 wrong number. Fix the assertion to derive its count from the list when the test is yours to change; when the
 test is a protected path, leave the implementation alone and report which side the plan's list supports.
 
+
+## Startup failures and repeated timeouts
+
+A successful compilation does not prove the application starts. When checks wait
+for missing UI, unavailable endpoints, or a process that exited, reproduce startup
+using the project's existing runtime and capture the first exception or startup
+log before retrying the full suite. For browser projects capture page errors and
+failed module requests; for CLI/services inspect exit status and stderr. Diagnose
+the actual source or build configuration, using the installed toolchain's module
+contracts. Do not add a framework or browser dependency to unrelated projects.
+Repair the cause, verify startup and the failing behavior, then let the driver
+rerun all approved checks. Never hide exceptions, skip assertions, extend timeouts
+to mask a broken startup, or claim unexecuted tests passed after fail-fast.

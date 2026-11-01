@@ -7730,7 +7730,12 @@ class UncleTUI:
         return changed
 
     def _run_loop(self):
-        curses.curs_set(0)
+        # Some valid terminals cannot hide the cursor. That cosmetic capability
+        # must not discard a --application startup action or abort an unattended run.
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
         self.stdscr.keypad(True)
         self.input_timeout = 80
         self.stdscr.timeout(self.input_timeout)

@@ -21,6 +21,29 @@ console.log('ok');
 
 @unittest.skipUnless(HAS_NODE, 'node is not installed')
 class Runner(unittest.TestCase):
+    def test_environment_ports_and_outputs_are_isolated_for_controls_and_mutants(self):
+        log = self.root / 'ports.jsonl'
+        (self.root / 'tests/check.mjs').write_text("""import fs from 'node:fs';
+import net from 'node:net';
+import {add} from '../src/a.js';
+const server=net.createServer();
+server.listen(Number(process.env.TEST_PORT), '127.0.0.1', () => {
+  fs.appendFileSync(process.env.PORT_LOG, JSON.stringify({port:server.address().port, output:process.env.TEST_OUTPUT_DIR})+'\\n');
+  setTimeout(()=>server.close(()=>{if(add(2,3)!==5){console.error('FAIL arithmetic');process.exit(1);}}),150);
+});
+""")
+        self.entries({'id':'DI-1','file':'src/a.js','find':'a + b','replace':'a - b',
+                      'command':'node tests/check.mjs first'},
+                     {'id':'DI-2','file':'src/a.js','find':'a + b','replace':'a * b',
+                      'command':'node tests/check.mjs second'})
+        done = self.run_runner(env={'PORT_LOG':str(log), 'TEST_PORT':'4174', 'TEST_OUTPUT_DIR':'shared'})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(len({row['port'] for row in rows}), 4)
+        self.assertEqual(len({row['output'] for row in rows}), 4)
+        self.assertNotIn(4174, [row['port'] for row in rows])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -45,6 +68,30 @@ class Runner(unittest.TestCase):
 
     def summary(self):
         return json.loads((self.root / '.test-out/mutations.json').read_text())
+
+    def test_nested_package_uses_its_runner_and_links_its_dependencies(self):
+        import os
+        app = self.root / "nested app"
+        (app/'src').mkdir(parents=True)
+        (app/'tests').mkdir()
+        (app/'package.json').write_text('{"type":"module"}')
+        (app/'playwright.config.js').write_text('export default {}')
+        (app/'src/a.js').write_text(SOURCE)
+        dependency = app/'node_modules/oracle'
+        dependency.mkdir(parents=True)
+        (dependency/'package.json').write_text('{"type":"module","exports":"./index.js"}')
+        (dependency/'index.js').write_text('export default 5;')
+        (app/'tests/example.spec.js').write_text("import expected from 'oracle';\n" + CHECK.replace('!== 5', '!== expected'))
+        binpath = self.root/'bin'
+        binpath.mkdir()
+        fake = binpath/'npx'
+        fake.write_text('#!/bin/sh\n[ "$1 $2" = "playwright test" ] || exit 99\nshift 2\nexec node "$@"\n')
+        fake.chmod(0o755)
+        self.entries({'id':'DI-NESTED','file':'nested app/src/a.js', 'find':'a + b',
+                      'replace':'a - b', 'spec':'nested app/tests/example.spec.js', 'command':None})
+        result = self.run_runner(env={'PATH':str(binpath)+os.pathsep+os.environ['PATH']})
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('CAUGHT', result.stdout)
 
     def test_a_defect_the_tests_catch_passes_the_run(self):
         self.entries({'id': 'DI-1', 'file': 'src/a.js', 'find': 'a + b', 'replace': 'a - b'})

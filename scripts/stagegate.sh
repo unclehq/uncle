@@ -98,14 +98,10 @@ case "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" in
     ''|*[!0-9]*) echo "WORKFLOW_AUTO_REPAIR_ATTEMPTS must be an integer from 0 to 100." >&2; exit 1 ;;
 esac
 
-# A new application build does not repair. Every other stage already records what it finds, and a repair
-# has repeatedly cost more than it returned: it spent a pass on a harness defect the driver should have
-# fixed (a mangled `wait` flag, an include glob in vite.config.js the mechanical fixer did not read), it
-# stopped the run outright on a defect in a protected file it may not touch, and a second pass that changed
-# nothing ends the run. With repair off, a failure is written to the unresolved-evidence ledger
-# (nonblocking-test-failures.tsv), the run goes on to the final audit, and the audit reports it. Nothing is
-# marked PASS. WORKFLOW_REPAIR=1 restores the bounded repair stage.
-WORKFLOW_REPAIR="${WORKFLOW_REPAIR:-0}"
+# New applications get the same bounded source repair opportunity as other
+# failed verification. Explicit WORKFLOW_REPAIR=0 remains an opt-out; exhausted
+# runtime-readiness repairs still stop instead of declaring a broken app ready.
+WORKFLOW_REPAIR="${WORKFLOW_REPAIR:-1}"
 if [[ "$WORKFLOW_REPAIR" != 1 ]]; then
     WORKFLOW_AUTO_REPAIR=0
     WORKFLOW_AUTO_REPAIR_ATTEMPTS=0
@@ -1368,6 +1364,12 @@ route_unrunnable_application() {
         # repair budget is already spent, the run must stop for a person
         # (the existing default branch below), not silently skip the whole
         # checklist pipeline with zero evidence the app works at all.
+        {
+            printf '# Application startup verification failed\n\n'
+            printf 'Repair the startup failure before browser/checklist verification.\n'
+            printf 'Driver command results: `%s`\nFull execution evidence: `%s/green-check.log`\n\n' "$GREEN_MD" "$LOG_DIR"
+            [[ ! -f "$GREEN_MD" ]] || cat "$GREEN_MD"
+        } > "$STATE_DIR/runtime-unrunnable-application"
         printf '%s\n' "$STATE_DIR/runtime-unrunnable-application" > "$STATE_DIR/repair-source"
         echo 'The application cannot render or its configured test runner did not execute tests; repairing once before browser/checklist work.'
         set_state REPAIR
@@ -3724,6 +3726,12 @@ run_parallel_checklist_workers() {
         case "$lane_file" in /*) ;; *) lane_file="$PWD/$lane_file" ;; esac
         mkdir -p "$(dirname "$lane_file")"
         if lane_count="$(checklist_lane_batches "$checklist_input" "$lane_file")"; then
+            if [[ "$lane_count" -eq 0 ]]; then
+                echo 'Checklist lanes: no required checks; recording an empty worker packet.'
+                python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$(dirname "$lane_file")" \
+                    "$workers_output" --expected
+                return $?
+            fi
             # A single lane is still execution work.  Sending it to the
             # parent makes the stage appear workerless and asks a full-context
             # synthesis agent to repeat the browser session.  Dispatch one
@@ -5488,6 +5496,7 @@ while true; do
             plan_before_write || plan_status=$?
             case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
             [[ "$plan_status" == 22 ]] || run_stage IMPLEMENT
+            python3 -B "$ROOT/scripts/lib/completion_preview.py" --normalize "$PWD" || exit 1
             plan_status=0
             plan_after_write || plan_status=$?
             case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
@@ -5606,6 +5615,8 @@ while true; do
             # with this wait), then materialize
             # the driver-owned report they consume.  Checklist stages still
             # reuse this completed result and never rerun these commands.
+            # Resume interrupted verification; matching completed evidence is reused.
+            run_green_check_auto || true
             green_wait_final || {
                 echo 'Driver verification did not publish final evidence before test review.' >&2
                 exit 1

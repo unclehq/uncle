@@ -40,3 +40,4 @@ VERIFICATION_REPORT.md
 
 # A test run from this directory once left a whole .uncle/workflow here (and committed it).
 scripts/tests/.uncle/
+.uncle

@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# A new application build does not repair (WORKFLOW_REPAIR, default 0): a failure goes to the unresolved-evidence
-# ledger and the run continues to the final audit, nothing is marked PASS, and no route enters the REPAIR state.
-# WORKFLOW_REPAIR=1 restores the bounded repair stage.
+# Automatic repair is enabled by default; an explicit opt-out preserves unresolved evidence.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="${NO_REPAIR_TEST_SCRIPT:-$ROOT/scripts/stagegate.sh}"   # an override lets a mutated copy be tested without touching the real file
@@ -11,22 +9,22 @@ fails=0
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 
 # --- the switch and what it forces ---------------------------------------------------------------------------
-config="$(awk '/^WORKFLOW_REPAIR="\$\{WORKFLOW_REPAIR:-0\}"/{p=1} p{print} p&&/^fi$/{exit}' "$SCRIPT")"
+config="$(awk '/^WORKFLOW_REPAIR="\$\{WORKFLOW_REPAIR:-1\}"/{p=1} p{print} p&&/^fi$/{exit}' "$SCRIPT")"
 check "the WORKFLOW_REPAIR switch exists" test -n "$config"
 settings() {   # env assignments... -> "AUTO ATTEMPTS"
     env -i bash --norc --noprofile -c "$(printf '%s\n' "$@" "UNATTENDED=1" "WORKFLOW_AUTO_REPAIR=\${WORKFLOW_AUTO_REPAIR:-1}" \
         'if [[ -z "${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-}" ]]; then WORKFLOW_AUTO_REPAIR_ATTEMPTS=2; fi' "$config" \
         'echo "$WORKFLOW_AUTO_REPAIR $WORKFLOW_AUTO_REPAIR_ATTEMPTS"')"
 }
-check "default: auto repair is off and no attempts remain" test "$(settings)" == "0 0"
-check "default: an explicit attempt count cannot bring it back" test "$(settings 'WORKFLOW_AUTO_REPAIR_ATTEMPTS=3' 'WORKFLOW_AUTO_REPAIR=1')" == "0 0"
+check "default: bounded auto repair is enabled" test "$(settings)" == "1 2"
+check "explicit opt-out overrides attempt count" test "$(settings 'WORKFLOW_REPAIR=0' 'WORKFLOW_AUTO_REPAIR_ATTEMPTS=3' 'WORKFLOW_AUTO_REPAIR=1')" == "0 0"
 check "WORKFLOW_REPAIR=1 leaves the repair settings alone" test "$(settings 'WORKFLOW_REPAIR=1')" == "1 2"
 
 # --- the unrunnable-application route, run for real -----------------------------------------------------------
 route() {   # env assignments... -> "rc state-list ledger-lines"
     local out
     out="$(env -i bash --norc --noprofile -c "$(printf '%s\n' "$@")
-        STATE_DIR='$TMP/state'; mkdir -p \"\$STATE_DIR\"; : > \"\$STATE_DIR/states\"; : > \"\$STATE_DIR/ledger\"; rm -f \"\$STATE_DIR/runtime-unrunnable-recorded\"
+        GREEN_MD='$TMP/green.md'; LOG_DIR='$TMP/logs'; STATE_DIR='$TMP/state'; mkdir -p \"\$STATE_DIR\"; : > \"\$STATE_DIR/states\"; : > \"\$STATE_DIR/ledger\"; rm -f \"\$STATE_DIR/runtime-unrunnable-recorded\"
         $(awk '/^route_unrunnable_application\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$SCRIPT")
         green_application_not_runnable() { return 0; }
         reconcile_scaffold_mismatches() { return 1; }

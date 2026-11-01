@@ -77,6 +77,14 @@ def good_files(directory, trace=True):
 
 
 class Assemble(unittest.TestCase):
+    def test_implementation_receives_the_outline_contract_in_the_final_plan(self):
+        good_files(self.dir)
+        (Path(self.dir) / 'outline.md').write_text(OUTLINE + '\nExact export: calculateTotal; display selector: result-panel\n')
+        text = sections.assemble(self.dir)
+        self.assertIn('Exact export: calculateTotal; display selector: result-panel', text)
+        self.assertIn('### Binding planning outline', text)
+        self.assertEqual(text.count('## Verification commands'), 1)
+
     def setUp(self):
         self.dir = tempfile.mkdtemp()
 

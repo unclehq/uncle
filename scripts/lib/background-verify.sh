@@ -162,6 +162,7 @@ run_green_check_auto() {
     green_background_enabled || { run_green_check; return; }
     local now remembered
     verify_commands .uncle/docs/UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS" 2>/dev/null || true
+    python3 -B "$ROOT/scripts/lib/install_command.py" normalize "$GREEN_CMDS" . > /dev/null 2>&1 || true
     now="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
     if green_pending && [[ -n "$now" && "$now" == "$(cat "$STATE_DIR/green-background/start.fingerprint" 2>/dev/null)" ]]; then
         echo 'Verification is already running in the background for this tree.'

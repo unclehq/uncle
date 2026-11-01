@@ -1311,6 +1311,12 @@ run_parallel_checklist_workers() {
         case "$lane_file" in /*) ;; *) lane_file="$PROJECT_ROOT/$lane_file" ;; esac
         mkdir -p "$(dirname "$lane_file")"
         if lane_count="$(checklist_lane_batches "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$lane_file")"; then
+            if [[ "$lane_count" -eq 0 ]]; then
+                echo 'Checklist lanes: no required checks; recording an empty worker packet.'
+                python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$(dirname "$lane_file")" \
+                    "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" --expected
+                return $?
+            fi
             # One shared-resource lane still belongs to an execution worker.
             # The parent only collates its JSON packet; it must not rerun the
             # checks merely because there was no parallel sibling.
@@ -4063,6 +4069,7 @@ REPAIR
                 fi
             fi
 
+            python3 -B "$ROOT/scripts/lib/completion_preview.py" --normalize "$PWD" || exit 1
             check_scope_deviations
 
             # Whitespace tidying is cosmetic. Under `set -e` a bare call

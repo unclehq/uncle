@@ -184,7 +184,7 @@ def warm(names, state_dir=None):
         browser = 1
         summary = ['%d package(s) %s' % (len(names), 'cached' if status == 0 else 'not fully cached')]
         if wants_playwright(names) and status == 0 and shutil.which('npx'):
-            browser = run(['npx', '--no-install', 'playwright', 'install', 'chromium'], folder, 1200)
+            browser = run([sys.executable, str(Path(__file__).with_name('browser_setup.py')), 'chromium'], folder, 360)
             summary.append('chromium %s' % ('ready' if browser == 0 else 'not downloaded'))
         if marker and status == 0 and (not wants_playwright(names) or browser == 0):
             try:

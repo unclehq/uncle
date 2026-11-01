@@ -28,6 +28,17 @@ SUPPORT_URL = "https://github.com/unclehq/uncle"
 
 
 class SupportTests(unittest.TestCase):
+    def test_terminal_without_cursor_visibility_reaches_ui_setup(self):
+        import curses
+        ui = UncleTUI.__new__(UncleTUI)
+        ui.stdscr = Mock()
+        ui._setup_colors = Mock(side_effect=RuntimeError('reached UI setup'))
+        with patch('uncle_tui.curses.curs_set', side_effect=curses.error('unsupported')), \
+             patch('uncle_tui.curses.tigetstr', return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'reached UI setup'):
+                ui._run_loop()
+        ui.stdscr.keypad.assert_called_once_with(True)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

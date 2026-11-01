@@ -68,7 +68,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('directory', nargs='?')
     parser.add_argument('output', nargs='?')
-    parser.add_argument('--expected', nargs='+', required=True)
+    parser.add_argument('--expected', nargs='*', required=True)
     parser.add_argument('--validate', metavar='PACKET',
                         help='validate one worker packet without collating it')
     args = parser.parse_args()

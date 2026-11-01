@@ -5,6 +5,7 @@
 # recorded as an attributed deviation, and re-baselined -- without ever
 # spending the repair budget on a file REPAIR usually cannot even touch.
 set -euo pipefail
+WORKFLOW_REPAIR=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 temp="$(mktemp -d)"

@@ -56,3 +56,13 @@ worker's delivery file.
 The project is read-only. Never edit or repair its tests, application, package
 files or lockfiles. Every shell probe runs in a disposable scratch copy outside
 the project; use relative paths. Report failures as evidence, without fixing them.
+
+## Capability evidence belongs to its execution environment
+
+A sandboxed model tool and the workflow driver are different execution environments.
+An EPERM from a model's loopback probe proves only that this tool is restricted;
+it does not prove the driver-owned verification or app server cannot bind. Cite
+available driver setup/server evidence before diagnosing that capability. Do not
+ask to change the user's network configuration for a driver-owned check merely
+because the model sandbox denies it. If driver evidence is pending, record that
+limitation explicitly; do not invent either a successful probe or a platform blocker.

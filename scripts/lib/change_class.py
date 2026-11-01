@@ -202,6 +202,12 @@ RISK_SECTIONS = ('required_functionality', 'definition_of_done', 'failure_behavi
 # An application is small when the approved interpretation is: this many requirements and done-criteria, no risk keyword, and a
 # plan that did not balloon (a sparse brief can still be planned into dozens of files, and that is not small).
 APP_SMALL = {'requirements': 6, 'criteria': 8, 'steps': 12, 'files': 30}
+# What a small application's plan should actually look like (the limits above are only where it stops being small): a handful of
+# steps over a handful of files, and every section a fraction of its usual length. All thirteen plan headings are still written;
+# they are just terse.
+PLAN_TARGET = {'steps': 8, 'files': 15}
+PLAN_WORD_SCALE = 0.4
+PLAN_WORD_FLOOR = 80
 
 
 def interpretation(project):
@@ -446,10 +452,20 @@ def plan_budget(project):
     if data.get('class') != 'small' or data.get('family') == 'change':
         return ''
     return ('\n\n## Build class (binding)\n\nThis application was classified **small** from its approved requirements: few '
-            'requirements and done-criteria, nothing security-sensitive. Plan it as a small build: at most %d implementation '
-            'steps and %d owned files, sharing files between related work rather than scaffolding one file per idea. A plan '
-            'larger than that is reclassified and reviewed in full, so it costs more than the budget saves.\n'
-            % (APP_SMALL['steps'], APP_SMALL['files']))
+            'requirements and done-criteria, nothing security-sensitive. Plan it as a small build, and keep the plan small: aim for '
+            'at most %d implementation steps and %d owned files, sharing files between related work rather than scaffolding one '
+            'file per idea, and write every section tersely. A plan beyond %d steps or %d files is reclassified and reviewed in '
+            'full, so it costs more than the budget saves.\n'
+            % (PLAN_TARGET['steps'], PLAN_TARGET['files'], APP_SMALL['steps'], APP_SMALL['files']))
+
+
+def plan_word_scale(project='.'):
+    """How much to scale each plan section's word cap: PLAN_WORD_SCALE for a small application, else 1."""
+    try:
+        data = json.loads(_read(Path(project) / OUTPUT))
+    except ValueError:
+        return 1.0
+    return PLAN_WORD_SCALE if data.get('class') == 'small' and data.get('family') != 'change' else 1.0
 
 
 def get(project, key, default=''):

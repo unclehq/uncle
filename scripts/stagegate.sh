@@ -1181,13 +1181,9 @@ format_claude_stream() {
 . "$ROOT/scripts/lib/stage-runtime.sh"
 . "$ROOT/scripts/lib/stage-runtime-app.sh"
 
-# Automatic source repair is reserved for the configured local/self-hosted runner.
-# Resolve the repair stage itself: mixed-runner projects may configure it separately.
-if ! stage_uses_self_hosted repair AGENT; then
-    WORKFLOW_REPAIR=0
-    WORKFLOW_AUTO_REPAIR=0
-    WORKFLOW_AUTO_REPAIR_ATTEMPTS=0
-fi
+# Bounded automatic source repair is on for every runner, hosted or self-hosted (prompts/repair.md, or the investigate/format
+# split for a self-hosted model). It used to be reserved for the self-hosted runner, which meant a build with a fixable defect
+# (an error-state bug, a palette bug) ended NOT READY with nothing attempted. WORKFLOW_REPAIR=0 still opts out.
 
 
 

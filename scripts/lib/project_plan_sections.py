@@ -310,8 +310,22 @@ WORD_CAP = {'design': 350, 'state': 300, 'domain': 350, 'components': 450, 'step
             'invariants': 550, 'guards': 400, 'tests': 600, 'defects': 400, 'obligations': 400, 'flow': 300, 'commands': 200, 'closing': 400, 'trace': 400}
 
 
-def length_note(name):
+def scaled_cap(name):
+    """The section's word cap, scaled down for a small application (scripts/lib/change_class.py), never below a usable floor."""
     cap = WORD_CAP.get(name)
+    if not cap or name == 'commands':      # the verification commands must never be squeezed
+        return cap
+    try:
+        import change_class
+        scale = change_class.plan_word_scale()
+        floor = change_class.PLAN_WORD_FLOOR
+    except ImportError:
+        return cap
+    return cap if scale >= 1 else max(floor, int(cap * scale) // 10 * 10)
+
+
+def length_note(name):
+    cap = scaled_cap(name)
     return ('Keep your whole answer to about %d words: every row terse, no repetition of what the requirements or another worker '
             'already says. The stage waits for the longest answer.' % cap) if cap else ''
 

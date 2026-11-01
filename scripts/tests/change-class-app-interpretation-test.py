@@ -125,7 +125,7 @@ class AfterPlanning(unittest.TestCase):
         root = self.project(interpretation(), 9, 17)
         text = c.plan_budget(root)
         self.assertIn('classified **small**', text)
-        self.assertIn('at most %d implementation steps and %d owned files' % (c.APP_SMALL['steps'], c.APP_SMALL['files']), text)
+        self.assertIn('at most %d implementation steps and %d owned files' % (c.PLAN_TARGET['steps'], c.PLAN_TARGET['files']), text)
         for other in ('standard', 'large', 'risky'):
             self.assertEqual(c.plan_budget(self.project(interpretation(), 9, 17, cls=other)), '', other)
         self.assertEqual(c.plan_budget('/nonexistent'), '')

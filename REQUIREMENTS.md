@@ -37,8 +37,8 @@ that specific gates were executed and recorded.
 - Allow seeding a run from a GitHub issue via `from-issue.sh`, including
   `--new` and `--change` project-root modes.
 - Require an external reviewer CLI (default Codex CLI) for adversarial
-  review and manual-checklist creation, invoked via
-  `scripts/codex-review-plan.sh` and `scripts/codex-create-checklist.sh`.
+  review and manual-checklist creation, run by the drivers
+  (`stagegate.sh` and `change-workflow.sh`) as independent reviewer panels.
 
 ## User-visible behavior
 A user runs the launcher, the tool creates or resumes workflow state, and

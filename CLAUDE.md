@@ -88,9 +88,9 @@ After writing .uncle/docs/PROJECT_PLAN.md:
 
 This stage begins only after .uncle/docs/PROJECT_PLAN.md has a valid approval record.
 
-Invoke:
-
-./scripts/codex-review-plan.sh
+The driver runs the review itself: `stagegate.sh` starts the independent reviewer
+panel (one lens per reviewer, default Codex CLI) and collates its packets into
+.uncle/docs/ADVERSARIAL_REVIEW.md. There is no separate script to invoke.
 
 After .uncle/docs/ADVERSARIAL_REVIEW.md is created:
 
@@ -200,12 +200,15 @@ Failing review or acceptance rows return to a bounded repair stage. Repairs
 repeat driver checks, human diff approval, independent test review, and checklist
 execution. Missing prerequisites pause the run; they cannot become passes.
 
-After implementation and automated checks, invoke:
-
-./scripts/codex-create-checklist.sh
-
-The reviewer CLI must inspect the requirements, plans, source code, and
-automated-test report before creating .uncle/docs/MANUAL_CHECKLIST.md.
+The driver creates .uncle/docs/MANUAL_CHECKLIST.md; there is no separate script to
+invoke. Independent reviewers draft the checklist from the approved requirements
+and plan while implementation runs, so it does not share the implementation's
+assumptions. After implementation and the automated checks, a reconciler
+compares that draft with the built application, the test review and the driver's
+verification record, and only drops, corrects or adds checks with a stated reason
+(it may never loosen a check because the implementation fails it). If the draft is
+missing, stale or refused, the full reviewer panel writes the checklist from the
+requirements, plans, source code and automated-test report instead.
 
 ## Stage 7: Manual verification
 
@@ -348,9 +351,9 @@ After .uncle/docs/CHANGE_PLAN.md is created:
 
 This stage begins only after .uncle/docs/CHANGE_PLAN.md has a valid approval record.
 
-Invoke:
-
-./scripts/codex-review-plan.sh
+The driver runs the review itself: `change-workflow.sh` starts the independent
+reviewer panel and collates its packets into .uncle/docs/ADVERSARIAL_REVIEW.md.
+There is no separate script to invoke.
 
 After .uncle/docs/ADVERSARIAL_REVIEW.md is created:
 
@@ -385,11 +388,12 @@ stops at a human gate on the real diff.
 
 ### Stage 4: Manual verification
 
-After implementation and driver-initiated automated verification, invoke:
-
-./scripts/codex-create-checklist.sh
-
-The reviewer CLI creates .uncle/docs/MANUAL_CHECKLIST.md.
+After implementation and driver-initiated automated verification, the driver
+creates .uncle/docs/MANUAL_CHECKLIST.md (there is no separate script to invoke):
+reviewers draft it from the baseline, change spec and plan while implementation
+runs, and a reconciler compares the draft with the finished change and the
+driver's results, falling back to the full reviewer panel when the draft cannot
+be used.
 
 Execute every feasible critical item in .uncle/docs/MANUAL_CHECKLIST.md and write
 .uncle/docs/VERIFICATION_REPORT.md.

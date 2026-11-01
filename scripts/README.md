@@ -388,45 +388,12 @@ left as it is — hand edits survive a resume — and only the prompt is repeate
 `.uncle/workflow/lock`. The refusal names the exact command that clears the state
 deliberately; neither script ever clears it automatically.
 
-### `codex-review-plan.sh` — adversarial plan review (Stage 2)
-
-Runs the reviewer CLI against the approved `.uncle/docs/PROJECT_PLAN.md` and writes
-`.uncle/docs/ADVERSARIAL_REVIEW.md`.
-
-```sh
-./scripts/codex-review-plan.sh
-./scripts/codex-review-plan.sh -h
-./scripts/codex-review-plan.sh --help
-```
-
-Takes no positional arguments. Requires `REQUIREMENTS.md`, `.uncle/docs/PROJECT_PLAN.md`,
-and a matching approval record in `.uncle/workflow/approvals/PROJECT_PLAN.sha256`.
-Normally invoked by the driver; can be run by hand.
-
-### `codex-create-checklist.sh` — manual checklist generation (Stage 6)
-
-Runs the reviewer CLI against the approved `.uncle/docs/UPDATED_PROJECT_PLAN.md` and the
-automated-test report, and writes `.uncle/docs/MANUAL_CHECKLIST.md`.
-
-```sh
-./scripts/codex-create-checklist.sh
-./scripts/codex-create-checklist.sh -h
-./scripts/codex-create-checklist.sh --help
-```
-
-Takes no positional arguments. Requires `REQUIREMENTS.md`,
-`.uncle/docs/UPDATED_PROJECT_PLAN.md`, `.uncle/docs/AUTOMATED_TEST_REPORT.md`, and a matching approval
-record in `.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256`. Normally invoked
-by the driver; can be run by hand.
-
 ## Argument handling summary
 
 | Script | `-h` / `--help` | `--version` | Positional arguments | Unrecognized argument |
 |---|---|---|---|---|
 | `stagegate.sh` | usage, exit 0 | `0.1.0`, exit 0 | none | usage on **stderr**, exit 1 |
 | `change-workflow.sh` | usage, exit 0 | `0.1.0`, exit 0 | none | usage on **stderr**, exit 1 |
-| `codex-review-plan.sh` | usage, exit 0 | not supported | none | usage on **stderr**, exit 1 |
-| `codex-create-checklist.sh` | usage, exit 0 | not supported | none | usage on **stderr**, exit 1 |
 | `workflow.sh` | usage, exit 0 | not supported | exactly one subcommand | usage on **stdout**, exit 1 |
 | `from-issue.sh` | usage, exit 0 | not supported | issue number or URL, optional `--change` / `--new` / `--worktree` / `--worktree-dir PATH` / `--branch NAME` | usage on **stdout**, exit 1 |
 

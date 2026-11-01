@@ -416,8 +416,8 @@ by splitting large outputs, removing serial hand-offs and not repeating work.
 - A test (`checklist-lanes-test.py`) read the live noinit project's checklist and failed whenever that project was run again; it
   now uses a self-contained list of the same shape.
 
-Not done: wiring `verify_prewarm.py` (installs and the browser download during implementation, about 18 s of a 31 s green check);
-running resolvers as soon as their own writers finish; grouping findings by the ids they name; cache-friendly shared prompt prefixes.
+Not done: a verify prewarm (installs and the browser download during implementation, about 18 s of a 31 s green check; the
+unwired helper was removed); running resolvers as soon as their own writers finish; grouping findings by the ids they name; cache-friendly shared prompt prefixes.
 
 ## The implementation, test and verification loop (sixth noinit run)
 

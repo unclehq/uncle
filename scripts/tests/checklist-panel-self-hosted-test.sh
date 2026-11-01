@@ -47,6 +47,7 @@ run_codex() {
 }
 EOF
         printf '%s\n' '. "$ROOT/scripts/lib/workflow-paths-change.sh"'
+        printf '%s\n' '. "$ROOT/scripts/lib/change-class-stage.sh"'
         extract checklist_worker_codex
         extract run_checklist_panel
         printf 'run_checklist_panel base prompts/change/manual-checklist-base.md\necho PANEL_OK\n'

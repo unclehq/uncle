@@ -66,5 +66,73 @@ class Manifest(unittest.TestCase):
             self.assertIn('never one string', text, name)
 
 
+class Fallback(unittest.TestCase):
+    def project(self, launch, package=None, vite=None):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / '.uncle/workflow').mkdir(parents=True)
+        if launch is not None:
+            (root / '.uncle/launch.json').write_text(launch if isinstance(launch, str) else json.dumps(launch))
+        if package is not None:
+            (root / 'package.json').write_text(json.dumps(package))
+        if vite is not None:
+            (root / 'vite.config.js').write_text(vite)
+        return root
+
+    def test_the_vs_code_shape_from_the_second_calculator_run_is_repaired_in_place(self):
+        root = self.project({'version': '0.0.1', 'configurations': [{
+            'name': 'vite-dev', 'runtimeExecutable': 'npx', 'runtimeArgs': ['vite', '--port', '5173', '--strictPort'],
+            'port': 5173}]})
+        cp.repair_launch_manifest(root)
+        self.assertEqual(cp.launch_spec(root), {'kind': 'webpage', 'url': 'http://127.0.0.1:5173',
+                                                'command': ['npx', 'vite', '--port', '5173', '--strictPort']})
+        self.assertFalse((root / '.uncle/launch.json.invalid').exists())
+
+    def test_an_unrepairable_file_is_replaced_by_one_derived_from_the_project(self):
+        root = self.project({'run': 'whatever', 'configurations': 'nope'},
+                            {'scripts': {'dev': 'vite --port 4321', 'build': 'vite build'}})
+        message = cp.repair_launch_manifest(root)
+        self.assertIn('Replaced an unusable .uncle/launch.json', message)
+        self.assertEqual(cp.launch_spec(root), {'kind': 'webpage', 'command': ['npm', 'run', 'dev'], 'url': 'http://127.0.0.1:4321'})
+        self.assertIn('configurations', (root / '.uncle/launch.json.invalid').read_text())
+        self.assertIn('Replaced', (root / '.uncle/workflow/launch-repair.txt').read_text())
+
+    def test_the_port_comes_from_the_vite_config_then_the_default(self):
+        root = self.project('not json at all', {'scripts': {'dev': 'vite'}}, 'export default { server: { port: 3999 } }')
+        cp.repair_launch_manifest(root)
+        self.assertEqual(cp.launch_spec(root)['url'], 'http://127.0.0.1:3999')
+        root = self.project('[]', {'scripts': {'dev': 'vite'}})
+        cp.repair_launch_manifest(root)
+        self.assertEqual(cp.launch_spec(root)['url'], 'http://127.0.0.1:5173')
+
+    def test_a_project_with_nothing_to_launch_gets_kind_none(self):
+        root = self.project({'junk': 1})
+        cp.repair_launch_manifest(root)
+        self.assertEqual(cp.launch_spec(root), {'kind': 'none'})
+        root = self.project({'junk': 1}, {'scripts': {'test': 'vitest'}})
+        cp.repair_launch_manifest(root)
+        self.assertEqual(cp.launch_spec(root), {'kind': 'none'})
+
+    def test_no_launch_file_is_not_created(self):
+        root = self.project(None, {'scripts': {'dev': 'vite'}})
+        self.assertEqual(cp.repair_launch_manifest(root), '')
+        self.assertFalse((root / '.uncle/launch.json').exists())
+
+    def test_a_valid_file_is_never_touched(self):
+        valid = {'kind': 'command', 'command': ['python3', 'app.py']}
+        root = self.project(valid, {'scripts': {'dev': 'vite'}})
+        self.assertEqual(cp.repair_launch_manifest(root), '')
+        self.assertEqual(json.loads((root / '.uncle/launch.json').read_text()), valid)
+
+    def test_the_cli_exits_zero_for_a_file_it_had_to_replace(self):
+        import subprocess
+        root = self.project({'junk': 1}, {'scripts': {'dev': 'vite'}})
+        done = subprocess.run([sys.executable, str(ROOT / 'scripts/lib/completion_preview.py'), '--normalize', str(root)],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('Replaced', done.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

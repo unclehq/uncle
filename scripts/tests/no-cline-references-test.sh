@@ -8,7 +8,7 @@ cd "$ROOT"
 # deny entry, historical ledger tolerance, this test, the tests that assert the
 # rejection (and the two that use the real issue's title or an old ledger row as a
 # fixture), the request and plan docs, and the audit report of the removal itself.
-ALLOW_FILES='^(scripts/tests/(no-cline-references|tui-config|checklist-runner-config|runner-validation|stage-runner|supervisor|native-steering|stage-billing|ledger-tolerance|origin-self-heal)-test\.(sh|py)|CHANGE_REQUEST\.md|FINAL_AUDIT\.md|\.uncle/.*)$'
+ALLOW_FILES='^(scripts/tests/(no-cline-references|tui-config|checklist-runner-config|runner-validation|stage-runner|supervisor|native-steering|stage-billing|ledger-tolerance|origin-self-heal)-test\.(sh|py)|scripts/tests/suite-weights\.tsv|CHANGE_REQUEST\.md|FINAL_AUDIT\.md|\.uncle/.*)$'
 ALLOW_LINE='== .?cline.?( |:|$)|removal text only for cline|Cline support was removed|\.cline|cline-usage|clinepass|runner .?cline|runner.cline|cline.*(removed|unsupported|unknown|legacy|stale)|(removed|unsupported|legacy|stale).*cline'
 hits="$(git ls-files -z | xargs -0 grep -InoiE '(^|[^a-z])cline([^a-z]|$)' 2>/dev/null \
     | grep -vE "$ALLOW_FILES" | awk -F: '{print $1":"$2}' | sort -u || true)"

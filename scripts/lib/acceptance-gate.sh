@@ -125,6 +125,12 @@ acceptance_queue_repair() {
     if (( count >= limit )); then
         echo "Acceptance repair already attempted $count time(s) for $report; the same rows still fail."
         if [[ "${UNATTENDED:-0}" == 1 ]]; then
+            # Two repair passes are all there is. Severity decides where the failure goes next, as in stagegate.sh's
+            # test_review_next_stage: an application that cannot be built, served or tested has nothing for the checklists to look
+            # at, so it goes straight to the final audit; anything else still gets them.
+            if python3 -B "$ROOT/scripts/lib/failure_severity.py" unrunnable "${LOG_DIR:-$STATE_DIR/logs}/green-check.log"; then
+                next=FINAL_AUDIT
+            fi
             record_unattended_gate "acceptance-repair-exhausted" "continued to $next with rows still failing in $report after $count repair(s)"
             rm -f "$count_file"
             set_state "$next"

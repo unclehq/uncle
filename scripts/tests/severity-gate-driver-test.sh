@@ -52,6 +52,37 @@ mk 'PASS	npm ci'
 out="$(go "$s" WORKFLOW_REPAIR_SEVERITY=all)"
 grep -q 'state=REPAIR' <<< "$out"               || bad "WORKFLOW_REPAIR_SEVERITY=all restores repair for every failing row, got: $out"
 
+
+# the change driver's repair is bounded the same way: once the two passes are spent, an unrunnable application goes to the audit
+queue() {   # <state dir> -> the state the exhausted repair continues to
+    printf '2\n' > "$1/acceptance-repair-count-TEST_REVIEW"
+    env -i PATH="$PATH" UNATTENDED=1 bash --norc --noprofile -c "
+        ROOT='$ROOT'; STATE_DIR='$1'; LOG_DIR='$1/logs'
+        record_unattended_gate() { :; }
+        set_state() { echo \"state=\$1\"; }
+        . '$ROOT/scripts/lib/acceptance-gate.sh'
+        acceptance_queue_repair '$1/documents/TEST_REVIEW.json' .uncle/docs/TEST_REVIEW.md CHECKLIST; echo rc=\$?" 2>&1
+}
+mk 'PASS	npm ci'
+grep -q 'state=CHECKLIST' <<< "$(queue "$s")"   || bad "exhausted repair on a runnable application should still reach the checklist"
+mk 'PASS	npm ci'
+echo 'error when starting dev server' > "$s/logs/green-check.log"
+grep -q 'state=FINAL_AUDIT' <<< "$(queue "$s")" || bad "exhausted repair on an unrunnable application should go to the final audit"
+
+# the change driver waits for the green check before test review
+CW="$ROOT/scripts/change-workflow.sh"
+fn="$(awk '/^wait_green_check_bg\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$CW")"
+[[ -n "$fn" ]] || bad "could not extract wait_green_check_bg"
+out="$(env -i PATH="$PATH" bash --norc --noprofile -c "
+    STATE_DIR='$work'; LOG_DIR='$work'
+    record_codex_cost() { :; }
+    $fn
+    sleep 1 > /dev/null 2>&1 &
+    GREEN_BG_PID=\$!
+    wait_green_check_bg; echo rc=\$?" 2>&1)"
+grep -q 'continuing without waiting' <<< "$out" && bad "the change driver continued without waiting by default: $out"
+grep -q 'Collecting the background check results' <<< "$out" || bad "the change driver did not collect the result: $out"
+
 # only the test review is gated, and both drivers reach it through acceptance_transition
 grep -q 'TEST_REVIEW.md ]] || severity_gate_test_review' "$ROOT/scripts/lib/acceptance-gate.sh" || bad "the gate is not applied to the test review"
 [[ $fail == 0 ]] && echo "severity-gate-driver-test.sh: ok"

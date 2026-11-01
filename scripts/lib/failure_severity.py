@@ -13,6 +13,7 @@ driver's own evidence and are not downgraded here. This only changes the driver'
 
 usage:
   failure_severity.py critical GREEN_CLASS GREEN_LOG   exit 0 and print the reason when a CRITICAL failure is present, exit 1 if not
+  failure_severity.py unrunnable GREEN_LOG             exit 0 when the application cannot be built, served or tested
   failure_severity.py downgrade TEST_REVIEW.json       mark the failing MAJOR/MINOR rows non-blocking; print "ID<TAB>SEVERITY" for each
 """
 import json
@@ -26,6 +27,13 @@ SEVERITY = {'ASSERTIONS': 'MAJOR', 'COVERAGE': 'MAJOR', 'ORACLE': 'MINOR', 'NEGA
 UNRUNNABLE = re.compile(r'(^|[^A-Za-z])(build failed|failed to resolve import|is not exported by|could not resolve|'
                         r'error when starting (dev|preview) server|process from config\.webServer was not able to start|'
                         r'webserver.*exit code|no test files found|testDir.*does not exist|application_runtime_unrunnable)', re.I)
+
+
+def unrunnable(green_log):
+    try:
+        return bool(UNRUNNABLE.search(Path(green_log).read_text(encoding='utf-8', errors='replace')))
+    except OSError:
+        return False
 
 
 def critical(green_class, green_log):
@@ -69,6 +77,8 @@ def main(argv):
         if reason:
             print(reason)
         return 0 if reason else 1
+    if len(argv) == 3 and argv[1] == 'unrunnable':
+        return 0 if unrunnable(argv[2]) else 1
     if len(argv) == 3 and argv[1] == 'downgrade':
         try:
             for identifier, severity in downgrade(argv[2]):

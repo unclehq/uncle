@@ -1260,7 +1260,9 @@ start_green_check_bg() {
 wait_green_check_bg() {
     [[ -n "$GREEN_BG_PID" ]] || return 0
     local status=0 pid="$GREEN_BG_PID"
-    if [[ "${WORKFLOW_WAIT_FOR_GREEN:-0}" != 1 ]] && kill -0 "$pid" 2>/dev/null; then
+    # Same default as stagegate.sh's green_wait_final: every caller consumes final evidence (test review, the checklist, the audit), so
+    # wait for it. A review that reads PENDING can only report NOT RUN. WORKFLOW_WAIT_FOR_GREEN=0 continues without waiting.
+    if [[ "${WORKFLOW_WAIT_FOR_GREEN:-1}" != 1 ]] && kill -0 "$pid" 2>/dev/null; then
         echo 'Verification is pending; continuing without waiting. Pending checks are not passes.'
         return 0
     fi

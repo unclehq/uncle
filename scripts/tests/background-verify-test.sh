@@ -56,12 +56,14 @@ check "the report says so" grep -q 'running in the background' "$GREEN_MD"
 
 # Evidence consumers may wait once for the published result.  A failed command
 # is still final evidence; only PENDING is prohibited.
+# Opting out keeps the evidence pending and returns at once.
 start=$SECONDS
+WORKFLOW_WAIT_FOR_GREEN=0 green_wait_final > /dev/null
+check "opted-out wait returns immediately" test $((SECONDS - start)) -lt 1
+check "opted-out wait preserves pending evidence" grep -q '^PENDING' "$GREEN_CLASS"
+# The default waits for the published result before the caller goes on.
 green_wait_final > /dev/null
-check "default wait returns immediately" test $((SECONDS - start)) -lt 1
-check "default wait preserves pending evidence" grep -q '^PENDING' "$GREEN_CLASS"
-WORKFLOW_WAIT_FOR_GREEN=1 green_wait_final > /dev/null
-check "wait helper publishes final evidence" not grep -q '^PENDING' "$GREEN_CLASS"
+check "default wait publishes final evidence" not grep -q '^PENDING' "$GREEN_CLASS"
 check "wait helper accepts final regression evidence" grep -q '^REGRESSION' "$GREEN_CLASS"
 
 # finish: real results replace the placeholder, in a copy with the port moved, and failures are recorded

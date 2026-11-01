@@ -181,7 +181,11 @@ run_green_check_auto() {
 # incomplete. Callers decide whether a recorded failure is repairable,
 # nonblocking, or terminal.
 green_wait_final() {
-    if [[ "${WORKFLOW_WAIT_FOR_GREEN:-0}" != 1 ]]; then
+    # Every caller is a consumer of final evidence (test review, the checklists, the audit), none of them the implementation fan-out, so
+    # the default is to wait. A review launched against PENDING can only report NOT RUN, and its packet cannot be repaired by publishing
+    # the results later: the failing rows it wrote opened a repair that spent an attempt on timing, not on the code.
+    # WORKFLOW_WAIT_FOR_GREEN=0 restores continuing without waiting.
+    if [[ "${WORKFLOW_WAIT_FOR_GREEN:-1}" != 1 ]]; then
         if green_pending || grep -q '^PENDING' "$GREEN_CLASS" 2>/dev/null; then
             echo 'Verification is pending; continuing without waiting. Pending checks are not passes.'
         fi

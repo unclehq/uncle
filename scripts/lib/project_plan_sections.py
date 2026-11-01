@@ -23,6 +23,7 @@ usage:
   project_plan_sections.py assemble-model DIRECTORY OUTPUT   (the same plan as a model, from workers' typed blocks)
 """
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -308,6 +309,101 @@ def packet_example(name):
 WORD_CAP = {'design': 350, 'state': 300, 'domain': 350, 'components': 450, 'steps': 300, 'sequence': 300, 'decisions': 300,
             'restrictions': 450, 'limits': 450, 'bounds': 450, 'behaviors': 550, 'handling': 450, 'checks': 350,
             'invariants': 550, 'guards': 400, 'tests': 600, 'defects': 400, 'obligations': 400, 'flow': 300, 'commands': 200, 'closing': 400, 'trace': 400}
+
+
+# --- the merged layout for a small application --------------------------------------------------------------------------------
+# Twenty-two workers, each a model call with its own copy of the shared prompt, is the right shape for a large plan whose longest
+# section sets the time. For a small application every section is a few lines, so several workers are one call's worth of
+# writing. This swaps the layout (WORKERS, PHASES, EARLY, the trace tables) for one with the sections that were split for speed
+# written whole by a single worker. Every plan heading is still written, in the same order, validated the same way; only the
+# number of calls changes. Decided once, at import, from the class the classifier recorded, so every call of this helper in a
+# run sees the same layout. WORKFLOW_PLAN_MERGE=0 keeps the full layout and =1 forces the merged one.
+MERGES = {
+    'core': ('design', 'state', 'domain', 'flow'),
+    'restrictions': ('restrictions', 'limits', 'bounds'),
+    'steps': ('steps', 'sequence'),
+    'invariants': ('invariants', 'guards'),
+    'tests': ('tests', 'defects', 'obligations'),
+}
+MERGED_SPECIFIC = {
+    'core': (
+        'Write four sections of the plan in this one answer: the architecture (section 1), the authoritative state (2), the '
+        'domain model (3) and the data flow (5). The outline\'s component IDs, names and files are binding, and the data flow '
+        'names components by the outline\'s `C-n` IDs. The components table (section 4) is written beside you by another '
+        'worker: do not write or restate it. Do not cite decision or restriction IDs: those are written beside you by other '
+        'workers. A few lines each is the honest size of a small application.'),
+    'restrictions': (
+        'Write the whole Restriction Inventory: the restrictions the requirements impose (USER, REPOSITORY, PLATFORM or '
+        'DESIGN), one row each with every field the plan requires, with an ID `R-n` numbered from `R-1` and staying below '
+        '`R-20`. At most 10 rows. You start before the outline exists: work from the requirements alone.'),
+    'steps': (
+        'Expand all of the outline\'s steps in the same order and numbering, each with a one-line description. Keep every '
+        '`Owns:` and `Depends on:` exactly as the outline has them: do not add, drop or move a file or a dependency.'),
+    'invariants': (
+        'Give every invariant an ID `I-n`, numbered from `I-1` and staying below `I-40`, in the invariant table. Cover what is '
+        'always true of the data and the results (state, calculations, ordering, stored values) and what holds at the edges '
+        '(input validation and rejection, display, persistence, security, performance, resources, lifecycle). If a category '
+        'has none for this project, leave it out. In its "Automated test" column write `see 10`: the test strategy is written '
+        'beside you by another worker and the traceability table joins invariants to tests afterwards. Enforcement points name '
+        'components (`C-n`) and files from the outline.'),
+    'tests': (
+        'Write the whole automated-test strategy (section 10) in this one answer: the runner matrix and the test table, an ID '
+        '`T-n` for every automated test, using only test files, configuration and the runner that the outline assigns to a '
+        'step (never invent a path it does not own) and planning tests from the requirements and acceptance criteria, not from '
+        'behaviors or invariants, which are being written beside you; then the representative defect injections (IDs `DI-n`, '
+        'each naming the defect and the one test FILE that must reject it, a file one of the steps owns, never a `T-n` ID; at '
+        'most 10); then the acceptance obligations (IDs `O-n`, each with its observable assertion and independent oracle, at '
+        'most 12) and the protected verification paths (a file the implementation must not change: never a lockfile or a '
+        'directory the install command creates, because nothing can hash a file that does not exist before the install). Do not '
+        'write the verification commands: another worker owns them.'),
+}
+
+
+def merged_layout_enabled():
+    setting = os.environ.get('WORKFLOW_PLAN_MERGE', 'auto').strip().lower()
+    if setting in ('0', 'false', 'no', 'off'):
+        return False
+    if setting in ('1', 'true', 'yes', 'on'):
+        return True
+    try:
+        import change_class
+        return change_class.plan_word_scale() < 1
+    except ImportError:
+        return False
+
+
+def merged_layout(workers, phases, early, trace_kinds):
+    """(WORKERS, PHASES, EARLY, TRACE_KINDS) with each MERGES group written by one worker, at the position of its first member."""
+    replaced = {member: name for name, members in MERGES.items() for member in members}
+
+    def rename(names):
+        out = []
+        for member in names:
+            name = replaced.get(member, member)
+            if name not in out:
+                out.append(name)
+        return tuple(out)
+
+    merged = {}
+    for name, spec in workers.items():
+        target = replaced.get(name, name)
+        if target not in merged:
+            merged[target] = {'sections': (), 'extra': (), 'commands': spec['commands']}
+        entry = merged[target]
+        entry['sections'] += tuple(n for n in spec['sections'] if n not in entry['sections'])
+        entry['extra'] += tuple(n for n in spec['extra'] if n not in entry['extra'])
+        if 'rows' in spec:
+            entry['rows'] = tuple(entry.get('rows', ())) + tuple(k for k in spec['rows'] if k not in entry.get('rows', ()))
+    kinds = {replaced.get(name, name): letter for name, letter in trace_kinds.items()}
+    return merged, tuple(rename(phase) for phase in phases), rename(early), kinds
+
+
+if merged_layout_enabled():
+    WORKERS, PHASES, EARLY, TRACE_KINDS = merged_layout(WORKERS, PHASES, EARLY, TRACE_KINDS)
+    SPECIFIC = dict(SPECIFIC, **MERGED_SPECIFIC)
+    WORD_CAP = dict(WORD_CAP, **{name: sum(WORD_CAP[m] for m in members) for name, members in MERGES.items()})
+    WRITERS = {n: sum(n in spec['sections'] or n in spec['extra'] for spec in WORKERS.values()) for n in list(TITLES) + list(EXTRA)}
+    SHARED = {n for n, count in WRITERS.items() if count > 1}
 
 
 def scaled_cap(name):

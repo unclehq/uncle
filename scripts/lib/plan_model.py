@@ -1012,6 +1012,40 @@ def authored_section(heading, flat_blocks, section_id):
     return {'id': section_id, 'heading': heading, 'blocks': blocks}
 
 
+IMPLEMENTATION_SECTION = re.compile(r'Implementation\s+(?:order|sequence|steps|plan)', re.I)
+
+
+def demote_stray_step_blocks(model):
+    """Keep one implementation sequence: a steps block anywhere else becomes an ordered list.
+
+    A plan is written once and a rejected bundle stops the run. A rollback plan or a manual-verification list that cites files reads as
+    steps to the author and was delivered as a steps block, so its numbers collided with the real sequence ('s14.1/step-1 number 1 is
+    used twice') and a good plan was thrown away. The implementation sequence is the section whose heading says so; with none, the
+    largest steps block is. Every other steps block keeps its text, its numbers and the files it names, as a list.
+    """
+    blocks = [(section, block) for section in model['sections'] for block in section['blocks'] if block.get('kind') == 'steps']
+    if len(blocks) < 2:
+        return model
+    keep = [b for s, b in blocks if IMPLEMENTATION_SECTION.search(s['heading'])]
+    if not keep:
+        keep = [max((b for _, b in blocks), key=lambda b: len(b['items']))]
+    for section, block in blocks:
+        if any(block is k for k in keep):
+            continue
+        items = []
+        for n, step in enumerate(block['items'], 1):
+            text = step.get('title', '')
+            if step.get('text'):
+                text = (text + '. ' if text else '') + step['text']
+            if step.get('owns'):
+                text += ' Files: ' + ', '.join(step['owns'])
+            items.append({'id': '%s.i%d' % (block['id'], n), 'depth': 0, 'text': text.strip(), 'number': step.get('number', n)})
+        block_id = block['id']
+        block.clear()
+        block.update({'id': block_id, 'kind': 'list', 'ordered': True, 'items': items})
+    return model
+
+
 def model_from_flat(flat_sections, title='', root=None, stage=None):
     """A model from sections written as flat blocks, in any order and under any headings (a change plan)."""
     sections = []
@@ -1025,7 +1059,7 @@ def model_from_flat(flat_sections, title='', root=None, stage=None):
         sections.append(section)
     if not sections:
         raise PlanError('the plan has no sections')
-    model = dedupe({'title': title, 'intro': '', 'sections': sections})
+    model = dedupe(demote_stray_step_blocks({'title': title, 'intro': '', 'sections': sections}))
     if renumber_enabled({}, root or Path.cwd(), stage):
         model = renumber_steps(model, root or Path.cwd())
     errors, _ = validate(model)

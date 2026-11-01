@@ -115,7 +115,10 @@ class PanelTests(unittest.TestCase):
         functions = re.findall(r'^run_adversarial_review_[\w]+\(\) \{\n.*?^\}', source, re.M | re.S)
         self.assertTrue(functions)
         function_path = project / 'functions.sh'
-        function_path.write_text('\n'.join(functions) + '\n')
+        # The panel asks the build class which lenses to run (change-class-stage.sh); no class file means all four.
+        lenses = re.search(r'^change_class_lenses\(\) \{\n.*?^\}', (ROOT / 'scripts/lib/change-class-stage.sh').read_text(), re.M | re.S)
+        self.assertTrue(lenses)
+        function_path.write_text('CHANGE_CLASS_PY="$ROOT/scripts/lib/change_class.py"\n' + lenses.group(0) + '\n' + '\n'.join(functions) + '\n')
         clean_env = {k: v for k, v in os.environ.items() if not k.startswith(('WORKFLOW_', 'UNCLE_', 'FIXTURE_'))}
         clean_env.update(ROOT=str(ROOT), PROJECT_ROOT=str(project), STATE_DIR=str(state),
                          LOG_DIR=str(state / 'logs'), UNCLE_CONFIG=str(config_path),

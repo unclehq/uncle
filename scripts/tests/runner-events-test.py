@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 LIB = Path(__file__).resolve().parents[1] / 'lib'
 CORPUS = Path(__file__).with_name('fixtures') / 'runner-events'
-CALLERS = ('publish_agent_artifact', 'recover_investigation', 'recover_worker_packet')
+CALLERS = ('publish_agent_artifact', 'recover_investigation')
 KIND = 'checklist-execution-worker-packet'
 HEADING = '## Required functionality'
 
@@ -42,13 +42,6 @@ def observe(lib, case, name, direct=False):
         target = root / 'output'
         args = ([str(log), str(target), '--heading', HEADING] if name == 'recover_investigation'
                 else [str(log), str(target), '--kind', KIND])
-        if case == 'summary' and name == 'recover_worker_packet':
-            checklist, prompt = root / 'checklist.json', root / 'prompt.md'
-            checklist.write_text(json.dumps({'checks': [
-                {'id': 'MC-1', 'exact_action': 'do one', 'expected_result': 'one'},
-                {'id': 'MC-2', 'exact_action': 'do two', 'expected_result': 'two'}]}))
-            prompt.write_text('- Execute `MC-1`.\n- Execute `MC-2`.\n')
-            args += ['--checklist', str(checklist), '--prompt', str(prompt)]
         if name == 'publish_agent_artifact':
             args = ['project-plan', str(log), str(root)]
         writes = []

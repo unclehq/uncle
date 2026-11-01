@@ -179,7 +179,7 @@ class Timeout(unittest.TestCase):
 
     def test_timeout_kills_the_whole_process_tree_not_just_the_direct_child(self):
         status = warm.run(self.command, str(self.tmp), 1)
-        self.assertEqual(status, 1)
+        self.assertEqual(status, 124)       # the timeout status (process_tree.wait_check), which run() hands back unchanged
         pid = self.grandchild_pid()
         import time
         deadline = time.time() + 5

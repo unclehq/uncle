@@ -163,7 +163,7 @@ class TriageTests(unittest.TestCase):
         # A fake install: the guard, bundle lib, and prompt the TUI needs, so
         # the installed-tree check has a tree the fake master can try to edit.
         self.install = base / 'install'
-        for rel in ('scripts/lib/triage_guard.py', 'scripts/lib/triage.sh', 'scripts/lib/state.sh',
+        for rel in ('scripts/lib/triage_guard.py', 'scripts/lib/uncle_gitignore.py', 'scripts/lib/triage.sh', 'scripts/lib/state.sh',
                     'scripts/lib/sha256.sh', 'scripts/lib/terminal-title.sh', 'prompts/triage.md'):
             (self.install / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / rel, self.install / rel)

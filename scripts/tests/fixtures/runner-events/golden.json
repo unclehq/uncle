@@ -105,17 +105,6 @@
         "writes": [
           "output"
         ]
-      },
-      "recover_worker_packet": {
-        "status": 0,
-        "stdout": "",
-        "stderr": "",
-        "files": {
-          "output": "7b0a2020226b696e64223a2022636865636b6c6973742d657865637574696f6e2d776f726b65722d7061636b6574222c0a202022726573756c7473223a205b0a202020207b0a202020202020226964223a202266696e616c222c0a20202020202022737461747573223a202250415353220a202020207d0a20205d2c0a202022736368656d61223a2022756e636c652e61727469666163742f7631220a7d0a"
-        },
-        "writes": [
-          "output"
-        ]
       }
     },
     "empty": {
@@ -130,13 +119,6 @@
         "status": 1,
         "stdout": "",
         "stderr": "investigation recovery: no complete Markdown investigation with heading '## Required functionality' in final runner output\n",
-        "files": {},
-        "writes": []
-      },
-      "recover_worker_packet": {
-        "status": 1,
-        "stdout": "",
-        "stderr": "worker packet recovery: no valid checklist-execution-worker-packet in final worker response\n",
         "files": {},
         "writes": []
       }
@@ -159,13 +141,6 @@
         "writes": [
           "output"
         ]
-      },
-      "recover_worker_packet": {
-        "status": 1,
-        "stdout": "",
-        "stderr": "worker packet recovery: no valid checklist-execution-worker-packet in final worker response\n",
-        "files": {},
-        "writes": []
       }
     },
     "summary": {
@@ -182,17 +157,6 @@
         "stderr": "investigation recovery: no complete Markdown investigation with heading '## Required functionality' in final runner output\n",
         "files": {},
         "writes": []
-      },
-      "recover_worker_packet": {
-        "status": 0,
-        "stdout": "",
-        "stderr": "worker packet recovery: normalized explicit checklist summary\n",
-        "files": {
-          "output": "7b0a2020226b696e64223a2022636865636b6c6973742d657865637574696f6e2d776f726b65722d7061636b6574222c0a202022726573756c7473223a205b0a202020207b0a20202020202022616374696f6e223a2022646f206f6e65222c0a2020202020202261637475616c5f726573756c74223a20223a206f627365727665642e222c0a202020202020226465666563745f7265666572656e6365223a20224e6f6e65222c0a2020202020202265766964656e6365223a20224472697665722d6e6f726d616c697a65642066726f6d20616e206578706c6963697420776f726b6572207374617475733a203a206f627365727665642e222c0a2020202020202265787065637465645f726573756c74223a20226f6e65222c0a202020202020226964223a20224d432d31222c0a20202020202022737461747573223a202250415353220a202020207d2c0a202020207b0a20202020202022616374696f6e223a2022646f2074776f222c0a2020202020202261637475616c5f726573756c74223a2022576f726b657220646964206e6f74207374617465206120726573756c7420666f7220746869732061737369676e656420636865636b2e222c0a202020202020226465666563745f7265666572656e6365223a2022576f726b657220646964206e6f74207374617465206120726573756c7420666f7220746869732061737369676e656420636865636b2e222c0a2020202020202265766964656e6365223a20224472697665722d6e6f726d616c697a65642066726f6d20616e206578706c6963697420776f726b6572207374617475733a20576f726b657220646964206e6f74207374617465206120726573756c7420666f7220746869732061737369676e656420636865636b2e222c0a2020202020202265787065637465645f726573756c74223a202274776f222c0a202020202020226964223a20224d432d32222c0a20202020202022737461747573223a20224e4f542052554e220a202020207d0a20205d2c0a202022736368656d61223a2022756e636c652e61727469666163742f7631220a7d0a"
-        },
-        "writes": [
-          "output"
-        ]
       }
     },
     "fallback-json": {
@@ -217,15 +181,6 @@
           ".uncle/docs/PROJECT_PLAN.md": "7b22736368656d61223a2022756e636c652e61727469666163742f7631222c20226b696e64223a2022706c616e222c20226e6172726174697665223a2022232046616c6c6261636b222c2022766572696669636174696f6e5f636f6d6d616e6473223a202274727565227d"
         },
         "writes": []
-      },
-      "recover_worker_packet": {
-        "status": 1,
-        "stdout": "",
-        "stderr": "worker packet recovery: no valid checklist-execution-worker-packet in final worker response\n",
-        "files": {
-          ".uncle/docs/PROJECT_PLAN.md": "7b22736368656d61223a2022756e636c652e61727469666163742f7631222c20226b696e64223a2022706c616e222c20226e6172726174697665223a2022232046616c6c6261636b222c2022766572696669636174696f6e5f636f6d6d616e6473223a202274727565227d"
-        },
-        "writes": []
       }
     },
     "fallback-markdown": {
@@ -246,15 +201,6 @@
           ".uncle/docs/PROJECT_PLAN.md": "2320416c72656164792072656e64657265640a"
         },
         "writes": []
-      },
-      "recover_worker_packet": {
-        "status": 1,
-        "stdout": "",
-        "stderr": "worker packet recovery: no valid checklist-execution-worker-packet in final worker response\n",
-        "files": {
-          ".uncle/docs/PROJECT_PLAN.md": "2320416c72656164792072656e64657265640a"
-        },
-        "writes": []
       }
     },
     "list": {
@@ -266,13 +212,6 @@
         "writes": []
       },
       "recover_investigation": {
-        "status": 1,
-        "stdout": "",
-        "stderr": "AttributeError: 'list' object has no attribute 'get'\n",
-        "files": {},
-        "writes": []
-      },
-      "recover_worker_packet": {
         "status": 1,
         "stdout": "",
         "stderr": "AttributeError: 'list' object has no attribute 'get'\n",
@@ -294,13 +233,6 @@
         "stderr": "AttributeError: 'NoneType' object has no attribute 'get'\n",
         "files": {},
         "writes": []
-      },
-      "recover_worker_packet": {
-        "status": 1,
-        "stdout": "",
-        "stderr": "AttributeError: 'NoneType' object has no attribute 'get'\n",
-        "files": {},
-        "writes": []
       }
     },
     "string": {
@@ -312,13 +244,6 @@
         "writes": []
       },
       "recover_investigation": {
-        "status": 1,
-        "stdout": "",
-        "stderr": "AttributeError: 'str' object has no attribute 'get'\n",
-        "files": {},
-        "writes": []
-      },
-      "recover_worker_packet": {
         "status": 1,
         "stdout": "",
         "stderr": "AttributeError: 'str' object has no attribute 'get'\n",
@@ -340,13 +265,6 @@
         "stderr": "AttributeError: 'int' object has no attribute 'get'\n",
         "files": {},
         "writes": []
-      },
-      "recover_worker_packet": {
-        "status": 1,
-        "stdout": "",
-        "stderr": "AttributeError: 'int' object has no attribute 'get'\n",
-        "files": {},
-        "writes": []
       }
     },
     "boolean": {
@@ -358,13 +276,6 @@
         "writes": []
       },
       "recover_investigation": {
-        "status": 1,
-        "stdout": "",
-        "stderr": "AttributeError: 'bool' object has no attribute 'get'\n",
-        "files": {},
-        "writes": []
-      },
-      "recover_worker_packet": {
         "status": 1,
         "stdout": "",
         "stderr": "AttributeError: 'bool' object has no attribute 'get'\n",

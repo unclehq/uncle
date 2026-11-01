@@ -145,6 +145,7 @@ out="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     WORKFLOW_MODEL_PROJECT_PLAN= \
     WORKFLOW_EFFORT_PROJECT_PLAN=low \
     WORKFLOW_SPECULATE=0 \
+    WORKFLOW_CLASSIFY=0 \
     bash "$ROOT/scripts/stagegate.sh" 2>&1)" || true
 # The piped "n" declines the approval gate, which is the expected outcome
 # here (this scenario only checks which agent command ran and with what
@@ -178,7 +179,7 @@ out_candidates="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     WORKFLOW_MODEL_PROJECT_PLAN= \
     WORKFLOW_EFFORT_PROJECT_PLAN=low \
     WORKFLOW_SELF_HOSTED_CANDIDATES=4 \
-    WORKFLOW_SPECULATE=0 \
+    WORKFLOW_SPECULATE=0 WORKFLOW_CLASSIFY=0 \
     bash "$ROOT/scripts/stagegate.sh" 2>&1)" || true
 # Same declined-gate exit-status issue as the first capture above: without
 # `|| true` this assignment's nonzero status silently truncates the rest of
@@ -195,7 +196,7 @@ rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md"
     UNCLE_PROJECT_ROOT="$PROJ" \
     WORKFLOW_AGENT_CMD="$TMP/agent-global" \
     WORKFLOW_MODEL_PROJECT_PLAN=vendor/kimi-k3 \
-    WORKFLOW_SPECULATE=0 \
+    WORKFLOW_SPECULATE=0 WORKFLOW_CLASSIFY=0 \
     bash "$ROOT/scripts/stagegate.sh" > /dev/null 2>&1) || true
 check_contains "stagegate: a set model is passed" \
     "--model vendor/kimi-k3" "$(cat "$ARGV")"
@@ -228,7 +229,7 @@ if command -v git > /dev/null 2>&1; then
         UNCLE_PROJECT_ROOT="$CPROJ" \
         WORKFLOW_AGENT_CMD="$TMP/agent-global" \
         WORKFLOW_MODEL_CHANGE_PLAN=vendor/glm-5.3 \
-        WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
+        WORKFLOW_SPECULATE=0 WORKFLOW_CLASSIFY=0 WORKFLOW_CLOSE_ISSUE=0 \
         bash "$ROOT/scripts/change-workflow.sh" 2>&1)" || true
     # Same declined-gate exit-status issue as the stagegate.sh captures above.
 
@@ -258,7 +259,7 @@ run_reread() {
     (cd "$CPROJ2" && echo n | ARGV_LOG="$ARGV" \
         UNCLE_PROJECT_ROOT="$CPROJ2" UNCLE_CONFIG="$CPROJ2/.uncle/config" \
         WORKFLOW_AGENT_CMD="$TMP/agent-global" \
-        WORKFLOW_SPECULATE=0 \
+        WORKFLOW_SPECULATE=0 WORKFLOW_CLASSIFY=0 \
         bash "$ROOT/scripts/stagegate.sh" > /dev/null 2>&1) || true
     cat "$ARGV"
 }
@@ -299,7 +300,7 @@ rm -rf "$CPROJ2/.uncle/workflow" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"
     UNCLE_PROJECT_ROOT="$CPROJ2" UNCLE_CONFIG="$CPROJ2/.uncle/config" \
     WORKFLOW_AGENT_CMD="$TMP/agent-global" \
     WORKFLOW_MODEL_PROJECT_PLAN=vendor/override \
-    WORKFLOW_SPECULATE=0 \
+    WORKFLOW_SPECULATE=0 WORKFLOW_CLASSIFY=0 \
     bash "$ROOT/scripts/stagegate.sh" > /dev/null 2>&1) || true
 check_contains "env overrides the config file" "--model vendor/override" "$(cat "$ARGV")"
 
@@ -342,7 +343,7 @@ chmod +x "$TMP/config-reviewer"
 printf 'adversarial-review.runner claude\nadversarial-review.model vendor/reviewer\nadversarial-review.effort low\n' > "$RPROJ/.uncle/config"
 printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
-    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null 2>&1
+    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_CLASSIFY=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null 2>&1
 argv="$(cat "$TMP/reviewer.argv")"
 check_contains 'reviewer: configured model is used' '-m vendor/reviewer' "$argv"
 check_contains 'reviewer: configured effort is used' 'model_reasoning_effort=low' "$argv"
@@ -353,7 +354,7 @@ rm -f "$TMP/reviewer.argv"
 printf 'adversarial-review.runner codex\nadversarial-review.effort high\n' > "$RPROJ/.uncle/config"
 printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
-    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_EFFORT_ADVERSARIAL_REVIEW=low \
+    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_CLASSIFY=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_EFFORT_ADVERSARIAL_REVIEW=low \
     bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null
 argv="$(cat "$TMP/reviewer.argv")"
 check_contains 'reviewer: explicit effort wins' 'model_reasoning_effort=low' "$argv"

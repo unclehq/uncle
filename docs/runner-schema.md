@@ -21,6 +21,4 @@ the existing file contract with a one-line diagnostic. The CLI shim also falls
 back when its installed CLI does not advertise the required flags.
 
 Native sessions retain live steering and runner reuse. Claude and self-hosted
-schema handling is unchanged. Cline is unchanged: no supported schema flag
-could be established from the offline installation or documentation available
-when this adapter was built.
+schema handling is unchanged.

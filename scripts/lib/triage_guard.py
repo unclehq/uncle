@@ -33,6 +33,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# The guard is how a triage turn proves it left the installed tree untouched, so importing a sibling must not write a
+# __pycache__ into that tree.
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uncle_gitignore import only_adds_managed
 

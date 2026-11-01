@@ -85,7 +85,7 @@ class RunnerSchema(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='uncle runner schema ')
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
-        for name in ('codex', 'cline'):
+        for name in ('codex',):
             stub = self.directory / name
             stub.write_text(STUB)
             stub.chmod(0o755)
@@ -97,7 +97,6 @@ class RunnerSchema(unittest.TestCase):
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(('UNCLE_', 'WORKFLOW_', 'STAGEGATE_', 'STUB_'))}
         env.update(WORKFLOW_CODEX_CMD=str(self.directory / 'codex'),
-                   WORKFLOW_CLINE_CMD=str(self.directory / 'cline'),
                    UNCLE_PROJECT_ROOT=str(self.directory),
                    UNCLE_CONFIG=str(self.directory / 'config'),
                    UNCLE_STATUS_STAGE='updated-plan-worker-edits-1',
@@ -255,14 +254,6 @@ class RunnerSchema(unittest.TestCase):
         self.assertEqual(json.loads(self.source.read_text()), schema)
         self.assertFalse(self.delivery.exists())
 
-    def test_cline_does_not_receive_an_undocumented_schema_flag(self):
-        done = self.run_runner(runner='cline')
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertNotIn('--output-schema', self.argv)
-        self.assertNotIn('--json-schema', self.argv)
-        self.assertNotIn('structured_output', self.result)
-        self.assertFalse(self.delivery.exists())
-
     def test_cli_failure_cannot_deliver_an_apparently_valid_packet(self):
         done = self.run_runner(STUB_EXIT='7')
         self.assertEqual(done.returncode, 7, done.stderr)
@@ -363,7 +354,7 @@ stage_agent_cmd() { printf '%s\\n' "$TEST_COMMAND"; }
         for gate in ('app_stage_supports_structured_output', 'change_stage_supports_structured_output'):
             for runner, command, supported in (
                     ('codex', str(ROOT / 'scripts/agent-codex.sh'), True),
-                    ('claude', '/stub/claude', True), ('cline', str(ROOT / 'scripts/agent-cline.sh'), False),
+                    ('claude', '/stub/claude', True),
                     ('self-hosted', '/stub/self-hosted', False), ('codex', '/stub/custom', False)):
                 with self.subTest(gate=gate, runner=runner, command=command):
                     done = subprocess.run(['bash', '-c', script], cwd=self.directory,

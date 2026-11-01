@@ -183,7 +183,7 @@ run_driver() {
     # a developer or CI environment that has the key exported must not turn it into a failure.
     (cd "$proj" && unset ANTHROPIC_API_KEY && echo "$answer" | AGENT_WRITE="$write" AGENT_WRITE_ON_CALL="${AGENT_WRITE_ON_CALL:-0}" \
         UNCLE_PROJECT_ROOT="$proj" UNCLE_CONFIG="$proj/.uncle/config" UNCLE_STATUS_FILE="$proj/status.jsonl" \
-        WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_CLAUDE_CMD="$SUPERVISOR" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
+        WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_CLAUDE_CMD="$SUPERVISOR" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 WORKFLOW_CLASSIFY=0 \
         GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
         bash "$ROOT/scripts/$driver" > "$proj/driver.out" 2>&1) || status=$?
     echo "$status"
@@ -387,7 +387,7 @@ run_answered() {
     local status=0
     (cd "$proj" && UNCLE_LIB="$ROOT/scripts/lib" python3 "$ANSWERER" "$proj/status.jsonl" "$proj/.uncle/workflow" "$answer" "$mode" \
         | AGENT_WRITE=1 UNCLE_PROJECT_ROOT="$proj" UNCLE_CONFIG="$proj/.uncle/config" UNCLE_STATUS_FILE="$proj/status.jsonl" \
-        UNCLE_APPROVAL_NAME="Brian" WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_CLAUDE_CMD="$SUPERVISOR" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
+        UNCLE_APPROVAL_NAME="Brian" WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_CLAUDE_CMD="$SUPERVISOR" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 WORKFLOW_CLASSIFY=0 \
         GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
         bash "$ROOT/scripts/$driver" > "$proj/driver.out" 2>&1) || status=$?
     echo "$status"
@@ -451,7 +451,7 @@ check_eq "reopen: the supervisor attribution is not carried to the new decision"
 # Unattended keeps its own word regardless of receipts.
 P="$(new_project unattended-word)"
 (cd "$P" && mkdir -p .uncle && printf 'implementation.runner claude\n' > .uncle/config && AGENT_ARGV="$P/agent.argv" AGENT_CALLS="$P/agent.calls" AGENT_PROMPT="$P/agent.prompt" AGENT_WRITE=1 \
-    UNCLE_PROJECT_ROOT="$P" UNCLE_CONFIG="$P/.uncle/config" WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
+    UNCLE_PROJECT_ROOT="$P" UNCLE_CONFIG="$P/.uncle/config" WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 WORKFLOW_CLASSIFY=0 \
     GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1 bash "$ROOT/scripts/stagegate.sh" --unattended > "$P/driver.out" 2>&1 < /dev/null) || true
 check_eq "unattended: approved-by stays unattended" "unattended" "$(cat "$P/.uncle/workflow/approvals/REQUIREMENTS_INTERPRETATION.approved-by")"
 

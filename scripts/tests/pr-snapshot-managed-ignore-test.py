@@ -30,7 +30,7 @@ class ManagedIgnore(unittest.TestCase):
         Path('.gitignore').write_text('node_modules\n')
         Path('app.js').write_text('x\n')
         subprocess.run(['git', 'add', '.'], check=True)
-        subprocess.run(['git', 'commit', '-q', '-m', 'base'], check=True)
+        subprocess.run(['git', 'commit', '--no-gpg-sign', '-q', '-m', 'base'], check=True)
         # the real checkout's .uncle state is ignored; a bare checkout here has none to hide, so ignore it as uncle does
         self.reviewed = NS['snapshot']()
 

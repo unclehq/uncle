@@ -141,7 +141,7 @@ class Recovery(unittest.TestCase):
             events = [{'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': json.dumps(ANSWER)}]}},
                       {'type': 'result', 'result': json.dumps(ANSWER)}]
             return subprocess.CompletedProcess(command, 0, '\n'.join(json.dumps(event) for event in events))
-        for runner in ('kimi', 'cline'):
+        for runner in ('kimi',):
             with self.subTest(runner=runner), patch.object(recovery.subprocess, 'run', side_effect=run) as call:
                 self.assertEqual(recovery.request_steps(BODY, self.root, 'project-plan', runner, {}, 1024, 12), ANSWER)
                 call.assert_called_once()

@@ -433,6 +433,7 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/waivers.sh"
 . "$ROOT/scripts/lib/acceptance.sh"
 . "$ROOT/scripts/lib/acceptance-gate.sh"
+. "$ROOT/scripts/lib/repair-judge.sh"
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
@@ -3799,7 +3800,7 @@ while true; do
 
     # Older drivers could advance despite an explicitly partial delivery.
     case "$state" in
-        WAIT_IMPLEMENT_APPROVAL|CHECKLIST|EXECUTE_CHECKLIST|VALIDATE_CHECKLIST|FINAL_AUDIT|VALIDATE_AUDIT)
+        WAIT_IMPLEMENT_APPROVAL|MANUAL_CHECKLIST|EXECUTE_CHECKLIST|VALIDATE_MANUAL_CHECKLIST|FINAL_AUDIT|VALIDATE_AUDIT)
             if ! implementation_complete "$state"; then
                 echo "Incomplete acceptance delivery; returning to IMPLEMENT."
                 cat "$STATE_DIR/implementation-completion.txt"

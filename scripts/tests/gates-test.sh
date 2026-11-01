@@ -188,6 +188,7 @@ new_case() {
     printf '# Adversarial review\n\nNo unresolved findings in this fixture.\n' > "$REPO/.uncle/docs/ADVERSARIAL_REVIEW.md"
     printf 'write a checklist\n' > "$REPO/prompts/change/manual-checklist.md"
     printf 'review tests\n' > "$REPO/prompts/change/test-review.md"
+    printf 'repair\n' > "$REPO/prompts/change/repair.md"
     printf 'audit it\n'          > "$REPO/prompts/change/final-audit.md"
 
     # Read-only specialist templates the review/checklist panels fan out to.
@@ -1507,22 +1508,18 @@ expect_out 'Repair limit (1) reached'
 
 # A repair pass that changes none of the files its findings name is a report,
 # not a repair: it is not reviewed, consumes no attempt, is retried once with a
-# driver-written brief, and a second such pass stops the run for a person.
+# driver-written brief, and a second such pass spends the remaining passes and
+# sends the open findings to the final audit rather than stopping for a person.
 new_stagegate_case sg-repair-noop-retries-then-stops
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_REPAIR_NOOP=1
-expect_status 1
-expect_state REPAIR
+run_stagegate WORKFLOW_REPAIR_SEVERITY=all WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_REPAIR_NOOP=1
+expect_status 0
+expect_state COMPLETE
 expect_out 'changed none of the files these findings name: COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
 expect_out 'Retrying once with a driver-written brief'
 expect_out 'second pass in a row that changed nothing'
-expect_in_file .uncle/workflow/repair-count '0'
-expect_in_file .uncle/workflow/REPAIR_BRIEF.md '**COVERAGE**'
-expect_in_file .uncle/workflow/REPAIR_BRIEF.md '| NEGATIVE | YES | FAIL |'
-expect_in_file .uncle/workflow/REPAIR_BRIEF.md 'not as evidence'
-expect_in_file .uncle/workflow/stop-reason 'human'
-expect_no_file .uncle/docs/FINAL_AUDIT.md
+expect_file .uncle/docs/FINAL_AUDIT.md
 COUNT=$((COUNT + 1))
 if [[ "$(grep -c '.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 1 ]]; then
     fail 'a no-op repair pass must not be sent to review'
@@ -1809,14 +1806,16 @@ exit 7
 EOF
 hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
-# Exercise both real executions, including the final audit refresh.
+# Exercise every real execution: the implementation check, the background re-run beside the
+# checklist, and the final audit refresh (3 commands each).
 run_stagegate WORKFLOW_GREEN_CHECK_REUSE=0 WORKFLOW_DIFF_GATE=0
 expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workflow/green-check.tsv PASS
 COUNT=$((COUNT+1))
-if [[ "$(find "$REPO/.uncle/workflow/metrics" -name '*.json' -exec cat {} + | jq -s '[.[]|select(.kind=="check")]|length')" != 6 ]]; then
-    fail 'driver did not record each check at implementation and final audit'
+checks_recorded="$(find "$REPO/.uncle/workflow/metrics" -name '*.json' -exec cat {} + | jq -s '[.[]|select(.kind=="check")]|length')"
+if [[ "$checks_recorded" != 9 ]]; then
+    fail "driver did not record each check at implementation, beside the checklist and at final audit (recorded $checks_recorded)"
 fi
 
 new_stagegate_case sg-invalid-parallel-plan
@@ -2173,7 +2172,7 @@ expect_in_file '.uncle/workflow/change.diff' 'new implementation'
 }
 
 gate_group_11() {
-for resumed in WAIT_IMPLEMENT_APPROVAL CHECKLIST EXECUTE_CHECKLIST FINAL_AUDIT; do
+for resumed in WAIT_IMPLEMENT_APPROVAL MANUAL_CHECKLIST EXECUTE_CHECKLIST FINAL_AUDIT; do
     new_case "partial-resume-$resumed"
     green_baseline 0 'bash app/test.sh'
     printf 'Old partial report\n' > "$REPO/.uncle/docs/IMPLEMENTATION_NOTES.md"
@@ -2259,10 +2258,11 @@ jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
     deliveries:[{id:"AC-1",status:"IMPLEMENTED",changed_code:"app/main.sh",observed_verification:"app/test.sh PASS"}]}' \
     > "$REPO/.uncle/workflow/documents/IMPLEMENTATION_NOTES.json"
 printf 'prior test evidence\n' > "$REPO/.uncle/docs/CHANGE_TEST_REPORT.md"
-run_driver_stdin "$(gate_input repair)"
-expect_status 0
-expect_state WAIT_ANALYSIS_APPROVAL
-expect_out 'Repairing the acceptance contract before implementation can continue.'
+run_driver_stdin "$(gate_input stop)"
+expect_status 1
+expect_state IMPLEMENT
+expect_out 'The acceptance contract cannot be evaluated from the implementation notes'
+expect_out 'Planning is not run again.'
 expect_not_out 'No row ids to waive'
 expect_no_file .uncle/workflow/impl-agent-started
 

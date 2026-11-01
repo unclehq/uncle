@@ -24,8 +24,7 @@ install_warm_start() {
 # install_warm_cancel — from the EXIT trap.  A download must not outlive its run.
 install_warm_cancel() {
     if [[ -n "$INSTALL_WARM_PID" ]] && kill -0 "$INSTALL_WARM_PID" 2>/dev/null; then
-        # The warm-up runs npm and Playwright as children: stop the whole tree.
-        pkill -P "$INSTALL_WARM_PID" 2>/dev/null || true
+        # The helper owns its child groups and releases the install lock after cleanup.
         kill "$INSTALL_WARM_PID" 2>/dev/null || true
         wait "$INSTALL_WARM_PID" 2>/dev/null || true
     fi

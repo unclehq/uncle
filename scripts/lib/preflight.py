@@ -35,6 +35,9 @@ def prerequisites(commands):
         if not words:
             raise ValueError('Standalone assignment needs model preflight')
         name = words[0]
+        if name in ('./node_modules/.bin/playwright', 'node_modules/.bin/playwright'):
+            names.add('node')
+            return
         if name in BUILTINS:
             return
         if name not in PROBES:
@@ -54,12 +57,28 @@ def prerequisites(commands):
         lexer.whitespace_split = True
         tokens = list(lexer)
         words = []
+        depth = 0
+        closed_group = False
         i = 0
         while i < len(tokens):
             token = tokens[i]
             if token in separators:
-                inspect(words)
+                if not closed_group:
+                    inspect(words)
                 words = []
+                closed_group = False
+            elif token == '(':
+                if words or closed_group:
+                    raise ValueError('Unexpected shell group')
+                depth += 1
+            elif token == ')':
+                if not depth:
+                    raise ValueError('Unmatched shell group')
+                if not closed_group:
+                    inspect(words)
+                words = []
+                depth -= 1
+                closed_group = True
             elif token in redirects:
                 if words and words[-1].isdigit():
                     words.pop()  # Optional file descriptor, e.g. 2>&1.
@@ -71,11 +90,15 @@ def prerequisites(commands):
             elif re.fullmatch(r'[;&|<>()]+', token):
                 raise ValueError('Unsupported shell syntax: ' + token)
             else:
+                if closed_group:
+                    raise ValueError('Missing separator after shell group')
                 words.append(token)
             i += 1
+        if depth:
+            raise ValueError('Unclosed shell group')
         if words:
             inspect(words)
-        elif tokens and tokens[-1] != ';':
+        elif tokens and tokens[-1] != ';' and not closed_group:
             raise ValueError('Incomplete shell command')
     return sorted(names)
 
@@ -98,6 +121,8 @@ def probe(name):
 
 
 def run(commands, report):
+    from dependency_versions import check
+    check()
     names = prerequisites(Path(commands).read_text())
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(probe, names))
@@ -106,7 +131,7 @@ def run(commands, report):
     import json
     payload = {
         'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report',
-        'narrative': ('Deterministic runtime probes completed. Approved commands were not executed.\n\n'
+        'narrative': ('Deterministic runtime probes completed with no application acceptance claims. Approved commands were not executed.\n\n'
                       'Dependency installation and application-specific browser, service, credential, and human checks remain subject to implementation and checklist verification.\n\n'
                       'Findings: ' + ('; '.join(results) or 'No external runtime required by the command list.')),
         'rows': [{'id': 'PF-RUNTIME', 'required': True, 'status': 'PASS',

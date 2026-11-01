@@ -117,7 +117,10 @@ SPECIFIC = {
         '- `## Steps`: numbered implementation steps, `1. Title -- Owns: `a`, `b` -- Depends on: 2`. Every file the '
         'project needs (source, tests, test and runner configuration, fixtures, `.gitignore`, `.uncle/launch.json`) is '
         'under exactly one step\'s `Owns:`. At most three dependencies per step; most steps have none. Steps are '
-        'implemented at the same time and the slowest sets the time: size steps evenly, and give no step a file you expect '
+        'implemented at the same time and the slowest sets the time: give independent unit, UI, keyboard, and other '
+        'test suites separate steps with disjoint owned files. Keep test configuration and shared fixtures in their '
+        'own steps. Specify exact shared exports, data shapes, selectors, test titles and fixture contracts before '
+        'fan-out; tests must not wait for implementation files to be written. Size steps evenly, and give no step a file you expect '
         'to exceed about 100 lines. Split a big file across steps and keep helper scripts simple, sequential where that '
         'will do. The defect-injection runner is supplied by the driver: give it its own step that owns only '
         '`tests/mutations/run.mjs` (nothing else) and put the list in `tests/mutations/list.mjs`, a default-exported array '
@@ -244,7 +247,9 @@ SPECIFIC = {
         'no lockfile and no step may install, so the fallback is `npm install`, never `npm ci`), '
         'build, unit tests, browser tests and, when the plan has defect injections, one runner command that starts '
         'them concurrently. Before it, you may add a `## Parallel verification groups` section (one fenced `text` '
-        'block of one-based command positions) for commands that share no port, output or fixture.'),
+        'block of one-based command positions) for commands that share no port, output or fixture. '
+        'Write one group per line, only space-separated integers (for example `4 5 6`), never prose such as '
+        '`After 1-3 succeed`. Omit comments and blank lines inside the commands block so positions are unambiguous.'),
     'closing': (
         'Keep both sections short: a line each is the honest answer when it is. Non-goals and risks must be '
         'consistent with the outline\'s decisions and restrictions.'),
@@ -842,6 +847,18 @@ def trace_section(directory):
     return '\n'.join([header, rule] + rows)
 
 
+def binding_outline(directory):
+    """Carry contracts into the final plan, not just the ephemeral planning prompts."""
+    directory = Path(directory)
+    if (directory / 'outline.json').is_file():
+        text = render_packet('outline', json.loads((directory / 'outline.json').read_text(encoding='utf-8')))
+    elif (directory / 'outline.md').is_file():
+        text = (directory / 'outline.md').read_text(encoding='utf-8')
+    else:
+        return ''
+    return '### Binding planning outline\n\n' + re.sub(r'^## ', '#### ', text, flags=re.M)
+
+
 def assemble(directory):
     directory = Path(directory)
     found, joined = {}, {}
@@ -897,6 +914,8 @@ def assemble(directory):
         if item not in found and item == GROUPS:
             continue                                   # optional
         line, body = found[item]
+        if item == 1:
+            body += '\n\n' + binding_outline(directory)
         parts.append(line + ('\n' + body if body else ''))
     return '\n\n'.join(parts) + '\n'
 
@@ -976,6 +995,11 @@ def assemble_model(directory):
         raise ValueError('sections missing: ' + ', '.join(missing + ([] if COMMANDS in found else [COMMANDS])))
     order = list(TITLES) + list(EXTRA) + [GROUPS]       # the commands are a separate field of the plan, not a section
     sections = [found[item] for item in order if item in found]
+    outline = binding_outline(directory)
+    if outline:
+        first = sections[0]
+        sections[0] = dict(first, blocks=first['blocks'] + [
+            {'id': first['id'] + '.outline', 'kind': 'prose', 'text': outline}])
     model = {'title': 'Project plan', 'intro': '', 'sections': [reid(sec, n) for n, sec in enumerate(sections, 1)]}
     pm.dedupe(model)
     errors, _ = pm.validate(model)

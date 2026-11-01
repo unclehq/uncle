@@ -19,11 +19,11 @@ run_case() {
     local name="$1" lanes="$2"; shift 2
     local dir="$TMP/$name"; mkdir -p "$dir/.uncle/workflow/documents" "$dir/.uncle/workflow/checklist-groups" "$dir/.uncle/workflow/logs"
     python3 - "$dir" "$@" <<'PY'
-import json, sys
+import json, os, sys
 checks = []
 for spec in sys.argv[2:]:
     cid, resources, depends = (spec.split('|') + ['', ''])[:3]
-    check = {'id': cid, 'required': True, 'exact_action': 'a', 'expected_result': 'b',
+    check = {'id': cid, 'required': os.environ.get('CASE_OPTIONAL') != '1', 'exact_action': 'a', 'expected_result': 'b',
              'depends_on': [d for d in depends.split(',') if d]}
     if resources != '?':
         check['exclusive_resources'] = [r for r in resources.split(',') if r]
@@ -57,6 +57,21 @@ PY
 }
 state() { echo "$TMP/$1/.uncle/workflow"; }
 collated() { python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["results"]))' "$(state "$1")/documents/EXECUTE_CHECKLIST_WORKERS.json"; }
+
+# No required rows must replace stale results without launching a worker or
+# expanding an unset Bash array. Optional observations are not claimed as PASS.
+for driver in stagegate change-workflow; do
+    awk '/^run_parallel_checklist_workers\(\) \{/ {p=1} p {print} p && /^}/ {exit}' "$ROOT/scripts/$driver.sh" > "$TMP/run_parallel_checklist_workers.sh"
+    CASE_OPTIONAL=1 run_case "$driver-optional" 1 'OPTIONAL|'
+    check "$driver optional: successful exit" test "$(cat "$(state "$driver-optional")/rc")" == 0
+    check "$driver optional: no workers" test ! -e "$(state "$driver-optional")/calls"
+    check "$driver optional: no fabricated results" test "$(collated "$driver-optional")" == 0
+done
+awk '/^run_parallel_checklist_workers\(\) \{/ {p=1} p {print} p && /^}/ {exit}' "$ROOT/scripts/stagegate.sh" > "$TMP/run_parallel_checklist_workers.sh"
+run_case empty 1
+check 'empty: successful exit' test "$(cat "$(state empty)/rc")" == 0
+check 'empty: no workers' test ! -e "$(state empty)/calls"
+check 'empty: empty results' test "$(collated empty)" == 0
 
 # --- lanes: three checks on one port form a lane; the rest run beside it, no barriers --------------------
 run_case lanes 1 'A|port:4173' 'B|' 'C|port-4173' 'D|' 'E|port:4173' 'F|' 'G|dir:x'

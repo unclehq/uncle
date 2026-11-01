@@ -287,8 +287,15 @@ REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 DEFAULT_RUNNER = "claude"
 DEFAULT_EFFORT = "low"
 
+def public_stage_label(stage):
+    """Private review slices retain the existing lens labels and indicators."""
+    return re.sub(r"^(adversarial-review-worker-(?:requirements|regression|security|testability))-slice-\d+(?=-|$)",
+                  r"\1", stage)
+
+
 def parent_stage(stage):
     """Return the configured parent for a driver-created stage name."""
+    stage = public_stage_label(stage)
     # issue 103: a raced stage's own candidates (`<stage>-candidate-<n>`) fold
     # back only as far as `<stage>` itself, not past it -- checked first so
     # a raced worker (`adversarial-review-worker-requirements-candidate-2`)
@@ -4506,6 +4513,19 @@ class UncleTUI:
             self.chat_error = ''
         self._auto_resume_after_do(proposal, summary, False)
 
+    def _bounded_stage_stop(self):
+        try:
+            state = Path(self._workflow_dir())
+            reason = (state / 'stop-reason').read_text()
+        except (OSError, AttributeError, TypeError):
+            return False
+        if 'writer attempts exhausted' not in reason and 'read-only preflight violation' not in reason:
+            return False
+        line = ('system', 'Not resuming: ' + sanitize(reason.strip()) + '. Type /resume when ready.')
+        if not self.triage_history or self.triage_history[-1] != line:
+            self.triage_history.append(line)
+        return True
+
     def _auto_resume_after_do(self, proposal, summary, failed):
         """After /do N completes, resume the build the ordinary way unless the
         execute failed, the guard refused anything, or the proposal holds.
@@ -4521,6 +4541,9 @@ class UncleTUI:
         if problem:
             self.triage_offer_resume = False
             self.triage_history.append(('system', 'Not resuming: %s.' % problem))
+            return True
+        if self._bounded_stage_stop():
+            self.triage_offer_resume = True
             return True
         reason = triage_hold_reason(proposal[1] if proposal else '')
         if reason:
@@ -4644,6 +4667,8 @@ class UncleTUI:
         reviewed the diagnosis.
         """
         if not getattr(self, 'workflow_unattended', False):
+            return
+        if self._bounded_stage_stop():
             return
         if not self.triage_offer_resume or self.triage_tainted:
             return
@@ -6318,7 +6343,7 @@ class UncleTUI:
             model_label = (model or runner or model_label) + ' (' + effort + ')'
         stage_status = ''
         if build and getattr(self, 'status_stage', ''):
-            stage_status = self.status_stage
+            stage_status = public_stage_label(self.status_stage)
             if getattr(self, 'status_stage_index', 0) and getattr(self, 'status_stage_total', 0):
                 stage_status += ' (%d/%d)' % (self.status_stage_index, self.status_stage_total)
             stage_status += '  ·  '
@@ -6575,6 +6600,8 @@ class UncleTUI:
                 wall_ended.append(max(started, ended))
             group["tokens"].append(self._token_total(row))
             group["attempts"] += 1
+            attempts = group.setdefault("_attempts_by_stage", {})
+            attempts[stage] = attempts.get(stage, 0) + 1
             group["last_result"] = row
             result_exit = row.get("process_exit")
             # issue 103: exit 130 on a `-candidate-` raw stage is
@@ -6606,6 +6633,8 @@ class UncleTUI:
                 wall_ended.append(max(started, ended))
             group["tokens"].append(event.get("total_tokens"))
             group["attempts"] += 1
+            attempts = group.setdefault("_attempts_by_stage", {})
+            attempts[stage] = attempts.get(stage, 0) + 1
             group.setdefault("_worker_statuses", {})[stage] = {
                 "active": True,
                 "failed": False,
@@ -6618,10 +6647,10 @@ class UncleTUI:
         self._panel_indicator_prefix = {}
         for stage, group in sorted(groups.items(), key=lambda item: item[1]["started"]):
             raw_stages = group.get("raw_stages", set())
-            is_rollup = len(raw_stages) > 1
+            is_rollup = len({public_stage_label(raw) for raw in raw_stages}) > 1
             active = any(raw in stats["active"] for raw in raw_stages) if raw_stages else (stage in stats["active"])
             result = group.get("last_result", {})
-            if is_rollup:
+            if len(raw_stages) > 1:
                 # A retried worker can fail once and later succeed. Use the
                 # latest status for each raw stage, not a sticky history.
                 any_failed = any(status.get("failed")
@@ -6629,14 +6658,26 @@ class UncleTUI:
             else:
                 any_failed = result.get("process_exit") not in (None, 0) or result.get("reported_error") in (True, "true")
             title = ("> " if active else "") + stage
-            if not is_rollup and group["attempts"] > 1:
-                title += " (%d attempts)" % group["attempts"]
+            attempts = max(group.get("_attempts_by_stage", {}).values(), default=group["attempts"])
+            if not is_rollup and attempts > 1:
+                title += " (%d attempts)" % attempts
             if is_rollup:
                 statuses = group.get("_worker_statuses", {})
                 indicator_styles = []
                 indicator_chars = []
+                visible_statuses = {}
                 for raw in sorted(raw_stages):
+                    label = public_stage_label(raw)
                     ws = statuses.get(raw, {})
+                    if label not in visible_statuses:
+                        visible_statuses[label] = dict(ws)
+                    else:
+                        merged = visible_statuses[label]
+                        merged["active"] = merged.get("active") or ws.get("active")
+                        merged["failed"] = merged.get("failed") or ws.get("failed")
+                        if ws.get("failed") or merged.get("exit") == 130:
+                            merged["exit"] = ws.get("exit")
+                for raw, ws in sorted(visible_statuses.items()):
                     # issue 103: a raced candidate gets one of 4 states, not
                     # the plain worker's 2 (running/failed) -- winner (exit
                     # 0), stopped (exit 130: killed once another candidate
@@ -7689,7 +7730,12 @@ class UncleTUI:
         return changed
 
     def _run_loop(self):
-        curses.curs_set(0)
+        # Some valid terminals cannot hide the cursor. That cosmetic capability
+        # must not discard a --application startup action or abort an unattended run.
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
         self.stdscr.keypad(True)
         self.input_timeout = 80
         self.stdscr.timeout(self.input_timeout)

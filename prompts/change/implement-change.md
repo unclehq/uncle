@@ -230,3 +230,11 @@ current evidence. Write one concise final report: changed behavior, exact checks
 and evidence references, unresolved findings. No chronological work diary or
 restatement of requirements. Planning revisions must remain complete plans;
 implementation reports must preserve every required result and failure.
+
+Use current stable test tooling resolved at install time (`latest` or a `^` range
+based on the current release), including Playwright, Vite and Vitest when used;
+never pin an old Playwright or an old Node. Keep the installed Node: do not
+install or switch Node versions. If `package.json` sets `engines.node`, its
+range must accept the installed Node major. Record resolved versions in the
+lockfile; reuse a compatible installation. If an approved plan conflicts,
+report it through the existing review/repair path; do not silently edit it.

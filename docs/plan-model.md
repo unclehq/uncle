@@ -36,6 +36,22 @@ runner's grammar can enforce that the id exists.
 Goals
 - Plan edits address blocks by id. No quoted text, no heading matching, no line numbers.
 - The per-call schema lists the ids and columns that exist, so a wrong target cannot be written.
+  Edit writers derive their ids from assigned finding citations, review locations, headings, requirement links and file owners.
+  Cited containers include their contents; ancestors provide insertion targets without unlocking unrelated siblings. Legacy
+  intro component/file links lead to the owning step. If no direct location matches, heading/keyword relevance selects at most
+  `updated-plan.scope-sections` sections (default 2); only an unmatchable finding falls back to the full plan, with one diagnostic.
+  `updated-plan.finding-scopes 0` restores the full writer scope. These settings use stage environment, family environment,
+  stage config, then family config precedence (`WORKFLOW_UPDATED_CHANGE_PLAN_SCOPE_SECTIONS`,
+  `WORKFLOW_UPDATED_PLAN_SCOPE_SECTIONS`, and the corresponding `.finding-scopes` settings).
+  Resolver scopes use the conflicting targets and their ancestors, with the same evidence fallback for missing targets.
+  Schemas remain inline for runner compatibility, omit redundant keywords and use compact JSON. Self-hosted edit writers
+  and resolvers use the fast generic schema first, escalating to these per-kind scoped schemas only after local plan
+  validation rejects their answer; see [edit-writer settings](updated-plan-slicing.md). Other runners retain scoped schemas.
+  Ownership repair reads legacy heading-form assignments without changing their layout and compares `./path` with `path`.
+  Heading steps under any level of Implementation order/steps/sequence share the same records across ownership, shell and
+  scheduling readers; alphanumeric labels such as `3b` retain their display label and use positional identities internally.
+  Its grammar lists all candidate typed steps and permits removing only unresolved protected paths; rejected packets receive
+  one retry carrying the exact validation error. Existing ownership, unrelated protected paths and verification commands remain fixed.
 - Overlap between writers is exact (same id, same field), not substring matching.
 - Markdown is rendered from the data, deterministically, for humans only.
 - Every stage that reads the plan (review, implementation, checklists, audits) receives plan JSON, whole or
@@ -87,6 +103,8 @@ Ids
 - Everything else gets a generated id, `<section id>.<n>` (`s4.7`), assigned at import in document order and
   stored. New blocks take the next unused number in their section. Ids are never reused after a delete.
 - Steps are addressed by `step-<number>` as written in the plan; `depends_on` holds step numbers.
+  Edit packets add steps with `insert_step`, placement, and unnumbered content. The driver assigns their numbers/ids at
+  merge and rewrites dependencies, including packet-local `new:N` references, in implementation order.
 
 ## Row kinds
 
@@ -481,3 +499,61 @@ at about 2,300 to 3,000 tokens and 52 s. Time follows output; the models write f
   browser tests and the defect-injection runner run together; the install warm-up no longer takes prose words for packages (noinit:
   40 of them, one invalid, so nothing was cached); the first group's step sandboxes are made while the updated plan is written.
 - Estimate, not measured: outline about 15 s, second phase about 20 s, so about 35 to 40 s.
+
+## Dependency compatibility before verification
+
+Plans and scaffolds use current stable test tools resolved at install time and keep
+this machine's installed Node. The opt-in Vite React template uses `latest` for
+Playwright, Vite, Vitest and the Vite React plugin; the generated lockfile records
+concrete versions.
+
+`dependency_versions.py` checks local manifests and resolved Playwright metadata
+without loading project JavaScript or contacting a registry. Deterministic
+preflight and serial/parallel verification use the same check. A version below
+`execution.playwright-min-version` (default `1.50`) or an `engines.node` range
+excluding the installed Node produces one actionable finding through the existing
+failure/repair path. Approved plans are never edited by the guard.
+
+Set `execution.playwright-min-version` or `execution.dependency-version-check`
+(default `true`) in `.uncle/config`; `WORKFLOW_PLAYWRIGHT_MIN_VERSION` and
+`WORKFLOW_DEPENDENCY_VERSION_CHECK` override those values. `UNCLE_CONFIG` selects
+an alternate config file, as for other execution settings. A manifest range is
+not a resolved version: installed package metadata takes precedence over npm
+shrinkwrap/lockfiles, with exact manifest pins as the final fallback. Install-only
+commands may replace stale packages and are checked again afterward. Combined
+install/browser commands inspect the lockfile before installed metadata and reject
+known stale resolutions before launching; keep
+setup separate when upgrading. Dependencies first resolved inside a compound
+command cannot be inspected between its shell operations.
+
+## Implementation step layout
+
+`plan_steps.py` is the shared Markdown extractor for plan import, scheduling,
+ownership checks and scaffold assessment. Implementation order/steps/sequence/plan
+headings may use any heading level. Heading, bold, list and table steps retain
+labels such as `0` and `3b`; scheduling uses their positions. Ownership and
+dependencies may be inline or on following lines. Fenced examples and nested
+numbered instructions stay in the step text.
+
+Plan publication standardizes alternate layouts into the renderer's numbered
+steps and retains their canonical records. Already numbered plans keep their
+existing layout and numbering validation. Bytes outside the implementation
+section are unchanged. Existing canonical records remain authoritative.
+
+An unreadable section, or one whose steps all lack ownership, gets one bounded
+schema extraction request using only that section. The returned records must
+match source lines, name source-owned paths and have valid dependency edges.
+Failure leaves the existing validation and approval gates in control. Recovery attempts
+are cached by section and configuration under `.uncle/workflow/plan-step-recovery`,
+so preview and publication share one attempt.
+
+The following options use existing runner/stage configuration precedence:
+`plan-step-normalize` and `plan-step-recovery` default to `on`,
+`plan-step-answer-tokens` to `4096`, and `plan-step-seconds` to `60`.
+For example, `updated-plan.plan-step-recovery off` disables recovery for that
+stage; `WORKFLOW_SELF_HOSTED_PLAN_STEP_RECOVERY_UPDATED_PLAN=on` overrides it.
+Native Claude and Codex use their schema flags; self-hosted uses the existing
+constrained-completion transport without exploration, repair turns or network
+reconnect retries. The answer-token limit applies to Claude and self-hosted;
+Codex uses the schema and process timeout because its CLI has no answer-token
+limit flag.

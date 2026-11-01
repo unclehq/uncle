@@ -4,6 +4,8 @@
 # caller then runs the specialist round and the writers as before), except a failed specialist or reconciler, which costs only
 # the extra edits.
 set -uo pipefail
+# Retain the explicit stop-on-exhaustion compatibility contract.
+export WORKFLOW_UPDATED_PLAN_DEFER_UNAPPLIED=off
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0
@@ -102,7 +104,7 @@ check "ok: the reconciler saw the corrections and the writers' edits" grep -q '^
 check "ok: hosted reconciler had a schema listing the ids" python3 - "$w/updated-change-plan-edits/schemas/reconcile.json" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1]))
-sys.exit(0 if 'B-2' in s['properties']['ops']['items']['properties']['id']['enum'] else 1)
+sys.exit(0 if 'B-2' in [identifier for v in s['properties']['ops']['items']['anyOf'] for identifier in v['properties'].get('id', {}).get('enum', [])] else 1)
 PY
 
 run_case conflict resolve

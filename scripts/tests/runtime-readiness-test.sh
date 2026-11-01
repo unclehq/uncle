@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+WORKFLOW_REPAIR=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 temp="$(mktemp -d)"
@@ -64,6 +65,8 @@ fi
 # checklist pipeline with zero evidence the app works at all.
 [[ "$(cat "$STATE_DIR/repair-source")" == "$STATE_DIR/runtime-unrunnable-application" ]] \
     || { echo 'runtime repair recorded a source REPAIRs ineligibility fallback treats as already-judged evidence' >&2; exit 1; }
+[[ -s "$STATE_DIR/runtime-unrunnable-application" ]] || { echo 'runtime repair lacks a readable failure report' >&2; exit 1; }
+grep -q 'green-check.log' "$STATE_DIR/runtime-unrunnable-application" || { echo 'runtime repair lacks execution evidence reference' >&2; exit 1; }
 [[ -e "$LOG_DIR/green-check.log" ]] || { echo 'runtime repair discarded green-check evidence' >&2; exit 1; }
 for kept in \
     "$STATE_DIR/parallel-implementation-complete" \
@@ -95,6 +98,13 @@ block = sys.argv[1]
 if block.index('green_wait_final') > block.rindex('route_unrunnable_application'):
     raise SystemExit('runtime route precedes checklist verification')
 PY
+
+review="$(sed -n '/^        TEST_REVIEW)/,/^        VALIDATE_TEST_REVIEW)/p' "$ROOT/scripts/stagegate.sh")"
+python3 - "$review" <<'PYTEST'
+import sys
+block = sys.argv[1]
+assert block.index('run_green_check_auto') < block.index('green_wait_final'), 'interrupted verification must restart before review waits'
+PYTEST
 
 final_audit="$(sed -n '/^        FINAL_AUDIT)/,/^        VALIDATE_AUDIT)/p' "$ROOT/scripts/stagegate.sh")"
 [[ "$final_audit" == *'green_wait_final'* ]] || { echo 'final audit lost green-check reuse guard' >&2; exit 1; }

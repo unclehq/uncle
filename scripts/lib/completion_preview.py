@@ -80,46 +80,79 @@ def prepare_project(root, command):
     return ', '.join(done)
 
 
+def normalize_launch_manifest(root):
+    """Repair only the unambiguous legacy npm-script shape, without executing it."""
+    root = Path(root)
+    manifest = root / '.uncle/launch.json'
+    if not manifest.is_file():
+        return False
+    data = json.loads(manifest.read_text())
+    if not isinstance(data, dict):
+        return False
+    fixed = dict(data)
+    command = fixed.get('command')
+    if isinstance(command, str):
+        match = re.fullmatch(r'npm\s+run\s+([A-Za-z0-9][A-Za-z0-9:_.-]*)', command.strip())
+        if not match:
+            return False
+        try:
+            scripts = json.loads((root / 'package.json').read_text()).get('scripts', {})
+        except (OSError, ValueError, AttributeError):
+            return False
+        if match[1] not in scripts:
+            return False
+        fixed['command'] = ['npm', 'run', match[1]]
+    if 'kind' not in fixed and isinstance(fixed.get('command'), list):
+        url = urlparse(fixed.get('url', ''))
+        if url.scheme in ('http', 'https') and url.hostname in ('localhost', '127.0.0.1', '::1'):
+            fixed['kind'] = 'webpage'
+    if fixed == data:
+        return False
+    # Validate before replacing anything. Invalid or ambiguous manifests retain
+    # their original contents and the normal diagnostic.
+    validate_launch_spec(root, fixed)
+    temporary = manifest.with_name('launch.json.pending')
+    temporary.write_text(json.dumps(fixed, indent=2) + '\n')
+    temporary.replace(manifest)
+    return True
+
+
 def launch_spec(root):
     root = Path(root).resolve()
     manifest = root / '.uncle' / 'launch.json'
     if manifest.is_file():
         data = json.loads(manifest.read_text())
-        if not isinstance(data, dict) or data.get('kind') not in ('command', 'webpage', 'none'):
-            raise ValueError('Invalid .uncle/launch.json kind')
-        command = data.get('command')
-        if command is not None:
-            command = data['command'] = existing_script(root, command)
-        if command is not None and (not isinstance(command, list) or not command or
-                                    not all(isinstance(x, str) and x and '\0' not in x for x in command)):
-            raise ValueError('Launch command must be a nonempty argument array')
-        if data['kind'] == 'command' and command is None:
-            raise ValueError('Command project requires a launch command')
-        if 'terminal' in data and not isinstance(data['terminal'], bool):
-            raise ValueError('Launch terminal flag must be boolean')
-        if data['kind'] == 'command' and any(Path(arg).name in ('uncle', 'uncle_tui.py') for arg in command):
-            data['terminal'] = True
-        if data['kind'] == 'webpage':
-            if data.get('path'):
-                target = (root / data['path']).resolve()
-                if not target.is_relative_to(root) or not target.is_file():
-                    raise ValueError('Webpage path must be an existing project file')
-                data['url'] = target.as_uri()
-            else:
-                url = urlparse(data.get('url', ''))
-                if url.scheme not in ('http', 'https') or url.hostname not in ('localhost', '127.0.0.1', '::1'):
-                    raise ValueError('Preview URL must be a local HTTP address')
-        return data
-    # Deliberately conservative, matching preview_kind.py's own stated
-    # principle: answer `none` unless something positively says otherwise.
-    # A real web app gets an explicit .uncle/launch.json from the plan
-    # (prompts/project-plan.md requires it); an index.html's mere presence
-    # is not reliable evidence of that -- a CLI project can have one for
-    # unrelated reasons (uncle's own repo does, its status-dashboard
-    # preview) -- and opening a browser tab against a project that never
-    # asked for one is wrong regardless of why the file is there.
+        return validate_launch_spec(root, data)
     return {'kind': 'none'}
 
+
+def validate_launch_spec(root, data):
+    root = Path(root).resolve()
+    if not isinstance(data, dict) or data.get('kind') not in ('command', 'webpage', 'none'):
+        raise ValueError('Invalid .uncle/launch.json kind')
+    command = data.get('command')
+    if command is not None:
+        command = data['command'] = existing_script(root, command)
+    if command is not None and (not isinstance(command, list) or not command or
+                                not all(isinstance(x, str) and x and '\0' not in x for x in command)):
+        raise ValueError('Launch command must be a nonempty argument array')
+    if data['kind'] == 'command' and command is None:
+        raise ValueError('Command project requires a launch command')
+    if 'terminal' in data and not isinstance(data['terminal'], bool):
+        raise ValueError('Launch terminal flag must be boolean')
+    if data['kind'] == 'command' and any(Path(arg).name in ('uncle', 'uncle_tui.py') for arg in command):
+        data['terminal'] = True
+    if data['kind'] == 'webpage':
+        if data.get('path'):
+            target = (root / data['path']).resolve()
+            if not target.is_relative_to(root) or not target.is_file():
+                raise ValueError('Webpage path must be an existing project file')
+            data['url'] = target.as_uri()
+        else:
+            url = urlparse(data.get('url', ''))
+            if url.scheme not in ('http', 'https') or url.hostname not in ('localhost', '127.0.0.1', '::1'):
+                raise ValueError('Preview URL must be a local HTTP address')
+    return data
 
 class CompletionPreview:
     def __init__(self, root):
@@ -258,3 +291,15 @@ class CompletionPreview:
             self.reader_thread.join(timeout=1)
         if self.process and self.process.stdout and (not self.reader_thread or not self.reader_thread.is_alive()):
             self.process.stdout.close()
+
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) != 3 or sys.argv[1] != '--normalize':
+        raise SystemExit('usage: completion_preview.py --normalize PROJECT')
+    try:
+        if normalize_launch_manifest(sys.argv[2]):
+            print('Normalized generated launch metadata to the canonical argument-array contract.')
+        launch_spec(sys.argv[2])
+    except (OSError, ValueError) as error:
+        raise SystemExit('Invalid launch metadata: ' + str(error))

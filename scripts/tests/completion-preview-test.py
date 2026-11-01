@@ -8,10 +8,31 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
-from completion_preview import CompletionPreview, launch_spec, has_starred
+from completion_preview import CompletionPreview, launch_spec, has_starred, normalize_launch_manifest
 
 
 class ScriptFallback(unittest.TestCase):
+    def test_legacy_generated_manifest_is_repaired_before_verification(self):
+        root = self.project({'preview': 'vite preview'})
+        manifest = root / '.uncle/launch.json'
+        manifest.write_text(json.dumps({'command': 'npm run preview', 'url': 'http://127.0.0.1:4173'}))
+        with patch('completion_preview.subprocess.run') as run:
+            self.assertTrue(normalize_launch_manifest(root))
+            run.assert_not_called()
+        self.assertEqual(launch_spec(root)['command'], ['npm', 'run', 'preview'])
+        self.assertEqual(json.loads(manifest.read_text())['kind'], 'webpage')
+        self.assertFalse(normalize_launch_manifest(root))
+
+    def test_normalization_does_not_guess_shell_commands_or_unknown_scripts(self):
+        root = self.project({'preview': 'vite preview'})
+        manifest = root / '.uncle/launch.json'
+        for command in ('npm run preview && touch bad', 'npm run missing', 'echo $(touch bad)'):
+            original = json.dumps({'command': command, 'url': 'http://127.0.0.1:4173'})
+            manifest.write_text(original)
+            self.assertFalse(normalize_launch_manifest(root))
+            self.assertEqual(manifest.read_text(), original)
+        self.assertFalse((root / 'bad').exists())
+
     def project(self, scripts, built=False, command=('npm', 'run', 'start')):
         root = Path(tempfile.mkdtemp())
         (root / '.uncle').mkdir()
@@ -35,6 +56,49 @@ class ScriptFallback(unittest.TestCase):
         self.assertEqual(launch_spec(self.project({'start': 'x', 'dev': 'y'}))['command'], ['npm', 'run', 'start'])
         self.assertEqual(launch_spec(self.project({'dev': 'y'}, command=('node', 'server.js')))['command'], ['node', 'server.js'])
         self.assertEqual(launch_spec(self.project({'build': 'b'}))['command'], ['npm', 'run', 'start'])
+
+
+class ProjectKinds(unittest.TestCase):
+    def test_shared_driver_normalization_supports_projects_without_node(self):
+        cases = [
+            ('library', None),
+            ('no-preview', {'kind': 'none'}),
+            ('python-cli', {'kind': 'command', 'command': ['python3', 'main.py']}),
+            ('go-cli', {'kind': 'command', 'command': ['./bin/tool']}),
+            ('rust-cli', {'kind': 'command', 'command': ['cargo', 'run']}),
+            ('native-cli', {'kind': 'command', 'command': ['./build/tool']}),
+            ('python-web', {'kind': 'webpage', 'command': ['python3', '-m', 'http.server', '8000'],
+                            'url': 'http://127.0.0.1:8000'}),
+            ('static-web', {'kind': 'webpage', 'path': 'index.html'}),
+        ]
+        helper = Path(__file__).resolve().parents[1] / 'lib/completion_preview.py'
+        for name, spec in cases:
+            with self.subTest(project=name), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root / '.uncle').mkdir()
+                (root / 'index.html').write_text('<!doctype html><title>Fixture</title>')
+                manifest = root / '.uncle/launch.json'
+                if spec is not None:
+                    manifest.write_text(json.dumps(spec))
+                before = manifest.read_bytes() if manifest.exists() else None
+                result = subprocess.run([sys.executable, str(helper), '--normalize', str(root)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(manifest.read_bytes() if manifest.exists() else None, before)
+                self.assertFalse((root / 'package.json').exists())
+                self.assertFalse((root / 'node_modules').exists())
+                self.assertEqual(launch_spec(root)['kind'], spec['kind'] if spec else 'none')
+
+    def test_non_react_web_launch_infers_kind_without_npm(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / '.uncle').mkdir()
+            command = ['python3', '-m', 'http.server', '8000']
+            (root / '.uncle/launch.json').write_text(json.dumps({
+                'command': command, 'url': 'http://127.0.0.1:8000'}))
+            self.assertTrue(normalize_launch_manifest(root))
+            self.assertEqual(launch_spec(root)['command'], command)
+            self.assertEqual(launch_spec(root)['kind'], 'webpage')
 
 
 class Prepare(unittest.TestCase):

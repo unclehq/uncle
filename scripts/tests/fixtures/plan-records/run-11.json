@@ -1,0 +1,5 @@
+{
+  "source": "groovy-calc-11/.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json (implementation headings, ownership, dependencies only)",
+  "narrative": "## 12. Implementation order\n\n### Step 1: Project scaffold and theme\n\n**Owns:** `package.json`, `vite.config.js`, `playwright.config.js`, `index.html`, `src/main.jsx`, `src/index.css`, `src/theme.css`, `.gitignore`\n\n**Owns (additional):** `.eslintrc.cjs`\n\n### Step 2: Calculator logic (reducer)\n\n**Owns:** `src/calcReducer.js`, `src/calcReducer.test.js`\n\n### Step 3: UI components\n\n**Owns:** `src/Display.jsx`, `src/CalcButton.jsx`, `src/Keypad.jsx`, `src/Calculator.jsx`, `src/App.jsx`, `src/App.test.jsx`\n\n### Step 4: Browser tests\n\n**Owns:** `tests/theme.spec.js`, `tests/calculator.spec.js`\n\n### Step 5: Defect injection runner\n\n**Owns:** `tests/injections/manifest.json`, `tests/injections/run.js`\n\n### Step 6: Launch metadata\n\n**Owns:** `.uncle/launch.json`, `.github/workflows/ci.yml`\n",
+  "protected_verification_paths": "src/calcReducer.test.js\ntests/theme.spec.js\nsrc/App.test.jsx\ntests/calculator.spec.js\ntests/injections/run.js\nplaywright.config.js"
+}

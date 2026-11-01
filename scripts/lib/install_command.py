@@ -11,6 +11,7 @@ that creates it; where it exists the command is untouched.
     install_command.py unprotect PATHS_FILE [PROJECT_ROOT]      drop lockfiles that do not exist yet from the protected paths
 """
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -19,7 +20,38 @@ YARN_FROZEN = re.compile(r'(\byarn(?:\s+install)?)\s+--frozen-lockfile\b')
 PNPM_FROZEN = re.compile(r'(\bpnpm\s+(?:install|i))\s+--frozen-lockfile\b')
 
 
-PLAYWRIGHT_INSTALL = re.compile(r'^\s*npx\s+playwright\s+install\b(.*)$')
+BROWSER_INSTALL = re.compile(r'(?<![\w./-])(?:npx\s+(?:--no-install\s+)?playwright|(?:\./)?node_modules/\.bin/playwright)\s+install\b')
+
+
+def browser_install_commands(line):
+    # Only executable shell text, never quoted JS or diagnostic strings.
+    unquoted = set()
+    quote = None
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == '\\' and quote != "'":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "\"'`":
+            quote = char
+        else:
+            unquoted.add(index)
+    helper = shlex.quote(str(Path(__file__).with_name('browser_setup.py').resolve()))
+    changed = False
+    def replace(match):
+        nonlocal changed
+        if (match.start() not in unquoted or
+                not re.search(r'(?:^|[;&|()\n])\s*$', line[:match.start()])):
+            return match[0]
+        changed = True
+        return 'python3 ' + helper
+    return BROWSER_INSTALL.sub(replace, line), changed
 
 
 def adapt(line, root):
@@ -35,12 +67,9 @@ def adapt(line, root):
     if PNPM_FROZEN.search(line) and not (root / 'pnpm-lock.yaml').exists():
         line = PNPM_FROZEN.sub(r'\1', line)
         changed.append('`--frozen-lockfile` needs a pnpm-lock.yaml and there is none')
-    found = PLAYWRIGHT_INSTALL.match(line)
-    if found and not re.search(r'&&|;|\|', line):
-        # Once the project's dependencies are installed, `npx playwright` is a local binary; without --no-install npx asks the
-        # registry first (about eight seconds, every run).  Fall back to the plain command when it is not local yet.
-        line = 'npx --no-install playwright install%s || npx playwright install%s' % (found.group(1), found.group(1))
-        changed.append('the Playwright CLI is local once the install has run; `--no-install` skips the registry check')
+    line, browser_changed = browser_install_commands(line)
+    if browser_changed:
+        changed.append('bound browser installation and recover a stalled local CLI with isolated Node 22')
     return line, '; '.join(changed)
 
 

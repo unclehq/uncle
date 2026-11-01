@@ -18,8 +18,8 @@ what it receives for runners with no schema support.
     worker_schemas.py section-model NAME OUTPUT   project-plan section worker, writing typed blocks (NAME outline: the outline)
     worker_schemas.py edit PLAN.json OUTPUT [owner]   updated-plan edit writer
     worker_schemas.py resolve PLAN.json OUTPUT        updated-plan resolver
-    worker_schemas.py edit-ops PLAN.json OUTPUT [owner]   the same writer, editing the plan model by id
-    worker_schemas.py resolve-ops PLAN.json OUTPUT        the same resolver, for ops
+    worker_schemas.py edit-ops PLAN.json OUTPUT [owner] [--scope IDS.json]   the same writer, editing the plan model by id
+    worker_schemas.py resolve-ops PLAN.json OUTPUT [--scope IDS.json]        the same resolver, for ops
     worker_schemas.py requirements OUTPUT                     the requirements interpretation
     worker_schemas.py synthesis KIND protected|plain OUTPUT   the single-call updated plan (KIND plan or change-plan)
 """
@@ -182,42 +182,196 @@ def _strings(names, maximum=8000):
     return _object({name: _text(maximum, 0) for name in names}, ())
 
 
-def _op(ids=None):
+def _op(ids=None, model=None):
     """One flat edit of the plan model (docs/plan-model.md): every value a string, so any grammar accepts it.
     `ids`, when given, are the only ids the edit may name."""
-    from plan_model import FIELD_NAMES, OP_NAMES
+    from plan_model import FIELD_NAMES, OP_NAMES, ROW_KINDS
     pick = (lambda extra=(): {'type': 'string', 'enum': sorted(ids) + list(extra)}) if ids else (lambda extra=(): _text(120, 0))
     step = ['title', 'text', 'owns', 'depends_on']
     block = _object({'kind': {'type': 'string', 'enum': ['prose', 'heading', 'code', 'list']},
                      'text': _text(EDIT_MAX, 0), 'level': _text(2, 0), 'lang': _text(30, 0),
                      'items': {'type': 'array', 'maxItems': 60, 'items': _text(2000)}}, ('kind',))
-    return _object({
-        'op': {'type': 'string', 'enum': list(OP_NAMES)},
+    generic = _object({
+        'op': {'type': 'string', 'enum': [name for name in OP_NAMES if name not in ('insert_step', 'set_fields') and (model is None or name != 'insert_row')]},
         'id': pick(), 'target': pick(), 'after': pick(['']),
         'fields': _strings(FIELD_NAMES + step), 'text': _text(EDIT_MAX, 0),
-        'new': _strings(['id', 'number'] + FIELD_NAMES + step, EDIT_MAX),
+        'new': _strings(['id'] + FIELD_NAMES + step, EDIT_MAX),
         'block': block, 'heading': _text(300, 0), 'blocks': {'type': 'array', 'maxItems': 20, 'items': block},
     }, ('op',))
+    variants = [generic, _new_step(ids)]
+    if model is None:
+        # Kind-only callers lack a plan index. Canonical behavior/invariant IDs
+        # still have unambiguous fields; driver schemas use the actual model.
+        known = {'B': 'behavior', 'INV': 'invariant'}
+        for kind, specs in ROW_KINDS.items():
+            keys = [key for key in ids or [] if known.get(key.split('-')[0], kind) == kind]
+            if ids is not None and not keys:
+                continue
+            variants.append(_object({'op': {'const': 'set_fields'},
+                                     'id': _choice(keys) if ids is not None else _text(120),
+                                     'fields': _strings([f[0] for f in specs if f[0] != 'id'])},
+                                    ('op', 'id', 'fields')))
+    if model is not None:
+        variants.extend(v for v in model_op(model, ids).get('anyOf', [])
+                        if v['properties']['op']['const'] in ('set_fields', 'insert_row'))
+    return {'anyOf': variants}
 
 
-def edit_ops_packet(ids=None, owner=False):
+def _new_step(ids=None):
+    steps = [key for key in ids if key.startswith('step-')] if ids is not None else None
+    anchor = _choice(steps) if steps else _text(120)
+    strings = {'type': 'array', 'maxItems': 150, 'items': _text(4000)}
+    return _object({'op': {'const': 'insert_step'}, 'after': _choice(steps + ['end']) if steps else _text(120),
+                    'before': anchor,
+                    'new': _object({'title': _text(EDIT_MAX, 0), 'text': _text(EDIT_MAX, 0), 'owns': strings,
+                                    'depends_on': strings}, ('title', 'text', 'owns', 'depends_on'))}, ('op', 'new'))
+
+
+def scoped_ids(model, targets):
+    """Explicit containers include their contents; ancestors supply insertion targets only."""
+    from plan_model import index, parent_of
+    where, parents = index(model), parent_of(model)
+    selected = set(targets) & set(where)
+    for key in where:
+        parent = parents.get(key)
+        while parent:
+            if parent in targets:
+                selected.add(key)
+                break
+            parent = parents.get(parent)
+    for key in list(selected):
+        parent = parents.get(key)
+        while parent:
+            selected.add(parent)
+            parent = parents.get(parent)
+    return sorted(selected)
+
+
+def model_op(model, ids=None):
+    """Closed operation variants, grouped by actual row kind instead of by individual id."""
+    from plan_model import ROW_KINDS, index, steps_of
+    allowed = set(index(model))
+    if ids is not None:
+        allowed.intersection_update(ids)
+    variants, rows, texts, steps = [], {}, [], []
+    step_blocks = False
+    strings = {'type': 'array', 'maxItems': 150, 'items': _text(4000)}
+    references = _choice([step['id'] for step in steps_of(model)] + ['new:%d' % n for n in range(1, 121)])
+    step_fields = {'title': _text(EDIT_MAX, 0), 'text': _text(EDIT_MAX, 0), 'owns': strings,
+                   'depends_on': {'type': 'array', 'maxItems': 150,
+                                  'items': {'anyOf': [{'type': 'integer', 'minimum': 0}, references]}}}
+
+    def fields(kind, new=False):
+        properties = {name: strings if is_list else _text(EDIT_MAX, 0)
+                      for name, _, is_list, _ in ROW_KINDS[kind] if new or name != 'id'}
+        if new:
+            properties['id'] = _text(120)
+        return _object(properties, ('id',) if new else ())
+
+    def add(op, properties, required):
+        variants.append(_object(dict(op={'const': op}, **properties), ['op'] + list(required)))
+
+    def pick(values):
+        return {'type': 'string', 'enum': sorted(values)}
+
+    block = {'anyOf': [
+        _object({'kind': {'const': 'prose'}, 'text': _text(EDIT_MAX, 0)}, ('kind', 'text')),
+        _object({'kind': {'const': 'heading'}, 'text': _text(EDIT_MAX, 0),
+                 'level': {'type': 'string', 'enum': ['3', '4', '5', '6']}}, ('kind', 'text')),
+        _object({'kind': {'const': 'code'}, 'text': _text(EDIT_MAX, 0), 'lang': _text(30, 0)}, ('kind', 'text')),
+        _object({'kind': {'const': 'list'}, 'items': strings}, ('kind', 'items'))]}
+    sections = []
+    for section in model['sections']:
+        if section['id'] in allowed:
+            sections.append(section['id'])
+            add('insert_block', {'target': pick([section['id']]),
+                                'after': pick([''] + [b['id'] for b in section['blocks'] if b['id'] in allowed]),
+                                'block': block}, ('target', 'block'))
+        for node in section['blocks']:
+            members = node.get('rows') or node.get('items') or []
+            member_ids = [r['id'] for r in members if r['id'] in allowed]
+            kind = node['kind']
+            if kind == 'rows':
+                rows.setdefault(node['row_kind'], []).extend(member_ids)
+            elif kind == 'steps':
+                steps.extend(member_ids)
+                step_blocks = step_blocks or node['id'] in allowed
+            elif kind == 'list':
+                texts.extend(member_ids)
+            if node['id'] not in allowed:
+                continue
+            if kind in ('prose', 'heading', 'code'):
+                texts.append(node['id'])
+            if kind in ('rows', 'list'):
+                new = (fields(node['row_kind'], new=True) if kind == 'rows' else
+                       _object({'id': _text(120), 'text': _text(EDIT_MAX, 0)}, ('text',)))
+                add('insert_row' if kind == 'rows' else 'insert_item',
+                    {'target': pick([node['id']]), 'after': pick([''] + member_ids), 'new': new}, ('target', 'new'))
+    for kind, keys in rows.items():
+        if keys:
+            add('set_fields', {'id': pick(keys), 'fields': fields(kind)}, ('id', 'fields'))
+    if steps:
+        add('set_step', {'id': pick(steps), 'fields': _object(step_fields, ())}, ('id', 'fields'))
+    if steps or step_blocks:
+        variants.append(_new_step(steps))
+    if texts:
+        add('set_text', {'id': pick(texts), 'text': _text(EDIT_MAX, 0)}, ('id', 'text'))
+    deletable = []
+    for key, (node, _, _) in index(model).items():
+        if key in allowed and 'blocks' not in node and all(
+                child['id'] in allowed for child in node.get('rows') or node.get('items') or []):
+            deletable.append(key)
+    if deletable:
+        add('delete', {'id': pick(deletable)}, ('id',))
+    if sections:
+        add('insert_section', {'after': pick(sections), 'heading': _text(300),
+                               'blocks': {'type': 'array', 'maxItems': 20, 'items': block}}, ('after', 'heading', 'blocks'))
+    return {'anyOf': variants} if variants else {}
+
+
+def _minimal(schema):
+    """Omit redundant keywords while retaining the inline subset accepted by every runner."""
+    if isinstance(schema, list):
+        return [_minimal(value) for value in schema]
+    if not isinstance(schema, dict):
+        return schema
+    result = {key: _minimal(value) for key, value in schema.items()}
+    if result.get('minLength') == 0:
+        del result['minLength']
+    if result.get('required') == []:
+        del result['required']
+    if result.get('type') == 'string' and result.get('enum') and all(isinstance(v, str) for v in result['enum']):
+        del result['type']
+        if len(result['enum']) == 1:
+            result['const'] = result.pop('enum')[0]
+    return result
+
+
+def _ops(ids, model, maximum, generic_model=None):
+    item = model_op(model, ids) if model is not None else _op(ids, generic_model)
+    return {'type': 'array', 'maxItems': maximum if item else 0, 'items': item}
+
+
+def edit_ops_packet(ids=None, owner=False, model=None, generic_model=None):
     owner = owner and os.environ.get('UNCLE_PLAN_KIND') != 'change-plan'
     properties = {
         'dispositions': {'type': 'array', 'maxItems': 40, 'items': _object({
             'finding': _text(80), 'disposition': {'type': 'string', 'enum': list(DISPOSITIONS)},
             'reason': _text(300), 'plan_change': _text(300)}, ('finding', 'disposition', 'reason', 'plan_change'))},
-        'ops': {'type': 'array', 'maxItems': 120, 'items': _op(ids)},
+        'ops': _ops(ids, model, 120, generic_model),
         'commands_replace': _commands(),
     }
-    if owner:
+    if owner or os.environ.get('UNCLE_UPDATED_PLAN_STRUCTURE_REPAIR') == '1':
         properties['protected_verification_paths'] = _text(4000)
-    return envelope(EDIT_OPS_KIND, properties, ['dispositions', 'ops'] + (['protected_verification_paths'] if owner else []))
+    packet = envelope(EDIT_OPS_KIND, properties, ['dispositions', 'ops'] + (['protected_verification_paths'] if owner else []))
+    return _minimal(packet) if model is not None else packet
 
 
-def resolution_ops_packet(ids=None):
-    return envelope(RESOLUTION_OPS_KIND, {'resolutions': {'type': 'array', 'minItems': 1, 'maxItems': 40, 'items': _object({
-        'group': _text(40), 'ops': {'type': 'array', 'maxItems': 60, 'items': _op(ids)}, 'commands_replace': _commands()},
+def resolution_ops_packet(ids=None, model=None, generic_model=None):
+    packet = envelope(RESOLUTION_OPS_KIND, {'resolutions': {'type': 'array', 'minItems': 1, 'maxItems': 40, 'items': _object({
+        'group': _text(40), 'ops': _ops(ids, model, 60, generic_model), 'commands_replace': _commands()},
         ('group',))}}, ['resolutions'])
+    return _minimal(packet) if model is not None else packet
 
 
 # What a self-hosted adapter enforces when it knows only the kind named in the prompt.
@@ -239,6 +393,18 @@ def plan_ids(plan_json):
 
 
 def main(argv):
+    argv = list(argv)
+    scope = None
+    attempt = None
+    if '--attempt' in argv:
+        at = argv.index('--attempt')
+        attempt = argv[at + 1]
+        del argv[at:at + 2]
+    if '--scope' in argv:
+        at = argv.index('--scope')
+        scope = json.loads(Path(argv[at + 1]).read_text(encoding='utf-8'))
+        scope = scope['ids'] if isinstance(scope, dict) else scope
+        del argv[at:at + 2]
     output = argv[2] if len(argv) > 2 else None
     try:
         if len(argv) == 3 and argv[0] == 'section':
@@ -267,14 +433,21 @@ def main(argv):
                 schema = section_model_packet([h[3:] for h in sections.expected_headings(argv[1])], sections.trace_letters(argv[1]),
                                               sections.row_kinds_of(argv[1]), sections.allows_steps(argv[1]))
         elif len(argv) in (3, 4) and argv[0] == 'edit-ops':
-            schema = edit_ops_packet(plan_ids(argv[1]), owner=len(argv) == 4)
+            from plan_model import load_model
+            from updated_plan_ops import strict_schema_attempt
+            model = load_model(argv[1]) if strict_schema_attempt(attempt) else None
+            schema = edit_ops_packet(scope if scope is not None else plan_ids(argv[1]), owner=len(argv) == 4, model=model, generic_model=load_model(argv[1]))
         elif len(argv) == 3 and argv[0] == 'resolve-ops':
-            schema = resolution_ops_packet(plan_ids(argv[1]))
+            from plan_model import load_model
+            from updated_plan_ops import strict_schema_attempt
+            model = load_model(argv[1]) if strict_schema_attempt(attempt) else None
+            schema = resolution_ops_packet(scope if scope is not None else plan_ids(argv[1]), model=model, generic_model=load_model(argv[1]))
         elif len(argv) == 3 and argv[0] == 'resolve':
             schema = resolution_packet(plan_headings(argv[1]))
         else:
             raise SystemExit(__doc__)
-        Path(output).write_text(json.dumps(schema, indent=2) + '\n', encoding='utf-8')
+        formatting = {'separators': (',', ':')} if argv[0] in ('edit-ops', 'resolve-ops') else {'indent': 2}
+        Path(output).write_text(json.dumps(schema, **formatting) + '\n', encoding='utf-8')
     except (OSError, ValueError, KeyError) as error:
         print('worker schemas: %s' % error, file=sys.stderr)
         return 1

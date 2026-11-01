@@ -1,0 +1,21 @@
+{
+  "name": "uncle-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": { "react": "18.3.1", "react-dom": "18.3.1" },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@vitejs/plugin-react": "latest",
+    "jsdom": "25.0.1",
+    "vite": "latest",
+    "vitest": "latest"
+  }
+}

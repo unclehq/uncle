@@ -6,6 +6,8 @@ from evidence_index import save
 
 
 def key(command):
+    if os.environ.get('WORKFLOW_CHECK_REUSE') == '0':
+        return None
     state=Path('.uncle/workflow')
     policy=state/'check-reuse.json'
     try:

@@ -56,7 +56,11 @@ check "the report says so" grep -q 'running in the background' "$GREEN_MD"
 
 # Evidence consumers may wait once for the published result.  A failed command
 # is still final evidence; only PENDING is prohibited.
+start=$SECONDS
 green_wait_final > /dev/null
+check "default wait returns immediately" test $((SECONDS - start)) -lt 1
+check "default wait preserves pending evidence" grep -q '^PENDING' "$GREEN_CLASS"
+WORKFLOW_WAIT_FOR_GREEN=1 green_wait_final > /dev/null
 check "wait helper publishes final evidence" not grep -q '^PENDING' "$GREEN_CLASS"
 check "wait helper accepts final regression evidence" grep -q '^REGRESSION' "$GREEN_CLASS"
 
@@ -90,7 +94,12 @@ check "the first run is gone" not kill -0 "$first" 2>/dev/null
 wait "$GREEN_BG_PID" 2>/dev/null
 check "the second one published" grep -q '^PASS' "$GREEN_CLASS"
 
-# the same tree while running is not started twice
+# the same tree while running is not started twice, including normalized setup commands
+python3 - <<'NORMALIZE_FIXTURE'
+from pathlib import Path
+p = Path(".uncle/docs/UPDATED_PROJECT_PLAN.md")
+p.write_text(p.read_text().replace("npm test", "npm ci"))
+NORMALIZE_FIXTURE
 FAKE_SECONDS=5; green_check_background_start > /dev/null; running="$GREEN_BG_PID"
 resumed_pid="$( ( GREEN_BG_PID=""; green_pending && printf '%s' "$GREEN_BG_PID" ) )"
 check "a resumed driver discovers the durable verifier pid" test "$resumed_pid" == "$running"

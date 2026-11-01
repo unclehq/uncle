@@ -21,6 +21,7 @@
 // pass first, or no result is trustworthy.  Exit 0 when every defect was caught and every control passed, else 1.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -73,7 +74,15 @@ function normalize(e, i) {
 function copyProject(dest) {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(ROOT, dest, { recursive: true, filter: (src) => !SKIP.has(path.basename(src)) || src === ROOT });
-  if (exists(path.join(ROOT, 'node_modules'))) fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(dest, 'node_modules'), 'dir');
+  const linkDependencies = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const source = path.join(dir, entry.name);
+      if (entry.name === 'node_modules') {
+        fs.symlinkSync(source, path.join(dest, path.relative(ROOT, source)), 'dir');
+      } else if (entry.isDirectory() && !SKIP.has(entry.name)) linkDependencies(source);
+    }
+  };
+  linkDependencies(ROOT);
 }
 
 const CONFIGS = ['playwright.config.js', 'playwright.config.mjs', 'playwright.config.cjs', 'playwright.config.ts',
@@ -113,20 +122,50 @@ function rewritePort(dir, from, to) {
 function commandFor(entry) {
   if (entry.command) return entry.command;
   if (entry.specs.length === 0) throw new Error('no spec and no command');
-  const list = entry.specs.join(' ');
-  const pkg = exists(path.join(ROOT, 'package.json')) ? JSON.parse(read(path.join(ROOT, 'package.json'))) : {};
+  const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const packageRoot = (spec) => {
+    let dir = path.dirname(path.resolve(ROOT, spec));
+    if (path.relative(ROOT, dir).startsWith('..')) throw new Error('spec outside project');
+    while (dir !== ROOT && !exists(path.join(dir, 'package.json'))) dir = path.dirname(dir);
+    return dir;
+  };
+  const roots = entry.specs.map(packageRoot);
+  if (roots.some((dir) => dir !== roots[0])) throw new Error('specs span packages; supply an explicit command');
+  const root = roots[0];
+  const list = entry.specs.map((spec) => quote(path.relative(root, path.resolve(ROOT, spec)))).join(' ');
+  const pkg = exists(path.join(root, 'package.json')) ? JSON.parse(read(path.join(root, 'package.json'))) : {};
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-  const e2e = entry.specs.some((s) => /\.spec\.|[\\/]e2e[\\/]/.test(s)) && CONFIGS.slice(0, 4).some((c) => exists(path.join(ROOT, c)));
-  if (e2e) return `${pkg.scripts?.build ? 'npm run build && ' : ''}npx playwright test ${list}`;
-  if (deps.vitest) return `npx vitest run ${list}`;
-  if (deps.jest) return `npx jest ${list}`;
-  return `node --test ${list}`;
+  const e2e = entry.specs.some((s) => /\.spec\.|[\\/]e2e[\\/]/.test(s)) && CONFIGS.slice(0, 4).some((c) => exists(path.join(root, c)));
+  const prefix = root === ROOT ? '' : `cd ${quote(path.relative(ROOT, root))} && `;
+  const title = entry.expected ? ' --grep ' + quote(String(entry.expected).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) : '';
+  if (e2e) return `${prefix}${pkg.scripts?.build ? 'npm run build && ' : ''}npx playwright test ${list}${title}`;
+  if (deps.vitest) return `${prefix}npx vitest run ${list}`;
+  if (deps.jest) return `${prefix}npx jest ${list}`;
+  return `${prefix}node --test ${list}`;
 }
 
-function run(command, cwd) {
+const allocatedPorts = new Set();
+async function availablePort() {
+  while (true) {
+    const port = await new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        const port = server.address().port;
+        server.close(() => resolve(port));
+      });
+    });
+    if (!allocatedPorts.has(port)) { allocatedPorts.add(port); return port; }
+  }
+}
+
+function run(command, cwd, port) {
   return new Promise((resolve) => {
     const started = Date.now();
-    const child = spawn('bash', ['-c', command], { cwd, detached: true, env: { ...process.env, CI: '1', FORCE_COLOR: '0' } });
+    const child = spawn('bash', ['-c', command], { cwd, detached: true, env: { ...process.env, CI: '1', FORCE_COLOR: '0',
+      TEST_PORT: String(port), PLAYWRIGHT_PORT: String(port),
+      TEST_OUTPUT_DIR: path.join(cwd, '.uncle/verification/browser'),
+      PLAYWRIGHT_OUTPUT_DIR: path.join(cwd, '.uncle/verification/browser') } });
     let output = '';
     let timedOut = false;
     const collect = (d) => { if (output.length < 400000) output += d; };
@@ -163,8 +202,9 @@ for (const e of entries) {
 const controls = await pool(commands, async (command, i) => {
   const dir = path.join(SCRATCH, `control-${i}`);
   copyProject(dir);
-  rewritePort(dir, base, base ? base + 900 + i : null);
-  const r = await run(command, dir);
+  const port = await availablePort();
+  rewritePort(dir, base, port);
+  const r = await run(command, dir, port);
   log(`${r.code === 0 ? 'CONTROL OK  ' : 'CONTROL FAIL'}  ${command}  (${r.seconds.toFixed(1)}s)`);
   if (r.code !== 0) log(r.output.split('\n').slice(-12).join('\n'));
   return { command, ok: r.code === 0 };
@@ -189,8 +229,9 @@ await pool(entries, async (e, i) => {
   const count = e.find instanceof RegExp ? (text.match(new RegExp(e.find.source, `${e.find.flags.replace('g', '')}g`)) || []).length : text.split(e.find).length - 1;
   if (count !== 1) return finish('INVALID', `find occurs ${count} times in ${e.file}, not once`);
   fs.writeFileSync(target, e.find instanceof RegExp ? text.replace(e.find, e.replace) : text.replace(e.find, () => e.replace));
-  rewritePort(dir, base, base ? base + 1 + i : null);
-  const r = await run(e.cmd, dir);
+  const port = await availablePort();
+  rewritePort(dir, base, port);
+  const r = await run(e.cmd, dir, port);
   const named = e.expected === undefined || r.output.includes(String(e.expected));
   if (r.code === 0) return finish('SURVIVED', 'the tests still pass with this defect in', r.seconds);
   if (strict && !named) return finish('SURVIVED', `failed, but not in the expected test (${e.expected})`, r.seconds);

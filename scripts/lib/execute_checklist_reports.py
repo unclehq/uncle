@@ -7,10 +7,28 @@ def main(project='.', empty=False):
  p=Path(project); docs=p/'.uncle/docs'; state=p/'.uncle/workflow/documents'
  workers={'results': []} if empty else json.loads((state/'EXECUTE_CHECKLIST_WORKERS.json').read_text())
  checklist=json.loads((state/'MANUAL_CHECKLIST.json').read_text())
- required={c['id']:bool(c.get('required',True)) for c in checklist.get('checks',[])}
+ checks=checklist.get('checks')
+ if not isinstance(checks,list):
+  raise ValueError('Canonical checklist must contain an explicit checks list')
+ required={c['id']:bool(c.get('required',True)) for c in checks}
  rows=[]
  for r in workers['results']:
   rows.append({'id':r['id'],'required':required.get(r['id'],True),'status':r['status'],'evidence':r['evidence'],'action':r['action'],'expected_result':r['expected_result'],'actual_result':r['actual_result'],'defect_ids':[r['defect_reference']] if r.get('defect_reference') else []})
+ observed={r['id'] for r in rows}
+ for c in checks:
+  if c['id'] not in observed:
+   rows.append({'id':c['id'],'required':required[c['id']],'status':'NOT RUN',
+    'evidence':'No worker observation was supplied for this checklist item.',
+    'action':c.get('exact_action',''),'expected_result':c.get('expected_result',''),
+    'actual_result':'Not performed.','defect_ids':[]})
+ if not any(required.values()):
+  scope_id='CHECKLIST-SCOPE'
+  while scope_id in required: scope_id+='-EMPTY'
+  rows.append({'id':scope_id,'required':True,'status':'PASS',
+   'evidence':'.uncle/workflow/documents/MANUAL_CHECKLIST.json contains zero required checks; optional observations remain NOT RUN unless supplied.',
+   'action':'Inspect the canonical checklist for required checks.',
+   'expected_result':'No required checklist work remains uncovered.',
+   'actual_result':'Zero required checks are declared.','defect_ids':[]})
  payload={'schema':'uncle.artifact/v1','kind':'execute-checklist','results':rows}
  (state/'EXECUTE_CHECKLIST.json').write_text(json.dumps(payload,indent=2)+'\n')
  # VERIFICATION_REPORT is the canonical acceptance-routing artifact. Keep it

@@ -115,6 +115,11 @@ done
         package.build_archive(source, output)
         with tarfile.open(output / "uncle.tar.gz") as archive:
             names = archive.getnames()
+            for relative in ('scripts/lib/browser_setup.py', 'scripts/lib/completion_preview.py',
+                             'scripts/lib/execute_checklist_reports.py', 'scripts/lib/install_command.py',
+                             'prompts/implement.md', 'prompts/change/implement-change.md'):
+                self.assertEqual(archive.extractfile('uncle/' + relative).read(),
+                                 (source / relative).read_bytes())
             self.assertFalse(any(".uncle" in name or "PRIVATE" in name or "__pycache__" in name for name in names))
             extracted = self.work / "installed with spaces"
             # Archive was just created from the explicit local allowlist above.

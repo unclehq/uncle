@@ -26,6 +26,7 @@ run_parallel_checklist_workers() { :; }
 set_state() { echo "$1" > state; }
 require_file() { test -s "$1"; }
 check_document_budget() { test ! -e bad-report; }
+stage_uses_self_hosted() { return 1; }
 green_requires_implementation_repair() { return 1; }
 # Inject a report-recovery failure at the durable validation boundary.
 # Presentation budgets no longer gate canonical report validation.

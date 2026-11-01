@@ -226,6 +226,8 @@ def publish(stage, log, project, delivery=None):
     preserve_updated_plan_fields(payload, project, stage)
     artifact_json = module('artifact_json')
     project = Path(project)
+    if kind in ('plan', 'change-plan'):
+        payload = module('plan_model').publish_records(payload, project, stage=stage)
     if stage == 'requirements':
         rendered = artifact_json.render_requirements(payload)
     elif stage in ('change-plan', 'updated-change-plan'):

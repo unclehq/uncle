@@ -1,0 +1,1836 @@
+{
+  "model": {
+    "title": "Architecture",
+    "intro": "Single-page React calculator served as static HTML. React 18 loaded via CDN UMD bundles; JSX transpiled in-browser by Babel standalone. No build step, no bundler. Calculator logic in a plain JS module (`src/calc.js`), React UI components in `src/ui.js`, app shell in `index.html`. Tests use Playwright against a local static file server.\n\n# Authoritative state\n\n| Field | Type | Description |\n|---|---|---|\n| `display` | string | Current value shown (max 15 chars) |\n| `leftOperand` | number \\| null | Stored left operand |\n| `pendingOperator` | string \\| null | `+`, `-`, `*`, `/`, or null |\n| `waitingForOperand` | boolean | True after operator pressed; next digit starts new number |\n| `clearNext` | boolean | True after = or Error; next digit starts fresh |\n| `error` | boolean | True when division by zero occurred |\n| `decimalEntered` | boolean | Prevents second `.` in current number |\n\nState lives in a single `useReducer` in the top-level `App` component. No external state library.\n\n# Domain model\n\n- **Operand**: a finite real number within JavaScript Number range.\n- **Operator**: one of `+`, `-`, `*`, `/`.\n- **Expression**: immediate-execution chain: `leftOperand operator rightOperand = result`.\n- **Result**: computed via `applyOperator(left, op, right)`. Division by zero sets `error = true`, display `\"Error\"`.\n- **Display**: string representation of current operand or `\"Error\"`.\n\n# Components and responsibilities\n\n| Component | File | Responsibility |\n|---|---|---|\n| `App` | `src/ui.js` | Root component, holds reducer state, renders Display and Keypad |\n| `Display` | `src/ui.js` | Shows `display` string, styled with groovy theme |\n| `Keypad` | `src/ui.js` | Renders 0-9, ., +, -, *, /, =, C buttons; dispatches actions |\n| `calcReducer` | `src/calc.js` | Pure function: (state, action) => new state. Actions: DIGIT, DECIMAL, OPERATOR, EQUALS, CLEAR |\n| `applyOperator` | `src/calc.js` | Pure function: (left, op, right) => number or throws on /0 |\n| `keyboardMap` | `src/calc.js` | Maps `keydown` event to action types |\n\n# Data flow\n\n1. User clicks button or presses key \u2192 `keydown` listener on `document` maps to action.\n2. Action dispatched to `calcReducer`.\n3. Reducer computes new state (pure function).\n4. React re-renders Display and Keypad with new state.\n5. Display shows `state.display`.\n\n# Observable behaviors\n\n| ID | Trigger | Expected result | Failure behavior | Verification |\n|---|---|---|---|---|\n| B-1 | Digit key (0-9) or button click | Digit appended to display | Wrong digit shown | Automated keyboard/click test |\n| B-2 | Operator key (+, -, *, /) or button | Operator recorded, left operand stored | Wrong operation or crash | Input 2+2, verify 4 |\n| B-3 | Enter/= key or button | Result computed and displayed | NaN, Infinity, no output | Input 9/3, verify 3 |\n| B-4 | Escape or C button | Display resets to 0, all state cleared | Partial clear or no action | Automated keypress/click test |\n| B-5 | Decimal point (.) key or button | Decimal appended, at most one per number | Multiple decimals allowed | Input 1.5+2.5, verify 4 |\n| B-6 | Page loads | 1970s groovy theme applied | Plain white/default styles | Automated CSS property check |\n\n# Domain invariants\n\n| ID | Invariant | Scope | Enforcement point | Automated test | Violation impact |\n|---|---|---|---|---|---|\n| I-1 | Display never shows NaN or Infinity | All states | `calcReducer` converts NaN/Infinity to \"Error\" | `test(\"division by zero shows Error\")` | User sees NaN/Infinity |\n| I-2 | At most one decimal point per number | Per-number input | `decimalEntered` flag in reducer | `test(\"only one decimal per number\")` | Invalid number like \"1.2.3\" |\n| I-3 | Division by zero sets error flag | `/` operator | `applyOperator` returns sentinel | `test(\"division by zero sets error\")` | Crash or Infinity |\n| I-4 | Chained operations use result as left operand | After = pressed | Reducer sets `leftOperand = result` | `test(\"chained operation\")` | Wrong computation |\n| I-5 | Consecutive operators: last wins | Operator input | Reducer replaces `pendingOperator` | `test(\"consecutive operators last wins\")` | Wrong operator used |\n| I-6 | Leading operator treated as 0 left operand | Initial state | Reducer uses 0 when `leftOperand` is null | `test(\"leading operator\")` | NaN or no-op |\n| I-7 | Invalid keypress ignored | Keyboard input | `keyboardMap` returns null for non-mapped keys | `test(\"letter key ignored\")` | Unexpected character in display |\n| I-8 | Background uses defined groovy palette | Page load | CSS in `index.html` | `test(\"groovy theme CSS properties\")` | Plain white background |\n\n# Failure handling\n\n| Failure | Mechanism | User-visible result |\n|---|---|---|\n| Division by zero | `applyOperator` returns `{ error: true }` | Display shows \"Error\" |\n| Overflow (Number.MAX_VALUE * 2) | JavaScript returns Infinity; reducer converts to \"Error\" | Display shows \"Error\" |\n| Invalid keypress | `keyboardMap` returns null; no dispatch | Nothing happens |\n| Consecutive operators | Reducer replaces pending operator | Last operator wins |\n| Leading operator | Reducer treats as 0 op right | Computes correctly |\n\n# Concurrency model\n\nSingle-threaded React synchronous rendering. No async operations, no timers, no network requests. No concurrency concerns.\n\n# Automated-test strategy\n\n**Framework**: Playwright (`@playwright/test`). Tests run against a local static file server (`npx serve` or Python http.server).\n\n**Test file**: `tests/calculator.test.js` \u2014 one file covering all behaviors.\n\n**Fixture**: Playwright `page` fixture loading `http://localhost:3000/index.html`.\n\n**Assertions**: `await expect(page.locator(...)).toHaveText(...)` for display values; `await expect(page.locator(...)).toHaveCSS(...)` for theme properties.\n\n**Defect injections**: A separate script `tests/injections/run.js` creates scratch copies of the source, applies one mutation each, runs the specific test that must fail, and reports pass/fail. Mutations are independent, run in parallel.\n\n**Protected verification paths**:\n- `index.html` (app shell)\n- `src/calc.js` (calculator logic)\n- `src/ui.js` (React components)\n- `tests/calculator.test.js` (test suite)\n- `tests/injections/` (defect injection runner and mutations)\n- `playwright.config.js` (test config)\n\n**Generated outputs** (outside protected paths):\n- `test-results/`\n- `playwright-report/`\n- `node_modules/`\n- `package-lock.json`",
+    "sections": [
+      {
+        "id": "s1",
+        "heading": "Defect injections",
+        "blocks": [
+          {
+            "id": "s1.1",
+            "kind": "table",
+            "columns": [
+              "ID",
+              "Defect",
+              "Injected file",
+              "Test that must fail",
+              "Expected failure"
+            ],
+            "rows": [
+              {
+                "id": "s1.1.r1",
+                "cells": [
+                  "D-1",
+                  "Remove division-by-zero check in `applyOperator`",
+                  "`src/calc.js`",
+                  "`division by zero shows Error`",
+                  "Test sees \"Infinity\" not \"Error\""
+                ]
+              },
+              {
+                "id": "s1.1.r2",
+                "cells": [
+                  "D-2",
+                  "Remove decimal guard in reducer",
+                  "`src/calc.js`",
+                  "`only one decimal per number`",
+                  "Test sees \"1.2.3\" not \"1.23\""
+                ]
+              },
+              {
+                "id": "s1.1.r3",
+                "cells": [
+                  "D-3",
+                  "Change groovy background color to `#fff`",
+                  "`index.html`",
+                  "`groovy theme CSS properties`",
+                  "Test sees white not burnt orange"
+                ]
+              },
+              {
+                "id": "s1.1.r4",
+                "cells": [
+                  "D-4",
+                  "Make `=` do nothing (remove EQUALS case)",
+                  "`src/calc.js`",
+                  "`Enter computes result`",
+                  "Display unchanged after ="
+                ]
+              },
+              {
+                "id": "s1.1.r5",
+                "cells": [
+                  "D-5",
+                  "Make C button not clear error flag",
+                  "`src/calc.js`",
+                  "`clear resets error state`",
+                  "Error persists after clear"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "s2",
+        "heading": "Parallel verification groups",
+        "blocks": [
+          {
+            "id": "s2.1",
+            "kind": "table",
+            "columns": [
+              "Group",
+              "Commands",
+              "Shared resources",
+              "Rationale"
+            ],
+            "rows": [
+              {
+                "id": "s2.1.r1",
+                "cells": [
+                  "1",
+                  "`npx playwright test`",
+                  "Port 3000 (server)",
+                  "Sequential: tests need the server"
+                ]
+              },
+              {
+                "id": "s2.1.r2",
+                "cells": [
+                  "2",
+                  "`node tests/injections/run.js`",
+                  "Port 3000 (server), scratch dirs",
+                  "Sequential with group 1: both need server; injection runner uses its own port per scratch copy"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s2.2",
+            "kind": "prose",
+            "text": "Both groups share the server port. Run group 1 first, then group 2. Each injection scratch copy uses a unique port (3001, 3002, ...) so they run in parallel within group 2.\n\n# Manual-test strategy"
+          },
+          {
+            "id": "s2.3",
+            "kind": "table",
+            "columns": [
+              "Check",
+              "How",
+              "When"
+            ],
+            "rows": [
+              {
+                "id": "s2.3.r1",
+                "cells": [
+                  "Visual theme matches 1970s groovy aesthetic",
+                  "Open page in browser, verify colors, font, background pattern",
+                  "After implementation"
+                ]
+              },
+              {
+                "id": "s2.3.r2",
+                "cells": [
+                  "Keyboard input feels responsive",
+                  "Type digits and operators rapidly",
+                  "After implementation"
+                ]
+              },
+              {
+                "id": "s2.3.r3",
+                "cells": [
+                  "Button layout is usable at narrow widths",
+                  "Resize browser to 320px width",
+                  "After implementation"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s2.4",
+            "kind": "prose",
+            "text": "# Implementation order"
+          }
+        ]
+      },
+      {
+        "id": "s3",
+        "heading": "Step 1: Scaffold \u2014 Owns: `package.json`, `playwright.config.js`, `tests/calculator.test.js`, `tests/injections/run.js`, `tests/injections/mutations.js`, `.gitignore`",
+        "blocks": [
+          {
+            "id": "s3.1",
+            "kind": "prose",
+            "text": "Create project manifest with `@playwright/test` dev dependency. Write Playwright config (chromium only, webServer starting `npx serve .` on port 3000). Write the full test suite covering B-1 through B-6, MC-1 through MC-10, and all invariants I-1 through I-8. Write the defect injection runner and mutation definitions. `.gitignore` already written."
+          }
+        ]
+      },
+      {
+        "id": "s4",
+        "heading": "Step 2: Calculator logic \u2014 Owns: `src/calc.js`",
+        "blocks": [
+          {
+            "id": "s4.1",
+            "kind": "prose",
+            "text": "Implement `calcReducer`, `applyOperator`, `keyboardMap` as pure functions. No React, no DOM. Exports: `initialState`, `calcReducer`, `applyOperator`, `keyboardMap`."
+          }
+        ]
+      },
+      {
+        "id": "s5",
+        "heading": "Step 3: UI components \u2014 Owns: `src/ui.js`, `index.html`",
+        "blocks": [
+          {
+            "id": "s5.1",
+            "kind": "prose",
+            "text": "Write `index.html` loading React, ReactDOM, Babel standalone from CDN, loading `src/ui.js` as a Babel script. Write `App`, `Display`, `Keypad` React components using `useReducer(calcReducer, initialState)`. Attach `keydown` listener on `document` in `useEffect`. Style with the groovy 1970s theme: background radial-stripe pattern using burnt orange `#CC5500`, mustard `#D4AF37`, avocado `#7A9A01`, chocolate brown `#5C3A21`, cream `#FFFDD0`. Font stack: `'Georgia', 'Times New Roman', serif` for display; `'Arial Rounded MT Bold', 'Helvetica Rounded', sans-serif` for buttons."
+          }
+        ]
+      },
+      {
+        "id": "s6",
+        "heading": "Step 4: Launch metadata \u2014 Owns: `.uncle/launch.json`",
+        "blocks": [
+          {
+            "id": "s6.1",
+            "kind": "prose",
+            "text": "Write `{\"kind\":\"webpage\",\"command\":[\"npx\",\"serve\",\".\"],\"url\":\"http://127.0.0.1:3000\"}`.\n\n# Requirement traceability"
+          },
+          {
+            "id": "s6.2",
+            "kind": "rows",
+            "row_kind": "traceability",
+            "rows": [
+              {
+                "requirement": "MC-1",
+                "behaviors": [
+                  "B-6"
+                ],
+                "invariants": [
+                  "I-8"
+                ],
+                "components": [
+                  "App"
+                ],
+                "tests": [
+                  "renders calculator UI"
+                ],
+                "manual": [
+                  "Visual inspection"
+                ],
+                "id": "MC-1"
+              },
+              {
+                "requirement": "MC-2",
+                "behaviors": [
+                  "B-1"
+                ],
+                "invariants": [
+                  "\u2014"
+                ],
+                "components": [
+                  "`calcReducer` + `keyboardMap`"
+                ],
+                "tests": [
+                  "digit input via keyboard"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-2"
+              },
+              {
+                "requirement": "MC-3",
+                "behaviors": [
+                  "B-1"
+                ],
+                "invariants": [
+                  "\u2014"
+                ],
+                "components": [
+                  "Keypad"
+                ],
+                "tests": [
+                  "digit input via button click"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-3"
+              },
+              {
+                "requirement": "MC-4",
+                "behaviors": [
+                  "B-2",
+                  "B-3"
+                ],
+                "invariants": [
+                  "I-4",
+                  "I-5",
+                  "I-6"
+                ],
+                "components": [
+                  "`calcReducer` + `applyOperator`"
+                ],
+                "tests": [
+                  "2+2=4",
+                  "9/3=3",
+                  "chained operation",
+                  "consecutive operators"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-4"
+              },
+              {
+                "requirement": "MC-5",
+                "behaviors": [
+                  "B-4"
+                ],
+                "invariants": [
+                  "\u2014"
+                ],
+                "components": [
+                  "calcReducer"
+                ],
+                "tests": [
+                  "Escape clears display"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-5"
+              },
+              {
+                "requirement": "MC-6",
+                "behaviors": [
+                  "B-4"
+                ],
+                "invariants": [
+                  "\u2014"
+                ],
+                "components": [
+                  "Keypad"
+                ],
+                "tests": [
+                  "C button clears display"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-6"
+              },
+              {
+                "requirement": "MC-7",
+                "behaviors": [
+                  "B-3"
+                ],
+                "invariants": [
+                  "\u2014"
+                ],
+                "components": [
+                  "calcReducer"
+                ],
+                "tests": [
+                  "Enter computes result"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-7"
+              },
+              {
+                "requirement": "MC-8",
+                "behaviors": [
+                  "B-6"
+                ],
+                "invariants": [
+                  "I-8"
+                ],
+                "components": [
+                  "`index.html` CSS"
+                ],
+                "tests": [
+                  "groovy theme CSS properties"
+                ],
+                "manual": [
+                  "Visual inspection"
+                ],
+                "id": "MC-8"
+              },
+              {
+                "requirement": "MC-9",
+                "behaviors": [
+                  "\u2014"
+                ],
+                "invariants": [
+                  "I-1",
+                  "I-3"
+                ],
+                "components": [
+                  "applyOperator"
+                ],
+                "tests": [
+                  "division by zero shows Error"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-9"
+              },
+              {
+                "requirement": "MC-10",
+                "behaviors": [
+                  "B-5"
+                ],
+                "invariants": [
+                  "I-2"
+                ],
+                "components": [
+                  "calcReducer"
+                ],
+                "tests": [
+                  "decimal point input",
+                  "only one decimal per number"
+                ],
+                "manual": [
+                  "\u2014"
+                ],
+                "id": "MC-10"
+              }
+            ]
+          },
+          {
+            "id": "s6.3",
+            "kind": "prose",
+            "text": "# Explicit non-goals"
+          },
+          {
+            "id": "s6.4",
+            "kind": "list",
+            "ordered": false,
+            "items": [
+              {
+                "id": "s6.4.i1",
+                "depth": 0,
+                "text": "Scientific functions (sin, cos, log, sqrt, etc.)"
+              },
+              {
+                "id": "s6.4.i2",
+                "depth": 0,
+                "text": "Memory buttons (MC, MR, M+, M-)"
+              },
+              {
+                "id": "s6.4.i3",
+                "depth": 0,
+                "text": "History/expression log"
+              },
+              {
+                "id": "s6.4.i4",
+                "depth": 0,
+                "text": "Responsive design beyond basic mobile fit"
+              },
+              {
+                "id": "s6.4.i5",
+                "depth": 0,
+                "text": "Accessibility compliance beyond keyboard support"
+              },
+              {
+                "id": "s6.4.i6",
+                "depth": 0,
+                "text": "Server-side rendering or persistence"
+              },
+              {
+                "id": "s6.4.i7",
+                "depth": 0,
+                "text": "Unit conversion or non-arithmetic features"
+              },
+              {
+                "id": "s6.4.i8",
+                "depth": 0,
+                "text": "Percentage button"
+              },
+              {
+                "id": "s6.4.i9",
+                "depth": 0,
+                "text": "Backspace/delete key"
+              },
+              {
+                "id": "s6.4.i10",
+                "depth": 0,
+                "text": "Build tooling, bundler, or transpiler pipeline"
+              },
+              {
+                "id": "s6.4.i11",
+                "depth": 0,
+                "text": "CSS framework or preprocessor"
+              },
+              {
+                "id": "s6.4.i12",
+                "depth": 0,
+                "text": "Linting or formatting configuration"
+              }
+            ]
+          },
+          {
+            "id": "s6.5",
+            "kind": "prose",
+            "text": "# Risks and unresolved questions"
+          },
+          {
+            "id": "s6.6",
+            "kind": "table",
+            "columns": [
+              "Risk",
+              "Impact",
+              "Mitigation"
+            ],
+            "rows": [
+              {
+                "id": "s6.6.r1",
+                "cells": [
+                  "Babel standalone adds ~2s parse time on slow devices",
+                  "Delayed initial render",
+                  "Acceptable for a calculator; no build step tradeoff"
+                ]
+              },
+              {
+                "id": "s6.6.r2",
+                "cells": [
+                  "CDN failure (React, Babel, ReactDOM)",
+                  "App doesn't load",
+                  "Include fallback message; user must refresh"
+                ]
+              },
+              {
+                "id": "s6.6.r3",
+                "cells": [
+                  "`npx serve` not available",
+                  "Tests fail",
+                  "Use Python `http.server` as fallback in Playwright webServer config"
+                ]
+              },
+              {
+                "id": "s6.6.r4",
+                "cells": [
+                  "Playwright browser download fails in CI",
+                  "Tests cannot run",
+                  "Document manual test steps as fallback"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s6.7",
+            "kind": "prose",
+            "text": "No unresolved questions. All design decisions resolved within the requirements."
+          }
+        ]
+      }
+    ]
+  },
+  "writers": [
+    {
+      "writer": 1,
+      "findings": [
+        {
+          "id": "AR-001",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json observable behaviors B-1 through B-6 and invariants I-1 through I-8 do not include an EQUALS-without-operator case. REQUIREMENTS_INTERPRETATION.json user-visible behaviors table and definition-of-done MC-1 through MC-10 omit this flow.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "MC-1",
+        "MC-10",
+        "s6",
+        "s6.2"
+      ],
+      "before_bytes": 15130,
+      "before_wire_bytes": 5155
+    },
+    {
+      "writer": 2,
+      "findings": [
+        {
+          "id": "AR-002",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json: Failure handling table says 'Overflow (Number.MAX_VALUE * 2) \u2192 JavaScript returns Infinity; reducer converts to \"Error\"' but no reducer logic, invariant, or test covers this conversion. I-1 only covers NaN/Infinity from division by zero, not from overflow. No test case for overflow.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 3,
+      "findings": [
+        {
+          "id": "AR-003",
+          "severity": "HIGH",
+          "evidence": "PROJECT_PLAN.json: I-4 says 'Chained operations use result as left operand' and test 'chained operation' exists, but no test covers pressing = repeatedly (e.g., 5 + = =) which on basic calculators repeats the last operation. The plan does not specify this behavior, leaving it ambiguous and untested.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 4,
+      "findings": [
+        {
+          "id": "AR-004",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json Failure handling table: 'Overflow (Number.MAX_VALUE * 2) \u2192 JavaScript returns Infinity; reducer converts to \"Error\"' vs REQUIREMENTS_INTERPRETATION.json failure_behaviors: 'Overflow / very large numbers: display in scientific notation or truncate (browser Number limits).' Affected plan IDs: I-1, MC-9.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 5,
+      "findings": [
+        {
+          "id": "AR-005",
+          "severity": "HIGH",
+          "evidence": "PROJECT_PLAN.json B-4: 'Escape or C button' \u2014 C is on-screen button only. keyboardMap in src/calc.js has no mention of 'c' key mapping. REQUIREMENTS_INTERPRETATION B-4 says 'Escape or C/AC key' implying keyboard C should work. Affected plan IDs: B-4, MC-5, MC-6.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "MC-5",
+        "s6",
+        "s6.2"
+      ],
+      "before_bytes": 14898,
+      "before_wire_bytes": 5020
+    },
+    {
+      "writer": 6,
+      "findings": [
+        {
+          "id": "AR-006",
+          "severity": "HIGH",
+          "evidence": "PROJECT_PLAN.json B-4 says clear resets display to 0 but does not explicitly state it clears the error flag. D-5 injection ('Make C button not clear error flag') implies C should clear error, but no observable behavior or invariant documents this recovery path. Affected plan IDs: B-4, I-3, D-5.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 7,
+      "findings": [
+        {
+          "id": "AR-007",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json Step 1: 'Write the full test suite covering B-1 through B-6, MC-1 through MC-10, and all invariants I-1 through I-8.' Step 2: 'Implement calcReducer, applyOperator, keyboardMap as pure functions.' Tests written before implementation cannot validate the actual interface.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "MC-1",
+        "MC-10",
+        "s6",
+        "s6.2"
+      ],
+      "before_bytes": 14979,
+      "before_wire_bytes": 5044
+    },
+    {
+      "writer": 8,
+      "findings": [
+        {
+          "id": "AR-008",
+          "severity": "HIGH",
+          "evidence": "PROJECT_PLAN.json Step 1 owns 'tests/injections/run.js' and 'tests/injections/mutations.js'. Mutations D-1, D-2, D-4, D-5 modify src/calc.js; D-3 modifies index.html. Both files are created in Steps 2 and 3 respectively.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 9,
+      "findings": [
+        {
+          "id": "AR-009",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json Components table: 'applyOperator: Pure function: (left, op, right) => number or throws on /0' vs Failure handling table: 'applyOperator returns { error: true }'. Two incompatible return type contracts for the same function.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 10,
+      "findings": [
+        {
+          "id": "AR-010",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json verification_commands Group 2: `npx playwright test --reporter=list` has no `npx serve . &` / `kill %1` wrapper; the Playwright webServer config is mentioned but not shown in the plan's verification_commands. The plan's Parallel verification groups section says 'Sequential: tests need the server' but provides no start/stop lifecycle.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 11,
+      "findings": [
+        {
+          "id": "AR-011",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json Step 1 owns tests/injections/run.js and mutations.js; D-1 through D-5 mutate src/calc.js and index.html. Step 2 owns src/calc.js, Step 3 owns index.html. The injection runner cannot operate on files that do not yet exist.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 12,
+      "findings": [
+        {
+          "id": "AR-012",
+          "severity": "HIGH",
+          "evidence": "PROJECT_PLAN.json Step 1: 'Write the full test suite covering B-1 through B-6, MC-1 through MC-10, and all invariants I-1 through I-8.' Tests reference DOM elements and reducer behavior defined in Steps 2-3.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "MC-1",
+        "MC-10",
+        "s6",
+        "s6.2"
+      ],
+      "before_bytes": 14979,
+      "before_wire_bytes": 5044
+    },
+    {
+      "writer": 13,
+      "findings": [
+        {
+          "id": "AR-013",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json: 'JSX transpiled in-browser by Babel standalone' and 'React, ReactDOM, Babel standalone from CDN' (Step 3). No Content-Security-Policy or subresource integrity attributes are specified anywhere in the plan.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 14,
+      "findings": [
+        {
+          "id": "AR-014",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json narrative: 'JSX transpiled in-browser by Babel standalone.' No CSP, no input sanitization, no SRI mentioned. Requirement MC-1, MC-8 reference index.html as the app shell.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "MC-1",
+        "MC-8",
+        "s6",
+        "s6.2"
+      ],
+      "before_bytes": 14976,
+      "before_wire_bytes": 5041
+    },
+    {
+      "writer": 15,
+      "findings": [
+        {
+          "id": "AR-015",
+          "severity": "HIGH",
+          "evidence": "PROJECT_PLAN.json Step 3: 'index.html loading React, ReactDOM, Babel standalone from CDN.' Risk table acknowledges CDN failure only as availability concern; no SRI or fallback integrity check.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 16,
+      "findings": [
+        {
+          "id": "AR-016",
+          "severity": "HIGH",
+          "evidence": "PROJECT_PLAN.json and REQUIREMENTS_INTERPRETATION.json contain no mention of CSP headers or meta tag. Step 3 describes index.html loading multiple CDN scripts and Babel standalone (which uses eval-like transpilation).",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 17,
+      "findings": [
+        {
+          "id": "AR-017",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json Step 3: 'index.html loading React, ReactDOM, Babel standalone from CDN' \u2014 no SRI attributes mentioned anywhere in the plan or requirements. A compromised CDN could serve malicious JavaScript that exfiltrates data or modifies calculator behavior.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 18,
+      "findings": [
+        {
+          "id": "AR-018",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json Step 3 loads React/ReactDOM/Babel from CDN UMD bundles with no SRI attribute; Risks section acknowledges CDN failure but not malicious CDN compromise.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 19,
+      "findings": [
+        {
+          "id": "AR-019",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.md: Risks table \u2014 \"CDN failure (React, Babel, ReactDOM) | App doesn't load | Include fallback message; user must refresh.\" No automated test covers this failure mode. The Playwright test suite (MC-1) only checks that the UI renders, not that the CDN scripts resolved.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "MC-1",
+        "s6",
+        "s6.2"
+      ],
+      "before_bytes": 14898,
+      "before_wire_bytes": 5020
+    },
+    {
+      "writer": 20,
+      "findings": [
+        {
+          "id": "AR-020",
+          "severity": "HIGH",
+          "evidence": "PROJECT_PLAN.md: Defect injections table \u2014 D-4 expects test \"Enter computes result\" to fail; D-5 expects test \"clear resets error state\" to fail. The plan's Automated-test strategy section lists no test with those exact names. The observable behaviors table (B-3, B-4) and invariants table (I-1\u2013I-8) also lack matching test identifiers.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 21,
+      "findings": [
+        {
+          "id": "AR-021",
+          "severity": "HIGH",
+          "evidence": "PROJECT_PLAN.md: Automated-test strategy \u2014 \"Test file: tests/calculator.test.js \u2014 one file covering all behaviors.\" No traceability matrix or test-name convention links test cases to requirement IDs. REQUIREMENTS_INTERPRETATION.md: Definition of Done table (MC-1 through MC-10) lists verification methods but no test function names.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "MC-1",
+        "MC-10",
+        "s6",
+        "s6.2"
+      ],
+      "before_bytes": 14979,
+      "before_wire_bytes": 5044
+    },
+    {
+      "writer": 22,
+      "findings": [
+        {
+          "id": "AR-022",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json, Parallel verification groups table: Group 1 uses `npx playwright test` on port 3000, Group 2 uses `node tests/injections/run.js` on port 3000 (shared) with scratch copies on 3001+ \u2014 but the plan says \"Both groups share the server port. Run group 1 first, then group 2.\" This is sequential, not parallel, contradicting the \"parallel\" label and the injection runner's design of independent parallel scratch copies.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    },
+    {
+      "writer": 23,
+      "findings": [
+        {
+          "id": "AR-023",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json: I-1 invariant and Failure handling table state overflow converts to \"Error\", but the Automated-test strategy and Defect injections tables list no test for Number.MAX_VALUE * 2 or Number.MIN_VALUE / 2. The test suite in Step 1 covers B-1 through B-6 and MC-1 through MC-10, none of which include overflow input.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "MC-1",
+        "MC-10",
+        "s6",
+        "s6.2"
+      ],
+      "before_bytes": 14979,
+      "before_wire_bytes": 5044
+    },
+    {
+      "writer": 24,
+      "findings": [
+        {
+          "id": "AR-024",
+          "severity": "CRITICAL",
+          "evidence": "PROJECT_PLAN.json `verification_commands` block: `npx playwright test --reporter=list` is listed under \"Group 2: Browser tests (need server)\" but the preceding comment says \"Start server, run Playwright tests, stop server\" \u2014 no actual server start command appears. The webServer config in playwright.config.js (mentioned in Step 1) is the intended mechanism, but the verification_commands block does not reference or rely on it, creating a gap between documented verification procedure and actual test infrastructure.",
+          "required_plan_change": "Address in the plan. Verify: Re-run the check."
+        }
+      ],
+      "before_scope": [
+        "s1",
+        "s1.1",
+        "s1.1.r1",
+        "s1.1.r2",
+        "s1.1.r3",
+        "s1.1.r4",
+        "s1.1.r5",
+        "s2",
+        "s2.1",
+        "s2.1.r1",
+        "s2.1.r2",
+        "s2.2",
+        "s2.3",
+        "s2.3.r1",
+        "s2.3.r2",
+        "s2.3.r3",
+        "s2.4",
+        "s3",
+        "s3.1",
+        "s4",
+        "s4.1",
+        "s5",
+        "s5.1",
+        "s6",
+        "s6.1",
+        "s6.2",
+        "MC-1",
+        "MC-2",
+        "MC-3",
+        "MC-4",
+        "MC-5",
+        "MC-6",
+        "MC-7",
+        "MC-8",
+        "MC-9",
+        "MC-10",
+        "s6.3",
+        "s6.4",
+        "s6.4.i1",
+        "s6.4.i2",
+        "s6.4.i3",
+        "s6.4.i4",
+        "s6.4.i5",
+        "s6.4.i6",
+        "s6.4.i7",
+        "s6.4.i8",
+        "s6.4.i9",
+        "s6.4.i10",
+        "s6.4.i11",
+        "s6.4.i12",
+        "s6.5",
+        "s6.6",
+        "s6.6.r1",
+        "s6.6.r2",
+        "s6.6.r3",
+        "s6.6.r4",
+        "s6.7"
+      ],
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
+    }
+  ]
+}

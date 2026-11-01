@@ -81,6 +81,11 @@ def request_options(stage=None, config=None):
 
 def configure_request_options(values, stage=None, config=None):
     """Snapshot and validate at stage start, before tools or server discovery."""
+    if os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1':
+        options = dict(values.get('_request_options', request_options(stage, config)))
+        options['chat_template_kwargs'] = dict(options.get('chat_template_kwargs') or {}, enable_thinking=False)
+        return dict(values, _request_options=options,
+                    _request_options_stage=stage or os.environ.get('UNCLE_STATUS_STAGE', ''))
     if '_request_options' in values:
         return values
     stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
@@ -118,6 +123,40 @@ def _names_option(detail, options):
 
 
 def compatible_post(values, body, timeout, url=None):
+    """Reserve reasoning separately from the deliverable cap on every transport."""
+    from self_hosted_stream import ANSWER_CAP, answer_signal, output_accounting
+    answer_cap = body.get('max_tokens', body.get('options', {}).get('num_predict'))
+    if answer_cap is None:
+        return _compatible_output_post(values, body, timeout, url)
+    # OpenAI max_tokens and Ollama num_predict include reasoning. Even servers
+    # that omit/reject reasoning_effort may still think, so always reserve room.
+    reserve = output_cap(2 ** 31 - 1, 'reasoning-output-tokens')
+    body = dict(body)
+    if 'max_tokens' in body:
+        body['max_tokens'] = answer_cap + reserve
+    else:
+        body['options'] = dict(body['options'], num_predict=answer_cap + reserve)
+    token = ANSWER_CAP.set(answer_cap)
+    try:
+        data = _compatible_output_post(values, body, timeout, url)
+        # Non-streaming fallback cannot interrupt generation, but still checks
+        # the answer before capture or tool execution. Native Ollama reports
+        # thinking separately and eval_count as the combined completion total.
+        native = 'message' in data and 'choices' not in data
+        message = data['message'] if native else (data.get('choices') or [{}])[0].get('message', {})
+        if native:
+            message = dict(message, reasoning_content=message.get('thinking', ''))
+        usage = data.get('usage') or ({'completion_tokens': data.get('eval_count')} if native else {})
+        accounting = output_accounting(message, usage)
+        if answer_signal(accounting) > answer_cap:
+            raise StreamStopped('answer_cap', usage=dict(usage, **accounting))
+        data['usage'] = dict(usage, **accounting)
+        return data
+    finally:
+        ANSWER_CAP.reset(token)
+
+
+def _compatible_output_post(values, body, timeout, url=None):
     """Apply extras to every turn, with fallback separate from effort/schema."""
     values = configure_request_options(values)
     base = values['base_url'].rstrip('/')
@@ -244,6 +283,8 @@ def reasoning_effort(values=None, effort=None):
     # Off by default: on DeepSeek V4 any reasoning_effort value switches thinking
     # back on even when a stage's request options turn it off, and the hint showed
     # no measurable benefit on tool-using requests. Opt in per project.
+    if os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1':
+        return None
     enabled = option('reasoning-effort', 'off')
     if enabled in ('off', '0', 'false'):
         return None
@@ -391,17 +432,18 @@ def output_cap(limit, option_name, artifact=''):
             if config.get(name + '.' + option_name):
                 value = config[name + '.' + option_name]
                 break
-    # Small caps are for mechanical packets only. Judgment workers (review
-    # lenses, test review, audit, checklist) may think at length before they
-    # answer, and a small cap cut every lens off mid-thought (run 10).
-    # Applies to tool-loop turns, where the thinking happens; the final
-    # answer keeps upstream's small packet ceiling.
-    judgment = option_name == 'turn-output-tokens' and (
-        artifact.startswith(('adversarial_review', 'test_review', 'final_audit', 'manual_checklist')) or
-        bool(re.search(r'(?:adversarial-review|test-review|final-audit|manual-checklist)', stage)))
-    small = not judgment and (artifact.endswith(('worker_packet', 'ops_packet', 'outline_packet')) or
-                              bool(re.search(r'-worker-(?:edits|resolution|resolve)-', stage)))
-    cap = int(value) if value is not None else (4096 if small else 32768)
+    # Only known mechanical deliveries are small. A generic worker packet may
+    # contain judgment (preflight/checklist/custom lenses included).
+    small = (option_name != 'reasoning-output-tokens' and
+             (artifact.replace('_', '-').endswith(('ops-packet', 'outline-packet',
+                                                   'section-worker-packet', 'section-model-packet')) or
+              bool(re.search(r'-worker-(?:edits|resolution|resolve|section)-', stage))))
+    default = 4096 if small else 32768
+    if os.environ.get('UNCLE_ADVERSARIAL_SLICE') == '1':
+        default = 8192 if option_name == 'reasoning-output-tokens' else 4096
+    if small and option_name != 'reasoning-output-tokens' and os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'):
+        default = int(os.environ['UNCLE_UPDATED_PLAN_ANSWER_TOKENS'])
+    cap = int(value) if value is not None else default
     if cap <= 0:
         raise ValueError(option_name + ' must be a positive integer')
     return min(int(limit), cap)
@@ -516,6 +558,8 @@ class Connections:
         self.http2 = {}         # (scheme, netloc) -> httpx.Client
         self.lock = threading.Lock()
         self.aborting = threading.Event()   # set while a request is being dropped on purpose
+        self.reconnect_seconds = None
+        self.connect_seconds = None
 
     def abort(self):
         """Wake a request blocked on one of these connections, from another thread.
@@ -657,7 +701,9 @@ def post(url, api_key, body, timeout, what='model request'):
     A server that answered, or one that simply never did (a read timeout), is not retried.
     """
     started = time.monotonic()
-    budget = reconnect_seconds()
+    budget = _connections().reconnect_seconds
+    if budget is None:
+        budget = reconnect_seconds()
     noted = -30.0
     while True:
         try:
@@ -715,15 +761,14 @@ def connect_timeout():
     the operating system's connect timeout, once per attempt and per stage.
     """
     configured = os.environ.get('WORKFLOW_SELF_HOSTED_CONNECT_SECONDS', '').strip()
-    if not configured:
-        return 15.0
     try:
-        value = float(configured)
+        value = float(configured) if configured else 15.0
     except ValueError:
         value = 0
     if value <= 0:
         raise ValueError('WORKFLOW_SELF_HOSTED_CONNECT_SECONDS must be a positive number')
-    return value
+    scoped = _connections().connect_seconds
+    return min(value, scoped) if scoped is not None else value
 
 
 def _failure(url, error, connecting=False):
@@ -911,7 +956,8 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
         if effort:
             body['reasoning_effort'] = effort
         data = compatible_post(values, body, timeout, url=_origin(base_url) + '/api/chat')
-        usage = {'prompt_tokens': data.get('prompt_eval_count', 0), 'completion_tokens': data.get('eval_count', 0)}
+        usage = dict(data.get('usage') or {}, prompt_tokens=data.get('prompt_eval_count', 0),
+                     completion_tokens=data.get('eval_count', 0))
         reason = 'length' if data.get('done_reason') == 'length' else 'stop'
         return strip_reasoning(data['message']['content']), reason, usage
     body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,

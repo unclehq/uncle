@@ -10,7 +10,6 @@ PROMPT="$ROOT/prompts/implement.md"
 INVESTIGATE="$ROOT/prompts/implement-investigate.md"
 HANDOFF="$ROOT/prompts/test-evidence-handoff.md"
 PROJECT_PLAN="$ROOT/prompts/project-plan.md"
-UPDATED_PLAN="$ROOT/prompts/updated-plan.md"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -31,7 +30,7 @@ grep -Fq '`.uncle/workflow/documents/IMPLEMENTATION_NOTES.json`' "$HANDOFF" || f
 grep -Fq '"kind":"automated-test-report"' "$HANDOFF" || fail "handoff does not produce canonical test-report JSON"
 grep -Fq 'test_report.py" validate . application' "$STAGEGATE" || fail "application test report is not ingested"
 grep -Fq 'test_report.py" validate . change' "$ROOT/scripts/change-workflow.sh" || fail "change test report is not ingested"
-for prompt in "$PROJECT_PLAN" "$UPDATED_PLAN"; do
+for prompt in "$PROJECT_PLAN"; do
     grep -Fq 'must never instruct the implementation agent to run the `Verification commands`' "$prompt" || fail "$(basename "$prompt") can put driver verification in a reconcile step"
 done
 

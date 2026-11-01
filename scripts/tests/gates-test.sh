@@ -171,13 +171,6 @@ new_case() {
     mkdir -p "$REPO/scripts/tests"
     cp "$ROOT/scripts/tests/plan-executability-test.py" "$REPO/scripts/tests/"
     cp "$ROOT/prompts/plan-executability.md" "$ROOT/prompts/plan-recovery.md" "$REPO/prompts/"
-    printf 'STUB:revise\n' > "$REPO/prompts/change/updated-change-plan.md"
-    printf 'STUB:revise\n' > "$REPO/prompts/updated-plan.md"
-    # The investigate/format split reads these two files, not updated-plan.md
-    # above (now unused by the app-family driver, kept only so a stray read
-    # of it doesn't hard-fail).
-    printf 'STUB:plan-investigate\n' > "$REPO/prompts/updated-plan-investigate.md"
-    printf 'STUB:plan-format\n' > "$REPO/prompts/updated-plan-format.md"
 
     # Prompt files the driver reads and pipes to the stub CLIs. Each carries a
     # token the stub agent switches on.
@@ -191,7 +184,6 @@ new_case() {
     # wrote (.uncle/docs/IMPLEMENTATION_NOTES.md, .uncle/docs/CHANGE_TEST_REPORT.md) rather than
     # writing anything itself, so this fixture needs the file to exist for
     # the driver's `cp` to find, not a matching stub case.
-    printf 'STUB:report\n'    > "$REPO/prompts/change/implementation-report.md"
     printf 'review the plan\n'   > "$REPO/prompts/change/adversarial-review.md"
     printf '# Adversarial review\n\nNo unresolved findings in this fixture.\n' > "$REPO/.uncle/docs/ADVERSARIAL_REVIEW.md"
     printf 'write a checklist\n' > "$REPO/prompts/change/manual-checklist.md"
@@ -203,7 +195,6 @@ new_case() {
     # this fixture can reach needs its worker file present, even as a stub.
     printf 'STUB:worker\n' > "$REPO/prompts/change/adversarial-review-worker.md"
     printf 'STUB:worker\n' > "$REPO/prompts/change/updated-plan-review-worker.md"
-    printf 'STUB:worker\n' > "$REPO/prompts/change/test-review-worker.md"
     # The plan/source-only phase 1 and results-only phase 2 of test review
     # (run_test_review_investigate / run_test_review_panel) read these two
     # instead of the single worker template above.
@@ -614,17 +605,10 @@ new_stagegate_case() {
     printf 'STUB:preflight\n' > "$REPO/prompts/preflight.md"
     printf 'STUB:repair\n' > "$REPO/prompts/repair.md"
     printf 'review tests\n' > "$REPO/prompts/test-review.md"
-    printf 'investigate tests\n' > "$REPO/prompts/test-review-investigate.md"
-    printf 'format the investigation\n' > "$REPO/prompts/test-review-format.md"
     printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
     printf 'investigate the plan\n' > "$REPO/prompts/adversarial-review-investigate.md"
-    printf 'format the investigation\n' > "$REPO/prompts/adversarial-review-format.md"
     printf 'write a checklist\n' > "$REPO/prompts/manual-checklist.md"
-    printf 'investigate the checklist\n' > "$REPO/prompts/manual-checklist-investigate.md"
-    printf 'format the investigation\n' > "$REPO/prompts/manual-checklist-format.md"
     printf 'audit it\n'          > "$REPO/prompts/final-audit.md"
-    printf 'investigate the audit\n' > "$REPO/prompts/final-audit-investigate.md"
-    printf 'format the investigation\n' > "$REPO/prompts/final-audit-format.md"
 
     cat > "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" <<'EOF'
 # Updated Project Plan

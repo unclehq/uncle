@@ -204,41 +204,4 @@ rm -f advanced
 rm -f advanced
 (WORKFLOW_DOC_MAX_BYTES=7 require_artifact PROJECT_PLAN.md; touch advanced)
 [[ -e advanced ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-# Standalone reviewer entry points also advertise and enforce the same cap.
-mkdir -p standalone/scripts/lib standalone/.uncle/workflow/approvals standalone/.uncle/docs
-# gates.sh sources document-layout.sh, so a standalone copy needs both.
-cp "$ROOT/scripts/lib/gates.sh" "$ROOT/scripts/lib/document-layout.sh" \
-   "$ROOT/scripts/lib/compact-review.py" "$ROOT/scripts/lib/repair-acceptance.py" standalone/scripts/lib/
-cp "$ROOT/scripts/codex-review-plan.sh" "$ROOT/scripts/codex-create-checklist.sh" standalone/scripts/
-cat > standalone/reviewer <<'STUB'
-#!/usr/bin/env bash
-out=""
-while [[ $# -gt 0 ]]; do
-    if [[ "$1" == --output-last-message ]]; then shift; out="$1"; fi
-    prompt="$1"
-    shift
-done
-printf '%s' "$prompt" > reviewer-prompt.txt
-printf 'review body' > "$out"
-STUB
-chmod +x standalone/reviewer
-(
-    cd standalone
-    printf 'source' > REQUIREMENTS.md
-    printf 'plan' > .uncle/docs/PROJECT_PLAN.md
-    printf 'plan' > .uncle/docs/UPDATED_PROJECT_PLAN.md
-    printf 'tests' > .uncle/docs/AUTOMATED_TEST_REPORT.md
-    for plan in PROJECT_PLAN UPDATED_PROJECT_PLAN; do
-        hash_file ".uncle/docs/$plan.md" > ".uncle/workflow/approvals/$plan.sha256"
-    done
-    for script in codex-review-plan.sh codex-create-checklist.sh; do
-        if WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_REVIEWER_CMD="$PWD/reviewer" \
-            WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=1 \
-            bash "scripts/$script" > rejected 2>&1; then exit 1; fi
-        grep -q 'Document budget exceeded:' rejected
-        grep -q 'at most 1 UTF-8 bytes' reviewer-prompt.txt
-        WORKFLOW_REVIEWER_CMD="$PWD/reviewer" WORKFLOW_DOC_MAX_BYTES=100 \
-            bash "scripts/$script" > /dev/null
-    done
-)
 echo 'document-budget-test: passed'

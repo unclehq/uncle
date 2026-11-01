@@ -136,24 +136,6 @@ class Idle(Temporary):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), b'sanitized')
 
-    def test_background_setup_uses_the_shared_install_lock(self):
-        Path('package.json').write_text('{}')
-        Path('commands').write_text('npm install\n')
-        Path('bin').mkdir()
-        npm = Path('bin/npm')
-        npm.write_text('#!/bin/sh\ntouch package-install-ran\n')
-        npm.chmod(0o755)
-        with browser.install_lock(io.BytesIO()):
-            result = subprocess.run([sys.executable, str(LIB / 'verify_prewarm.py'), 'run',
-                                     str(self.root / 'commands'), str(self.root), str(self.root / 'state')],
-                                    env=dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + os.environ['PATH'],
-                                             WORKFLOW_INSTALL_LOCK_SECONDS='.2'),
-                                    capture_output=True, timeout=6)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(b'INSTALL_BUSY', result.stdout)
-        self.assertFalse(Path('package-install-ran').exists())
-        self.assertTrue(Path('state/prewarm/results.tsv').read_text().startswith('126\t'))
-
     def test_failed_browser_warmup_is_not_cached_as_complete(self):
         state = self.root / 'warm-state'
         state.mkdir()

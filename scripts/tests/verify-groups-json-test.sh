@@ -57,7 +57,7 @@ printf '## Parallel verification groups\n\n```text\nSerial: 1\nConcurrent: 2, 3\
 check "a Markdown plan with labelled groups is accepted"  test "$(verify_parallel_groups "$TMP/plan.md" "$TMP/commands")" == "2 3"
 
 # The prompts ask the planner and the implementer for a fast verification.
-for f in project-plan.md project-plan-investigate.md updated-plan.md updated-plan-investigate.md; do
+for f in project-plan.md project-plan-investigate.md; do
     check "$f asks for fast verification"  grep -q 'Make verification fast' "$ROOT/prompts/$f"
     check "$f asks for concurrent injections" grep -q 'starts every mutation at once' "$ROOT/prompts/$f"
 done
@@ -73,9 +73,4 @@ for f in project-plan.md project-plan-investigate.md; do
     check "$f limits Depends on to three steps"      grep -q '`Depends on:` lists at most three steps' "$ROOT/prompts/$f"
     check "$f names the serial tail and its cost"    grep -q 'adds its whole duration to the build' "$ROOT/prompts/$f"
 done
-for f in updated-plan.md updated-plan-investigate.md; do
-    check "$f keeps revised steps parallel"          grep -q 'Keep the steps parallel' "$ROOT/prompts/$f"
-    check "$f forbids a re-checking final step"      grep -q 'Do not add a final step that re-checks everything' "$ROOT/prompts/$f"
-done
-
 [[ "$fails" == 0 ]] && echo "verify-groups-json-test.sh: all checks passed" || exit 1

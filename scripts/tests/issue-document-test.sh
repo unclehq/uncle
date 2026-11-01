@@ -120,7 +120,7 @@ with tempfile.TemporaryDirectory(prefix='issue-document-') as tmp:
                     proc.communicate()
     print('AT-3: seven refusal/race cases passed; AT-4: three noclobber mutations detected')
 
-for name in ('change-plan.md', 'updated-change-plan.md'):
+for name in ('change-plan.md',):
     prompt = (root / 'prompts/change' / name).read_text()
     for phrase in ('- CHANGE_REQUEST.md', 'first top-level `Seeded from` link', 'before the first `##`',
                    'first standalone `Issue N`', 'URL number wins', 'verbatim',
@@ -151,10 +151,10 @@ if manual:
             '\n\n## Summary\nAdd issue identity to seeded documents.\n' +
             ('\n## Examples\nIssue 12\n' if i != 6 else ''))
         (p / 'BASELINE_REPORT.md').write_text('# Baseline\n\nChange surface: scripts/from-issue.sh, '
-            'prompts/change/change-plan.md, prompts/change/updated-change-plan.md.\n'
+            'prompts/change/change-plan.md.\n'
             'Current seed format: heading, standalone Issue N, Seeded from link, body sections.\n')
         (p / 'ADVERSARIAL_REVIEW.md').write_text('# Review\n\nNo findings.\n')
-        for stage, prompt in (('initial', 'change-plan.md'), ('revised', 'updated-change-plan.md')):
+        for stage, prompt in (('initial', 'change-plan.md'),):
             with (p / 'prompts/change' / prompt).open() as stdin, (p / f'{stage}.log').open('w') as log:
                 result = subprocess.run(['claude', '-p', '--allowedTools', 'Read,Write,Edit,Glob,Grep,Bash'],
                                         cwd=p, stdin=stdin, stdout=log, stderr=subprocess.STDOUT)
@@ -171,5 +171,5 @@ if manual:
                 failures.append(f'F-{i}/{stage}: identity/URL mismatch')
             assert (p / f'{stage}.log').stat().st_size, 'empty model output'
     assert not failures, '\n'.join(failures)
-    print('MC-1: six fixtures passed initial and revised generation; inspect retained placement')
+    print('MC-1: six fixtures passed initial generation; inspect retained placement')
 PY

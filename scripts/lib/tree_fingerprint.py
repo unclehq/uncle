@@ -17,11 +17,16 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_paths import project_files
 
+# These directories are verification outputs, also excluded from isolated inputs.
+VERIFICATION_OUTPUTS = {".test-out", "test-results", "playwright-report"}
+
 
 def fingerprint(root, extras=()):
     digest = hashlib.sha256()
     root = Path(root)
     for rel in sorted(set(project_files(root))):
+        if any(part in VERIFICATION_OUTPUTS for part in Path(rel).parts[:-1]):
+            continue
         path = root / rel
         digest.update(rel.encode('utf-8', 'replace') + b'\0')
         try:

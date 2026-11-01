@@ -56,7 +56,11 @@ check "the report says so" grep -q 'running in the background' "$GREEN_MD"
 
 # Evidence consumers may wait once for the published result.  A failed command
 # is still final evidence; only PENDING is prohibited.
+start=$SECONDS
 green_wait_final > /dev/null
+check "default wait returns immediately" test $((SECONDS - start)) -lt 1
+check "default wait preserves pending evidence" grep -q '^PENDING' "$GREEN_CLASS"
+WORKFLOW_WAIT_FOR_GREEN=1 green_wait_final > /dev/null
 check "wait helper publishes final evidence" not grep -q '^PENDING' "$GREEN_CLASS"
 check "wait helper accepts final regression evidence" grep -q '^REGRESSION' "$GREEN_CLASS"
 

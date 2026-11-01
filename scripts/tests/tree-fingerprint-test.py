@@ -48,6 +48,18 @@ class Fingerprint(unittest.TestCase):
         (root / 'node_modules' / 'x' / 'i.js').write_text('dep')
         self.assertEqual(fp.fingerprint(root), before)
 
+    def test_verification_outputs_do_not_invalidate_the_verified_source(self):
+        root = project()
+        before = fp.fingerprint(root)
+        for directory in ('.test-out', 'test-results', 'app/playwright-report'):
+            output = root / directory
+            output.mkdir(parents=True)
+            (output/'results.json').write_text('{"elapsed":1}')
+        self.assertEqual(fp.fingerprint(root), before)
+        (root/'tests').mkdir()
+        (root/'tests/test.js').write_text('assert(false)')
+        self.assertNotEqual(fp.fingerprint(root), before)
+
     def test_it_is_the_same_from_the_command_line(self):
         root = project()
         out = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/lib/tree_fingerprint.py'), str(root)],

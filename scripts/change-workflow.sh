@@ -1244,6 +1244,10 @@ start_green_check_bg() {
 wait_green_check_bg() {
     [[ -n "$GREEN_BG_PID" ]] || return 0
     local status=0 pid="$GREEN_BG_PID"
+    if [[ "${WORKFLOW_WAIT_FOR_GREEN:-0}" != 1 ]] && kill -0 "$pid" 2>/dev/null; then
+        echo 'Verification is pending; continuing without waiting. Pending checks are not passes.'
+        return 0
+    fi
     GREEN_BG_PID=""
     echo
     echo "Collecting the background check results..."
@@ -1269,6 +1273,7 @@ wait_green_check_bg() {
 # test discovery means the changed application was never runnable or tested.
 # It must not be carried as a nonblocking audit finding in unattended mode.
 green_requires_implementation_repair() {
+    stage_uses_self_hosted implementation AGENT || return 1
     [[ -s "$LOG_DIR/green-check.log" ]] || return 1
     grep -qiE '(^|[^[:alpha:]])(build failed|failed to resolve import|is not exported by|could not resolve|error when starting (dev|preview) server|process from config\.webServer was not able to start|webserver.*exit code|no test files found|testDir.*does not exist)' "$LOG_DIR/green-check.log"
 }

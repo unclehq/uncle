@@ -130,11 +130,11 @@ class MergeSteps(unittest.TestCase):
         # step 8 is only the defect-injection runner, which the driver supplies; 9 mixes roles; 10 owns everything.
         self.assertEqual(self.merged('2'), {2: [3, 4], 1: [5, 6, 7]})
 
-    def test_two_workers_is_the_default(self):
-        self.assertEqual(self.merged(None), self.merged('2'))
+    def test_independent_test_workers_are_the_default(self):
+        self.assertEqual(self.merged(None), {2: [3, 4]})
 
     def test_an_unknown_mode_is_the_default_not_a_silent_off(self):
-        self.assertEqual(self.merged('banana'), self.merged('2'))
+        self.assertEqual(self.merged('banana'), self.merged('1'))
 
     def test_a_unit_of_one_step_has_nothing_to_merge(self):
         self.assertEqual(self.merged('2', [1, 2]), {})                          # one application step, one harness step

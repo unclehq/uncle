@@ -150,6 +150,24 @@ def from_green(project, kind, current_tsv, log_path):
     already holds.  A report the implementation wrote for real is never replaced."""
     name = 'CHANGE_TEST_REPORT.md' if kind == 'change' else 'AUTOMATED_TEST_REPORT.md'
     canonical = artifact_json().path(project, name)
+    state = Path(project) / '.uncle/workflow'
+    classification = state / 'green-check.tsv'
+    pending = not classification.exists() or any(line.startswith('PENDING') for line in classification.read_text().splitlines())
+    if (state / 'green-background.pending').exists() and pending:
+        commands_path = state / 'green-check.commands'
+        commands = commands_path.read_text(encoding='utf-8').splitlines() if commands_path.exists() else []
+        payload = {'schema': 'uncle.artifact/v1',
+                   'kind': 'change-test-report' if kind == 'change' else 'automated-test-report',
+                   'driver_evidence': True,
+                   'commands': [{'command': command, 'status': 'NOT RUN', 'requirements': [],
+                                 'output': 'Driver verification is pending; no completed result is available.'}
+                                for command in commands if command.strip()],
+                   'coverage_gaps': ['Driver verification is pending; this report does not establish a green suite.'],
+                   'next_action': 'Read the completed driver results when available.'}
+        _validate(payload, kind)
+        artifact_json().write(project, name, payload)
+        (Path(project) / '.uncle/docs' / name).write_text(render(payload, kind), encoding='utf-8')
+        return True
     try:
         existing = json.loads(canonical.read_text(encoding='utf-8'))
     except (OSError, ValueError):

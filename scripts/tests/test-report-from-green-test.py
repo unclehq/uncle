@@ -38,6 +38,19 @@ class FromGreen(unittest.TestCase):
         self.log.write_text(LOG)
         self.report = self.root / '.uncle/workflow/documents/AUTOMATED_TEST_REPORT.json'
 
+    def test_pending_verification_replaces_stale_results_without_claiming_passes(self):
+        state = self.root / '.uncle/workflow'
+        (state/'green-background.pending').touch()
+        (state/'green-check.commands').write_text('npm run build\nnpm test\n')
+        self.assertTrue(tr.from_green(self.root, 'application', self.tsv, self.log))
+        report = json.loads(self.report.read_text())
+        self.assertEqual([r['status'] for r in report['commands']], ['NOT RUN', 'NOT RUN'])
+        # Publishing final classifications while the pending marker is still
+        # present must replace the placeholder with the actual command results.
+        (state/'green-check.tsv').write_text('PASS\tnpm run build\n')
+        self.assertTrue(tr.from_green(self.root, 'application', self.tsv, self.log))
+        self.assertEqual(json.loads(self.report.read_text())['commands'][0]['status'], 'PASS')
+
     def tearDown(self):
         self.tmp.cleanup()
 

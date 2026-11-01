@@ -167,15 +167,15 @@ MERGE_MODES = ('0', '1', '2')
 
 
 def merge_mode():
-    mode = os.environ.get('WORKFLOW_IMPLEMENT_MERGE_APP', '2').strip()
-    return mode if mode in MERGE_MODES else '2'
+    mode = os.environ.get('WORKFLOW_IMPLEMENT_MERGE_APP', '1').strip()
+    return mode if mode in MERGE_MODES else '1'
 
 
 def merge_map(owned, group):
     """{primary: [absorbed, ...]}: the steps of one parallel group that a single worker writes.
 
-    WORKFLOW_IMPLEMENT_MERGE_APP: 0 = every step its own worker (the old fan-out); 1 = the application steps share one worker;
-    2 (the default) = two workers: one for the application's source, one for everything that builds and verifies it (scaffold,
+    WORKFLOW_IMPLEMENT_MERGE_APP: 0 = every step its own worker (the old fan-out); 1 (the default) = application steps share one worker while scaffold and test steps stay independent;
+    2 = two workers: one for the application's source, one for everything that builds and verifies it (scaffold,
     config, tests, the defect-injection list). Both halves were failing at their seams: a stylesheet written without the
     component's class names, a `package.json` without the packages the tests import, an include glob that matched no test, a
     mutation list naming tests that do not exist. Tests stay out of the application's worker so that nobody checks code against

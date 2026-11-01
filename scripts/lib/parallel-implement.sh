@@ -288,6 +288,19 @@ parallel_implement_run_groups() {
             absorbed_for=""
             [[ "$merge_json" == "{}" ]] || absorbed_for="$(python3 -c 'import json,sys; print(" ".join(str(s) for s in json.loads(sys.argv[1]).get(sys.argv[2], [])))' "$merge_json" "$step")"
             UNCLE_ABSORBED_STEPS="$absorbed_for" "$prompt_builder_fn" "$step" "$group" "$prompt" "$module_interfaces_section" || return 1
+            cat >> "$prompt" <<CONTRACT
+
+## Shared implementation and test contract (binding)
+
+Independent test suites are written concurrently with source and scaffold steps.
+Use the shared interface contract above when supplied. If an exact export, data
+shape, selector, fixture API, or test title is missing, read the relevant section
+of the approved plan at \`$plan_doc\` before writing. This targeted contract read
+is required despite the speed guidance; do not guess aliases or read sibling files
+that are still being written. Keep expectations independent of implementation.
+Write only your owned files. Shared configuration and helpers belong to their
+assigned owners. Test execution happens after the required files are merged.
+CONTRACT
         done
         if [[ "$merge_json" != "{}" ]]; then
             echo "Implementation fan-out: isolated parallel steps $run_group (application steps $absorbed_all written together with their first)."

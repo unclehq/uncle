@@ -20,6 +20,23 @@ check "default: bounded auto repair is enabled" test "$(settings)" == "1 2"
 check "explicit opt-out overrides attempt count" test "$(settings 'WORKFLOW_REPAIR=0' 'WORKFLOW_AUTO_REPAIR_ATTEMPTS=3' 'WORKFLOW_AUTO_REPAIR=1')" == "0 0"
 check "WORKFLOW_REPAIR=1 leaves the repair settings alone" test "$(settings 'WORKFLOW_REPAIR=1')" == "1 2"
 
+# Resolve the configured repair stage, not a project-wide model assumption.
+policy="$(awk '/^if ! stage_uses_self_hosted repair AGENT; then/{p=1} p{print} p&&/^fi$/{exit}' "$SCRIPT")"
+check "non-local repair policy exists" test -n "$policy"
+runner_settings() {
+    env -i bash --norc --noprofile -c '
+        runner="$1"; policy="$2"
+        stage_uses_self_hosted() { [[ "$1 $2" == "repair AGENT" && "$runner" == self-hosted ]]; }
+        WORKFLOW_REPAIR=1; WORKFLOW_AUTO_REPAIR=1; WORKFLOW_AUTO_REPAIR_ATTEMPTS=2
+        eval "$policy"
+        echo "$WORKFLOW_REPAIR $WORKFLOW_AUTO_REPAIR $WORKFLOW_AUTO_REPAIR_ATTEMPTS"
+    ' _ "$1" "$policy"
+}
+for runner in claude codex kimi opencode; do
+    check "$runner cannot launch automatic repair" test "$(runner_settings "$runner")" == '0 0 0'
+done
+check "self-hosted retains bounded repair" test "$(runner_settings self-hosted)" == '1 1 2'
+
 # --- the unrunnable-application route, run for real -----------------------------------------------------------
 route() {   # env assignments... -> "rc state-list ledger-lines"
     local out

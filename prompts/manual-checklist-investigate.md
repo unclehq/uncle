@@ -211,3 +211,13 @@ mode, do ZERO size-only compaction passes. Preserve mandatory content even
 above the guide; do not repeatedly count bytes or trim whitespace. The driver
 measures the artifact. Enforced budgets retain the two-pass limit and
 preservation rules. All format and completeness checks still apply.
+
+## Recorded launch evidence
+
+When acceptance requires a launch command or launch manifest, verify that exact
+entry point and its advertised interface. Tests that start their own server or
+import a library do not establish that the recorded launch command works. Keep
+a required checklist item unless current evidence explicitly covers launching
+that command and exercising the required behavior. For a webpage check its
+recorded URL and functional controls; for a CLI or service use the specified
+command and interface. Do not add a browser requirement to non-browser projects.

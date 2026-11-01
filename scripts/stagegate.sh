@@ -1181,6 +1181,15 @@ format_claude_stream() {
 . "$ROOT/scripts/lib/stage-runtime.sh"
 . "$ROOT/scripts/lib/stage-runtime-app.sh"
 
+# Automatic source repair is reserved for the configured local/self-hosted runner.
+# Resolve the repair stage itself: mixed-runner projects may configure it separately.
+if ! stage_uses_self_hosted repair AGENT; then
+    WORKFLOW_REPAIR=0
+    WORKFLOW_AUTO_REPAIR=0
+    WORKFLOW_AUTO_REPAIR_ATTEMPTS=0
+fi
+
+
 
 
 # issue 103: how many isolated candidates race for one self-hosted stage
@@ -5061,6 +5070,10 @@ rm -f "$STATE_DIR/stop-reason" "$STATE_DIR/updated-plan-writers-exhausted" "$STA
 # A fresh run (no state file yet) drops any stale start stamp; a resume keeps it.
 [[ -e "$STATE_FILE" ]] || finished_extras reset
 finished_extras start
+# Application builds do not inherit completed verification from an earlier
+# driver invocation. Preserve historical reports for inspection, not acceptance.
+export WORKFLOW_CHECK_REUSE=0
+rm -f "$STATE_DIR/green-check.fingerprint"
 green_background_recover
 
 while true; do

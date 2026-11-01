@@ -181,6 +181,12 @@ run_green_check_auto() {
 # incomplete. Callers decide whether a recorded failure is repairable,
 # nonblocking, or terminal.
 green_wait_final() {
+    if [[ "${WORKFLOW_WAIT_FOR_GREEN:-0}" != 1 ]]; then
+        if green_pending || grep -q '^PENDING' "$GREEN_CLASS" 2>/dev/null; then
+            echo 'Verification is pending; continuing without waiting. Pending checks are not passes.'
+        fi
+        return 0
+    fi
     local pid="${GREEN_BG_PID:-}"
     if green_pending; then
         pid="$GREEN_BG_PID"

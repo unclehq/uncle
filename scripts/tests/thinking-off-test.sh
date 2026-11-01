@@ -13,11 +13,12 @@ nocheck() { local what="$1"; shift; if "$@"; then echo "FAIL: $what"; fails=$((f
 # Stages that transcribe decided inputs are off; judgment stages are not.
 for stage in requirements project-plan project-plan-section-invariants updated-plan updated-plan-worker-edits-3 \
              updated-plan-worker-resolve-g1-retry preflight-worker-browser preview-build-part-a module-interfaces \
-             execute-checklist-worker-group-1-batch-2; do
+             execute-checklist-worker-group-1-batch-2 test-review test-review-worker-oracle final-audit \
+             final-audit-review-worker-verification; do
     check "$stage runs without thinking" uncle_stage_thinking_off "$stage"
 done
 for stage in implementation implementation-step-2 repair adversarial-review adversarial-review-worker-security \
-             test-review final-audit manual-checklist derive-brief project-plan-stage-duties; do
+             manual-checklist derive-brief project-plan-stage-duties; do
     nocheck "$stage keeps thinking" uncle_stage_thinking_off "$stage"
 done
 

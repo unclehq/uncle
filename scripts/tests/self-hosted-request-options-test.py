@@ -67,7 +67,10 @@ class RequestOptions(unittest.TestCase):
 
     def test_default_is_empty_and_preserves_original_body(self):
         self.assertEqual(transport.request_options(), {})
-        self.chat()
+        # On a stage that keeps thinking, nothing is added; the stages that run without thinking get chat_template_kwargs by default
+        # (worker-thinking-default-test.py).
+        with patch.dict(os.environ, {'UNCLE_STATUS_STAGE': 'implementation'}):
+            self.chat()
         self.assertEqual(set(self.bodies[0]), {'model', 'messages', 'tools', 'max_tokens', 'stream', 'stream_options',
                                               'temperature', 'reasoning_effort'})
         self.assertTrue(self.bodies[0]['stream'])

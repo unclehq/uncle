@@ -20,20 +20,22 @@ def options(stage, config=None, env=None):
 
 
 class WorkerDefault(unittest.TestCase):
-    def test_worker_stages_turn_thinking_off(self):
-        for stage in ('adversarial-review-worker-regression', 'test-review-worker-coverage', 'manual-checklist-review-worker-coverage',
-                      'final-audit-review-worker-scope', 'project-plan-section-behaviors', 'updated-plan-review-worker-ownership'):
+    def test_the_shared_list_turns_thinking_off(self):
+        for stage in ('final-audit-review-worker-scope', 'test-review-worker-coverage', 'project-plan-section-behaviors',
+                      'updated-plan-review-worker-ownership', 'test-review', 'final-audit', 'execute-checklist',
+                      'execute-checklist-worker-2', 'requirements', 'classify-change', 'preflight-worker-x'):
             self.assertEqual(options(stage), OFF, stage)
 
-    def test_the_judging_stages_turn_thinking_off_too(self):
-        for stage in ('test-review', 'final-audit', 'execute-checklist', 'execute-checklist-worker-2', 'test-review-worker-oracle'):
-            self.assertEqual(options(stage), OFF, stage)
-        for stage in ('final-auditor', 'test-reviews', 'execute-checklists'):
+    def test_judgment_stages_keep_thinking_on_as_on_the_other_runners(self):
+        for stage in ('implementation', 'repair', 'adversarial-review', 'adversarial-review-worker-regression', 'manual-checklist',
+                      'manual-checklist-review-worker-coverage', 'derive-brief', 'project-plan-stage-duties', 'final-auditor',
+                      'test-reviews', 'execute-checklists', ''):
             self.assertEqual(options(stage), {}, stage)
 
-    def test_other_stages_are_unchanged(self):
-        for stage in ('implementation', 'requirements', 'project-plan', 'repair', 'classify-change', 'updated-plan', 'adversarial-review', ''):
-            self.assertEqual(options(stage), {}, stage)
+    def test_the_operators_extra_globs_and_the_global_switch_work_as_for_the_other_runners(self):
+        self.assertEqual(options('adversarial-review-worker-x', env={'WORKFLOW_THINKING_OFF_EXTRA': 'adversarial-review-*'}), OFF)
+        self.assertEqual(options('implementation', env={'WORKFLOW_THINKING_OFF_EXTRA': 'unrelated-*'}), {})
+        self.assertEqual(options('test-review', env={'WORKFLOW_THINKING': 'on'}), {})
 
     def test_a_stage_the_operator_configured_keeps_exactly_what_they_set(self):
         stage = 'test-review-worker-coverage'

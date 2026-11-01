@@ -84,22 +84,28 @@ def request_options(stage=None, config=None):
     return _lookup_request_options(stage, config)[1]
 
 
-# A worker answers one narrow question from inputs it was handed: its packet is the deliverable and the stage waits for the
-# slowest worker, so reasoning it was never asked for is pure latency. Unless the operator configured request options for the
-# stage (an explicit {} included) or set WORKFLOW_WORKER_THINKING=on, a worker's requests turn thinking off. The setting is the
-# one the updated-plan retry path already sends.
-# The same goes for the stages that judge from evidence they are handed (test review, the final audit, checklist execution): the
-# config for each of them used to say thinking false by hand.
-THINKING_OFF_STAGES = ('test-review', 'final-audit', 'execute-checklist')
+# The stages that run without thinking are the same on every runner (scripts/lib/thinking-off.sh, uncle_stage_thinking_off: claude
+# gets MAX_THINKING_TOKENS=0, codex and kimi their no-thinking effort). Self-hosted gets the equivalent here: unless the operator
+# configured request options for the stage (an explicit {} included), those stages' requests turn thinking off, the setting the
+# updated-plan retry path already sends. WORKFLOW_THINKING=on restores thinking everywhere, and WORKFLOW_THINKING_OFF_EXTRA adds
+# stage globs, exactly as for the other runners. Keep THINKING_OFF_STAGES in step with thinking-off.sh (a test compares them).
+THINKING_OFF_STAGES = (
+    'requirements', 'requirements-investigate', 'project-plan', 'project-plan-investigate', 'project-plan-section-*',
+    'updated-plan', 'updated-plan-*', 'updated-change-plan', 'updated-change-plan-*',
+    'preflight', 'preflight-*', 'preview-build', 'preview-build-*', 'module-interfaces', 'classify-change',
+    'execute-checklist', 'execute-checklist-*', 'test-review', 'test-review-*', 'final-audit', 'final-audit-*')
 
 
-def is_worker_stage(stage):
-    return ('-worker-' in stage or stage.startswith('project-plan-section')
-            or any(stage == name or stage.startswith(name + '-') for name in THINKING_OFF_STAGES))
+def thinking_off_stage(stage):
+    import fnmatch
+    if os.environ.get('WORKFLOW_THINKING', 'auto') == 'on' or os.environ.get('WORKFLOW_WORKER_THINKING', '').lower() in ('on', '1', 'true'):
+        return False
+    patterns = THINKING_OFF_STAGES + tuple(os.environ.get('WORKFLOW_THINKING_OFF_EXTRA', '').split())
+    return any(fnmatch.fnmatchcase(stage, pattern) for pattern in patterns)
 
 
 def worker_default_options(stage, found):
-    if found or not is_worker_stage(stage or '') or os.environ.get('WORKFLOW_WORKER_THINKING', '').lower() in ('on', '1', 'true'):
+    if found or not thinking_off_stage(stage or ''):
         return None
     return {'chat_template_kwargs': {'enable_thinking': False}}
 

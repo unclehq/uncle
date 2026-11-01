@@ -71,22 +71,33 @@ def prerequisite_skip(command, failed_build, failed_unit, failed_e2e):
     return ''
 
 
+# How many Playwright failures a green-check run tolerates before it stops. One failure used to end the run, which turned
+# "2 of 33 browser tests ran" into the evidence the test review, supervisor and audit all worked from: the 29 untouched tests
+# were unknown, and the mutation controls were skipped because "a browser command failed". It also made
+# browser_application_unrunnable() unable to ever fire, since that needs two or more missing-element failures. Five still bounds
+# a blank page (every locator waits out its timeout, and the suite stops after five of them) while letting an ordinary
+# suite with a failure or two report all of its results.
+DEFAULT_E2E_MAX_FAILURES = 5
+
+
+def e2e_max_failures():
+    return os.environ.get('WORKFLOW_GREEN_E2E_MAX_FAILURES', str(DEFAULT_E2E_MAX_FAILURES)).strip()
+
+
 def execution_command(command):
     """Bound a known-bad browser suite without changing its approved evidence.
 
     A blank application page makes every locator in a Playwright suite wait for
-    its timeout.  One such failure establishes that the browser baseline is
-    broken; continuing through the remaining cases and then mutation controls
-    only repeats the same failure.  Keep the command recorded in the report
-    unchanged, but give Playwright a small, overridable failure budget while it
-    executes.  Set WORKFLOW_GREEN_E2E_MAX_FAILURES=0 to retain Playwright's
-    normal unlimited behavior.
+    its timeout, so the suite gets a small, overridable failure budget while it
+    executes (DEFAULT_E2E_MAX_FAILURES). Keep the command recorded in the report
+    unchanged. Set WORKFLOW_GREEN_E2E_MAX_FAILURES=0 to retain Playwright's
+    normal unlimited behavior, or another number to change the budget.
     """
     script = npm_script(command)
     # Forward only to a single known Playwright invocation. Arbitrary scripts,
     # pipelines and other runners must never receive Playwright-specific flags.
     if script and re.fullmatch(r'(?:npx\s+)?playwright\s+test(?:\s+[^;&|<>`$()]*)?', script):
-        configured = os.environ.get('WORKFLOW_GREEN_E2E_MAX_FAILURES', '1').strip()
+        configured = e2e_max_failures()
         if (configured.isdigit() and int(configured) > 0
                 and '--max-failures' not in script + command):
             separator = ' ' if ' -- ' in command else ' -- '
@@ -96,7 +107,7 @@ def execution_command(command):
         return command
     if re.search(r'--max-failures(?:=|\s+)', command):
         return command
-    configured = os.environ.get('WORKFLOW_GREEN_E2E_MAX_FAILURES', '1').strip()
+    configured = e2e_max_failures()
     if not configured.isdigit() or int(configured) <= 0:
         return command
     # Attach the flag to the Playwright invocation itself, not the end of the line: in a

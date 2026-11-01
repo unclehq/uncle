@@ -124,22 +124,32 @@ class Checks(unittest.TestCase):
         self.assertFalse((self.root/'mutation-ran').exists())
         self.assertEqual([row.split('\t')[0] for row in (self.root/'results').read_text().splitlines()], ['1','125'])
 
-    def test_browser_suites_default_to_one_failure_but_keep_the_reported_command(self):
+    def test_browser_suites_get_a_small_failure_budget_but_keep_the_reported_command(self):
         r=self.run_checks(["printf '%s' \"$*\" > args # playwright test"], '')
         self.assertEqual(r.returncode, 0, r.stderr)
         # The helper's shell comment intentionally keeps this fixture command
         # inert; validate the execution transformation directly instead.
         import parallel_checks
         self.assertEqual(parallel_checks.execution_command('npx playwright test'),
-                         'npx playwright test --max-failures=1')
+                         'npx playwright test --max-failures=5')
         self.assertEqual(parallel_checks.execution_command('npx playwright test --max-failures=3'),
                          'npx playwright test --max-failures=3')
         self.assertEqual(parallel_checks.execution_command('npx playwright test e2e/a.spec.js'),
-                         'npx playwright test --max-failures=1 e2e/a.spec.js')
+                         'npx playwright test --max-failures=5 e2e/a.spec.js')
         # The flag goes on Playwright, never on the trailing `wait` of a compound command.
         self.assertEqual(parallel_checks.execution_command('(npx vitest run) & (PORT=4180 npx playwright test) & wait'),
-                         '(npx vitest run) & (PORT=4180 npx playwright test --max-failures=1) & wait')
+                         '(npx vitest run) & (PORT=4180 npx playwright test --max-failures=5) & wait')
         self.assertEqual(parallel_checks.execution_command('npx vitest run'), 'npx vitest run')
+    def test_the_default_budget_lets_an_ordinary_failing_suite_report_everything(self):
+        # One failure used to stop the run with most of the suite unrun, and made blank-page detection (two or more
+        # missing-element failures) impossible. The budget must be above that detection threshold and overridable.
+        import parallel_checks
+        from unittest.mock import patch
+        self.assertGreater(parallel_checks.DEFAULT_E2E_MAX_FAILURES, 2)
+        with patch.dict(os.environ, WORKFLOW_GREEN_E2E_MAX_FAILURES='0'):
+            self.assertEqual(parallel_checks.execution_command('npx playwright test'), 'npx playwright test')
+        with patch.dict(os.environ, WORKFLOW_GREEN_E2E_MAX_FAILURES='2'):
+            self.assertEqual(parallel_checks.execution_command('npx playwright test'), 'npx playwright test --max-failures=2')
     def test_npm_wrapper_uses_the_actual_script_and_preserves_other_runners(self):
         import parallel_checks, json
         from unittest.mock import patch
@@ -150,7 +160,7 @@ class Checks(unittest.TestCase):
             'other': 'pytest', 'chain': 'playwright test && echo done'}}))
         with patch('parallel_checks.Path.cwd', return_value=self.root):
             command = 'npm --prefix calculator run test:browser'
-            self.assertEqual(parallel_checks.execution_command(command), command + ' -- --max-failures=1')
+            self.assertEqual(parallel_checks.execution_command(command), command + ' -- --max-failures=5')
             self.assertIn('mutation controls', parallel_checks.prerequisite_skip('node mutation.mjs', False, False, True))
             self.assertIn('playwright test', parallel_checks.command_evidence(command))
             for name in ('test', 'other', 'chain', 'missing'):
@@ -170,7 +180,7 @@ class Checks(unittest.TestCase):
             result = self.run_checks(['npm run test:browser', 'touch mutation-ran # mutation test'], '')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.root/'mutation-ran').exists())
-        self.assertIn('args: run test:browser -- --max-failures=1', (self.root/'log').read_text())
+        self.assertIn('args: run test:browser -- --max-failures=5', (self.root/'log').read_text())
         self.assertEqual((self.root/'results').read_text().splitlines()[0], '1\tnpm run test:browser')
 
     def test_output_is_visible_before_command_finishes(self):

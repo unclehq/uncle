@@ -117,14 +117,6 @@ change_class_recheck() {
     [[ -z "$message" ]] || echo "$message"
 }
 
-# change_class_plan_single -- succeeds when a new application is small enough that its plan is written in one pass rather than by the
-# sectioned worker panel. An explicit WORKFLOW_PROJECT_PLAN_SECTIONS (1 or 0) is the operator's word and is read before this.
-change_class_plan_single() {
-    [[ "${WORKFLOW_CLASSIFY:-1}" != 0 ]] || return 1
-    [[ "$(python3 -B "$CHANGE_CLASS_PY" get . class 2>/dev/null)" == small \
-        && "$(python3 -B "$CHANGE_CLASS_PY" get . family 2>/dev/null)" == app ]]
-}
-
 # change_class_budget -- the planner's size paragraph for the class (empty unless the application is small).
 change_class_budget() {
     [[ "${WORKFLOW_CLASSIFY:-1}" != 0 ]] || return 0

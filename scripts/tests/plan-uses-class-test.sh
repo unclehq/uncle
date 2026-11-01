@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # CLASSIFY runs before PROJECT_PLAN in the application flow, and the plan uses the class: a small application is planned in
-# one pass to a size budget, and the plan's size is checked again afterwards (which can only raise the class).
+# to a size budget, and the plan's size is checked again afterwards (which can only raise the class). A small application keeps
+# the sectioned plan: the single-pass plan wrote Owns: entries that were commands, not files, and was rejected on every retry.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SG="$ROOT/scripts/stagegate.sh"
@@ -20,35 +21,41 @@ last_block PROJECT_PLAN | grep -q 'set_state WAIT_PLAN_APPROVAL' || bad "PROJECT
 last_block PROJECT_PLAN | grep -q 'set_state CLASSIFY' && bad "PROJECT_PLAN still routes through CLASSIFY"
 grep -q 'change_class_budget' "$ROOT/scripts/lib/gates.sh" || bad "the plan prompt does not get the class budget"
 
-# --- the sections gate, run for real --------------------------------------------------------------------------------------
-gate() {   # <class-says-single: yes|no> [env...]
-    local single="$1"; shift
+# --- the sections gate: the class does not turn sections off -----------------------------------------------------------------
+gate() {   # [env...]
     env -i bash --norc --noprofile -c "$(printf '%s\n' "$@")
         $(awk '/^project_plan_sections_enabled\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$SG")
-        change_class_plan_single() { [[ '$single' == yes ]]; }
         project_plan_sections_enabled && echo sections || echo single"
 }
-[[ "$(gate yes)" == single ]]   || bad "a small application should be planned in one pass by default"
-[[ "$(gate no)" == sections ]]  || bad "a larger application keeps the sectioned plan"
-[[ "$(gate yes 'WORKFLOW_PROJECT_PLAN_SECTIONS=1')" == sections ]] || bad "an explicit WORKFLOW_PROJECT_PLAN_SECTIONS=1 must win over the class"
-[[ "$(gate no 'WORKFLOW_PROJECT_PLAN_SECTIONS=0')" == single ]]    || bad "an explicit 0 still turns sections off"
+[[ "$(gate)" == sections ]] || bad "sections must stay on by default, including for a small application"
+[[ "$(gate 'WORKFLOW_PROJECT_PLAN_SECTIONS=0')" == single ]] || bad "an explicit 0 still turns sections off"
+grep -q 'change_class_plan_single' "$SG" "$ROOT/scripts/lib/change-class-stage.sh" && bad "the class must not switch the plan to a single pass"
+
+# --- the budget goes to the sections that size the plan ----------------------------------------------------------------
+budget_for() {   # <section name> -> appended text
+    local f="$work/section-$1.md"; printf 'base\n' > "$f"
+    env -i bash --norc --noprofile -c "
+        change_class_budget() { printf 'BUDGET\n'; }
+        $(awk '/^project_plan_section_budget\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$SG")
+        project_plan_section_budget '$1' '$f'"
+    tr '\n' ' ' < "$f"
+}
+[[ "$(budget_for steps)" == "base BUDGET " ]] || bad "the steps section does not get the budget"
+[[ "$(budget_for sequence)" == "base BUDGET " ]] || bad "the sequence section does not get the budget"
+[[ "$(budget_for design)" == "base " ]] || bad "a section that does not size the plan got the budget"
+[[ "$(grep -c 'project_plan_section_budget "$name" "$prompt"' "$SG")" == 2 ]] || bad "both delivery modes must apply the budget"
 
 # --- the helpers, against a real change-class.json -------------------------------------------------------------------------
 mkdir -p "$work/p/.uncle/workflow"; cd "$work/p"
 STATE_DIR="$PWD/.uncle/workflow"
 . "$ROOT/scripts/lib/change-class-stage.sh"
 put() { printf '%s\n' "$1" > .uncle/workflow/change-class.json; }
-change_class_plan_single && bad "no classification must not mean a one-pass plan"
 [[ -z "$(change_class_budget)" ]] || bad "no classification must give no budget"
 put '{"family": "app", "class": "small"}'
-change_class_plan_single || bad "a small app was not recognised"
 [[ "$(change_class_budget)" == *"classified **small**"* ]] || bad "a small app got no budget"
-WORKFLOW_CLASSIFY=0 change_class_plan_single && bad "WORKFLOW_CLASSIFY=0 must switch the one-pass plan off"
 [[ -z "$(WORKFLOW_CLASSIFY=0 change_class_budget)" ]] || bad "WORKFLOW_CLASSIFY=0 must give no budget"
 put '{"family": "app", "class": "standard"}'
-change_class_plan_single && bad "a standard app must keep the sectioned plan"
 put '{"family": "change", "class": "small"}'
-change_class_plan_single && bad "a change request is not planned by the application planner"
 
 # --- the budget reaches the real plan prompt (project-plan is a synthesis stage with its own early return) ------------------
 printf '# Project plan prompt\nWrite the plan.\n' > "$work/plan-prompt.md"

@@ -3929,11 +3929,19 @@ run_parallel_checklist_workers() {
 # One section worker, started in the background by the caller.  With schema-checked JSON (hosted Claude's
 # --json-schema, or the grammar a self-hosted adapter enforces for the packet kind) the worker returns a packet
 # and the driver renders its section file; otherwise (Codex) the worker writes the file itself.
+# A small application is planned to a size budget. Only the sections that decide how many steps and files there are need to hear it.
+project_plan_section_budget() {
+    case "$1" in
+        steps|sequence) change_class_budget >> "$2" ;;
+    esac
+}
+
 project_plan_section_run() {
     local name="$1" directory="$2" helper="$ROOT/scripts/lib/project_plan_sections.py" delivery="$3" prompt
     prompt="$directory/prompts/$name.md"
     if [[ "$delivery" == file ]]; then
         python3 -B "$helper" prompt "$name" "$directory" "$ROOT/prompts/project-plan-investigate.md" "$prompt" || return 1
+        project_plan_section_budget "$name" "$prompt"
         SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 run_claude "$prompt" "project-plan-section-$name"
         return
     fi
@@ -3941,6 +3949,7 @@ project_plan_section_run() {
     local prompt_flag=--json schema_command=section
     if [[ "${WORKFLOW_PLAN_BLOCKS:-1}" == 1 ]]; then prompt_flag=--blocks; schema_command=section-model; fi
     python3 -B "$helper" prompt "$name" "$directory" "$ROOT/prompts/project-plan-investigate.md" "$prompt" "$prompt_flag" || return 1
+    project_plan_section_budget "$name" "$prompt"
     rm -f "$directory/$name.json"
     if [[ "$delivery" == hosted ]]; then
         mkdir -p "$directory/schemas"
@@ -4123,7 +4132,7 @@ project_plan_sections_enabled() {
     local minimum="${WORKFLOW_PROJECT_PLAN_SECTIONS_MIN_BYTES:-12000}"
     case "$setting" in
         0|false|no|off) return 1 ;;
-        1|true|yes|on) [[ -n "${WORKFLOW_PROJECT_PLAN_SECTIONS:-}" ]] || { change_class_plan_single && return 1; }; return 0 ;;
+        1|true|yes|on) return 0 ;;
         auto|'') ;;
         *) echo "Invalid WORKFLOW_PROJECT_PLAN_SECTIONS value: $setting (use auto, 0, or 1)." >&2; return 1 ;;
     esac

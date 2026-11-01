@@ -49,7 +49,7 @@ def isolate_git():
 # writes its stage events (a second change-plan, requirements, preview-build, adversarial-review) into the live run's
 # UNCLE_STATUS_FILE, and one that honours WORKFLOW_AGENT_CMD or UNCLE_PROJECT_ROOT would run against the real thing.
 KEEP_ENV = ('UNCLE_MODEL_REFRESH', 'WORKFLOW_VERIFY_JOBS', 'WORKFLOW_TEST_JOBS', 'WORKFLOW_PYTHON_TESTS_RUNNER',
-            'WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS')
+            'WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 'WORKFLOW_SUITE_TIMINGS')
 LEAKY_PREFIXES = ('UNCLE_', 'STAGEGATE_', 'WORKFLOW_')
 
 
@@ -97,6 +97,25 @@ def guard_violations(before, after):
     return [name for name in GUARDED if before.get(name) != after.get(name)]
 
 
+def report_timings(kind, durations, statuses, show=15):
+    """Print the slowest suites, and with WORKFLOW_SUITE_TIMINGS=<file> write every suite's wall time, longest first.
+
+    The time is the suite's own wall clock while `jobs` suites share the machine, so it overstates a suite that ran beside heavy
+    neighbours; the order is what to read. A suite that was never started (the run was stopped first) has no entry.
+    """
+    ranked = sorted(durations.items(), key=lambda item: -item[1])
+    if not ranked:
+        return
+    print(f'Slowest {kind} suites:', flush=True)
+    for path, seconds in ranked[:show]:
+        print(f'  {seconds:7.1f}s  {path}', flush=True)
+    target = os.environ.get('WORKFLOW_SUITE_TIMINGS')
+    if target:
+        with open(target, 'w', encoding='utf-8') as out:
+            for path, seconds in ranked:
+                out.write(f'{seconds:.2f}\t{statuses.get(path, "")}\t{path}\n')
+
+
 def run_commands(jobs, commands, kind='shell'):
     """Execute named isolated commands with shared progress and cleanup.
 
@@ -116,6 +135,7 @@ def run_commands(jobs, commands, kind='shell'):
     files = list(commands)
     active, lock, stopped = set(), threading.Lock(), threading.Event()
     running = {}
+    durations, statuses = {}, {}
     def interrupted(*_):
         raise KeyboardInterrupt
     previous = signal.signal(signal.SIGTERM, interrupted)
@@ -137,7 +157,7 @@ def run_commands(jobs, commands, kind='shell'):
                         finish_check(child)
                         with lock:
                             active.discard(child)
-                            running.pop(path, None)
+                            durations[path] = time.monotonic() - running.pop(path, time.monotonic())
                 return path, status, log
             pool = ThreadPoolExecutor(max_workers=jobs)
             failed = skipped = 0
@@ -155,6 +175,7 @@ def run_commands(jobs, commands, kind='shell'):
                                 sys.stdout.buffer.write(chunk)
                         sys.stdout.buffer.flush()
                         label = 'SKIP' if status == 77 else ('PASS' if status == 0 else f'FAIL({status})')
+                        statuses[path] = status
                         print(f'{label} {path}', flush=True)
                         skipped += status == 77
                         failed += status not in (0, 77)
@@ -171,6 +192,7 @@ def run_commands(jobs, commands, kind='shell'):
                         kill_tree(child)
                 pool.shutdown(wait=True)
             print(f'{kind.capitalize()} suites: {len(files) - failed - skipped} passed, {failed} failed, {skipped} skipped.', flush=True)
+            report_timings(kind, durations, statuses)
             touched = guard_violations(guarded_before, guarded_snapshot())
             if touched:
                 print('FAIL: test isolation: a suite modified the live workflow binding it was run inside: ' + ', '.join(touched)

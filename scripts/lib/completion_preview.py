@@ -81,6 +81,97 @@ def prepare_project(root, command):
     return ', '.join(done)
 
 
+def editor_configuration(data):
+    """The canonical manifest equivalent to a VS Code style launch.json, or None."""
+    configurations = data.get('configurations')
+    if 'kind' in data or not isinstance(configurations, list):
+        return None
+    for entry in configurations:
+        if not isinstance(entry, dict):
+            continue
+        executable = entry.get('runtimeExecutable') or entry.get('program')
+        args = entry.get('runtimeArgs', entry.get('args', []))
+        if not isinstance(executable, str) or not executable or not isinstance(args, list) \
+                or not all(isinstance(a, str) and a for a in args):
+            continue
+        result = {'command': [executable] + args}
+        port = entry.get('port')
+        if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
+            result['url'] = 'http://127.0.0.1:%d' % port
+        elif isinstance(entry.get('url'), str):
+            result['url'] = entry['url']
+        result['kind'] = 'webpage' if 'url' in result else 'command'
+        return result
+    return None
+
+
+def derive_launch_manifest(root):
+    """A launch manifest worked out from the project itself, for when the worker's file cannot be repaired: the project's dev (or
+    start) script and the port it names, else `none`, which only skips the preview. Never executes anything."""
+    root = Path(root)
+    try:
+        scripts = json.loads((root / 'package.json').read_text()).get('scripts') or {}
+    except (OSError, ValueError, AttributeError):
+        return {'kind': 'none'}
+    if not isinstance(scripts, dict):
+        return {'kind': 'none'}
+    script = next((name for name in ('dev', 'start') if isinstance(scripts.get(name), str)), None)
+    if not script:
+        return {'kind': 'none'}
+    port = None
+    found = re.search(r'--port[ =](\d{2,5})', scripts[script])
+    if found:
+        port = int(found.group(1))
+    if port is None:
+        for name in ('vite.config.js', 'vite.config.ts', 'vite.config.mjs', 'vite.config.mts'):
+            try:
+                found = re.search(r'\bport\s*:\s*(\d{2,5})', (root / name).read_text())
+            except OSError:
+                continue
+            if found:
+                port = int(found.group(1))
+                break
+    if port is None and 'vite' in scripts[script]:
+        port = 5173
+    if port is None or not 0 < port < 65536:
+        return {'kind': 'command', 'command': ['npm', 'run', script]}
+    return {'kind': 'webpage', 'command': ['npm', 'run', script], 'url': 'http://127.0.0.1:%d' % port}
+
+
+def repair_launch_manifest(root):
+    """Make .uncle/launch.json valid, or say why it cannot be. Returns a message describing what was done ('' when nothing was).
+
+    The file only tells the driver how to start a preview; it is not evidence about the build. So a file that cannot be repaired
+    in place is replaced by one derived from the project, the original is kept beside it, and the replacement is recorded."""
+    root = Path(root)
+    manifest = root / '.uncle/launch.json'
+    messages = []
+    try:
+        if normalize_launch_manifest(root):
+            messages.append('Normalized generated launch metadata to the canonical argument-array contract.')
+    except (OSError, ValueError):
+        pass
+    if not manifest.is_file():
+        return '\n'.join(messages)
+    try:
+        launch_spec(root)
+    except (OSError, ValueError) as error:
+        derived = derive_launch_manifest(root)
+        validate_launch_spec(root, dict(derived))
+        invalid = manifest.with_name('launch.json.invalid')
+        invalid.write_bytes(manifest.read_bytes())
+        temporary = manifest.with_name('launch.json.pending')
+        temporary.write_text(json.dumps(derived, indent=2) + '\n')
+        temporary.replace(manifest)
+        note = ('Replaced an unusable .uncle/launch.json (%s) with one derived from the project: %s. The original is kept at '
+                '.uncle/launch.json.invalid.' % (error, json.dumps(derived)))
+        state = root / '.uncle/workflow'
+        if state.is_dir():
+            (state / 'launch-repair.txt').write_text(note + '\n')
+        messages.append(note)
+    return '\n'.join(messages)
+
+
 def normalize_launch_manifest(root):
     """Repair only the unambiguous legacy npm-script shape, without executing it."""
     root = Path(root)
@@ -91,6 +182,11 @@ def normalize_launch_manifest(root):
     if not isinstance(data, dict):
         return False
     fixed = dict(data)
+    editor = editor_configuration(fixed)
+    if editor:
+        # A VS Code launch.json (`configurations[]` with runtimeExecutable/runtimeArgs/port) is the commonest wrong shape a
+        # worker reaches for, because that is what the name suggests. Its first runnable configuration says the same thing.
+        fixed = editor
     command = fixed.get('command')
     if isinstance(command, str):
         match = re.fullmatch(r'npm\s+run\s+([A-Za-z0-9][A-Za-z0-9:_.-]*)', command.strip())
@@ -313,8 +409,9 @@ if __name__ == '__main__':
     if len(sys.argv) != 3 or sys.argv[1] != '--normalize':
         raise SystemExit('usage: completion_preview.py --normalize PROJECT')
     try:
-        if normalize_launch_manifest(sys.argv[2]):
-            print('Normalized generated launch metadata to the canonical argument-array contract.')
+        message = repair_launch_manifest(sys.argv[2])
+        if message:
+            print(message)
         launch_spec(sys.argv[2])
     except (OSError, ValueError) as error:
         raise SystemExit('Invalid launch metadata: ' + str(error))

@@ -113,7 +113,8 @@ workflow_model_cancel() {
 workflow_model_writer() {
     local stage="$1"; shift
     local limit=3600 pid guard heartbeat status=0 finding_limit="" idle_mode=""
-    if declare -F stage_uses_self_hosted >/dev/null && stage_uses_self_hosted "$stage" AGENT; then
+    # UNCLE_WRITER_SIDE=REVIEWER bounds a reviewer-side call (a panel lens) by the reviewer's configured runner.
+    if declare -F stage_uses_self_hosted >/dev/null && stage_uses_self_hosted "$stage" "${UNCLE_WRITER_SIDE:-AGENT}"; then
         limit="$(UNCLE_STATUS_STAGE="$3" python3 -B "$ROOT/scripts/lib/writer_deadline.py" seconds)" || return 1
     else
         idle_mode=ceiling-only
@@ -139,6 +140,25 @@ workflow_model_writer() {
     if [[ -e "$heartbeat.failed" ]]; then cat "$heartbeat.failed" >&2; status=124; fi
     rm -f "$heartbeat" "$heartbeat.failed"
     return "$status"
+}
+
+# One review lens of a panel, bounded by progress. A lens whose packet is missing or invalid is run once more, alone; it is never
+# the whole stage that is restarted. Returns nonzero when the lens still has no valid packet, and the caller decides what to do
+# without it.
+#   workflow_bounded_lens STAGE NAME OUTPUT DIRECTORY KIND LENS CALL_FUNCTION PROMPT
+# CALL_FUNCTION is called as `CALL_FUNCTION PROMPT NAME OUTPUT` (NAME is third on the command line, as the deadline expects).
+workflow_bounded_lens() {
+    local stage="$1" name="$2" output="$3" directory="$4" kind="$5" lens="$6" call="$7" prompt="$8" probe
+    probe="$directory/$lens.validated.json"
+    UNCLE_WRITER_SIDE=REVIEWER workflow_model_writer "$stage" "$call" "$prompt" "$name" "$output" || true
+    if ! python3 -B "$ROOT/scripts/lib/worker_packets.py" "$directory" "$probe" --kind "$kind" --expected "$lens" > /dev/null 2>&1; then
+        echo "$name did not deliver a valid packet; running that lens once more." >&2
+        rm -f "$output" "$output.delivery.json" "$probe"
+        UNCLE_WRITER_SIDE=REVIEWER workflow_model_writer "$stage" "$call" "$prompt" "$name-retry" "$output" || true
+        python3 -B "$ROOT/scripts/lib/worker_packets.py" "$directory" "$probe" --kind "$kind" --expected "$lens" > /dev/null 2>&1 \
+            || { rm -f "$probe"; return 1; }
+    fi
+    rm -f "$probe"
 }
 
 # Bound writer fan-out separately from the provider-wide lease pool.

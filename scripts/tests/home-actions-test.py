@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import shutil
 import sys
 import tempfile
 import unittest
@@ -489,17 +490,25 @@ class Actions(unittest.TestCase):
         gh = bin_dir/'gh'
         gh.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"title":"Grocery issue","body":"Offline lists","url":"https://github.com/example/project/issues/42"}\'\n')
         gh.chmod(0o755)
+        # An issue import works inside a repository; it refuses a directory that is not one.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import fixture_repo
+        fixture_repo.init_repo(self.root)
+        fixture_repo.commit(self.root, 'initial')
         env = dict(os.environ, UNCLE_PROJECT_ROOT=str(self.root), PATH=str(bin_dir)+os.pathsep+os.environ['PATH'])
         command = ['bash', str(ROOT/'scripts/from-issue.sh'), 'https://github.com/example/project/issues/42', '--change', '--seed-only']
         worker = IssueSeedRequest(command, str(self.root), env)
         kind, value = worker.events.get(timeout=15)
         worker.thread.join(5)
         self.assertEqual(kind, 'issue_seeded', value)
-        target = self.root/'.uncle/docs/CHANGE_REQUEST.md'
+        # An issue run owns a stable sibling worktree, and the seed is written there, not into the project root.
+        issue_root = Path(str(self.root) + '-issue-42')
+        self.addCleanup(shutil.rmtree, issue_root, True)
+        target = issue_root/'.uncle/docs/CHANGE_REQUEST.md'
         original = target.read_bytes()
         self.assertIn(b'Offline lists', original)
-        self.assertIn('example/project\t42', (self.root/'.uncle/workflow/origin').read_text())
-        self.assertFalse((self.root/'.uncle/workflow/state').exists())
+        self.assertIn('example/project\t42', (issue_root/'.uncle/workflow/origin').read_text())
+        self.assertFalse((issue_root/'.uncle/workflow/state').exists())
         worker = IssueSeedRequest(command, str(self.root), env)
         kind, value = worker.events.get(timeout=15)
         worker.thread.join(5)

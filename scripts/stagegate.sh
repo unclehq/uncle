@@ -160,6 +160,7 @@ uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-scope.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
+. "$ROOT/scripts/lib/change-class-stage.sh"
 . "$ROOT/scripts/lib/state.sh"
 
 # Absolute, not "$PROJECT_ROOT"-relative: this value is embedded verbatim
@@ -1339,6 +1340,16 @@ route_unrunnable_application() {
     fi
     local marker="$STATE_DIR/runtime-readiness-repair-attempted"
     if [[ "$WORKFLOW_REPAIR" != 1 ]]; then
+        # Once per run. One caller sits inside FINAL_AUDIT itself and treats a return of 2 as "the state changed, go round
+        # again": without this, setting FINAL_AUDIT from FINAL_AUDIT re-entered it, re-read the same log, recorded the same
+        # failure and returned 2 again, forever (calculator: 426 ledger lines in four minutes, the audit never started).
+        # The marker is keyed on the run, not on the log, because the log is rewritten on every pass.
+        local recorded="$STATE_DIR/runtime-unrunnable-recorded" run_id
+        run_id="$(cat "$STATE_DIR/run-started-at" 2>/dev/null)"; run_id="${run_id:-no-run-id}"
+        if [[ "$(cat "$recorded" 2>/dev/null)" == "$run_id" ]]; then
+            return 0    # already carried to the audit; let the audit run
+        fi
+        printf '%s\n' "$run_id" > "$recorded"
         # There is nothing for the checklist to drive, so it is skipped, not failed: the audit reads the ledger.
         record_nonblocking_failure green-check 'the application cannot render or its test runner did not execute tests; repair is disabled, so browser and checklist work was not started'
         record_test_failure_disposition || true
@@ -2332,7 +2343,8 @@ run_adversarial_review_lens() {
 # Read-only specialist packets improve review coverage. Only the complete,
 # validated panel can produce the canonical review.
 run_adversarial_review_panel() {
-    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid failed=0
+    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid failed=0 lenses
+    lenses="$(change_class_lenses 'requirements regression security testability')"
     local -a pids=()
     [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
     ensure_project_plan_json || return 1
@@ -2349,12 +2361,13 @@ run_adversarial_review_panel() {
     local slices
     . "$ROOT/scripts/lib/model-jobs.sh"
     slices="$(python3 -B "$ROOT/scripts/lib/adversarial_slices.py" count "$(workflow_model_runner adversarial-review REVIEWER)")" || return 1
-    if [[ "$slices" -gt 1 ]]; then
+    # Slices replace the four whole lenses; a build class that trims the lens set keeps whole lenses.
+    if [[ "$slices" -gt 1 && "$lenses" == "requirements regression security testability" ]]; then
         . "$ROOT/scripts/lib/adversarial-slices.sh"
         run_adversarial_review_slices "$directory" "$plan_input" \
             "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json" "$slices" new || return 1
     else
-    for lens in requirements regression security testability; do
+    for lens in $lenses; do
         prompt="$directory/prompts/$lens.md"
         output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
@@ -2371,7 +2384,7 @@ run_adversarial_review_panel() {
     done
     [[ "$failed" == 0 ]] || return 1
     fi
-    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
+    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected $lenses || return 1
     # Worker packets are already validated, complete, and deduplicated by
     # stable finding ID.  Rendering them directly makes the collated JSON the
     # sole authoritative review and avoids asking a weak parent model to
@@ -3077,7 +3090,9 @@ PY
     # response (rather than the sum), without the 20-way request burst of a
     # one-finding fan-out.
     threshold="${WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD:-5}"
-    slice="$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import updated_plan_ops as o; print(o.option("group-size", int(sys.argv[2])))' "$ROOT/scripts/lib" "$(workflow_model_group_size updated-plan)")"
+    # Findings per writer: an explicit setting wins, then the build class (small builds batch more), then the
+    # runner granularity default (small units for self-hosted).
+    slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-$(python3 -B "$ROOT/scripts/lib/change_class.py" get . edit_slice "$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import updated_plan_ops as o; print(o.option("group-size", int(sys.argv[2])))' "$ROOT/scripts/lib" "$(workflow_model_group_size updated-plan)")")}"
     if [[ "$count" =~ ^[0-9]+$ && "$threshold" =~ ^[0-9]+$ && "$slice" =~ ^[0-9]+$ ]] \
         && (( count >= threshold && slice > 0 && jobs != 1 )); then
         ensure_project_plan_json || return 1
@@ -5094,7 +5109,7 @@ while true; do
             # weak to do both, must fall back to running the plan stage -- not
             # fail a validation of the document it did write.
             rm -f "$STATE_DIR/merged-plan.input"
-            if merged_requirements_plan_enabled && -s .uncle/docs/PROJECT_PLAN.md; then
+            if merged_requirements_plan_enabled && [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
                 # The interpretation the plan was written against. If the
                 # operator edits it at the gate, the plan beside it is stale and
                 # must be rewritten -- the same rule adoption applies to a
@@ -5127,7 +5142,7 @@ while true; do
             # operator just approved. An edited interpretation means the plan
             # beside it answers a question nobody asked any more.
             merged_plan_usable=0
-            if [[ merged_requirements_plan_enabled && -s .uncle/docs/PROJECT_PLAN.md \
+            if merged_requirements_plan_enabled && [[ -s .uncle/docs/PROJECT_PLAN.md \
                   && -s "$STATE_DIR/merged-plan.input" ]]; then
                 if [[ "$(hash_file "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json")" \
                       == "$(cat "$STATE_DIR/merged-plan.input")" ]]; then
@@ -5148,6 +5163,13 @@ while true; do
             # packet.  Hydrate it before opening the approval gate: the
             # speculative adversarial review consumes only this JSON file.
             ensure_project_plan_json || exit 1
+            set_state CLASSIFY
+            ;;
+
+        CLASSIFY)
+            # How much review this plan needs; its own timed stage, fail-open, and it runs before the speculative review
+            # that starts at WAIT_PLAN_APPROVAL so that review already uses the classified lens set.
+            classify_change_stage app .uncle/docs/PROJECT_PLAN.md || true
             set_state WAIT_PLAN_APPROVAL
             ;;
 

@@ -176,6 +176,22 @@ off early and retrying, and lowering `--jobs`, which only makes the same work
 take longer. Run it with `bash` -- the suites are shell scripts, and `python3`
 on one fails with a parse error that reads like a broken test rather than the
 wrong interpreter.
+Uncle's Python suites (`scripts/tests/*-test.py`) are not part of that runner.
+When `scripts/run-python-tests.sh` exists, record `bash scripts/run-python-tests.sh`
+as a second command, and use nothing else for those suites. Do not use
+`python3 -m unittest discover -p "*-test.py"`: it cannot import hyphenated file
+names, so it runs zero tests ("NO TESTS RAN", status 5), which only looks like a
+check because it has a command line. Declare the two commands as one parallel
+group (`parallel_groups` of `1 2`): the shell suites and the Python suites use
+separate temporary directories and bind no ports in common, so together they take
+about as long as the shell suites alone, roughly five minutes at the default four
+jobs each (measured: shell 297 s, Python 196 s, both at once 297 s). Allow ten
+minutes before treating the pair as hung. Some Python suites already fail on a
+clean checkout; list the command anyway, as for any check that is already failing.
+
+A new Python test for Uncle must be named `scripts/tests/<name>-test.py`, with a
+hyphen: the runner collects exactly that pattern, and `<name>_test.py` is never run.
+
 For other projects, inspect their runner and fixture isolation before choosing
 parallelism; do not assume this Uncle-specific script exists.
 

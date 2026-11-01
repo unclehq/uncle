@@ -66,7 +66,7 @@ check_absent() { COUNT=$((COUNT + 1)); case "$3" in *"$2"*) fail "$1 — '$2' sh
 # The stage agent: logs argv and its prompt, delivers valid JSON when
 # AGENT_WRITE says so (or on its Nth call when AGENT_WRITE_ON_CALL says so).
 # Otherwise requirements fails its content validator and planning delivers
-# nothing across both checkpoint passes, exercising the real failure routes.
+# nothing in its single planning pass, exercising the real failure routes.
 AGENT="$TMP/agent"
 cat > "$AGENT" <<'EOF'
 #!/usr/bin/env bash
@@ -179,7 +179,9 @@ run_driver() {
         printf 'supervision.max_interventions 2\n'
     } > "$proj/.uncle/config"
     local status=0
-    (cd "$proj" && echo "$answer" | AGENT_WRITE="$write" AGENT_WRITE_ON_CALL="${AGENT_WRITE_ON_CALL:-0}" \
+    # The "no api key leaked when unset" check below is about the driver, not the operator's shell:
+    # a developer or CI environment that has the key exported must not turn it into a failure.
+    (cd "$proj" && unset ANTHROPIC_API_KEY && echo "$answer" | AGENT_WRITE="$write" AGENT_WRITE_ON_CALL="${AGENT_WRITE_ON_CALL:-0}" \
         UNCLE_PROJECT_ROOT="$proj" UNCLE_CONFIG="$proj/.uncle/config" UNCLE_STATUS_FILE="$proj/status.jsonl" \
         WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_CLAUDE_CMD="$SUPERVISOR" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
         GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
@@ -223,13 +225,13 @@ for driver in stagegate.sh change-workflow.sh; do
     rc="$(run_driver "$driver" "$P" true 0 malformed)"
     check_eq "$driver failure: driver still exits 1" 1 "$rc"
     check_eq "$driver failure: one supervisor call" 1 "$(cat "$P/sup.calls" 2>/dev/null || echo 0)"
-    # Planning exhausts its two checkpoint passes before supervision runs.
-    calls=1; [[ "$driver" != change-workflow.sh ]] || calls=2
+    # Planning is invoked once in both drivers; supervision runs after that single pass.
+    calls=1
     check_eq "$driver failure: no agent retry after malformed supervision" "$calls" "$(cat "$P/agent.calls")"
     if [[ "$driver" == stagegate.sh ]]; then
         check_contains "$driver failure: prompt carries the validator diagnostic" "missing or empty section: Required functionality" "$(cat "$P/sup.prompt.1")"
     else
-        check_contains "$driver failure: prompt carries the validator diagnostic" "planning stage ended twice without completing its documents (context used: 0 tokens)" "$(cat "$P/sup.prompt.1")"
+        check_contains "$driver failure: prompt carries the validator diagnostic" "planning stage ended without completing its documents (context used: 0 tokens)" "$(cat "$P/sup.prompt.1")"
     fi
     check_contains "$driver failure: ledger records malformed" '"outcome": "malformed"' "$(cat "$P/.uncle/workflow/supervision/ledger.jsonl")"
     check_contains "$driver failure: driver output shows the diagnosis" "[supervision] Supervision malformed" "$(cat "$P/driver.out")"
@@ -247,11 +249,11 @@ done
 
 for driver in stagegate.sh change-workflow.sh; do
     P="$(new_project "retry-$driver")"
-    write_call=2; [[ "$driver" != change-workflow.sh ]] || write_call=3
+    write_call=2   # planning is one invocation in both drivers; the supervised relaunch is the second
     rc="$(AGENT_WRITE_ON_CALL="$write_call" run_driver "$driver" "$P" true 0 retry)"
     check_eq "$driver retry: run ends at the declined gate" 0 "$rc"
     check_eq "$driver retry: one supervisor call" 1 "$(cat "$P/sup.calls")"
-    calls=2; [[ "$driver" != change-workflow.sh ]] || calls=3
+    calls=2
     check_eq "$driver retry: agent relaunched" "$calls" "$(cat "$P/agent.calls")"
     check_absent "$driver retry: first prompt has no note" "Supervisor note" "$(cat "$P/agent.prompt.1")"
     check_contains "$driver retry: supervised relaunch prompt carries the template" "Supervisor note" "$(cat "$P/agent.prompt.$write_call")"

@@ -35,6 +35,104 @@ class ScaffoldReconcile(unittest.TestCase):
         self.assertIn("'tests/unit/**/*.test.{js,jsx}'", config, 'the existing pattern must survive, not be replaced')
         self.assertIn('tests/*.test.js', config)
 
+    # ---- the Vitest config in vite.config.* (the calculator case: tests/calc.test.js, include globs for tests/unit and src) ----
+
+    CALCULATOR_VITE_CONFIG = """import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    include: ['tests/unit/**/*.test.{js,jsx}', 'src/**/*.test.{js,jsx}'],
+    exclude: ['tests/e2e/**', 'node_modules/**'],
+  },
+});
+"""
+
+    def test_widens_the_include_in_a_vite_config_test_block(self):
+        self.write('vite.config.js', self.CALCULATOR_VITE_CONFIG)
+        self.write('tests/calc.test.js', "test('x', () => {})")
+        change = module.fix_vitest_discovery(str(self.root))
+        self.assertIsNotNone(change)
+        self.assertEqual(change['file'], 'vite.config.js')
+        config = (self.root / 'vite.config.js').read_text()
+        self.assertIn("'tests/unit/**/*.test.{js,jsx}'", config, 'the existing patterns survive')
+        self.assertIn("'src/**/*.test.{js,jsx}'", config)
+        self.assertIn('tests/*.test.js', config)
+        self.assertIn("exclude: ['tests/e2e/**', 'node_modules/**']", config, 'nothing else in the block changes')
+
+    def test_the_widened_vite_config_discovers_the_test_it_missed(self):
+        self.write('vite.config.js', self.CALCULATOR_VITE_CONFIG)
+        self.write('tests/calc.test.js', "test('x', () => {})")
+        module.fix_vitest_discovery(str(self.root))
+        include = module.find_include_list((self.root / 'vite.config.js').read_text(), False)
+        patterns = __import__('re').findall(r"""['"]([^'"]+)['"]""", include.group(1))
+        self.assertTrue(any(module.glob_matches(p, 'tests/calc.test.js') for p in patterns))
+
+    def test_an_include_that_is_not_vitests_is_never_widened(self):
+        text = ("export default { optimizeDeps: { include: ['react', 'react-dom'] },\n"
+                "  test: { coverage: { include: ['src/**'] }, include: ['tests/unit/**/*.test.js'] } };")
+        self.write('vite.config.js', text)
+        self.write('tests/calc.test.js', "test('x', () => {})")
+        module.fix_vitest_discovery(str(self.root))
+        config = (self.root / 'vite.config.js').read_text()
+        self.assertIn("optimizeDeps: { include: ['react', 'react-dom'] }", config)
+        self.assertIn("coverage: { include: ['src/**'] }", config)
+        self.assertRegex(config, r"test: \{ coverage: \{ include: \['src/\*\*'\] \}, include: \['tests/unit/\*\*/\*\.test\.js',\s*'tests/\*\.test\.js'\]")
+
+    def test_a_vite_config_with_no_test_include_is_left_alone(self):
+        for text in ("export default { test: { environment: 'jsdom' } };",                       # Vitest's defaults apply
+                     "export default { optimizeDeps: { include: ['react'] } };"):                  # no test block: not Vitest's list
+            self.write('vite.config.js', text)
+            self.write('tests/calc.test.js', "test('x', () => {})")
+            self.assertIsNone(module.fix_vitest_discovery(str(self.root)), text)
+            self.assertEqual((self.root / 'vite.config.js').read_text(), text)
+
+    def test_a_dedicated_vitest_config_wins_over_vite_config(self):
+        self.write('vitest.config.js', "export default { test: { include: ['tests/unit/**/*.test.js'] } };")
+        vite = "export default { test: { include: ['tests/unit/**/*.test.js'] } };"
+        self.write('vite.config.js', vite)
+        self.write('tests/calc.test.js', "test('x', () => {})")
+        change = module.fix_vitest_discovery(str(self.root))
+        self.assertEqual(change['file'], 'vitest.config.js')
+        self.assertEqual((self.root / 'vite.config.js').read_text(), vite)
+
+    def test_other_config_spellings_are_found(self):
+        for name in ('vitest.config.mjs', 'vitest.config.ts', 'vite.config.mjs', 'vite.config.ts', 'vite.config.mts'):
+            tmp = tempfile.TemporaryDirectory()
+            self.addCleanup(tmp.cleanup)
+            root = Path(tmp.name)
+            (root / name).write_text("export default { test: { include: ['tests/unit/**/*.test.js'] } };", encoding='utf-8')
+            (root / 'tests').mkdir()
+            (root / 'tests' / 'calc.test.js').write_text("test('x', () => {})", encoding='utf-8')
+            change = module.fix_vitest_discovery(str(root))
+            self.assertIsNotNone(change, name)
+            self.assertEqual(change['file'], name)
+
+    def test_braces_and_brackets_inside_strings_do_not_end_the_test_block(self):
+        text = ("export default { test: { setupFiles: ['./a}b.js', \"./c{d.js\"], alias: { '}': 'x' },\n"
+                "  include: ['tests/unit/**/*.test.js'] } };")
+        self.write('vite.config.js', text)
+        self.write('tests/calc.test.js', "test('x', () => {})")
+        self.assertIsNotNone(module.fix_vitest_discovery(str(self.root)))
+        self.assertIn('tests/*.test.js', (self.root / 'vite.config.js').read_text())
+
+    def test_an_already_discoverable_vite_config_is_left_alone(self):
+        self.write('vite.config.js', self.CALCULATOR_VITE_CONFIG)
+        self.write('tests/unit/calc.test.js', "test('x', () => {})")
+        self.assertIsNone(module.fix_vitest_discovery(str(self.root)))
+        self.assertEqual((self.root / 'vite.config.js').read_text(), self.CALCULATOR_VITE_CONFIG)
+
+    def test_the_command_line_reports_the_file_it_changed(self):
+        self.write('vite.config.js', self.CALCULATOR_VITE_CONFIG)
+        self.write('tests/calc.test.js', "test('x', () => {})")
+        import io, contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(module.main([str(self.root)]), 0)
+        reported = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertEqual([c['file'] for c in reported], ['vite.config.js'])
+
     def test_does_nothing_when_a_real_test_file_is_already_covered(self):
         self.write('vitest.config.js',
                     "export default { test: { include: ['tests/unit/**/*.test.{js,jsx}'] } };")

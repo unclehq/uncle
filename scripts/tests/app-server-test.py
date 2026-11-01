@@ -98,8 +98,11 @@ class AppServer(unittest.TestCase):
         self.assertLess(block.index('app_server.py" start'), block.index('checklist_run_lanes'))
         self.assertIn('The application is already running', block)
         self.assertIn('app_server.py" prewarm', text)
-        self.assertIn('Prewarm never', text)
-        self.assertIn('app_server.py" stop', text[text.index('snapshot_checklist_groups > /dev/null'):])
+        self.assertIn('prewarm refuses to install, build, or navigate a page', text)
+        # Stopping lives in the driver's one cleanup path now (it also stops the preview server), not after the snapshot.
+        cleanup = text[:text.index('app_server.py" stop')]
+        self.assertIn('cancel_speculation', cleanup[cleanup.rindex('\n\n'):])
+        self.assertIn('app_server.py" stop', text)
 
 
 if __name__ == '__main__':

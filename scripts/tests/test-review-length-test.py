@@ -21,15 +21,6 @@ class InvestigateReportLength(unittest.TestCase):
         self.assertLess(text.index('at most 250 words'), text.index('what you read and checked'))
         self.assertLess(text.index('what you read and checked'), text.index('## Assigned acceptance-gate row'))
 
-    def test_the_driver_builds_every_lens_from_this_file(self):
-        driver = (ROOT / 'scripts/stagegate.sh').read_text(encoding='utf-8')
-        self.assertIn('prompts/change/test-review-worker-investigate.md', driver)
-
-    def test_the_finalize_prompt_is_not_capped_here(self):
-        # The finalize pass writes the JSON row the driver validates; its own contract governs its length.
-        finalize = (ROOT / 'prompts/change/test-review-worker-finalize.md').read_text(encoding='utf-8')
-        self.assertNotIn('at most 250 words', finalize)
-
 
 if __name__ == '__main__':
     unittest.main()

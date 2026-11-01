@@ -53,7 +53,7 @@ git add -f node_modules/pkg/index.js
 ln -s app.py src/link.py
 printf 'newline named\n' > "$(printf 'src/od\nd.py')"
 git add src .uncle/docs
-git commit -qm base
+git commit -qm base --no-gpg-sign
 
 fail() { echo "snapshot-excludes-history-test.sh: FAIL: $*" >&2; exit 1; }
 

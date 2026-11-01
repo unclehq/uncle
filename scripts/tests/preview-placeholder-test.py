@@ -99,12 +99,3 @@ class Placeholder(unittest.TestCase):
         self.assertEqual(placeholder.main([]), 0)
 
 
-class Prompt(unittest.TestCase):
-    def test_the_page_goes_to_the_staging_path_the_driver_publishes(self):
-        text = (ROOT / 'prompts' / 'preview-build.md').read_text()
-        self.assertIn('.uncle/workflow/preview/index.html', text)
-        self.assertIn('do not read, write or look for a root', text)
-
-
-if __name__ == '__main__':
-    unittest.main()

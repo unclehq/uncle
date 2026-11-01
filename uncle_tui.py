@@ -147,7 +147,8 @@ def _workflow_family():
     tell them apart; this is the authoritative source for that distinction."""
     marker = os.path.join(_project_root(), ".uncle", "workflow", "family")
     try:
-        return open(marker, encoding="utf-8").read().strip()
+        with open(marker, encoding="utf-8") as handle:
+            return handle.read().strip()
     except OSError:
         return ""
 
@@ -4673,6 +4674,8 @@ class UncleTUI:
             return
         if self.triage_request is not None:
             return  # a turn (diagnosis or an applied fix) is still in flight
+        if self._same_failure_again():
+            return
         note = 'Unattended: auto-resuming past triage (%s); no person reviewed this diagnosis.' % (
             self.triage_classification or 'no classification parsed')
         self.triage_history.append(('system', note))
@@ -4681,6 +4684,50 @@ class UncleTUI:
             self.triage_resume()
         except ValueError as exc:
             self.triage_history.append(('system', 'Auto-resume did not start: ' + sanitize(str(exc))))
+
+    def _failure_signature(self):
+        """What the driver said when it stopped, minus what changes on every attempt (clock times, durations, ids).
+
+        Empty when there is nothing to go on; the caller then does not count, so this can only ever stop a loop it
+        can positively recognise."""
+        lines = [line.strip() for line in list(getattr(self, 'output', []))[-60:] if line and line.strip()]
+        stops = [line for line in lines if re.search(
+            r'(?i)stopp|fail|conflict|error|refus|invalid|missing|cannot|not ready|blocked|must ', line)][-12:]
+        if not stops:
+            return ''
+        steady = [re.sub(r'\d{1,2}:\d{2}:\d{2}|\d+(?:\.\d+)?\s*(?:ms|s|m)\b|\b\d{5,}\b|\b[0-9a-f]{8,}\b', '#', line)[:240]
+                  for line in stops]
+        import hashlib
+        return hashlib.sha1('\n'.join([getattr(self, 'status_stage', '') or ''] + steady).encode('utf-8')).hexdigest()[:16]
+
+    def _same_failure_again(self):
+        """True, after saying so, when an unattended run is about to be resumed into the same stop for the Nth time.
+
+        Resuming replays the stage from its recorded state. When nothing a resume could change has changed, it stops at the
+        same place again, and an unattended run has no person to notice: issue 117 resumed six times in two minutes into one
+        stop ("Conflicting delivery status for AC-2"), and it ended only because the diagnosis happened to edit the file
+        itself on its fifth turn. The bound is on identical consecutive stops, so a failure that moves on (AC-2, then AC-4)
+        or is fixed starts the count again. WORKFLOW_TRIAGE_AUTO_RESUME_LIMIT sets it (default 5; 0 turns the bound off)."""
+        try:
+            limit = int(os.environ.get('WORKFLOW_TRIAGE_AUTO_RESUME_LIMIT', '5'))
+        except ValueError:
+            limit = 5
+        signature = self._failure_signature() if limit > 0 else ''
+        if not signature:
+            self._auto_resume_signature, self._auto_resume_streak = '', 0
+            return False
+        if signature == getattr(self, '_auto_resume_signature', ''):
+            self._auto_resume_streak = getattr(self, '_auto_resume_streak', 0) + 1
+        else:
+            self._auto_resume_signature, self._auto_resume_streak = signature, 1
+        if self._auto_resume_streak <= limit:
+            return False
+        note = ('Unattended: not auto-resuming. The driver has stopped with the same message %d times in a row and '
+                'nothing changed between attempts, so another resume would stop there again. A person needs to look '
+                '(raise WORKFLOW_TRIAGE_AUTO_RESUME_LIMIT to allow more).' % self._auto_resume_streak)
+        self.triage_history.append(('system', note))
+        self._record_unattended_gate(note)
+        return True
 
     def _record_unattended_gate(self, note):
         try:

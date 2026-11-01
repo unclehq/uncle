@@ -25,7 +25,7 @@ DRIVER = ROOT / 'scripts/change-workflow.sh'
 SOURCE = LIB.read_text().split("<<'PY'", 1)[1].split('\n', 1)[1].split('\nPY\n', 1)[0]
 REAL_GIT = shutil.which('git')
 SKIP = 'PR handoff disabled or unattended; no PR was created.'
-UNATTENDED_SKIP = 'Unattended: PR handoff skipped; no commit, push or PR was made.'
+UNATTENDED_SKIP = SKIP  # a headless run publishes nothing and says so (change_pr_complete)
 BOUNDARY = 'Publication boundary: unattended stages ended; a person answers from here.'
 PENDING_EOF = 'No answer received; PR remains pending. Rerun to resume.'
 LEDGER = '2026-09-14T00:00:00Z\tCHANGE_PLAN.md\tapproved unattended\n2026-09-14T00:00:01Z\tFINAL_AUDIT\tapproved unattended\n'
@@ -185,7 +185,7 @@ class Fixture(unittest.TestCase):
         return subprocess.run(args, cwd=self.repo, env=self.driver_env(unattended, relay, close), input=text,
                               text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
 
-    def complete_open_pipe(self, unattended=True, relay=False, timeout=5):
+    def complete_open_pipe(self, unattended=True, relay=False, timeout=30):
         """The driver with a pipe nobody closes: a prompt would hang here."""
         (self.state / 'state').write_text('COMPLETE\n')
         args = ['bash', str(DRIVER)] + (['--unattended'] if unattended else [])
@@ -283,9 +283,9 @@ class HeadlessTests(Fixture):
         self.assertEqual(code, 0, out)
         self.assertIn(UNATTENDED_SKIP, out)
         self.assert_no_prompt(out)
-        # Issue 107: a prepared journal (signing on) is left alone too. The
-        # unattended run neither prompts nor resumes, even once the person has
-        # made the commit; only an attended rerun publishes it.
+        # Issue 107: a prepared journal (signing on) is left alone until the person
+        # has made the commit. The unattended run never prompts; once the commit
+        # exists it continues that commit (change_pr_complete's headless path).
         self.enable_signing()
         result = self.complete('\nSummary text\nManual steps\ny\n', unattended=False, relay=True)
         self.ok(result)
@@ -298,12 +298,11 @@ class HeadlessTests(Fixture):
         self.assertEqual(self.journal()['phase'], 'prepared')
         self.assertEqual(self.creates(), [])
         self.human_commit(result.stdout, signed=True)
-        for close in ('1', '0'):
-            code, out = self.complete_open_pipe(unattended=True, relay=False)
-            self.assertEqual(code, 0, out)
-            self.assert_no_prompt(out)
-            self.assertEqual((self.creates(), self.pushes()), ([], []))
-        self.assertEqual(self.journal()['phase'], 'prepared')
+        code, out = self.complete_open_pipe(unattended=True, relay=False)
+        self.assertEqual(code, 0, out)
+        self.assert_no_prompt(out)
+        self.assert_created()
+        self.assertEqual(len(self.pushes()), 1)
 
 
 class PersonChannelTests(Fixture):

@@ -58,7 +58,10 @@ node a.js | node b.js; python3 checks.py || printf failure
             with patch.object(preflight, 'probe', return_value='node --version exited 0'):
                 preflight.run(commands, report)
             self.assertIn('PF-RUNTIME', report.read_text())
-            self.assertIn('no application acceptance claims', report.read_text())
+            # Probes only: the report must say it ran no approved command and carry no application acceptance row.
+            self.assertIn('Approved commands were not executed', report.read_text())
+            import json
+            self.assertEqual([row['id'] for row in json.loads(report.read_text())['rows']], ['PF-RUNTIME'])
 
     def test_posix_shell_probe(self):
         self.assertEqual(preflight.prerequisites('sh tests/static.sh > output.log 2>&1'), ['sh'])

@@ -41,19 +41,27 @@ parallel_groups() {
     parallel_implement_enabled || return 1
     [[ -s "$plan" ]] || return 1
     out="$(UNCLE_LIB="$lib" python3 -B "$lib/step_groups.py" "$plan" "$PWD" 2>/dev/null)" || return 1
+    # Steps that only run the test suites are not implementation work (the driver runs those commands itself afterwards);
+    # drop them from the groups so a model session is not spent running the whole regression block.
+    local skip=""
+    if declare -F plan_steps > /dev/null; then
+        skip="$(plan_steps "$plan" 2>/dev/null | python3 -B "$lib/verification_steps.py" skip-set - 2>/dev/null || true)"
+    fi
     printf '%s' "$out" | python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
 except ValueError:
     raise SystemExit(1)
-groups = d.get("groups") or []
+skip = set(sys.argv[1].split())
+groups = [[n for n in g if str(n) not in skip] for g in (d.get("groups") or [])]
+groups = [g for g in groups if g]
 # Nothing to gain, and nothing to risk, when no group holds more than one step.
 if not d.get("steps_declaring_ownership") or max((len(g) for g in groups), default=0) < 2:
     raise SystemExit(1)
 for g in groups:
     print(" ".join(str(n) for n in g))
-' || return 1
+' "$skip" || return 1
 }
 
 # parallel_merge_map <plan> <lib-dir> <group> -- JSON {"primary": [absorbed...]} naming the application steps of one group that a

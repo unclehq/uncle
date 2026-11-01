@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="$ROOT"
-jobs="${WORKFLOW_VERIFY_JOBS:-4}"
+jobs="${WORKFLOW_VERIFY_JOBS:-16}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --project-root) project="$2"; shift 2 ;;

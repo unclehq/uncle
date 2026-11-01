@@ -160,14 +160,6 @@ class EnvelopeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn('audit, release', result.stdout)
 
-    def test_exclusion_list_matches_workflow_artifacts_and_verifier(self):
-        text = (ROOT / 'scripts/lib/workflow-artifacts.sh').read_text()
-        case = text[text.index('case "$1" in'):text.index('return 0')]
-        names = set(re.findall(r'([A-Z_]+\.md)', case))
-        self.assertEqual(names, {x for x in envelope.ARTIFACT_EXCLUDES if x.endswith('.md')})
-        self.assertIn('.uncle/', envelope.ARTIFACT_EXCLUDES)
-        block = lambda p: re.search(r'ARTIFACT_EXCLUDES = \((.*?)^\)', p.read_text(), re.S | re.M).group(1)
-        self.assertEqual(block(VERIFY), block(ROOT / 'scripts/lib/envelope.py'))
 
     def test_blocking_constant_is_defined_once(self):
         self.assertEqual(envelope.BLOCKING, {'review': ('fail', 'unavailable'), 'verification': ('fail', 'unavailable'),

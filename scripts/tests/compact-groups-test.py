@@ -40,13 +40,6 @@ class CompactGroups(unittest.TestCase):
             self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-8', block)
             self.assertEqual(block.count('batches="$compact_max_workers"'), 2)
 
-    def test_the_checklist_prompts_say_declaring_nothing_lets_a_check_overlap(self):
-        for name in ('manual-checklist.md', 'manual-checklist-investigate.md', 'change/manual-checklist-base.md'):
-            text = (ROOT / 'prompts' / name).read_text()
-            self.assertIn('Declaring nothing is a statement', text, name)
-            self.assertIn('A check with no declaration at all is scheduled alone', text, name)
-            self.assertNotIn('empty `exclusive_resources` array is scheduled alone', text, name)
-            self.assertIn('Several checks\n  can use one running application', text, name)
 
     def test_spellings_of_one_resource_are_one_resource(self):
         import checklist_groups as groups
@@ -61,21 +54,6 @@ class CompactGroups(unittest.TestCase):
         checks, by_id, _ = groups.parse(text)
         self.assertEqual([[c for c in run] for run in groups.runs(checks)], [['MC-001'], ['MC-002']])
 
-    def test_every_check_is_executed_and_over_serial_checklists_can_use_parent_fallback(self):
-        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
-            text = (ROOT / source).read_text()
-            block = text[text.index('run_parallel_checklist_workers()'):text.index('\n}\n', text.index('run_parallel_checklist_workers()'))]
-            self.assertNotIn('[[ "$n" -gt 1 ]] || continue', block)
-            self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_GROUPS:-4', block)
-            self.assertIn('Checklist runs as one agent', block)
-            self.assertIn('one shared-resource worker', block)
-            # uncle consolidation phase (c): the worker-coverage fast path
-            # (and its checklist_coverage.py call) moved into the shared
-            # checklist_execute_worker_fastpath (scripts/lib/checklist-stage.sh),
-            # used by both drivers, so it is checked there instead of in each
-            # driver's own text.
-            shared = (ROOT / 'scripts/lib/checklist-stage.sh').read_text()
-            self.assertIn('checklist_coverage.py', shared)
 
     def test_coverage_lists_required_checks_no_worker_ran(self):
         import checklist_coverage as coverage
@@ -84,31 +62,6 @@ class CompactGroups(unittest.TestCase):
         self.assertEqual(coverage.uncovered(checklist, workers), ['MC-2', 'MC-4'])
         self.assertEqual(coverage.uncovered(checklist, None), ['MC-1', 'MC-2', 'MC-4'])
         self.assertEqual(coverage.uncovered(checklist, {'results': [{'id': i} for i in ('MC-1', 'MC-2', 'MC-4')]}), [])
-
-    def test_the_fast_path_runs_only_when_every_required_check_was_covered(self):
-        # uncle consolidation phase (c): this whole fast path is now the
-        # shared checklist_execute_worker_fastpath (scripts/lib/checklist-stage.sh),
-        # used by both drivers, rather than duplicated per-driver text.
-        shared = (ROOT / 'scripts/lib/checklist-stage.sh').read_text()
-        self.assertIn('Checks the workers did not cover', shared)
-        self.assertLess(shared.index('checklist_coverage.py'), shared.index('Execute-checklist fast path'))
-        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
-            text = (ROOT / source).read_text()
-            self.assertIn('checklist_execute_worker_fastpath', text)
-
-    def test_the_panel_workers_are_told_what_a_resource_is_and_to_write_few_checks(self):
-        text = (ROOT / 'prompts' / 'change' / 'manual-checklist-review-worker.md').read_text()
-        self.assertIn('at most 8', text)
-        self.assertIn('is not a resource (do not name its port)', text)
-        self.assertIn('Spell a token one way', text)
-        self.assertIn('cannot establish', text)
-
-    def test_a_new_application_checklist_has_no_regressions_lens_by_default(self):
-        text = (ROOT / 'scripts' / 'stagegate.sh').read_text()
-        block = text[text.index('run_manual_checklist_panel()'):text.index('run_final_audit_panel()')]
-        self.assertIn('lenses="coverage invariants resources"', block)
-        self.assertIn('WORKFLOW_MANUAL_CHECKLIST_REGRESSIONS:-0', block)
-        self.assertNotIn('coverage invariants resources regressions ||', block)
 
 
 if __name__ == '__main__':

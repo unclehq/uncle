@@ -181,7 +181,11 @@ class EarlyPreview(unittest.TestCase):
 
     def make(self, root, stage='implementation'):
         self.tui._project_root = lambda: str(root)
-        names = ('_poll_early_preview', '_previewable_page', '_show_early_preview',
+        # An early preview belongs to a new-application build only; the driver records that in the family marker.
+        marker = Path(root) / '.uncle/workflow/family'
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text('app\n')
+        names = ('_poll_early_preview', '_early_preview_allowed', '_previewable_page', '_show_early_preview',
                  '_close_early_preview', '_preview_after_implementation',
                  '_poll_completion_preview')
         body = {name: getattr(self.tui.UncleTUI, name) for name in names}

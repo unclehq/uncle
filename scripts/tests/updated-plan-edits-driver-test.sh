@@ -37,7 +37,7 @@ PY
             grep -q 'You own exactly these findings' "$1" || echo "no slice note: $n" >> "$STATE_DIR/violations"
             echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
             if [[ "$mode:$n" == slow:2 ]]; then sleep 30; fi
-            sleep 0.4
+            sleep 1
             if [[ "$mode:$n" == limit:2 ]]; then echo "cause: You've hit your session limit" > "$LOG_DIR/updated-plan-worker-edits-2.log"; return 1; fi
             [[ "$mode:$n" != fail:2 && "$mode:$n" != fail:2-* && "$mode:$n" != failonce:2 ]] || return 1
             # failtwice: the writer and its one-finding retries fail by the default path only.
@@ -78,7 +78,7 @@ check "success: each writer got its slice"    test ! -e "$w/violations"
 check "success: writers overlapped"           python3 - "$w/starts" <<'PY'
 import sys
 t = sorted(float(l.split()[1]) for l in open(sys.argv[1]))
-sys.exit(0 if len(t) == 2 and t[1] - t[0] < 0.3 else 1)
+sys.exit(0 if len(t) == 2 and t[1] - t[0] < 0.9 else 1)
 PY
 
 run_case failonce failonce

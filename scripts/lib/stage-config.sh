@@ -83,6 +83,26 @@ uncle_first_configured_model_stage() {
     done < "$file"
 }
 
+# The config stage whose runner, model and effort the classifier uses (see uncle_config_stage): its own classify-change.* when
+# any is set; otherwise the supervisor's (supervision.*) when the supervisor's runner is installed; otherwise the stage that
+# planned the build, named by the driver in UNCLE_CLASSIFY_FALLBACK_STAGE.
+uncle_classify_config_stage() {
+    local supervisor installed
+    if [[ -n "$(uncle_config_get classify-change.runner)$(uncle_config_get classify-change.model)$(uncle_config_get classify-change.effort)" ]]; then
+        printf 'classify-change'
+        return 0
+    fi
+    supervisor="$(uncle_config_get supervision.runner)"
+    supervisor="${supervisor:-claude}"
+    # Captured, not piped into `grep -q`: under pipefail grep's early exit kills the writer with SIGPIPE and the test flips.
+    installed="$(uncle_installed_runners)"
+    if [[ $'\n'"$installed"$'\n' == *$'\n'"$supervisor"$'\n'* ]]; then
+        printf 'supervision'
+        return 0
+    fi
+    printf '%s' "${UNCLE_CLASSIFY_FALLBACK_STAGE:-project-plan}"
+}
+
 # Base and delta are executions of the configured checklist stage.
 uncle_config_stage() {
     case "$1" in
@@ -101,6 +121,10 @@ uncle_config_stage() {
             first_model_stage="$(uncle_first_configured_model_stage)"
             [[ -n "$first_model_stage" ]] && printf '%s' "$first_model_stage" || printf '%s' "$1"
             ;;
+        # The classifier is a small judgment call: it runs where the supervisor runs unless classify-change.* is configured,
+        # and falls back to the stage that planned the build when the supervisor's runner is not installed (so a Codex-only,
+        # Kimi-only, Cline or self-hosted setup classifies too).
+        classify-change) uncle_classify_config_stage ;;
         plan-executability) printf 'adversarial-review' ;;
         plan-recovery) printf 'updated-plan' ;;
         manual-checklist-base|manual-checklist-delta) printf 'manual-checklist' ;;
@@ -114,6 +138,7 @@ uncle_config_stage() {
         manual-checklist-investigate) printf 'manual-checklist' ;;
         final-audit-investigate) printf 'final-audit' ;;
         project-plan-investigate|project-plan-section-*|project-plan-stage-duties) printf 'project-plan' ;;
+        change-plan-stage-duties) printf 'change-plan' ;;
         requirements-investigate) printf 'requirements' ;;
         preflight-investigate) printf 'preflight' ;;
         implementation-investigate) printf 'implementation' ;;

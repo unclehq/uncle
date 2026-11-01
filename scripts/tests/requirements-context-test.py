@@ -101,17 +101,30 @@ class Requirements(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('bash'), 'Bash required')
     def test_resume_validates_without_generation(self):
+        import json
         root=Path(__file__).resolve().parents[2]
         block=(root/'scripts/stagegate.sh').read_text().split('        VALIDATE_REQUIREMENTS)\n',1)[1].split('        WAIT_REQUIREMENTS_APPROVAL)',1)[0]
         with tempfile.TemporaryDirectory() as d:
             (Path(d)/'.uncle/docs').mkdir(parents=True)
+            documents=Path(d)/'.uncle/workflow/documents'; documents.mkdir(parents=True)
             p=Path(d)/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md'
-            harness=f'ROOT="{root}"\nrequire_artifact() {{ test -s "$1"; }}; set_state() {{ echo "$1" > state; }}; run_stage() {{ exit 99; }}\ncase validate in\nvalidate)\n'+block+'esac\n'
+            canonical=documents/'REQUIREMENTS_INTERPRETATION.json'
+            # The saved canonical JSON is what resumes; the stage must not call the model (run_stage exits 99).
+            harness=(f'ROOT="{root}"\nSTATE_DIR=.uncle/workflow\nrequire_artifact() {{ test -s "$1"; }}; '
+                     'set_state() { echo "$1" > state; }; run_stage() { exit 99; }; supervision_validation_failed() { :; }; '
+                     'merged_requirements_plan_enabled() { return 1; }; hash_file() { echo hash; }\n'
+                     'case validate in\nvalidate)\n'+block+'esac\n')
             p.write_text('bad')
+            canonical.write_text('{}')
             for _ in range(2):
                 self.assertEqual(subprocess.run(['bash','-c',harness],cwd=d,capture_output=True).returncode,1)
-            p.write_text(self.document())
-            self.assertEqual(subprocess.run(['bash','-c',harness],cwd=d,capture_output=True).returncode,0)
+            payload={'schema':'uncle.artifact/v1','kind':'requirements-interpretation',
+                     'sections':{name.lower().replace(' ','_').replace('-','_'):'No additional interpretation.'
+                                 for name in module.SECTIONS}}
+            canonical.write_text(json.dumps(payload))
+            result=subprocess.run(['bash','-c',harness],cwd=d,capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual((Path(d)/'state').read_text().strip(),'WAIT_REQUIREMENTS_APPROVAL')
+            self.assertIn('## 1. Required functionality',p.read_text())
 
 if __name__=='__main__': unittest.main()

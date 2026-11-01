@@ -88,7 +88,7 @@ class HomepageRowsTests(unittest.TestCase):
         ui.workflow_idx = 1
         ui.issue = '64'
         ui.issue_mode = ISSUE_MODES[3][1]
-        ui.misc = {}
+        ui.misc = {'auto_mode': 'false'}  # auto mode is the default; ask for an attended run explicitly
         self.assertEqual(ui.cmd_for()[-2:], ['64', '--worktree'])
         self.assertFalse(self.signer_log.exists())
 

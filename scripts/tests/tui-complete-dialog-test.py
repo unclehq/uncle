@@ -15,6 +15,19 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from uncle_tui import UncleTUI
 
+
+def setUpModule():
+    # A run's family is read from <project root>/.uncle/workflow/family. These tests are about the dialog, not about which
+    # directory they happen to run in, so they must not depend on whatever marker the checkout holds.
+    import uncle_tui
+    global _family_patch
+    _family_patch = patch.object(uncle_tui, '_workflow_family', return_value='app')
+    _family_patch.start()
+
+
+def tearDownModule():
+    _family_patch.stop()
+
 BANNERS = ["Workflow complete.", "Change workflow complete.",
            "Workflow complete with waived acceptance.",
            "Change workflow complete with waived acceptance."]

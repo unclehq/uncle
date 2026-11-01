@@ -649,13 +649,18 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.maybe_reload = Mock()
         self.ui.cmd_for = Mock(return_value=[sys.executable, '-u', '-c',
             "from pathlib import Path; import sys; "
-            "assert Path('REQUIREMENTS.md').read_text().startswith('## Summary'); "
+            "assert Path('.uncle/docs/REQUIREMENTS.md').read_text().startswith('## Summary'); "
             "print('stage output\\n' * 10000, flush=True); "
             "print('ANSWER=' + sys.stdin.readline().strip(), flush=True)"])
         launch = subprocess.Popen
         attempts = []
 
         def popen(*args, **kwargs):
+            # Only the driver launch fails: run setup also shells out (git worktree probes go through subprocess.run,
+            # which calls Popen), and those must run for real.
+            command = args[0] if args else kwargs.get('args')
+            if not (isinstance(command, list) and command[:2] == [sys.executable, '-u']):
+                return launch(*args, **kwargs)
             attempts.append((self.root / '.uncle/docs/REQUIREMENTS.md').stat().st_ino)
             if len(attempts) == 1:
                 raise OSError('first launch failed')
@@ -881,7 +886,7 @@ class ChatInteractionTests(unittest.TestCase):
         self.assertEqual(calls[0].args[1], 0)
         self.assertTrue(all(call.args[3] == 126 for call in calls))
 
-    def test_exited_workflow_is_reported_once_and_escape_returns_home(self):
+    def test_exited_workflow_is_reported_once_and_points_to_homepage(self):
         self.ui.state = 'running'
         self.ui.proc = Mock()
         self.ui.proc.poll.return_value = 1
@@ -893,8 +898,10 @@ class ChatInteractionTests(unittest.TestCase):
         self.assertEqual(len(self.ui.home_history), 1)
         self.assertIn('exit code 1', self.ui.chat_error)
         self.assertFalse(self.ui.steering_channels)
+        # Escape no longer leaves a stopped run; the report names the command that does.
+        self.assertIn('/homepage', self.ui.chat_error)
         self.ui.handle_key(27)
-        self.assertEqual(self.ui.state, 'menu')
+        self.assertEqual(self.ui.state, 'running')
 
     def test_issue_input_rejects_transcript_before_launch(self):
         self.ui.state = 'issue'
@@ -1331,8 +1338,8 @@ class ComposerEditingTests(unittest.TestCase):
     def test_kill_functions_follow_bash_boundaries(self):
         # T-KILL (pure functions)
         cases = [
-            (tui.edit_kill_whitespace_word, 'git commit-tree  ', 17, ('git ', 4, 'commit-tree  ')),
-            (tui.edit_kill_word_back, 'git commit-tree', 15, ('git commit-', 11, 'tree')),
+            (tui.edit_kill_whitespace_word, 'git commit-tree  ', 17, ('git ', 4, 'commit-tree  ')),  # editing-key text, not a git call
+            (tui.edit_kill_word_back, 'git commit-tree', 15, ('git commit-', 11, 'tree')),  # editing-key text, not a git call
             (tui.edit_kill_word_forward, 'a foo.bar', 1, ('a.bar', 1, ' foo')),
             (tui.edit_kill_to_end, 'one two', 3, ('one', 3, ' two')),
             (tui.edit_kill_to_start, 'one two', 3, (' two', 0, 'one')),

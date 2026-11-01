@@ -410,6 +410,24 @@ green_regressions() {
     ' "$1"
 }
 
+# green_vacuous_commands <log_path> — one command per line whose output says it ran no tests.
+#
+# A command that runs zero tests exits nonzero (unittest: status 5, "NO TESTS RAN"), so it lands in the table as a failure --
+# and, failing before the change as well, as PREEXISTING, under a summary reading "No regressions". It is neither: it verifies
+# nothing. `python3 -m unittest discover -p "*-test.py"` did exactly this on Uncle's own repository, because discover cannot
+# import hyphenated module names; the Python half of its verification had never run a test, and a new test named
+# `bug_report_test.py` was never collected either (issue 117: found only by the test-review panel, after three full passes).
+# The log marks each command with a `$ ` line; a section is vacuous when it reports no tests ran.
+green_vacuous_commands() {
+    local log="$1"
+    [[ -r "$log" ]] || return 0
+    sed 's/\x1b\[[0-9;]*[A-Za-z]//g' "$log" | awk '
+        /^\$ / { cmd = substr($0, 3); next }
+        cmd != "" && (/^NO TESTS RAN/ || /^Ran 0 tests? in / || /^collected 0 items/ || /^no tests ran/) && !(cmd in seen) {
+            seen[cmd] = 1; print cmd
+        }'
+}
+
 # green_report <classified_file> <out_md> <source_doc> <log_path> [has_baseline]
 # — the table the human reads at the gate.
 #
@@ -449,6 +467,16 @@ green_report() {
             }
         ' "$classified"
         echo
+
+        local vacuous
+        vacuous="$(green_vacuous_commands "$log")"
+        if [[ -n "$vacuous" ]]; then
+            echo "**Ran no tests.** These commands reported that no tests ran, so they verify nothing: a PASS or PREEXISTING"
+            echo "row for them is not evidence, and any test they were meant to collect has not been run by the driver:"
+            echo
+            printf '%s\n' "$vacuous" | sed 's/^/- `/; s/$/`/'
+            echo
+        fi
 
         local failures
         failures="$(green_regressions "$classified")"

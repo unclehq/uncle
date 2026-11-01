@@ -78,6 +78,13 @@ acceptance_after_waiver() {
 ensure_acceptance_canonical() {
     local report="$1" canonical acceptance_kind="" acceptance_retry_state="" acceptance_retry_slug=""
     canonical="$STATE_DIR/documents/$(basename "${report%.md}").json"
+    # A reviewer's answer saved raw as JSON in the view has not been ingested, and it outranks whatever canonical already
+    # exists: that file predates this review (a leftover, or a fixture some other process wrote), so honouring it would
+    # let a stale PASS stand in for a review that said FAIL. An answer that does not ingest removes it, so the format
+    # retry below runs instead of the stale file deciding the gate.
+    if [[ -s "$report" ]] && python3 -B "$ROOT/scripts/lib/acceptance_context.py" --is-raw-json "$report"; then
+        python3 -B "$ROOT/scripts/lib/acceptance_context.py" "$report" . > /dev/null 2>&1 || rm -f "$canonical"
+    fi
     [[ ! -s "$canonical" ]] || return 0
     case "$report" in
         .uncle/docs/TEST_REVIEW.md) acceptance_kind=TEST_REVIEW; acceptance_retry_state=TEST_REVIEW; acceptance_retry_slug=test-review ;;

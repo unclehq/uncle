@@ -70,12 +70,13 @@ triage_stage_reports() {
         requirements) printf '%s\n' .uncle/docs/REQUIREMENTS_INTERPRETATION.md ;;
         baseline) printf '%s\n' .uncle/docs/BASELINE_REPORT.md ;;
         project-plan) printf '%s\n' .uncle/docs/PROJECT_PLAN.md ;;
-        change-plan|change-spec) printf '%s\n' .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md ;;
+        change-plan|change-spec|change-plan-stage-duties) printf '%s\n' .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md ;;
         adversarial-review|plan-executability) printf '%s\n' .uncle/docs/ADVERSARIAL_REVIEW.md ;;
         updated-plan|plan-recovery) printf '%s\n' .uncle/docs/UPDATED_PROJECT_PLAN.md ;;
         updated-change-plan) printf '%s\n' .uncle/docs/CHANGE_PLAN.md ;;
         preflight) printf '%s\n' .uncle/docs/PREFLIGHT_REPORT.md ;;
         module-interfaces) printf '%s\n' .uncle/workflow/documents/MODULE_INTERFACES.json ;;
+        classify-change) printf '%s\n' .uncle/workflow/change-class.json ;;
         implementation*) printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/CHANGE_TEST_REPORT.md ;;
         repair*) printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md ;;
         test-review) printf '%s\n' .uncle/docs/TEST_REVIEW.md ;;

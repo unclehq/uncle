@@ -15,8 +15,8 @@ from process_tree import bash_executable, start_check, finish_check, kill_tree
 
 
 def run(jobs, suites=()):
-    if not 1 <= jobs <= 16:
-        raise ValueError('WORKFLOW_VERIFY_JOBS must be from 1 to 16')
+    if not 1 <= jobs <= 32:
+        raise ValueError('WORKFLOW_VERIFY_JOBS must be from 1 to 32')
     if any(not re.fullmatch(r'[a-z0-9][a-z0-9-]*', name) for name in suites):
         raise ValueError('Invalid shell suite name')
     files = ([f'scripts/tests/{name}-test.sh' for name in suites] if suites
@@ -40,9 +40,26 @@ def isolate_git():
         os.close(fd)
         os.environ['GIT_CONFIG_GLOBAL'] = path
     os.environ.setdefault('GIT_CONFIG_NOSYSTEM', '1')
+    isolate_environment()
 
 
-def run_commands(jobs, commands):
+# What a suite may inherit from the run that launched it. The baseline and green-check runners execute this suite
+# *inside a live workflow*, so without this a test that drives stagegate.sh or change-workflow.sh with a stub agent
+# writes its stage events (a second change-plan, requirements, preview-build, adversarial-review) into the live run's
+# UNCLE_STATUS_FILE, and one that honours WORKFLOW_AGENT_CMD or UNCLE_PROJECT_ROOT would run against the real thing.
+KEEP_ENV = ('UNCLE_MODEL_REFRESH', 'WORKFLOW_VERIFY_JOBS', 'WORKFLOW_TEST_JOBS', 'WORKFLOW_PYTHON_TESTS_RUNNER',
+            'WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS')
+LEAKY_PREFIXES = ('UNCLE_', 'STAGEGATE_', 'WORKFLOW_')
+
+
+def isolate_environment():
+    """Drop the launching workflow's own variables from this process, so every suite starts from a clean slate."""
+    for name in list(os.environ):
+        if name.startswith(LEAKY_PREFIXES) and name not in KEEP_ENV and not name.startswith('UNCLE_TEST_'):
+            del os.environ[name]
+
+
+def run_commands(jobs, commands, kind='shell'):
     """Execute named isolated commands with shared progress and cleanup.
 
     The 1-8 range on run()'s own --jobs flag is a deliberate cap on the full
@@ -54,8 +71,8 @@ def run_commands(jobs, commands):
     than an arbitrary two, so this only bounds jobs by the actual work and a
     generous ceiling against a mistyped huge number, not by the unrelated
     CLI's own limit."""
-    if not 1 <= jobs <= max(16, len(commands)):
-        raise ValueError(f'Worker count must be from 1 to {max(16, len(commands))}')
+    if not 1 <= jobs <= max(32, len(commands)):
+        raise ValueError(f'Worker count must be from 1 to {max(32, len(commands))}')
     timeout = check_timeout('WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 600)
     files = list(commands)
     active, lock, stopped = set(), threading.Lock(), threading.Event()
@@ -63,7 +80,7 @@ def run_commands(jobs, commands):
     def interrupted(*_):
         raise KeyboardInterrupt
     previous = signal.signal(signal.SIGTERM, interrupted)
-    print(f'Running {len(files)} shell suites with up to {jobs} workers.', flush=True)
+    print(f'Running {len(files)} {kind} suites with up to {jobs} workers.', flush=True)
     try:
         with tempfile.TemporaryDirectory(prefix='uncle-shell-tests-') as directory:
             def check(path):
@@ -114,7 +131,7 @@ def run_commands(jobs, commands):
                     for child in active:
                         kill_tree(child)
                 pool.shutdown(wait=True)
-            print(f'Shell suites: {len(files) - failed - skipped} passed, {failed} failed, {skipped} skipped.', flush=True)
+            print(f'{kind.capitalize()} suites: {len(files) - failed - skipped} passed, {failed} failed, {skipped} skipped.', flush=True)
             return int(bool(failed))
     finally:
         signal.signal(signal.SIGTERM, previous)

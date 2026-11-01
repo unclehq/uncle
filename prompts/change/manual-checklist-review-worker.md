@@ -32,3 +32,16 @@ a diff against an unspecified "version referenced" by a report. For regression
 evidence, use approved current-file paths and the workflow verification snapshot
 when it exists. An initial snapshot has no predecessor and is normal evidence,
 never a setup blocker.
+
+## Use prepared acceptance probes
+
+Inspect the approved test steps' `*.acceptance.md` handoffs and the referenced
+probes for your assigned requirements. For a live browser observation they
+actually cover, put the existing probe path and exact invocation in
+`exact_action`, with the expected observation in `expected_result`. The execute
+worker will supply the current application URL. Do not request a replacement
+script for an already-covered scenario, or invent another automated-suite row.
+Fresh driver assertions can cover a requirement only when they measure its
+exact expected result. Keep uncovered observations and human visual/sign-off
+checks explicit. A handoff or prepared script is not passing evidence. Missing
+handoffs in older projects are normal: describe the required action directly.

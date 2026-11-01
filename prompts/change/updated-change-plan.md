@@ -205,3 +205,24 @@ do no size-only compaction passes after the complete draft. With enforced
 budgets, use the existing preservation validator and at most two passes total;
 if mandatory content cannot fit, retain it for the driver's budget resolution.
 This does not waive format, completeness, acceptance or executability checks.
+
+## Prepare acceptance probes during implementation
+
+For projects with browser acceptance criteria, assign reusable browser probes
+and a small `*.acceptance.md` handoff beside each probe to the relevant test
+implementation step's owned files. Prepare these concurrently with app code,
+using the approved selector and behavior contracts; do not add a dependency on
+finished UI code just to write them. Reuse existing test helpers and probes
+where possible. The handoff maps requirement IDs to the probe path, exact
+invocation, assertions, and remaining human-only observations. Do not invent
+future checklist IDs. Include these paths in verification protection.
+
+Probes must accept the driver's application URL at execution time, use isolated
+browser state/output, emit actual observations, and return nonzero for failed
+assertions. They must not install, build, start another server, change product
+files, update snapshots, or approve visual appearance on a human's behalf.
+Keep them outside automatic test discovery unless they also have a supported
+normal-suite invocation. Execute Checklist will confirm selectors on the final
+page and run uncovered live assertions; preparing a probe is not a PASS.
+For non-browser projects, use the existing native verification strategy; do
+not introduce a browser or an unrelated test framework.

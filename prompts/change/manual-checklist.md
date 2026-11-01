@@ -207,3 +207,16 @@ In advisory-budget mode, do ZERO size-only compaction passes. Preserve mandatory
 content even above the guide; do not repeatedly count bytes or trim whitespace.
 The driver measures the artifact. Enforced budgets retain the two-pass limit
 and preservation rules. All format and completeness checks still apply.
+
+## Use prepared acceptance probes
+
+Inspect the approved test steps' `*.acceptance.md` handoffs and the referenced
+probes for your assigned requirements. For a live browser observation they
+actually cover, put the existing probe path and exact invocation in
+`exact_action`, with the expected observation in `expected_result`. The execute
+worker will supply the current application URL. Do not request a replacement
+script for an already-covered scenario, or invent another automated-suite row.
+Fresh driver assertions can cover a requirement only when they measure its
+exact expected result. Keep uncovered observations and human visual/sign-off
+checks explicit. A handoff or prepared script is not passing evidence. Missing
+handoffs in older projects are normal: describe the required action directly.

@@ -80,3 +80,24 @@ Include one result for every assigned ID; `status` is exactly PASS, FAIL,
 BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or NOT RUN. Do not place the
 packet in a Markdown fence. The driver has a separate single writer that
 consumes the collated JSON and writes canonical reports.
+
+## Run prepared acceptance probes first
+
+For your assigned checks, you may read the current approved probe and its
+`*.acceptance.md` handoff referenced by the checklist action (or the approved
+test step). These are executable inputs, never prior PASS evidence. First use
+fresh driver results for exact assertions they already cover. For remaining
+live browser observations, inspect the final page once and confirm the prepared
+probe's selectors and assertions match that page and the assigned expected
+result, then execute it with the driver-supplied URL and isolated state/output.
+Do not rewrite a matching probe or run its covered actions a second time.
+Do not run checks outside your assignment; use a supported filter or a narrow
+temporary probe if the prepared script also exercises unassigned checks.
+
+Keep prepared project probes and handoffs read-only. If absent, stale, or
+incompatible, write a narrow temporary probe in `.uncle/tests/` or a temporary
+directory using the observed DOM, following the existing two-correction limit.
+A selector/setup failure is not an application defect; an observed assertion
+failure must retain its evidence and must not be rewritten into a PASS.
+Never treat a prepared script, an earlier run, or a screenshot alone as proof
+of unexecuted behavior or required human approval.

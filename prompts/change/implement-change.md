@@ -238,3 +238,19 @@ install or switch Node versions. If `package.json` sets `engines.node`, its
 range must accept the installed Node major. Record resolved versions in the
 lockfile; reuse a compatible installation. If an approved plan conflicts,
 report it through the existing review/repair path; do not silently edit it.
+
+## Prepare the acceptance handoff now
+
+For browser acceptance checks assigned to your step, write the approved reusable
+probes and their `*.acceptance.md` handoffs during implementation, alongside
+the other tests. Each handoff names requirement IDs, the exact invocation and
+runtime URL argument, assertions, and observations still requiring a person.
+Use the approved selector/behavior contracts while sibling UI files are being
+written. Keep ownership boundaries: only the assigned test worker writes its
+probe and handoff; source workers must not duplicate them. Reuse existing
+helpers, keep probes out of automatic discovery unless they support that runner,
+and do not install or start services just to prepare them. Use isolated browser
+state/output, report actual values, and exit nonzero on assertion failure.
+Do not add browser dependencies to a non-browser project. Do not claim a
+prepared or unexecuted probe passed. Final-page selector confirmation and live
+acceptance execution belong to Execute Checklist.

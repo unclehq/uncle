@@ -300,6 +300,22 @@ is required despite the speed guidance; do not guess aliases or read sibling fil
 that are still being written. Keep expectations independent of implementation.
 Write only your owned files. Shared configuration and helpers belong to their
 assigned owners. Test execution happens after the required files are merged.
+
+## Prepare the acceptance handoff now
+
+For browser acceptance checks assigned to your step, write the approved reusable
+probes and their \`*.acceptance.md\` handoffs during implementation, alongside
+the other tests. Each handoff names requirement IDs, the exact invocation and
+runtime URL argument, assertions, and observations still requiring a person.
+Use the approved selector/behavior contracts while sibling UI files are being
+written. Keep ownership boundaries: only the assigned test worker writes its
+probe and handoff; source workers must not duplicate them. Reuse existing
+helpers, keep probes out of automatic discovery unless they support that runner,
+and do not install or start services just to prepare them. Use isolated browser
+state/output, report actual values, and exit nonzero on assertion failure.
+Do not add browser dependencies to a non-browser project. Do not claim a
+prepared or unexecuted probe passed. Final-page selector confirmation and live
+acceptance execution belong to Execute Checklist.
 CONTRACT
         done
         if [[ "$merge_json" != "{}" ]]; then

@@ -242,11 +242,15 @@ def prepare_publication(directory, stage):
     return 0
 
 
-def report(directory):
-    path = Path(directory, 'deferred.json')
+def report(directory, canonical=False):
+    path = Path(directory) if canonical else Path(directory, 'deferred.json')
     if not path.exists():
         return
     rows = json.loads(path.read_text())
+    if canonical:
+        rows = {row['finding']: row for row in rows.get('dispositions', []) if row.get('disposition') == 'Deferred'}
+    if not rows:
+        return
     for finding, row in rows.items():
         print('Updated-plan finding %s: %s' % (finding, row['reason']))
     print('Updated-plan: %d finding(s) Deferred; review by hand in the existing dispositions table.' % len(rows))
@@ -275,6 +279,8 @@ if __name__ == '__main__':
             sys.exit(prepare_publication(*args))
         elif command == 'report':
             report(*args)
+        elif command == 'report-plan':
+            report(args[0], canonical=True)
     except (ValueError, OSError, KeyError) as error:
         print('updated-plan deferral: %s' % error, file=sys.stderr)
         sys.exit(1)

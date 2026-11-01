@@ -205,7 +205,12 @@ workflow_writer_exhausted() {
 }
 
 workflow_deferred_report() {
-    python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" report "$1" | tee -a "$LOG_DIR/UPDATED_PLAN.log" "$LOG_DIR/UPDATED_PLAN.speculative.log"
+    if [[ "${UNCLE_SPECULATIVE:-}" == true ]]; then
+        # speculate() already redirects stdout to the speculative log.
+        python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" report "$1" | tee -a "$LOG_DIR/UPDATED_PLAN.log"
+    else
+        python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" report "$1" | tee -a "$LOG_DIR/UPDATED_PLAN.log" "$LOG_DIR/UPDATED_PLAN.speculative.log"
+    fi
 }
 
 workflow_publish_updated_plan() {

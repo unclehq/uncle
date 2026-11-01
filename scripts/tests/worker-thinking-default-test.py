@@ -25,8 +25,14 @@ class WorkerDefault(unittest.TestCase):
                       'final-audit-review-worker-scope', 'project-plan-section-behaviors', 'updated-plan-review-worker-ownership'):
             self.assertEqual(options(stage), OFF, stage)
 
+    def test_the_judging_stages_turn_thinking_off_too(self):
+        for stage in ('test-review', 'final-audit', 'execute-checklist', 'execute-checklist-worker-2', 'test-review-worker-oracle'):
+            self.assertEqual(options(stage), OFF, stage)
+        for stage in ('final-auditor', 'test-reviews', 'execute-checklists'):
+            self.assertEqual(options(stage), {}, stage)
+
     def test_other_stages_are_unchanged(self):
-        for stage in ('implementation', 'requirements', 'project-plan', 'repair', 'final-audit', 'classify-change', ''):
+        for stage in ('implementation', 'requirements', 'project-plan', 'repair', 'classify-change', 'updated-plan', 'adversarial-review', ''):
             self.assertEqual(options(stage), {}, stage)
 
     def test_a_stage_the_operator_configured_keeps_exactly_what_they_set(self):

@@ -88,8 +88,14 @@ def request_options(stage=None, config=None):
 # slowest worker, so reasoning it was never asked for is pure latency. Unless the operator configured request options for the
 # stage (an explicit {} included) or set WORKFLOW_WORKER_THINKING=on, a worker's requests turn thinking off. The setting is the
 # one the updated-plan retry path already sends.
+# The same goes for the stages that judge from evidence they are handed (test review, the final audit, checklist execution): the
+# config for each of them used to say thinking false by hand.
+THINKING_OFF_STAGES = ('test-review', 'final-audit', 'execute-checklist')
+
+
 def is_worker_stage(stage):
-    return '-worker-' in stage or stage.startswith('project-plan-section')
+    return ('-worker-' in stage or stage.startswith('project-plan-section')
+            or any(stage == name or stage.startswith(name + '-') for name in THINKING_OFF_STAGES))
 
 
 def worker_default_options(stage, found):

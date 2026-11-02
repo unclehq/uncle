@@ -31,9 +31,18 @@ def run(jobs, suites=()):
     isolate_git()
     # Keep suites off the network and the real model cache; model-catalog-test manages its own env.
     os.environ.setdefault('UNCLE_MODEL_REFRESH', '0')
+    # Suites with a thread pool of their own (close-flow's handoff cases) read WORKFLOW_TEST_JOBS: left at their defaults they put far
+    # more than one process per core to work. all_suites.py measured 376 s -> 344 s from this cap alone.
+    os.environ.setdefault('WORKFLOW_TEST_JOBS', '2')
     commands = {}
     for path in files:
-        commands.update(expand(path, 'shell', path, [bash_executable(), path]))
+        if path == 'scripts/tests/gates-test.sh':
+            # gates-test.sh runs its 22 groups in a pool of its own: inside this pool that is 14 workers inside 14. Run the groups here
+            # instead, as entries of this one pool (the import is local: gate_suites imports this module).
+            from gate_suites import gate_commands
+            commands.update(gate_commands(path))
+        else:
+            commands.update(expand(path, 'shell', path, [bash_executable(), path]))
     return run_commands(jobs, commands)
 
 

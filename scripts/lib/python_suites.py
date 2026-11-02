@@ -50,6 +50,7 @@ def run(jobs, suites=()):
     isolate_git()
     # Keep suites off the network and the real model cache, as the shell runner does.
     os.environ.setdefault('UNCLE_MODEL_REFRESH', '0')
+    os.environ.setdefault('WORKFLOW_TEST_JOBS', '2')     # see shell_suites.run: nested pools stay small inside this one
     commands = {}
     for path in files:
         command = suite_command(path)

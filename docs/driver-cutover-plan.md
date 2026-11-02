@@ -55,3 +55,19 @@ dropped.
 | Stage | Result |
 |---|---|
 | Slices 1-5 (see table above) | committed; about -3% to -4% CPU |
+| Stage 1: per-run Python host serves helper calls | full pool: all suites pass; CPU about -15%, wall about -6.5% (clean A/B below) |
+| Stage 1b and the first slice of stage 3: served `build_timing` stage/report, `reviewer_output --from`, `writer_deadline stop`, inline scripts replaced | gates group 7 CPU 82.7 s -> 40.0 s, group 2 53.1 s -> 28.7 s when run alone; real Python launches in groups 2+5+7: about 4,200 -> 1,074 |
+
+### Clean A/B of the whole pool, host off vs on (same code, nothing else running, two runs each)
+
+| | Wall | CPU | Result |
+|---|---|---|---|
+| Host off | 384 s, 388 s | 3,360 s, 3,394 s | 2 suites failed each time (one was the host's own test, which needs the host) |
+| Host on | 362 s, 358 s | 2,869 s, 2,864 s | all 424 pass both times |
+
+### What the measurements say about the rest of the cutover
+
+- Wall time barely follows CPU. Across many full runs CPU fell by about 15% while wall fell by about 6.5%. At 22 and 30 workers wall time was 355 s and 381 s (CPU 3,079 s and 3,437 s, three failures at 30): the machine, not the worker count, is the limit.
+- The pool averages about 7 busy cores out of 14. A suite alone shows no idle time (`supervision-driver`: 53.5 s wall for 59.2 s CPU) but takes about 3x as long inside the pool, so the loss is contention on fork/exec and the file system, not sleeping.
+- What is left to port is small per item: `runner_timing.py`'s live stream (about 18% of the remaining real Python launches), about 300 inline scripts, the lock and process-control helpers. Each is about 1% of CPU; wall time would move less. Replacing the bash loop (stage 4) needs the whole model runner in Python.
+

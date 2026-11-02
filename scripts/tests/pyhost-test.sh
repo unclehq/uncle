@@ -3,6 +3,7 @@
 # host that is missing, killed, refusing or slow must never change an answer. Helpers live in a throwaway install root so the host's
 # rule "only a helper under ROOT/scripts/lib" is exercised for real.
 set -uo pipefail
+unset UNCLE_PY_HOST      # this suite tests the host itself; a run that switches it off for the others must not switch it off here
 REAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'kill "${HOST_PID:-0}" 2>/dev/null; rm -rf "$TMP"' EXIT

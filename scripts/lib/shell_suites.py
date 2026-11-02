@@ -62,7 +62,7 @@ def isolate_git():
 # *inside a live workflow*, so without this a test that drives stagegate.sh or change-workflow.sh with a stub agent
 # writes its stage events (a second change-plan, requirements, preview-build, adversarial-review) into the live run's
 # UNCLE_STATUS_FILE, and one that honours WORKFLOW_AGENT_CMD or UNCLE_PROJECT_ROOT would run against the real thing.
-KEEP_ENV = ('UNCLE_MODEL_REFRESH', 'UNCLE_SUITE_CPU', 'WORKFLOW_VERIFY_JOBS', 'WORKFLOW_TEST_JOBS', 'WORKFLOW_PYTHON_TESTS_RUNNER',
+KEEP_ENV = ('UNCLE_MODEL_REFRESH', 'UNCLE_SUITE_CPU', 'UNCLE_PY_HOST', 'WORKFLOW_VERIFY_JOBS', 'WORKFLOW_TEST_JOBS', 'WORKFLOW_PYTHON_TESTS_RUNNER',
             'WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 'WORKFLOW_SUITE_TIMINGS')
 LEAKY_PREFIXES = ('UNCLE_', 'STAGEGATE_', 'WORKFLOW_')
 

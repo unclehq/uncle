@@ -9,7 +9,7 @@ normalize_reviewer_packet() {
     # `adversarial-review`) and must not be forced through that envelope.
     [[ "$output_file" == *-panel/*.json && -s "$output_file" ]] || return 0
     normalized="$(mktemp "$STATE_DIR/.reviewer-packet.XXXXXX")" || return 1
-    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --packet "$runner" < "$output_file" > "$normalized"; then
+    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --packet --from "$output_file" "$runner" > "$normalized"; then
         rm -f "$normalized"
         return 1
     fi
@@ -23,7 +23,7 @@ validate_reviewer_artifact() {
     # never reaches the later execution gate as a successful artifact.
     [[ "${output_file##*/}" == MANUAL_CHECKLIST.md && -s "$output_file" ]] || return 0
     normalized="$(mktemp "$STATE_DIR/.reviewer-artifact.XXXXXX")" || return 1
-    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --artifact "$output_file" "$runner" < "$output_file" > "$normalized"; then
+    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --artifact "$output_file" --from "$output_file" "$runner" > "$normalized"; then
         rm -f "$normalized"
         return 1
     fi

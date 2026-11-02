@@ -41,9 +41,15 @@ PRELOAD = ('plan_model',)
 REQUEST_SECONDS = 30
 CALL_SECONDS = 900
 KEEP_OUTPUT_SECONDS = 120
-# Helpers the static scan refuses as a whole but whose short subcommands are safe to serve: build_timing.py's long-lived sampler is
-# `run`; its `stage` and `report` are one-shot.
-SUBCOMMANDS = {'build_timing.py': {'stage', 'report'}}
+# Helpers the static scan refuses as a whole but that are safe to serve for particular calls (args[0] is the script):
+#   build_timing.py    its long-lived sampler is `run`; `stage` and `report` are one-shot
+#   writer_deadline.py `stop PID` signals a process and its descendants and returns; `watch` is a long-lived timer
+#   reviewer_output.py a stdin filter, except when the input is named with --from FILE
+CONDITIONAL = {
+    'build_timing.py': lambda args: len(args) > 1 and args[1] in ('stage', 'report'),
+    'writer_deadline.py': lambda args: len(args) > 1 and args[1] == 'stop',
+    'reviewer_output.py': lambda args: '--from' in args,
+}
 UNSAFE = re.compile(r'stdin|setsid|killpg|os\.fork|Popen|signal\.|daemon|os\.exec|input\(')
 DECLARE = re.compile(r'declare -x ([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$', re.S)
 
@@ -124,7 +130,7 @@ def run_call(directory, conn, token, lib, allowed):
         dont_write, args = True, args[1:]
     script = os.path.realpath(os.path.join(cwd, args[0])) if args else ''
     name = os.path.basename(script)
-    served = name in allowed or (name in SUBCOMMANDS and len(args) > 1 and args[1] in SUBCOMMANDS[name])
+    served = name in allowed or (name in CONDITIONAL and CONDITIONAL[name](args))
     if not (script.startswith(lib + os.sep) and served and os.path.isfile(script)):
         conn.sendall(b'REFUSE\n')
         os._exit(0)

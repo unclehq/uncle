@@ -57,6 +57,15 @@ cat > "$ROOT/scripts/lib/whoami_parent.py" <<'PY'
 import os
 print(os.getppid())
 PY
+cat > "$ROOT/scripts/lib/reviewer_output.py" <<'PY'
+import os, sys                                   # mentions stdin on purpose: the scan refuses it unless --from names the input
+print('reviewer parent', os.getppid(), 'reads stdin' if '--from' not in sys.argv else 'reads a file')
+PY
+cat > "$ROOT/scripts/lib/writer_deadline.py" <<'PY'
+import os, signal, sys                           # uses signal. on purpose, as the real helper does: only `stop` is served
+def stop(pid): os.kill(pid, signal.SIGKILL)
+print('deadline', sys.argv[1], 'parent', os.getppid())
+PY
 cat > "$ROOT/scripts/lib/build_timing.py" <<'PY'
 import os, sys, threading
 threading.Thread(target=lambda: None, daemon=True)     # the word the static scan refuses on
@@ -93,6 +102,11 @@ export FOO="from-the-driver"
 [[ "$(python3 "$ROOT/scripts/lib/build_timing.py" stage X)" == "sub stage parent $HOST_PID" ]] && ok || bad subcommand-served "stage was not served by the host"
 [[ "$(python3 "$ROOT/scripts/lib/build_timing.py" report .)" == "sub report parent $HOST_PID" ]] && ok || bad subcommand-report "report was not served by the host"
 [[ "$(python3 "$ROOT/scripts/lib/build_timing.py" run)" != *"parent $HOST_PID" ]] && ok || bad subcommand-refused "run must not be served by the host"
+# Conditional rules: reviewer_output.py only with --from; writer_deadline.py only for `stop`.
+[[ "$(python3 "$ROOT/scripts/lib/reviewer_output.py" --from x.md claude)" == "reviewer parent $HOST_PID reads a file" ]] && ok || bad reviewer-from-served "--from was not served by the host"
+[[ "$(python3 "$ROOT/scripts/lib/reviewer_output.py" claude < /dev/null)" == "reviewer parent $HOST_PID"* ]] && bad reviewer-stdin-refused "a stdin call was served by the host" || ok
+[[ "$(python3 "$ROOT/scripts/lib/writer_deadline.py" stop 12345)" == "deadline stop parent $HOST_PID" ]] && ok || bad deadline-stop-served "stop was not served by the host"
+[[ "$(python3 "$ROOT/scripts/lib/writer_deadline.py" watch 1 2 3)" == "deadline watch parent $HOST_PID" ]] && bad deadline-watch-refused "watch was served by the host" || ok
 same parity "$ROOT/scripts/lib/echo_call.py" one "two words" 'three"quoted'
 same parity-minus-B -B "$ROOT/scripts/lib/echo_call.py" one
 EXIT_CODE=7 same exit-status "$ROOT/scripts/lib/echo_call.py"

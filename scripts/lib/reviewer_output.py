@@ -170,10 +170,25 @@ if __name__ == '__main__':
             print('--artifact requires a path', file=sys.stderr)
             raise SystemExit(2)
         del args[position:position + 2]
+    # --from FILE reads the document from FILE instead of stdin. A call that names its input needs no stdin, which is what lets the driver's
+    # Python host serve it (scripts/lib/pyhost.py) instead of starting an interpreter.
+    source = None
+    if '--from' in args:
+        position = args.index('--from')
+        try:
+            source = args[position + 1]
+        except IndexError:
+            print('--from requires a path', file=sys.stderr)
+            raise SystemExit(2)
+        del args[position:position + 2]
     runner = args[0] if args else 'reviewer'
     # Windows text mode would translate LF to CRLF on the way to the artifact.
     sys.stdout.reconfigure(newline='\n')
-    body = sys.stdin.read()
+    if source is None:
+        body = sys.stdin.read()
+    else:
+        with open(source) as handle:
+            body = handle.read()
     try:
         sys.stdout.write(worker_packet(body, runner) if packet else check(body, runner, artifact))
     except ValueError as error:

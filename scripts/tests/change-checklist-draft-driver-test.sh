@@ -23,6 +23,7 @@ run_in() {   # <project> <script>; extra environment through ENVX
     ( cd "$project" && env -i PATH="$PATH" HOME="$HOME" ${ENVX:-X=1} bash --norc --noprofile -c "
         ROOT='$ROOT'; STATE_DIR='.uncle/workflow'; LOG_DIR='.uncle/workflow/logs'; PROJECT_ROOT=\"\$PWD\"; PARALLEL_CHECKLIST=\${PARALLEL_CHECKLIST:-1}; CODEX_EFFORT_CHECKLIST=low
         hash_file() { shasum -a 256 \"\$1\" | cut -d' ' -f1; }
+        hash_stdin() { shasum -a 256 | cut -d' ' -f1; }
         resolve_prompt() { printf '%s\n' \"\$1\"; }
         change_class_panel() { printf '%s' \"\$2\"; }
         uncle_stage_runner() { echo \"\${STUB_RUNNER:-claude}\"; }

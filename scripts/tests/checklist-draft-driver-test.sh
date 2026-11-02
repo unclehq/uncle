@@ -27,6 +27,7 @@ run_in() {   # <project> <script...>   (extra env through the caller)
     ( cd "$project" && env -i PATH="$PATH" HOME="$HOME" ${ENVX:-X=1} bash --norc --noprofile -c "
         ROOT='$ROOT'; STATE_DIR='.uncle/workflow'; LOG_DIR='.uncle/workflow/logs'
         hash_file() { shasum -a 256 \"\$1\" | cut -d' ' -f1; }
+        hash_stdin() { shasum -a 256 | cut -d' ' -f1; }
         change_class_panel_subset() { printf '%s' \"\$2\"; }
         run_codex_review() {   # prompt output name
             echo \"\$3\" >> calls; cp \"\$1\" \"prompt-\$3.md\"

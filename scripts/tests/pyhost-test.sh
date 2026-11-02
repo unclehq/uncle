@@ -53,6 +53,15 @@ time.sleep(1.5)
 print('slow done')
 PY
 printf 'print("not a helper")\n' > "$TMP/work/elsewhere.py"
+cat > "$ROOT/scripts/lib/whoami_parent.py" <<'PY'
+import os
+print(os.getppid())
+PY
+cat > "$ROOT/scripts/lib/build_timing.py" <<'PY'
+import os, sys, threading
+threading.Thread(target=lambda: None, daemon=True)     # the word the static scan refuses on
+print('sub', sys.argv[1], 'parent', os.getppid())
+PY
 
 export ROOT
 . "$ROOT/scripts/lib/pyhost.sh"
@@ -78,6 +87,12 @@ for _ in $(seq 1 100); do [[ -e "$UNCLE_PY_HOST_DIR/ready" ]] && break; sleep 0.
 HOST_PID="$(pgrep -f "pyhost.py serve $UNCLE_PY_HOST_DIR" | head -1)"
 
 export FOO="from-the-driver"
+# A served call really is served: its parent is the host, not this shell.
+[[ "$(python3 "$ROOT/scripts/lib/whoami_parent.py")" == "$HOST_PID" ]] && ok || bad served-by-host "parent was $(python3 "$ROOT/scripts/lib/whoami_parent.py"), host is $HOST_PID"
+# build_timing.py is refused by the scan (a daemon thread) but its one-shot subcommands are served; others are not.
+[[ "$(python3 "$ROOT/scripts/lib/build_timing.py" stage X)" == "sub stage parent $HOST_PID" ]] && ok || bad subcommand-served "stage was not served by the host"
+[[ "$(python3 "$ROOT/scripts/lib/build_timing.py" report .)" == "sub report parent $HOST_PID" ]] && ok || bad subcommand-report "report was not served by the host"
+[[ "$(python3 "$ROOT/scripts/lib/build_timing.py" run)" != *"parent $HOST_PID" ]] && ok || bad subcommand-refused "run must not be served by the host"
 same parity "$ROOT/scripts/lib/echo_call.py" one "two words" 'three"quoted'
 same parity-minus-B -B "$ROOT/scripts/lib/echo_call.py" one
 EXIT_CODE=7 same exit-status "$ROOT/scripts/lib/echo_call.py"

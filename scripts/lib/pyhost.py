@@ -36,6 +36,9 @@ import argparse, collections, datetime, hashlib, itertools, json, pathlib, subpr
 REQUEST_SECONDS = 30
 CALL_SECONDS = 900
 KEEP_OUTPUT_SECONDS = 120
+# Helpers the static scan refuses as a whole but whose short subcommands are safe to serve: build_timing.py's long-lived sampler is
+# `run`; its `stage` and `report` are one-shot.
+SUBCOMMANDS = {'build_timing.py': {'stage', 'report'}}
 UNSAFE = re.compile(r'stdin|setsid|killpg|os\.fork|Popen|signal\.|daemon|os\.exec|input\(')
 DECLARE = re.compile(r'declare -x ([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$', re.S)
 
@@ -115,7 +118,9 @@ def run_call(directory, conn, token, lib, allowed):
     if args and args[0] == '-B':
         dont_write, args = True, args[1:]
     script = os.path.realpath(os.path.join(cwd, args[0])) if args else ''
-    if not (script.startswith(lib + os.sep) and os.path.basename(script) in allowed and os.path.isfile(script)):
+    name = os.path.basename(script)
+    served = name in allowed or (name in SUBCOMMANDS and len(args) > 1 and args[1] in SUBCOMMANDS[name])
+    if not (script.startswith(lib + os.sep) and served and os.path.isfile(script)):
         conn.sendall(b'REFUSE\n')
         os._exit(0)
     conn.sendall(b'ACK\n')

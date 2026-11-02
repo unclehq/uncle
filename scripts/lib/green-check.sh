@@ -45,8 +45,7 @@ verify_parallel_groups() {
     local narrative_file=""
     if [[ "$plan" == *.json ]]; then
         narrative_file="$(mktemp "${TMPDIR:-/tmp}/uncle-groups.XXXXXX")" || return 0
-        if ! python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1])).get("narrative") or "")' \
-                "$plan" > "$narrative_file" 2>/dev/null; then
+        if ! python3 "$GREEN_LIB_DIR/json_field.py" narrative "$plan" > "$narrative_file" 2>/dev/null; then
             rm -f "$narrative_file"; return 0
         fi
         local rows status=0
@@ -218,17 +217,7 @@ verify_commands() {
     [[ -s "$file" ]] || return 0
 
     if [[ "$file" == *.json ]]; then
-        python3 - "$file" <<'PY' | green_fold_commands || return 0
-import json, sys
-try:
-    payload = json.load(open(sys.argv[1], encoding='utf-8'))
-    commands = payload.get('verification_commands', '')
-    if not isinstance(commands, str):
-        raise ValueError('verification_commands is not a string')
-    print(commands.rstrip())
-except Exception:
-    raise SystemExit(1)
-PY
+        python3 "$GREEN_LIB_DIR/json_field.py" verification-commands "$file" | green_fold_commands || return 0
         return 0
     fi
 

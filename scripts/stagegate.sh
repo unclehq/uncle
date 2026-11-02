@@ -3371,7 +3371,7 @@ manual_checklist_draft_fingerprint() {
     for file in REQUIREMENTS_INTERPRETATION PROJECT_PLAN UPDATED_PROJECT_PLAN ADVERSARIAL_REVIEW; do
         [[ -s "$STATE_DIR/documents/$file.json" ]] || return 1
         printf '%s %s\n' "$file" "$(hash_file "$STATE_DIR/documents/$file.json")"
-    done | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.read().encode()).hexdigest())'
+    done | hash_stdin
 }
 
 manual_checklist_draft_start() {

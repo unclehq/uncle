@@ -34,3 +34,24 @@ if ! declare -f hash_file > /dev/null 2>&1; then
         return 0
     }
 fi
+
+# hash_stdin: the SHA-256 of standard input, as the digest and a newline. It replaces `python3 -c 'print(hashlib.sha256(...))'` where a
+# fingerprint is taken of text built on the fly: same bytes in, same digest out, no interpreter start.
+if ! declare -f hash_stdin > /dev/null 2>&1; then
+    hash_stdin() {
+        local out status=0
+        if command -v sha256sum > /dev/null 2>&1; then
+            out="$(sha256sum)" || status=$?
+        elif command -v shasum > /dev/null 2>&1; then
+            out="$(shasum -a 256)" || status=$?
+        elif command -v openssl > /dev/null 2>&1; then
+            out="$(openssl dgst -sha256)" || status=$?
+            out="${out##* }"
+        else
+            echo "no sha256 tool found: install shasum, sha256sum, or openssl" >&2
+            return 1
+        fi
+        printf '%s\n' "${out%% *}"
+        return "$status"
+    }
+fi

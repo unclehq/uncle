@@ -3251,7 +3251,7 @@ change_checklist_draft_fingerprint() {
     for file in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN ADVERSARIAL_REVIEW; do
         [[ -s "$STATE_DIR/documents/$file.json" ]] || return 1
         printf '%s %s\n' "$file" "$(hash_file "$STATE_DIR/documents/$file.json")"
-    done | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.read().encode()).hexdigest())'
+    done | hash_stdin
 }
 
 change_checklist_draft_start() {

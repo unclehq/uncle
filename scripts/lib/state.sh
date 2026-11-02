@@ -22,7 +22,8 @@ state_read() {
         return 0
     fi
 
-    raw="$(head -n 1 "$file")"
+    # First line without a process (head): `read` drops the newline; a final line with no newline is still returned in $raw.
+    IFS= read -r raw < "$file" || true
     # Only an all-digit run followed by ':' is a prefix. Anything else (e.g.
     # "abc:IMPLEMENT") is returned intact so it still falls through to the
     # caller's unknown-state branch rather than being silently accepted.
@@ -41,7 +42,8 @@ state_issue() {
         return 0
     fi
 
-    raw="$(head -n 1 "$file")"
+    # First line without a process (head): `read` drops the newline; a final line with no newline is still returned in $raw.
+    IFS= read -r raw < "$file" || true
     if [[ "$raw" =~ ^([0-9]+): ]]; then
         printf '%s' "${BASH_REMATCH[1]}"
     fi

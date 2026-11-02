@@ -424,11 +424,12 @@ green_regressions() {
         printf '0'
         return 0
     fi
-    awk '
-        { t = index($0, "\t") }
-        t > 0 && substr($0, 1, t - 1) == "REGRESSION" { n++ }
-        END { printf "%d", n + 0 }
-    ' "$1"
+    # Count the rows whose first tab-separated field is REGRESSION, without awk: it runs on every gate and every route decision.
+    local _line _n=0
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+        [[ "$_line" == REGRESSION$'\t'* ]] && _n=$((_n + 1))
+    done < "$1"
+    printf '%d' "$_n"
 }
 
 # green_vacuous_commands <log_path> — one command per line whose output says it ran no tests.

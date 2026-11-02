@@ -104,6 +104,11 @@ if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/pla
     exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
 fi
 python3 "$ROOT/scripts/lib/workflow_family.py" change
+# From here the driver is the process that will run the whole workflow (the lock wrapper above re-executed it), so this is where its
+# Python host starts: helper calls are served by a warm interpreter instead of starting one each (docs/driver-cutover-plan.md).
+# UNCLE_PY_HOST=0 turns it off; the call never waits for the host and falls back to a plain python3 whenever it cannot be used.
+. "$ROOT/scripts/lib/pyhost.sh"
+uncle_py_host_start
 unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/project-git.sh"
 uncle_ensure_project_git || exit 1

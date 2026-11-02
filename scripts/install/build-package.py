@@ -49,6 +49,10 @@ def copy_payload(source, target):
             relative = path.relative_to(source)
             if "__pycache__" in relative.parts or path.suffix == ".pyc":
                 continue
+            # A split test suite leaves a temporary piece (scripts/tests/.part*) beside its original while it runs; it is never part of a
+            # package, and it can be deleted between this listing and the check below.
+            if path.name.startswith(".part") or not path.exists():
+                continue
             if path.is_symlink():
                 raise ValueError(f"Symlink in package input: {relative}")
             dest = target / relative

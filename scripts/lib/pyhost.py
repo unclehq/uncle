@@ -33,6 +33,11 @@ import time
 # Imported once so every child inherits them already loaded.
 import argparse, collections, datetime, hashlib, itertools, json, pathlib, subprocess, tempfile, textwrap, traceback, uuid  # noqa: F401,E401
 
+# Library modules imported once in the host, so every forked call inherits them instead of compiling and importing them again
+# (plan_records.py: 16.5 ms served, of which about 12 ms was importing plan_model). Only modules that do nothing at import time that
+# depends on the run (environment, working directory, argv, clock, files) may be listed; scripts/tests/pyhost-preload-test.sh checks
+# that with an AST scan, so the list cannot go stale or unsafe.
+PRELOAD = ('plan_model',)
 REQUEST_SECONDS = 30
 CALL_SECONDS = 900
 KEEP_OUTPUT_SECONDS = 120
@@ -173,6 +178,12 @@ def serve(directory, owner, root):
     root = os.path.realpath(root)
     lib = os.path.join(root, 'scripts', 'lib')
     allowed = safe_helpers(lib)
+    sys.path.insert(0, lib)
+    for name in PRELOAD:
+        try:
+            __import__(name)
+        except Exception:
+            pass                                          # a module that cannot be preloaded is simply imported by each call
     token = secrets.token_hex(16)
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))

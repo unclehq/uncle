@@ -32,7 +32,7 @@ old_record() {  # state_dir log elapsed status speculative -> the jq pipeline, u
            usage_scope:($r.usage_scope // "last reported result"),
            usage_source:($r.usage_source // null),
            input_includes_cache:($r.input_includes_cache // false),
-           log:$log}' "$log" > "$tmp" || { rm -f "$tmp"; return 0; }
+           log:$log}' "$log" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
     python3 "$ROOT/scripts/lib/usage-cost.py" "$tmp" || true
     mv "$tmp" "$tmp.json"
 }

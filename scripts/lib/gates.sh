@@ -579,8 +579,9 @@ document_budget_source() {
 document_budget_override_path() {
     local source fingerprint key
     source="$(document_budget_source "$1")"
-    fingerprint="$(cksum 2>/dev/null < "$source" | awk '{print $1 "-" $2}')" || fingerprint=missing
-    [[ -n "$fingerprint" ]] || fingerprint=missing
+    local _ck _size
+    _ck="$(cksum 2>/dev/null < "$source")" || _ck=""      # "crc size": the digest and length, joined by a dash without awk
+    if [[ -n "$_ck" ]]; then _size="${_ck#* }"; fingerprint="${_ck%% *}-${_size%% *}"; else fingerprint=missing; fi
     uncle_sanitize_to key "${1##*/}" "azAZ09._-"
     printf '%s/document-budgets/%s-%s\n' "${STATE_DIR:-.uncle/workflow}" "$fingerprint" "$key"
 }
@@ -593,16 +594,29 @@ document_budget() {
     defaults="$(document_budget_defaults "$file")" || return 1
     read -r floor ceiling multiplier line_floor line_ceiling <<< "$defaults"
     source="$(document_budget_source "$file")"
+    # Every artifact shares one integer rule (DOCUMENT_BUDGET_RULE), so the arithmetic is shell arithmetic; the original awk remains for
+    # a rule that is not plain integers. This runs for every prompt and every document check: it was wc, awk and a second awk each time.
     if [[ -s "$source" ]]; then
-        source_bytes=$(wc -c < "$source")
+        local LC_ALL=C _c      # bytes, not characters, for ${#_c}
+        IFS= read -r -d '' _c < "$source" || true
+        source_bytes=${#_c}
     fi
-    read -r max_bytes max_lines <<< "$(awk -v n="$source_bytes" -v m="$multiplier" \
-        -v lo="$floor" -v hi="$ceiling" -v ll="$line_floor" -v lh="$line_ceiling" '
-        BEGIN {
-            b=n*m; if(b<lo)b=lo; if(b>hi)b=hi;
-            l=int((b*ll+lo-1)/lo); if(l>lh)l=lh;
-            printf "%.0f %.0f\n", b, l;
-        }')"
+    if [[ "$floor$ceiling$multiplier$line_floor$line_ceiling" =~ ^[0-9]+$ && ${#source_bytes} -le 12 && "$floor" -gt 0 ]] \
+            && [[ "$floor $ceiling $multiplier $line_floor $line_ceiling" =~ ^[0-9]{1,6}\ [0-9]{1,6}\ [0-9]{1,6}\ [0-9]{1,6}\ [0-9]{1,6}$ ]]; then
+        max_bytes=$(( source_bytes * multiplier ))
+        (( max_bytes >= floor )) || max_bytes=$floor
+        (( max_bytes <= ceiling )) || max_bytes=$ceiling
+        max_lines=$(( (max_bytes * line_floor + floor - 1) / floor ))
+        (( max_lines <= line_ceiling )) || max_lines=$line_ceiling
+    else
+        read -r max_bytes max_lines <<< "$(awk -v n="$source_bytes" -v m="$multiplier" \
+            -v lo="$floor" -v hi="$ceiling" -v ll="$line_floor" -v lh="$line_ceiling" '
+            BEGIN {
+                b=n*m; if(b<lo)b=lo; if(b>hi)b=hi;
+                l=int((b*ll+lo-1)/lo); if(l>lh)l=lh;
+                printf "%.0f %.0f\n", b, l;
+            }')"
+    fi
     uncle_upper_to key "${file%.md}" ".-"
     byte_key="WORKFLOW_DOC_MAX_BYTES_$key"
     line_key="WORKFLOW_DOC_MAX_LINES_$key"
@@ -611,7 +625,9 @@ document_budget() {
     case "$max_bytes$max_lines" in
         *[!0-9]*|"") echo "Document budgets for $file must be positive integers." >&2; return 1 ;;
     esac
-    if ! awk -v b="$max_bytes" -v l="$max_lines" 'BEGIN {exit !(b>0 && l>0)}'; then
+    if [[ ${#max_bytes} -le 15 && ${#max_lines} -le 15 ]]; then
+        (( 10#$max_bytes > 0 && 10#$max_lines > 0 )) || { echo "Document budgets for $file must be positive integers." >&2; return 1; }
+    elif ! awk -v b="$max_bytes" -v l="$max_lines" 'BEGIN {exit !(b>0 && l>0)}'; then
         echo "Document budgets for $file must be positive integers." >&2; return 1
     fi
     local saved_path saved_bytes saved_lines
@@ -622,7 +638,12 @@ document_budget() {
             echo "Invalid saved document budget: $saved_path" >&2
             return 1
         fi
-        read -r max_bytes max_lines <<< "$(awk -v b="$max_bytes" -v l="$max_lines" -v sb="$saved_bytes" -v sl="$saved_lines" 'BEGIN {printf "%.0f %.0f", (b>sb?b:sb), (l>sl?l:sl)}')"
+        if [[ ${#max_bytes} -le 15 && ${#max_lines} -le 15 && ${#saved_bytes} -le 15 && ${#saved_lines} -le 15 ]]; then
+            max_bytes=$(( 10#$max_bytes > 10#$saved_bytes ? 10#$max_bytes : 10#$saved_bytes ))     # also drops leading zeros, as %.0f did
+            max_lines=$(( 10#$max_lines > 10#$saved_lines ? 10#$max_lines : 10#$saved_lines ))
+        else
+            read -r max_bytes max_lines <<< "$(awk -v b="$max_bytes" -v l="$max_lines" -v sb="$saved_bytes" -v sl="$saved_lines" 'BEGIN {printf "%.0f %.0f", (b>sb?b:sb), (l>sl?l:sl)}')"
+        fi
     fi
     printf '%s %s\n' "$max_bytes" "$max_lines"
 }
@@ -644,7 +665,13 @@ document_budget_prompt() {
     while IFS= read -r file; do
         limits="$(document_budget "$file")" || return 1
         read -r bytes lines <<< "$limits"
-        read -r target target_lines <<< "$(awk -v b="$bytes" -v l="$lines" 'BEGIN {b=int(b*.75); l=int(l*.75); printf "%.0f %.0f", (b<1?1:b), (l<1?1:l)}')"
+        if [[ ${#bytes} -le 15 && ${#lines} -le 15 && "$bytes$lines" =~ ^[0-9]+$ ]]; then
+            target=$(( 10#$bytes * 3 / 4 )); target_lines=$(( 10#$lines * 3 / 4 ))      # int(x * .75) for integers
+            (( target >= 1 )) || target=1
+            (( target_lines >= 1 )) || target_lines=1
+        else
+            read -r target target_lines <<< "$(awk -v b="$bytes" -v l="$lines" 'BEGIN {b=int(b*.75); l=int(l*.75); printf "%.0f %.0f", (b<1?1:b), (l<1?1:l)}')"
+        fi
         printf -- '- %s: at most %s UTF-8 bytes and %s lines. Draft toward %s bytes and %s lines to leave revision room.\n' "$file" "$bytes" "$lines" "$target" "$target_lines"
     done < <(stage_documents "$stage")
     if [[ "$stage" == baseline && "${WORKFLOW_DOC_BUDGET_ENFORCE:-0}" != "1" ]]; then

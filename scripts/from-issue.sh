@@ -239,7 +239,19 @@ PY
 # source root; no untracked files; no HEAD commits missing from every remote ref.
 # (Tracked changes are refused by worktree_remove's git call.)
 auto_removal_refusal() {
-    local dir="$1" src="$2" rdir rsrc managed rhome untracked ahead branch pushed ref
+    local dir="$1" src="$2" rdir untracked ahead branch pushed ref out
+    out="$(worktree_path_refusal "$dir" "$src")"
+    if [[ -n "$out" ]]; then
+        printf '%s\n' "$out"; return 0
+    fi
+    rdir="$(worktree_real "$dir")" || rdir=""
+    auto_removal_content_refusal "$dir" "$rdir"
+}
+
+# worktree_path_refusal <dir> <source-root> — the path, symlink and managed-root
+# checks only; prints a reason or nothing.
+worktree_path_refusal() {
+    local dir="$1" src="$2" rdir rsrc managed rhome
     rdir="$(worktree_real "$dir")" || rdir=""
     rsrc="$(worktree_real "$src")" || rsrc=""
     if [[ -z "$rdir" || -z "$rsrc" ]]; then
@@ -264,6 +276,13 @@ auto_removal_refusal() {
     if [[ "$dir" != "$rdir" && -L "$dir" ]]; then
         echo "the worktree path is a symlink"; return 0
     fi
+    return 0
+}
+
+# auto_removal_content_refusal <dir> <resolved-dir> — untracked, tracked-change
+# and unpushed-commit checks (the PR path's content guards).
+auto_removal_content_refusal() {
+    local dir="$1" rdir="$2" untracked ahead branch pushed ref
     if ! untracked="$(git -C "$rdir" status --porcelain --untracked-files=all 2>/dev/null)"; then
         echo "the worktree status cannot be read"; return 0
     fi
@@ -291,6 +310,98 @@ auto_removal_refusal() {
     if [[ "$pushed" != 1 ]]; then
         [[ "$ahead" != 0 ]] || ahead="$(git -C "$rdir" rev-list --count HEAD 2>/dev/null || echo 1)"
         echo "the worktree has $ahead commit(s) not pushed to a remote"; return 0
+    fi
+    return 0
+}
+
+# no_pr_report <branch> <removed|kept> <switched|not switched> <dir> — the one
+# summary line of a no-PR COMPLETE run, plus the manual commands that apply.
+no_pr_report() {
+    local b="$1" wt="$2" sw="$3" dir="$4"
+    echo "Branch $b: worktree $wt; project $sw."
+    if [[ "$sw" == "not switched" && -n "$b" ]]; then
+        echo "Switch the project with: git switch $b"
+    fi
+    if [[ "$wt" == kept ]]; then
+        echo "Worktree $dir kept; remove with: scripts/lib/worktrees.sh remove $dir"
+    fi
+    return 0
+}
+
+# finalize_no_pr_worktree <dir> <source-root> — COMPLETE run, no PR: commit the
+# worktree's output on its branch, remove the worktree, switch the source
+# checkout to the branch. Every doubt keeps the worktree. Always returns 0 (the
+# run's exit status is not altered). Callers gate on WORKTREE=1, COMPLETE, no PR.
+finalize_no_pr_worktree() {
+    local dir="$1" src="$2" branch="" rdir="" reason="" nfiles=0 srcbranch="" left
+
+    branch="$(git -C "$dir" branch --show-current 2>/dev/null || true)"
+    reason="$(worktree_path_refusal "$dir" "$src")"
+    rdir="$(worktree_real "$dir" 2>/dev/null || true)"
+    if [[ -z "$reason" ]] && ! worktree_registered "$src" "$dir"; then
+        reason="the worktree is not registered with the source checkout"
+    fi
+    if [[ -z "$reason" && -z "$branch" ]]; then
+        reason="the worktree has no current branch (detached HEAD)"
+    fi
+    # Leave the directory about to be deleted; an unreachable source keeps it.
+    if [[ -z "$reason" ]] && ! cd "$src" 2>/dev/null; then
+        reason="the source checkout is unreachable"
+    fi
+    if [[ -n "$reason" ]]; then
+        echo "Not finalizing $dir: $reason."
+        no_pr_report "$branch" kept "not switched" "$dir"; return 0
+    fi
+
+    # `add -A -- . ':(exclude)...'` errors when the excluded path is gitignored
+    # (the usual `.uncle/*` rule), so stage everything, then unstage run state.
+    if ! git -C "$dir" add -A; then
+        echo "Commit failed: git add refused in $dir."
+        no_pr_report "$branch" kept "not switched" "$dir"; return 0
+    fi
+    git -C "$dir" reset -q -- .uncle/workflow >/dev/null 2>&1 || true
+    if ! git -C "$dir" diff --cached --quiet; then
+        nfiles="$(git -C "$dir" diff --cached --name-only | wc -l | tr -d ' ')"
+        if ! git -C "$dir" commit -q -m "uncle: issue ${ISSUE_NUM:-0} change"; then
+            echo "Commit failed in $dir; nothing was removed."
+            no_pr_report "$branch" kept "not switched" "$dir"; return 0
+        fi
+        echo "Committed $nfiles file(s) on branch $branch."
+    fi
+    left="$(git -C "$dir" status --porcelain --untracked-files=all -- . ':(exclude).uncle/workflow' 2>&1)" || left="status unreadable"
+    if [[ -n "$left" ]]; then
+        echo "Not removing $dir: the worktree is not clean after the commit."
+        no_pr_report "$branch" kept "not switched" "$dir"; return 0
+    fi
+
+    if [[ "$branch" == -* ]] || ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+        reason="the branch name '$branch' is not a safe branch name"
+    else
+        srcbranch="$(git -C "$src" branch --show-current 2>/dev/null || true)"
+        if [[ -z "$srcbranch" ]]; then
+            reason="the source checkout is not on a named branch"
+        elif [[ -n "$(git -C "$src" status --porcelain --untracked-files=all 2>&1)" ]]; then
+            reason="the source checkout has uncommitted changes"
+        elif ! git -C "$src" merge-base --is-ancestor HEAD "refs/heads/$branch" 2>/dev/null; then
+            reason="the source checkout's branch '$srcbranch' is not an ancestor of $branch"
+        fi
+    fi
+    if [[ -n "$reason" ]]; then
+        echo "Not removing $dir or switching the project: $reason."
+        no_pr_report "$branch" kept "not switched" "$dir"; return 0
+    fi
+
+    if ! worktree_remove "$rdir" || [[ -e "$rdir" ]]; then
+        no_pr_report "$branch" kept "not switched" "$dir"; return 0
+    fi
+    if [[ "$srcbranch" == "$branch" ]]; then
+        no_pr_report "$branch" removed switched "$dir"; return 0
+    fi
+    if git -C "$src" switch "$branch" >/dev/null 2>&1; then
+        no_pr_report "$branch" removed switched "$dir"
+    else
+        echo "git switch $branch failed in $src."
+        no_pr_report "$branch" removed "not switched" "$dir"
     fi
     return 0
 }
@@ -861,15 +972,9 @@ case "$MODE" in
                     # worktree_remove's own error is left visible above this line.
                     echo "Worktree $WORKTREE_DIR kept; remove with: scripts/lib/worktrees.sh remove $WORKTREE_DIR"
                 fi
-            # The TUI drives this script through a pipe and cannot answer;
-            # unattended runs have nobody to ask. Both get the command instead.
-            elif [[ -t 0 && "$UNATTENDED" != 1 ]]; then
-                cd "$SOURCE_PROJECT_ROOT"
-                # A refused removal (dirty tree) keeps the worktree and its
-                # reason; the run itself succeeded, so the exit status stays 0.
-                offer_worktree_removal "$WORKTREE_DIR" || true
             else
-                echo "Worktree $WORKTREE_DIR kept; remove with: scripts/lib/worktrees.sh remove $WORKTREE_DIR"
+                # No PR: no prompt in any mode; commit, remove, switch.
+                finalize_no_pr_worktree "$WORKTREE_DIR" "$SOURCE_PROJECT_ROOT"
             fi
         fi
         ;;

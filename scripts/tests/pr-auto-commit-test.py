@@ -257,6 +257,20 @@ class AutomaticCommitTests(Fixture):
         self.freeze()
         self.assert_created_automatically(self.handoff())
 
+    def test_tracked_root_final_audit_leaves_a_clean_checkout(self):
+        # A project that already tracks a root FINAL_AUDIT.md (an earlier run's)
+        # kept that stale copy in the checkout while HEAD moved to the new one,
+        # so the finished worktree read as modified and was never removed.
+        (self.repo / 'FINAL_AUDIT.md').write_text('STALE\n')
+        self.git('add', 'FINAL_AUDIT.md')
+        self.git('commit', '--no-gpg-sign', '-qm', 'track an old audit')
+        self.original = self.git('rev-parse', 'HEAD')
+        self.git('push', '-q', 'origin', 'main')
+        self.freeze()
+        self.assert_created_automatically(self.handoff())
+        self.assertEqual((self.repo / 'FINAL_AUDIT.md').read_text(), 'READY\n')
+        self.assertEqual(self.git('status', '--porcelain', '--untracked-files=no'), '')
+
     def test_t6_consent_precedes_the_commit(self):
         # B-9 / I-5: declining publication leaves no commit and no commit-tree call.
         self.freeze()

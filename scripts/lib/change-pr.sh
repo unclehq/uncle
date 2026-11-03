@@ -568,7 +568,12 @@ def snapshot(audit=False, excludes=(), attestation=False):
             # flag instead, so a snapshot can be taken with or without it.
             if (not raw
                     or (raw.startswith(b'.uncle/') and not raw.startswith(b'.uncle/docs/') and raw not in trust_root)
-                    or raw == b'.uncle/docs/FINAL_AUDIT.md'):
+                    or raw == b'.uncle/docs/FINAL_AUDIT.md'
+                    # A root FINAL_AUDIT.md is the driver's copy of that audit
+                    # (an earlier run's, when the project tracks one). It is
+                    # replaced by the audit entry below, so its checkout bytes
+                    # must not move the snapshot when the driver refreshes it.
+                    or raw == b'FINAL_AUDIT.md'):
                 continue
             name = os.fsdecode(raw)
             # The attestation names the tree it is committed into, so the
@@ -835,6 +840,19 @@ def prepare_commit(j):
 
 
 SIGNING_ERROR = re.compile(r'(?i)sign|gpg|pinentry|ssh-keygen')
+
+
+def sync_audit_copy():
+    # The handoff tree carries the audit as a root FINAL_AUDIT.md, taken from
+    # .uncle/docs/ rather than from the working tree. When the project already
+    # tracks a root FINAL_AUDIT.md (an earlier run's), the checkout keeps that
+    # stale copy while the index and HEAD move to the new one, so the tree
+    # reads as modified and the finished worktree is never removed. Write the
+    # file the driver just committed; no other path is touched. A checkout
+    # with no root copy is left without one: it would read as an unreviewed
+    # new file.
+    if os.path.lexists('FINAL_AUDIT.md') and git('ls-files', '--', 'FINAL_AUDIT.md'):
+        git('checkout-index', '-f', '--', 'FINAL_AUDIT.md')
 
 
 def automatic_commit(j):
@@ -1525,6 +1543,7 @@ def handoff(j):
         # Update only the index after the exact tree was approved; never reset,
         # stash or overwrite working files. Resuming repeats this safely.
         git('read-tree', j['commit_tree'])
+        sync_audit_copy()
         validate(j)
         remote = remote_sha(j)
         if remote != j['intended_head']:

@@ -519,6 +519,14 @@ def snapshot(audit=False, excludes=(), attestation=False):
         head_paths = set(subprocess.check_output(
             ['git', 'ls-tree', '-rz', '--name-only', 'HEAD']).split(b'\0'))
         paths.update(head_paths)
+        # .uncle/docs/ is always part of the tree (the canonical block re-includes it with `!.uncle/docs/`). A bare `.uncle` line
+        # appended to .gitignore mid-run (by a test or a first-run refresh) ignores the whole directory, which hid every approved
+        # document from the audit-time snapshot and made `bind` refuse the finished audit for a change nobody made.
+        docs_dir = Path('.uncle/docs')
+        if docs_dir.is_dir():
+            for found in docs_dir.rglob('*'):
+                if found.is_file() or found.is_symlink():
+                    paths.add(os.fsencode(found.as_posix()))
         paths.discard(b'')
         # The trust root is the one .uncle/ file a person force-adds on purpose. It is ignored and under
         # .uncle/, so the rules below would drop it and the commit would delete a tracked trust root.
@@ -538,7 +546,8 @@ def snapshot(audit=False, excludes=(), attestation=False):
             if ignored.returncode not in (0, 1):
                 raise ValueError('git check-ignore failed: '
                                  + ignored.stderr.decode('utf-8', 'replace').strip())
-            paths -= set(ignored.stdout.split(b'\0')) - trust_root
+            keep = trust_root | {x for x in paths if x.startswith(b'.uncle/docs/')}
+            paths -= set(ignored.stdout.split(b'\0')) - keep
         entries = []
         batched = []
         for raw in sorted(paths):

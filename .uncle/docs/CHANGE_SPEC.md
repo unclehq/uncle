@@ -1,74 +1,61 @@
-# Change Spec - Issue 141
+# Change Spec
 
-Omitted sections: Performance, Security (beyond invariants), Migration (none), Prototype isolation (not a prototype)
+Omitted sections: Performance (none); Security (no new surface beyond input parsing); Migration (none); Prototype isolation (not applicable)
 
 ## 1. Change type
 Feature.
 
 ## 2. Problem statement
-A COMPLETE `--worktree` run with no PR leaves its result uncommitted in a sibling worktree and the main project looks untouched (CHANGE_REQUEST.md).
+A new change request silently replaces a leftover `.uncle/docs/CHANGE_REQUEST.md`, so the user may run a different change than intended.
 
 ## 3. Current behavior
-Baseline B-2, B-3.
+See baseline B1.
 
 ## 4. Desired behavior
-After COMPLETE with no created PR, in every mode (attended, TUI, unattended) with no prompt: commit all run output on the run branch, remove the worktree, switch the main project to the branch, and print a plain summary. Any doubt keeps the worktree and prints a manual command.
+When seeding a new change request in change mode and the request file already exists (and is not the same in-flight issue run), tell the user, ask to proceed; yes proceeds, otherwise stop with the file and run state untouched.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| S-1 | ADD | COMPLETE, no PR, clean main on a branch that is an ancestor of the run branch | Worktree kept | Uncommitted/untracked output committed, worktree removed, main switched to run branch, change visible | worktree-run-test.sh case no-pr-switch |
-| S-2 | MODIFY | COMPLETE, no PR, tty attended | y/N prompt | No prompt; S-1 behavior | pty case |
-| S-3 | MODIFY | COMPLETE, no PR, `--unattended` or no tty | Kept, prints remove command | S-1 behavior | unattended case |
-| S-4 | ADD | Main project has uncommitted changes | n/a | Worktree kept (work committed on branch), branch name and `git switch <branch>` printed, summary says not switched | dirty-main case |
-| S-5 | ADD | Main on a branch whose tip is not an ancestor of the run branch | n/a | Same refusal as S-4 | other-branch case |
-| S-6 | ADD | `git worktree remove` fails | n/a | Worktree kept, manual remove command printed, exit status unchanged | failed-removal case |
-| S-7 | ADD | `git switch` fails after removal | n/a | Branch and commit intact, manual `git switch` printed, exit unchanged | switch-fail case |
-| S-8 | ADD | Commit fails | n/a | Worktree kept, manual commands printed, no removal | commit-fail case |
-| S-9 | ADD | Any no-PR outcome | n/a | Final output states branch name, worktree removed or kept, project switched or not | all cases assert text |
-| S-10 | PRESERVE | PR created (B-1), driver failure (B-6), non-COMPLETE (B-4) | as baseline | unchanged; no commit, no switch | existing cases |
+| S1 | ADD | Interactive, file exists, answer `y`/`yes` (case-insensitive) | Overwrites silently | Message names the file, prompt shown, run proceeds and file is replaced | AC-1 test |
+| S2 | ADD | Interactive, file exists, answer anything else, empty, or EOF | Overwrites | Exit nonzero with message; file bytes and run state unchanged | AC-2 test |
+| S3 | PRESERVE | No existing file | Written, no prompt | Same, no prompt | AC-3 test |
+| S4 | ADD | `UNCLE_UNATTENDED=1`, file exists | Overwrites | No read from stdin; stop nonzero with clear message unless `UNCLE_REPLACE_CHANGE_REQUEST=1`, then proceed | AC-4 test |
+| S5 | PRESERVE | Same-issue in-flight run (seed_is_current) | Resume, file untouched | Same, no prompt | AC-5 test |
+| S6 | PRESERVE | `UNCLE_NEW_WORKFLOW=1` fresh start (old evidence archived first) | Archive then reseed | Same, no prompt | AC-5 test |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| N-1 | NEW | A worktree is never removed unless HEAD commits contain all its tracked and non-ignored untracked content | no-PR finalization | commit step then clean-status check before removal | tests assert tree clean and commit contains file |
-| N-2 | NEW | Main project is never switched when dirty or on a non-ancestor branch | no-PR finalization | pre-removal check | S-4, S-5 tests |
-| N-3 | EXISTING | Run branch is never deleted | all | no `branch -d` anywhere | branch-exists asserts |
-| N-4 | EXISTING | Exit status equals driver status | all | I-1 | status asserts |
-| N-5 | EXISTING | Removal guards (lock, COMPLETE, managed root) apply | all | worktree_remove, path guards | existing tests |
-| N-6 | EXISTING | PR-created path is unchanged | PR runs | separate branch of if | B-1 tests |
+| V1 | NEW | An existing CHANGE_REQUEST.md is never replaced without an explicit yes or explicit unattended opt-in | from-issue.sh change mode | confirm function before write | AC-1..4 |
+| V2 | NEW | Declining or unattended refusal leaves CHANGE_REQUEST.md and `.uncle/workflow` state byte-identical | same | guard runs before archive, write_origin, and workflow launch | AC-2, AC-4 |
+| V3 | EXISTING | Seed-only and stdin imports never overwrite | same | noclobber / EXISTS | existing tests |
 
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-No new flags; `scripts/lib/worktrees.sh remove` CLI unchanged. `offer_worktree_removal` stays defined (sourced by tests).
+No-file and resume flows unchanged. Callers with closed or empty stdin now stop instead of overwriting.
 
 ## 8. Error behavior
-See S-4 to S-8; every failure keeps what remains and prints a manual command; exit status unchanged.
-
-## 10. Security
-Never use `--force`; never delete the branch; refuse paths outside the managed root or symlinked worktree paths.
+Decline/EOF/unattended-without-opt-in: message on stderr naming the file and (unattended) the env opt-in, exit 1.
 
 ## 12. Rollback
-Revert the commit; worktrees already removed are recoverable from the kept branch (`git worktree add <dir> <branch>`).
+Revert the from-issue.sh guard and test; no persisted state.
 
 ## 14. Non-goals
-PR creation changes; deleting branches; pushing; force removal; stashing the main project's changes; recording the run's base branch.
+Archiving the previous request (open question: deferred, not requested as required); changing stdin import behavior; prompting in the new-app flow.
 
 ## 15. Assumptions
-- Open question 1 resolved: commit is automatic. Open question 2 resolved: applies to attended and unattended runs.
-- Ignored files in the worktree are not committed; git removes them with the worktree.
-- The commit honors the user's git signing config; a signing failure is a commit failure (S-8).
-- "Dirty main" means any non-ignored porcelain entry (conservative).
+Yes = `y`/`yes` case-insensitive after trimming; empty = no. Unattended default is stop, opt-in via `UNCLE_REPLACE_CHANGE_REQUEST=1`. The worktree may already exist when declining; it is not modified beyond that.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | A COMPLETE --worktree run with no PR, clean main project: all output (including untracked files) is committed on the run branch, the worktree directory is gone, the main project is on the run branch and shows the changed file, with no prompt in attended, pty and unattended modes. | worktree-run-test.sh new cases (pty and unattended included) asserting dir absent, branch checked out in main, file content, commit contains the file |
-| AC-2 | A dirty main project, or main on a branch not contained in the run branch, leaves the worktree in place (run output already committed), prints the branch name and `git switch <branch>`, and does not switch. | worktree-run-test.sh dirty-main and other-branch cases |
-| AC-3 | A failed worktree removal keeps the worktree and prints the manual removal command; a failed commit keeps the worktree; a failed switch after removal keeps the branch and prints the switch command. The script exit status equals the driver's in all cases. | worktree-run-test.sh failed-removal, commit-fail, switch-fail cases with status asserts |
-| AC-4 | Final output for every no-PR outcome states the branch name, whether the worktree was removed, and whether the project was switched. | expect_out assertions in each new case |
-| AC-5 | The branch always survives; PR-created, non-COMPLETE and driver-failure behaviors are unchanged and no commit/switch happens in them. | existing worktree-run-test.sh PR cases plus new assertions; bash scripts/run-shell-tests.sh |
-| AC-6 | scripts/README.md describes the new no-PR behavior and no longer documents the y/N prompt as the no-PR flow. | manual read of README section; grep for stale prompt text |
+| AC-1 | Interactive run, existing request file, answer y/yes (any case): message names the file, run proceeds and the new request is written. | New shell test feeds `y`, `YES` on stdin; asserts exit 0 and new content. |
+| AC-2 | Interactive run, existing file, answer n, other text, empty line, or EOF: run stops nonzero and file bytes and workflow state are unchanged. | Shell test with hash comparison of file and `.uncle/workflow` inventory. |
+| AC-3 | No existing file: no prompt is printed and behavior is unchanged. | Shell test asserts no prompt text and file written; existing issue-document-test.sh still passes. |
+| AC-4 | With UNCLE_UNATTENDED=1 the run never reads stdin: it stops with a clear message naming UNCLE_REPLACE_CHANGE_REQUEST=1 unless that is set, in which case it proceeds. Documented in scripts/README.md. | Shell test with stdin closed/hanging pipe under timeout; both cases; README grep. |
+| AC-5 | In-flight same-issue resume and UNCLE_NEW_WORKFLOW=1 fresh start do not prompt. | Shell test or existing worktree-auto-seed-test.sh plus new case. |
+| AC-6 | Full shell and Python suites show no new failures versus baseline. | Driver runs bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh. |
 

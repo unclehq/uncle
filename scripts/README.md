@@ -257,6 +257,21 @@ change workflow inside it:
 - `--worktree` implies `--change`; with `--new` it exits 1 before fetching.
 - An existing branch or a non-empty target directory exits 1 before anything is
   written: no worktree, no `CHANGE_REQUEST.md`.
+- **Existing change request prompt.** In change mode, when a `CHANGE_REQUEST.md`
+  with at least one byte already exists and the run in flight is not this issue's
+  (not a resume), `from-issue.sh` asks on stderr, naming the file path:
+  `Proceed with the new change request and replace it? [y/N]`. The answer is read
+  from a terminal stdin only: `y` or `yes` (case-insensitive, whitespace and CR
+  ignored) replaces it; anything else, empty or EOF stops with exit 1 and leaves
+  the file and `.uncle/workflow` unchanged. A zero-byte file counts as absent
+  (no prompt); a whitespace-only file counts as existing. No prompt is shown for
+  a resume, `UNCLE_NEW_WORKFLOW=1` or `--seed-only` (which keeps its existing
+  no-overwrite behavior).
+- **Unattended default and opt-in.** With `--unattended` or `UNCLE_UNATTENDED=1`,
+  or when stdin is not a terminal, the prompt is never shown or read: the script
+  refuses with exit 1 and a stderr message naming `UNCLE_REPLACE_CHANGE_REQUEST=1`.
+  Setting `UNCLE_REPLACE_CHANGE_REQUEST=1` (exactly `1`; `0`, `true`, empty and
+  anything else refuse) permits replacement without a prompt, interactively or not.
 - `.uncle/config` is copied into the worktree byte-for-byte when the project has
   one, so the run uses the same runner and model settings. `.uncle/workflow`
   (lock, state, approvals, origin) is per worktree, so two runs never share

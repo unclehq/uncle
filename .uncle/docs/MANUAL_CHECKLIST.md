@@ -2,80 +2,85 @@
 
 ## Coverage
 
-### MC-100
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: In a scratch git repo (clean main on a branch that is an ancestor of the run branch), run a real `--worktree` change via scripts/from-issue.sh that completes with no PR, from an interactive terminal in attended mode, with an untracked file among the output.
-- Expected result: No y/N prompt appears; the worktree dir is gone, the main project is on the run branch and shows the changed and untracked files, and exactly one line `Branch <b>: worktree removed; project switched.` prints.
-- Evidence to capture: Terminal transcript, `git branch --show-current`, `ls` of the worktree path, and `git show --stat HEAD` in main.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-101
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Repeat the no-PR COMPLETE run in a fresh scratch repo with `--unattended` and with stdin piped (no tty).
-- Expected result: Same outcome as attended: commit made, worktree removed, main switched, the success summary line printed once, no prompt, and the old `Worktree ... kept; remove with:` line absent.
-- Evidence to capture: Output of both runs and `git log -1 --stat` plus `git branch --show-current` in the main project.
-- Actual result: 
-- Status: NOT RUN
-
 ### MC-102
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: dir:scratch-repo-decline
 - Depends on: none
-- Exact action: In a fresh scratch repo, make the main project dirty (once with a modified tracked file, once with an untracked-only file), then run a no-PR COMPLETE worktree run.
-- Expected result: The worktree is kept, main is not switched and the dirty file is untouched, and the summary line is `Branch <b>: worktree kept; project not switched.` with `git switch <b>` and `scripts/lib/worktrees.sh remove <dir>` printed.
-- Evidence to capture: Output for both variants, `git status` in main, and a listing showing the worktree dir exists.
+- Exact action: In a scratch repo with an existing non-empty CHANGE_REQUEST.md, run from-issue.sh change mode on a TTY and answer 'n', then empty Enter, then Ctrl-D (EOF), then 'y please'. Record sha256 of the file and a listing of .uncle/workflow before and after each run.
+- Expected result: Each run exits nonzero with a message saying the existing request was left unchanged; the file hash and .uncle/workflow contents are identical to before.
+- Evidence to capture: Transcripts, exit codes, and before/after hashes and listings.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-103
+### MC-104
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: dir:scratch-repo-unattended
 - Depends on: none
-- Exact action: In a scratch repo, put main on a branch that is not an ancestor of the run branch, then run a no-PR COMPLETE worktree run. Separately, detach main's HEAD and repeat.
-- Expected result: Both cases keep the worktree and do not switch. The summary says `worktree kept; project not switched`, and `git switch <b>` is printed. Main's branch or detached HEAD is unchanged.
-- Evidence to capture: Output, `git rev-parse HEAD` and `git branch --show-current` in main before and after.
+- Exact action: With an existing CHANGE_REQUEST.md, run from-issue.sh change mode once with the --unattended flag and once with UNCLE_UNATTENDED=1. Use stdin from a pipe that never writes, under a 10s timeout. Run each both without UNCLE_REPLACE_CHANGE_REQUEST and with UNCLE_REPLACE_CHANGE_REQUEST=1.
+- Expected result: Without the opt-in, each run exits 1 within the timeout with a stderr message containing UNCLE_REPLACE_CHANGE_REQUEST=1, and the file is unchanged. With the exact value 1, each run proceeds and replaces the file. No run hangs.
+- Evidence to capture: Exit codes, elapsed times, stderr text and file hashes for all four runs.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-105
+- Required for acceptance: YES
+- Exclusive resources: dir:scratch-repo-optin
+- Depends on: none
+- Exact action: With an existing CHANGE_REQUEST.md and stdin not a TTY, run from-issue.sh change mode with request text piped in. Then try UNCLE_REPLACE_CHANGE_REQUEST set to 0, true, and empty on a TTY-less run. Finally set it to exactly 1 on a TTY.
+- Expected result: Piped runs refuse with exit 1 and the opt-in message without consuming the piped input. The values 0, true and empty refuse. Exactly 1 proceeds with no prompt even on a TTY.
+- Evidence to capture: Exit codes, stderr and file hashes for each run.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-106
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: dir:scratch-repo-skip
 - Depends on: none
-- Exact action: Run worktree flows where the run ends with a PR created, where the driver exits non-zero, and where state is not COMPLETE. Check a source checkout that is already on the run branch.
-- Expected result: The PR run auto-removes the worktree as before with no commit or switch. Failure and non-COMPLETE runs commit, remove and switch nothing, and the exit status equals the driver's. A source already on the run branch skips the switch and reports `project switched`. The branch survives everywhere.
-- Evidence to capture: Output, exit codes, and `git branch --list` and `git log` for each scenario.
+- Exact action: With an existing CHANGE_REQUEST.md, run from-issue.sh with UNCLE_NEW_WORKFLOW=1, with --seed-only, and as a resume of the same in-flight issue, using a TTY for each.
+- Expected result: No prompt appears in any run. The resume leaves the file untouched, --seed-only does not overwrite the file, and the NEW_WORKFLOW run archives old evidence and reseeds.
+- Evidence to capture: Terminal output and file hashes for each run.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-201
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run the same no-PR COMPLETE scenario with main dirty: once with a modified tracked file in main and once with an untracked-only file in main (reset between runs). Then repeat with main on a branch that is not an ancestor of the run branch, and with main on a detached HEAD.
-- Expected result: Each case keeps the worktree, does not switch main, leaves the main file edits intact, and prints exactly one 'Branch <b>: worktree kept; project not switched.' line plus the literal `git switch <b>` command; the branch still exists.
-- Evidence to capture: Transcript for each case, git status and branch in main after each, existence of the worktree directory and run branch.
-- Actual result: 
-- Status: NOT RUN
+## Invariants
 
 ### MC-203
+- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run the no-PR COMPLETE scenario with a rejecting pre-commit hook in the repo, then with a worktree containing untracked work and a source checkout made unreachable before finalization (or worktree path replaced by a symlink).
-- Expected result: Hook rejection keeps the worktree with its files intact, prints 'worktree kept; project not switched.' and the remove command, and no --no-verify is used. The symlink/unreachable cases commit nothing, keep the worktree, and print the keep summary and remove command.
-- Evidence to capture: Transcripts, worktree git status and HEAD sha before and after, worktree directory presence.
+- Exact action: Run the same unattended invocation with UNCLE_REPLACE_CHANGE_REQUEST=1, then with values 0, true, and empty, and also run interactively with UNCLE_REPLACE_CHANGE_REQUEST=1.
+- Expected result: Exactly the value 1 replaces the file without any prompt (interactive and unattended); 0, true and empty refuse with exit 1 and leave the file unchanged.
+- Evidence to capture: Transcript per value with exit code and file hash comparison.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-204
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Run from-issue.sh change mode with a non-TTY stdin (piped content such as 'y') and an existing non-empty CHANGE_REQUEST.md, without the opt-in.
+- Expected result: The guard refuses with exit 1 and the opt-in message, never consuming the piped input as an answer; file unchanged.
+- Evidence to capture: Transcript showing exit code, stderr, and that the file hash is unchanged.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-205
+- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run the no-PR COMPLETE scenario on a pty (attended) and with `--unattended`/no tty, in a clean main, and also with main already on the run branch and with a clean-tree worktree (nothing to commit).
-- Expected result: No 'Remove worktree ...? [y/N]' prompt and no old 'kept; remove with:' line in any mode; results match MC-200. A clean tree creates no commit (HEAD unchanged) and still removes and switches; main already on the run branch reports 'project switched' without error.
-- Evidence to capture: Transcripts of each mode and HEAD sha before and after the clean-tree run.
+- Exact action: Run from-issue.sh change mode where no prompt should occur: no CHANGE_REQUEST.md, a zero-byte one, UNCLE_NEW_WORKFLOW=1 fresh start, an in-flight same-issue resume, and SEED_ONLY=1 with an existing file.
+- Expected result: No prompt text appears in any case; no-file and zero-byte cases write the file, resume leaves it untouched, NEW_WORKFLOW archives then reseeds, and SEED_ONLY leaves the existing file unmodified.
+- Evidence to capture: Per-case stderr output (no prompt phrase) and resulting file state.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-206
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Place a whitespace-only CHANGE_REQUEST.md, then a symlink (to a separate target file), then a directory at that path; run interactively and answer 'n' for each, then answer 'y' for the symlink case.
+- Expected result: Whitespace-only file prompts (treated as existing); symlink and directory also prompt; decline leaves everything intact; after 'y' the symlink target file is not clobbered.
+- Evidence to capture: Transcript with prompts and the symlink target's hash before and after.
 - Actual result: 
 - Status: NOT RUN
 
@@ -83,51 +88,31 @@
 
 ### MC-301
 - Required for acceptance: YES
-- Exclusive resources: dir:scratch-repo-unattended
-- Depends on: none
-- Exact action: Repeat a no-PR COMPLETE run with `--unattended` (no tty) in a separate scratch repo, with no prompt possible.
-- Expected result: Same outcome as attended: commit created, worktree removed, main switched to the run branch, summary line `removed; switched`, and the script exit status equals the driver's.
-- Evidence to capture: Captured stdout, `echo $?`, `git branch --show-current`, and worktree-directory existence check.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-302
-- Required for acceptance: YES
-- Exclusive resources: dir:scratch-repo-dirty
-- Depends on: none
-- Exact action: In a scratch repo, make the main project dirty (once with a modified tracked file, once with an untracked-only file) and run a no-PR COMPLETE worktree run.
-- Expected result: Worktree is kept, main is not switched and the dirty files are untouched, output contains `Branch <b>: worktree kept; project not switched.` plus literal `git switch <b>` and `scripts/lib/worktrees.sh remove <dir>` commands.
-- Evidence to capture: Transcript for both variants, `git status` of main, and the existing worktree directory listing.
+- Exclusive resources: dir:scratch-repo-142
+- Depends on: MC-300
+- Exact action: Recreate the scratch repo with an existing CHANGE_REQUEST.md, record its hash and a listing of .uncle/workflow, run from-issue.sh change mode on a TTY and answer 'n' (then repeat with an empty Enter and with Ctrl-D).
+- Expected result: Each run exits nonzero with a message saying the existing request was left unchanged; the file hash and .uncle/workflow listing are identical to before.
+- Evidence to capture: Transcripts, exit codes, and before/after hashes and listings.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-303
 - Required for acceptance: YES
-- Exclusive resources: dir:scratch-repo-otherbranch
-- Depends on: none
-- Exact action: In a scratch repo, put main on an unrelated branch whose tip is not an ancestor of the run branch (and, separately, detach main's HEAD), then run a no-PR COMPLETE worktree run.
-- Expected result: Worktree kept, project not switched, exactly one `kept; not switched` summary line, and the manual `git switch <b>` and remove commands printed; the run branch still exists.
-- Evidence to capture: Transcript, `git branch --show-current`/`git rev-parse HEAD` of main before and after, and `git branch --list`.
+- Exclusive resources: dir:scratch-repo-142
+- Depends on: MC-302
+- Exact action: Repeat the unattended run with UNCLE_REPLACE_CHANGE_REQUEST=1, then with values 0, true, and empty.
+- Expected result: Only the exact value 1 replaces the file and proceeds without a prompt; 0, true and empty refuse with exit 1 and leave the file untouched.
+- Evidence to capture: Per-value exit codes, stderr, and file hash.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-304
 - Required for acceptance: YES
-- Exclusive resources: dir:scratch-repo-dirty
-- Depends on: MC-302
-- Exact action: Run the manual recovery commands printed in a kept-worktree outcome: `git switch <b>` in the (clean) main project and `scripts/lib/worktrees.sh remove <dir>`, using the transcript from the dirty-main check after cleaning main.
-- Expected result: Removal succeeds with `Removed worktree <dir> (branch kept)`, the branch remains, and `git switch <b>` succeeds showing the committed run output.
-- Evidence to capture: Command output of both commands and `git branch --list` afterward.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-306
-- Required for acceptance: YES
-- Exclusive resources: dir:scratch-repo-hook
-- Depends on: none
-- Exact action: In a scratch repo with a rejecting pre-commit hook, run a no-PR COMPLETE worktree run; also run a run that ends in a failed driver / non-COMPLETE state.
-- Expected result: Hook-rejected run: worktree kept with its uncommitted output intact, `kept; not switched` and remove command printed. Failed/non-COMPLETE run: no commit created, no removal, no switch, no summary line, exit status equals driver's.
-- Evidence to capture: Transcripts, `git log` in the worktree, `git status` there, main's branch, and exit codes.
+- Exclusive resources: dir:scratch-repo-142
+- Depends on: MC-303
+- Exact action: Run from-issue.sh change mode on a repo with no CHANGE_REQUEST.md, and again with a zero-byte one, from a TTY.
+- Expected result: No prompt appears in either case and the new request is written.
+- Evidence to capture: Terminal transcript showing no prompt text and the written file.
 - Actual result: 
 - Status: NOT RUN
 
@@ -137,9 +122,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a scratch repo, run a `--worktree` change whose stub driver ends COMPLETE with a valid fresh PR journal (phase created, matching head_branch and URL). Observe the final output and the filesystem.
-- Expected result: The worktree directory is removed, the run branch still exists, no prompt appears, no new commit is made on the run branch, the main project is not switched, and no `Branch ...:` summary line is printed.
-- Evidence to capture: Terminal output, `git branch --list`, `git -C <source> branch --show-current`, and the run branch's HEAD sha before and after.
+- Exact action: In a scratch repo with no CHANGE_REQUEST.md, run scripts/from-issue.sh in change mode interactively on a TTY.
+- Expected result: No replacement prompt appears on stderr and the new CHANGE_REQUEST.md is written as before.
+- Evidence to capture: Terminal transcript showing no 'Proceed with the new change request and replace it? [y/N]' text and the written file.
 - Actual result: 
 - Status: NOT RUN
 
@@ -147,9 +132,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run a `--worktree` change where the driver exits non-zero, and a second one where the final state is not COMPLETE. Leave uncommitted output in each worktree.
-- Expected result: Each worktree is kept with its uncommitted output intact. No commit is created, the main project is not switched, no no-PR summary line is printed, and the script exit status equals the driver's.
-- Evidence to capture: Exit codes, terminal output, `git -C <worktree> status --porcelain`, and the run branch HEAD sha before and after.
+- Exact action: In a scratch repo, seed a change request for issue N, then rerun from-issue.sh change mode for the same issue N so the in-flight run is current.
+- Expected result: The run prints the Resuming message with no prompt, and CHANGE_REQUEST.md is byte-identical to before.
+- Evidence to capture: Terminal transcript plus a hash of CHANGE_REQUEST.md before and after.
 - Actual result: 
 - Status: NOT RUN
 
@@ -157,9 +142,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run a PR-created `--worktree` run with an untracked file left in the worktree, then another with a local commit not pushed to any remote. Observe the output.
-- Expected result: Each worktree is kept. The existing refusal strings are printed unchanged: `the worktree contains untracked files` and `the worktree has N commit(s) not pushed to a remote`. The `Worktree <dir> kept; remove with: scripts/lib/worktrees.sh remove <dir>` line is printed.
-- Evidence to capture: Terminal output showing the exact refusal and keep lines.
+- Exact action: In a scratch repo with an existing non-empty CHANGE_REQUEST.md, run from-issue.sh with UNCLE_NEW_WORKFLOW=1, and separately with --seed-only.
+- Expected result: Neither run prompts. NEW_WORKFLOW archives the old evidence and reseeds. Seed-only leaves the existing file unmodified through the existing no-overwrite failure.
+- Evidence to capture: Transcripts of both runs and the file hash after the seed-only run.
 - Actual result: 
 - Status: NOT RUN
 
@@ -167,9 +152,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `scripts/lib/worktrees.sh remove <dir>` directly. Do it on a finished COMPLETE worktree with a lock file present, then on a worktree with a dirty tracked file, then on a clean COMPLETE worktree with no lock.
-- Expected result: The first two attempts refuse with the existing messages and keep the worktree. The third removes the worktree and prints `Removed worktree <dir> (branch kept)`, and the branch survives.
-- Evidence to capture: Output and exit code of each invocation, `git worktree list`, and `git branch --list`.
+- Exact action: With an existing CHANGE_REQUEST.md, pipe request content into `uncle --change-request` (the stdin import path).
+- Expected result: The import is rejected with the existing EXISTS message, no replacement prompt appears, and the file is unchanged.
+- Evidence to capture: Command output and file hash before and after.
 - Actual result: 
 - Status: NOT RUN
 
@@ -177,8 +162,18 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run a no-PR COMPLETE `--worktree` run with a clean main project, once under a pty and once with `--unattended`. Then run `scripts/lib/worktrees.sh remove` manually on a kept worktree.
-- Expected result: No `Remove worktree <dir>? [y/N]` prompt and no `Worktree <dir> kept; remove with:` line appears on the no-PR path. The final output has exactly one line, `Branch <b>: worktree removed; project switched.`, and the exit status matches the driver's.
-- Evidence to capture: Captured pty and unattended terminal transcripts, plus exit codes.
+- Exact action: With an existing non-empty CHANGE_REQUEST.md from a different issue, run from-issue.sh change mode on a TTY, answer 'n', then rerun and answer 'y'.
+- Expected result: The 'n' run exits nonzero with the file and .uncle/workflow unchanged. The 'y' run replaces the file and proceeds.
+- Evidence to capture: Transcript of both runs, with hashes of the file and a listing of .uncle/workflow after the decline.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-406
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Run from-issue.sh change mode with an existing CHANGE_REQUEST.md and stdin not a TTY (closed or piped from /dev/null), without UNCLE_REPLACE_CHANGE_REQUEST. Then repeat with UNCLE_REPLACE_CHANGE_REQUEST=1, and once more with --unattended.
+- Expected result: Without the opt-in, each run exits 1 immediately with a stderr message naming UNCLE_REPLACE_CHANGE_REQUEST=1, never hangs, and leaves the file untouched. With the opt-in it proceeds and replaces.
+- Evidence to capture: Transcripts with exit codes and file hashes.
 - Actual result: 
 - Status: NOT RUN

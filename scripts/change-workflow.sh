@@ -482,6 +482,7 @@ on_exit() {
     if declare -f change_checklist_draft_cancel > /dev/null; then change_checklist_draft_cancel; fi
     if [[ -n "${PREFLIGHT_BG_PID:-}" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then kill "$PREFLIGHT_BG_PID" 2>/dev/null || true; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
+    python3 -B "$ROOT/scripts/lib/app_server.py" stop "${STATE_DIR:-.uncle/workflow}" > /dev/null 2>&1 || true
     if declare -f release_lock > /dev/null; then release_lock; fi
     uncle_title_end
     if [[ "$rc" != 0 && -e "${STATE_DIR:-.uncle/workflow}/run-started-at" ]]; then
@@ -1310,6 +1311,12 @@ checklist_run_worker() {
 # canonical reports or product files.  Groups remain barriers, so a row that
 # depends on an earlier group cannot start early.  A worker failure is evidence
 # for the synthesizer, not a reason to throw away results from its siblings.
+# post_workers_fn for checklist_execute_worker_fastpath (scripts/lib/checklist-stage.sh): the application the driver started for the
+# workers is stopped as soon as they finish, as stagegate.sh does. Without it every change request left a dev server running.
+_change_execute_checklist_stop_app_server() {
+    python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
+}
+
 run_parallel_checklist_workers() {
     local groups="$STATE_DIR/checklist-groups/groups.txt"
     # Packets must live inside the workspace because runner Write tools are
@@ -1320,6 +1327,10 @@ run_parallel_checklist_workers() {
     local -a ids pids pid_ids packet_names
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
+    # Every worker is told where the application is running and which file holds the rows, exactly as stagegate.sh's is (one definition,
+    # scripts/lib/checklist-stage.sh). This function used to hand the lane runner the bare worker prompt: each worker was named an id
+    # and nothing else, and all nine required rows came back BLOCKED-SETUP in twelve seconds.
+    checklist_bind_worker_template "$STATE_DIR/documents/MANUAL_CHECKLIST.json" EXECUTE_CHECKLIST_WORKERS.json
     # Lanes, the default: checks that share a resource or depend on one another run in order inside one
     # worker, everything else runs beside them, and nothing waits at a barrier (checklist_lanes.py).
     if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 && "${WORKFLOW_EXECUTE_CHECKLIST_LANES:-1}" == 1 ]]; then
@@ -1353,7 +1364,7 @@ run_parallel_checklist_workers() {
                 echo 'Each batch ran as one worker; checks that share a resource or a dependency ran in order inside one.'
                 echo 'The final execute-checklist stage is the sole writer of canonical reports.'
             } > "$directory/README.md"
-            checklist_run_lanes "$directory" "$lane_file" "$ROOT/prompts/change/execute-checklist-worker.md"
+            checklist_run_lanes "$directory" "$lane_file" "$CHECKLIST_WORKER_TEMPLATE"
             [[ "$failed" == 0 ]] || printf '\nSome workers failed; their IDs require reconciliation.\n' >> "$directory/README.md"
             python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
                 "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" --expected "${packet_names[@]}" || return 1
@@ -1454,7 +1465,7 @@ run_parallel_checklist_workers() {
             batch_label="group-$group_index-batch-$batch_index"
             prompt="$directory/prompts/$batch_label.md"
             packet="$directory/$batch_label.json"
-            cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
+            cp "$CHECKLIST_WORKER_TEMPLATE" "$prompt"
             printf '\n## Assigned checks\n\n' >> "$prompt"
             end=$(( i + chunk < n ? i + chunk : n ))
             for ((start = i; start < end; start++)); do
@@ -3761,6 +3772,15 @@ sys.exit(0 if all(isinstance(f, dict) and f.get("driver_fallback") is True for f
              "is authoritative (or merge both as evidence for one row) in $notes, then rerun."
         exit 1
     fi
+    # The contract could not be evaluated and the run was told to go on with it as it stands (change_implementation_incomplete_choice, for
+    # these very notes): that decision stands. Only a contract that cannot be read is excused; a row the notes reject is not.
+    if [[ -s "$STATE_DIR/implementation-contract-unevaluated" ]] \
+        && [[ "$(cat "$STATE_DIR/implementation-contract-unevaluated")" == "$(hash_file "$notes" 2>/dev/null)" ]] \
+        && [[ -s "$completion" ]] && grep -qvE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion" \
+        && ! grep -qE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
+        echo "Continuing with the acceptance contract unevaluated, as recorded; the final audit reads it as it stands."
+        return 0
+    fi
     supervision_validation_failed implementation_completion "$notes" \
         "$(head -n 3 "$completion" 2>/dev/null | tr '\n' ' ')" 0
     # Keep rejection evidence intact. Only explicitly waived delivery rows may
@@ -4679,7 +4699,7 @@ PY
             # Shared with stagegate.sh (uncle consolidation phase (c)): see
             # checklist_execute_worker_fastpath in scripts/lib/checklist-stage.sh.
             fastpath_status=0
-            checklist_execute_worker_fastpath || fastpath_status=$?
+            checklist_execute_worker_fastpath _change_execute_checklist_stop_app_server || fastpath_status=$?
             if [[ "$fastpath_status" == 0 ]]; then
                 PROGRESS_TOTAL=0
                 set_state VALIDATE_CHECKLIST

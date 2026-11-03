@@ -78,16 +78,41 @@ body | grep -qx 'keep-me/' || fail 'an unrelated rule was dropped'
 body | grep -qx 'other/'   || fail 'an unrelated rule was dropped'
 [[ "$(body | sed -n '1p')" == '.uncle/*' ]] || fail "block should take the first managed position: $(body | sed -n '1p')"
 
-# 4. No .gitignore means no file is created on the project's behalf.
+# 4. No .gitignore in a directory that is not a git repository: no file is created on the project's behalf.
 rm -rf "$work/c"; mkdir -p "$work/c"
 run_it
 [[ ! -e "$work/c/.gitignore" ]] || fail 'created a .gitignore where the project had none'
+
+# 4b. A git repository with none gets one holding the block, so attestations are not ignored.
+rm -rf "$work/c"; mkdir -p "$work/c"; git init -q "$work/c"
+run_it
+[[ -s "$work/c/.gitignore" ]] || fail 'a git repository with no .gitignore got none'
+check_ignored() { (cd "$work/c" && git check-ignore -q "$1" && echo ignored || echo tracked); }
+for path in .uncle/attestation.json .uncle/attestation.sig .uncle/allowed_signers .uncle/docs/PLAN.md; do
+    [[ "$(check_ignored "$path")" == tracked ]] || fail "$path is ignored in a created .gitignore"
+done
+for path in .uncle/workflow/state .uncle/config; do
+    [[ "$(check_ignored "$path")" == ignored ]] || fail "$path is not ignored in a created .gitignore"
+done
+before="$(body)"; run_it
+[[ "$(body)" == "$before" ]] || fail 'the created file changed on a second run'
 
 # 5. A project with no managed entry at all gets the block appended, once,
 #    and without gluing itself onto an unterminated last line.
 case_dir 'only-rule'
 run_it
-[[ "$(body | tail -2 | head -1)" == '.uncle/*' ]] || fail "append landed wrong: $(body)"
+[[ "$(body | sed -n '2p')" == '.uncle/*' ]] || fail "append landed wrong: $(body)"
 body | grep -qx 'only-rule' || fail 'append swallowed the last line'
+
+# 6. An existing .gitignore that ignores the whole directory (the legacy `.uncle/`) ends up committing the attestation.
+case_dir '.uncle/
+build/
+'
+(cd "$work/c" && git init -q . 2>/dev/null || true)
+run_it
+for path in .uncle/attestation.json .uncle/attestation.sig .uncle/allowed_signers; do
+    [[ "$(check_ignored "$path")" == tracked ]] || fail "$path is ignored after the legacy .uncle/ rule was normalized"
+done
+body | grep -qx 'build/' || fail 'an unrelated rule was dropped'
 
 echo 'uncle-gitignore-test.sh: one canonical block, legacy spellings retired, idempotent'

@@ -79,6 +79,35 @@ checklist_validate_manual_checklist() {
     return 0
 }
 
+# checklist_bind_worker_template <checklist_input> <workers_output_name> -- the template every checklist worker of one lane set is given,
+# in CHECKLIST_WORKER_TEMPLATE: the worker prompt plus two bound sections, where the application is already running (the driver starts
+# it) and which checklist file holds the rows. Without them a worker is told only an id and has nothing to run it against, and reports
+# BLOCKED-SETUP ("gives no checklist JSON path and no application URL"): that is what the change workflow did, with its own copy of
+# this, until it shared this one -- all nine required rows blocked, in twelve seconds, and the change never looked at in a browser.
+# Needs from the caller: ROOT, STATE_DIR, PWD (the project).
+checklist_bind_worker_template() {
+    local checklist_input="$1" output_name="$2"
+    # A worker may not start a server (noinit: `npm run start` was denied and five browser checks were BLOCKED-SETUP after 86 s), so the
+    # driver starts the application and every worker is told where it is.
+    local worker_template="$ROOT/prompts/change/execute-checklist-worker.md" app_url=""
+    if [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]] && app_url="$(python3 -B "$ROOT/scripts/lib/app_server.py" start "$PWD" "$STATE_DIR" 2>/dev/null)" && [[ -n "$app_url" ]]; then
+        worker_template="$STATE_DIR/execute-checklist-worker-template.md"
+        { cat "$ROOT/prompts/change/execute-checklist-worker.md"
+          printf '\n## The application is already running (binding)\n\nThe driver started the application and it answers at %s. Drive that URL in the browser and with curl. Do not start, build or install anything yourself, and do not run `npm run start`, `vite` or any server: it is already up, and you are not allowed to start one.\n' "$app_url"
+        } > "$worker_template"
+        echo "Checklist: the application is running at $app_url for the browser checks."
+    elif [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]]; then
+        echo 'Checklist: the application could not be started by the driver; browser checks that need a running page may be BLOCKED-SETUP.'
+    fi
+    # A streamed lens is its own complete, validated checklist slice. Every
+    # worker gets its exact immutable input instead of guessing the default.
+    local bound_template="$STATE_DIR/execute-checklist-worker-$output_name.md"
+    cp "$worker_template" "$bound_template"
+    printf '\n## Checklist input (binding)\n\nRead only `%s` for checklist rows in this lane. Do not read any other checklist document.\n' \
+        "$checklist_input" >> "$bound_template"
+    CHECKLIST_WORKER_TEMPLATE="$bound_template"
+}
+
 # checklist_execute_worker_fastpath [<post_workers_fn>]
 #
 # Shared piece of EXECUTE_CHECKLIST: run the parallel checklist workers, and

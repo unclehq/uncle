@@ -3,9 +3,12 @@
 -- never something to commit. This normalizes a project's ignore rules to one
 canonical block.
 
-Only a .gitignore that already exists is edited: a project with no git
-repository, or one that manages ignores elsewhere (e.g. a global
-excludesfile), gets no file created on its behalf.
+The block also keeps the change attestation, its signature and the trust root (`allowed_signers`) out of the ignore rules: they are
+committed on the feature branch, and under `.uncle/*` a negation is the only way to commit them. A `.gitignore` that lacks the
+negations ignored them, and the attestation then never reached the branch.
+
+An existing .gitignore is edited. A git repository with none gets one created, holding only this block. A directory that is not a
+git repository gets no file on its behalf.
 
 Generated documents (generated_input.py: REQUIREMENTS.md/CHANGE_REQUEST.md,
 and any workflow output that lands under .uncle/docs) live there instead of
@@ -36,6 +39,7 @@ import sys
 # them behind is what made a project's ignore file read as half-configured.
 MANAGED = {
     '.uncle', '.uncle/', '.uncle/*', '!.uncle/docs/',
+    '!.uncle/attestation.json', '!.uncle/attestation.sig', '!.uncle/allowed_signers',
     # The intermediate spellings, from after the `.workflow` rename but before
     # the `.uncle/*` block. `.uncle/workflow` on its own is the one that
     # matters most: it does not cover `.uncle/workflow-history/`, so a project
@@ -46,7 +50,7 @@ MANAGED = {
     '.workflow/state', '.workflow/approvals/', '.workflow/logs/',
     '.workflow/change.diff', '.workflow/change-stat.txt',
 }
-CANONICAL = ['.uncle/*', '!.uncle/docs/']
+CANONICAL = ['.uncle/*', '!.uncle/docs/', '!.uncle/attestation.json', '!.uncle/attestation.sig', '!.uncle/allowed_signers']
 
 
 def only_adds_managed(before, after):
@@ -79,6 +83,15 @@ def ensure(project_root):
     try:
         with open(path, encoding="utf-8") as fh:
             existing = fh.read()
+    except FileNotFoundError:
+        if not os.path.exists(os.path.join(project_root, ".git")):
+            return False
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("\n".join(CANONICAL) + "\n")
+        except OSError:
+            return False
+        return True
     except OSError:
         return False
     lines = existing.splitlines()

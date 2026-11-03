@@ -53,6 +53,22 @@ class Numbering(unittest.TestCase):
         self.text = TEXT.replace('   Depends on: 8\n', '')
         self.plan = dict(schema='uncle.artifact/v1', kind='plan', narrative=self.text, verification_commands='true')
 
+    def test_a_dependency_on_a_step_the_plan_does_not_have_is_dropped_when_planning(self):
+        # Run: step 2 "depends on 1" with no step 1. Planning runs once, so this stranded the stage (triage: tool bug).
+        narrative = ('# Plan\n\n## Implementation order\n\n2. **Only** — Change the theme.\n   Owns: `src/theme.css`\n   Depends on: 1\n')
+        plan = dict(self.plan, narrative=narrative)
+        with self.assertRaisesRegex(pm.PlanError, 'not another step'):
+            pm.publish_records(plan, self.root)
+        result = pm.publish_records(plan, self.root, stage='change-plan')
+        self.assertEqual([s['depends_on'] for s in pm.steps_of(result)], [[]])
+        self.assertNotIn('Depends on', result['narrative'])
+        self.assertEqual(pm.validate(pm.model_of(result), self.root)[0], [])
+
+    def test_a_self_dependency_is_still_refused_when_planning(self):
+        narrative = '# Plan\n\n## Implementation order\n\n2. **Only** — Change.\n   Owns: `a.css`\n   Depends on: 2\n'
+        with self.assertRaisesRegex(pm.PlanError, 'not another step'):
+            pm.publish_records(dict(self.plan, narrative=narrative), self.root, stage='change-plan')
+
     def test_duplicate_without_references_preserves_all_other_bytes_and_ids(self):
         original = copy.deepcopy(self.plan)
         result = pm.publish_records(self.plan, self.root)

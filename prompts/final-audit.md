@@ -45,6 +45,14 @@ For each waiver, say plainly whether it is acceptable, and why:
 - Does the waiver match the report? A waiver for a check the report shows as
   PASS, or as blocked for a different reason, is not a waiver of anything.
 
+A waiver may say the check was deferred to the person who reviews the PR or the
+finished application. An unattended run records that for a check only a person can
+judge (a subjective look, a sign-off) because nobody is there to sign and a person
+will review the result. That reason is real: a machine cannot supply the judgement.
+Accept it, as a non-blocking issue, when everything a machine can verify about the
+requirement is verified; name the requirement as unverified and never call it passed.
+It does not excuse a check that a machine could perform, or a defect the report shows.
+
 A waiver is never verification. The check was not performed, and your report
 must say which requirements are consequently unverified, however sound the
 reason. An acceptable waiver over a requirement that is otherwise covered is

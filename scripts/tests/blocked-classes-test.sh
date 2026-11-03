@@ -99,6 +99,80 @@ run_transition report.md FINAL_AUDIT < /dev/null || fail "human sign-off must no
 grep -q "C2" <<< "$OUT" || fail "it must say what awaits signing"
 grep -q "cannot complete" <<< "$OUT" || fail "it must say the run still cannot complete"
 
+# --- unattended: the rows that wait on a person are waived for the run, on the record ----------------
+# Nobody is there to sign, and a person reviews the PR or the finished application. The waiver is never a pass: the report
+# is untouched, the reason says "deferred", and only rows that wait on a person are waived.
+record_unattended_gate() { printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$1" "$2" >> "$work/unattended.tsv"; }
+report $'| C1 | YES | PASS | ok |\n| C2 | YES | BLOCKED-HUMAN | the groovy look |\n| C3 | YES | BLOCKED-HUMAN | sign-off |\n| C4 | NO | BLOCKED-HUMAN | optional |'
+rm -rf "$STATE_DIR/waivers" "$work/unattended.tsv"
+UNATTENDED=1 STATE=""
+run_transition report.md FINAL_AUDIT < /dev/null || fail "unattended: human sign-off must not stop the run"
+[ "$STATE" = "FINAL_AUDIT" ] || fail "unattended: the run must go on to the audit, went to '$STATE'"
+for id in C2 C3; do
+    [ -s "$STATE_DIR/waivers/$id" ] || fail "unattended: $id is required, waits on a person and must be waived"
+    grep -q "^id: $id$" "$STATE_DIR/waivers/$id" || fail "unattended: the waiver must name $id"
+    grep -q "^report: report.md$" "$STATE_DIR/waivers/$id" || fail "unattended: the waiver must name its report"
+    grep -q "Deferred to the person who reviews the PR or the finished application" "$STATE_DIR/waivers/$id" \
+        || fail "unattended: the reason must say it was deferred to the reviewer"
+    grep -q "not assessed here" "$STATE_DIR/waivers/$id" || fail "unattended: the reason must say it was not assessed"
+done
+[ ! -e "$STATE_DIR/waivers/C1" ] || fail "unattended: a passing row is not waived"
+[ ! -e "$STATE_DIR/waivers/C4" ] || fail "unattended: an optional row blocks nothing and is not waived"
+waived_ids C2 C3 || fail "unattended: the waivers are honoured by waived_ids"
+grep -q "BLOCKED-HUMAN" report.md || fail "unattended: the report must keep saying BLOCKED-HUMAN, never PASS"
+! grep -qE "\| C[234] \| (YES|NO) \| PASS" report.md || fail "unattended: a waiver must not turn a row into a pass"
+grep -q "left to whoever reviews" <<< "$OUT" || fail "unattended: it must say the checks are left to the reviewer"
+grep -q "They stay unperformed" <<< "$OUT" || fail "unattended: it must say they stay unperformed"
+! grep -q "cannot complete on an unsigned" <<< "$OUT" || fail "unattended: the attended wording must not be used"
+[ "$(grep -c "deferred to the reviewer of the PR or the application" "$work/unattended.tsv")" = 1 ] || fail "unattended: one ledger entry for the waiver"
+grep -q "C2 C3" "$work/unattended.tsv" || fail "unattended: the ledger names every waived row"
+! grep -q "C4" "$work/unattended.tsv" || fail "unattended: the ledger does not name the optional row"
+# Run again: already-waived rows are not waived a second time, and the run still goes on.
+before="$(cat "$STATE_DIR/waivers/C2")"
+sleep 1
+STATE=""
+run_transition report.md FINAL_AUDIT < /dev/null || fail "unattended: the second pass must not stop either"
+[ "$STATE" = "FINAL_AUDIT" ] || fail "unattended: second pass went to '$STATE'"
+[ "$(cat "$STATE_DIR/waivers/C2")" = "$before" ] || fail "unattended: a row already waived must not be waived again"
+[ "$(wc -l < "$work/unattended.tsv" | tr -d ' ')" = 1 ] || fail "unattended: the second pass must not add a ledger entry"
+
+# Only the rows that wait on a person are waived: a failing row still goes to repair, a PASS stays alone.
+report $'| C1 | YES | FAIL | broken |\n| C2 | YES | BLOCKED-HUMAN | the look |'
+rm -rf "$STATE_DIR/waivers"
+UNATTENDED=1 STATE=""
+run_transition report.md NEXT < /dev/null
+[ "$STATE" = "REPAIR" ] || fail "unattended: a FAIL must still go to repair, went to '$STATE'"
+[ ! -e "$STATE_DIR/waivers/C2" ] || fail "unattended: nothing is waived while a defect is going to repair"
+
+# The switch: off, an unattended run leaves them open, like an attended one.
+report $'| C1 | YES | PASS | ok |\n| C2 | YES | BLOCKED-HUMAN | the look |'
+rm -rf "$STATE_DIR/waivers" "$work/unattended.tsv"
+UNATTENDED=1 WORKFLOW_UNATTENDED_HUMAN_WAIVER=0 STATE=""
+run_transition report.md FINAL_AUDIT < /dev/null || fail "switch off: must still continue"
+[ "$STATE" = "FINAL_AUDIT" ] || fail "switch off: went to '$STATE'"
+[ ! -e "$STATE_DIR/waivers/C2" ] || fail "switch off: nothing is waived"
+grep -q "cannot complete on an unsigned" <<< "$OUT" || fail "switch off: the original wording stands"
+unset WORKFLOW_UNATTENDED_HUMAN_WAIVER
+
+# Attended: nothing is waived, whatever else is set.
+rm -rf "$STATE_DIR/waivers" "$work/unattended.tsv"
+UNATTENDED=0 STATE=""
+run_transition report.md FINAL_AUDIT < /dev/null || fail "attended: must continue"
+[ ! -e "$STATE_DIR/waivers/C2" ] || fail "attended: a person has not signed, so nothing is waived"
+[ ! -e "$work/unattended.tsv" ] || fail "attended: nothing is written to the unattended ledger"
+UNATTENDED=0
+
+# BLOCKED-SETUP waived by an unattended run still ends up waiving the human rows beside it.
+report $'| C1 | YES | PASS | ok |\n| C2 | YES | BLOCKED-SETUP | safaridriver |\n| C3 | YES | BLOCKED-HUMAN | the look |'
+rm -rf "$STATE_DIR/waivers" "$work/unattended.tsv"
+UNATTENDED=1 STATE=""
+run_transition report.md FINAL_AUDIT < /dev/null || fail "unattended setup+human: must continue"
+[ -s "$STATE_DIR/waivers/C2" ] && [ -s "$STATE_DIR/waivers/C3" ] || fail "unattended setup+human: both rows waived"
+grep -q "Deferred to the person" "$STATE_DIR/waivers/C3" || fail "unattended setup+human: the human row gets the deferral reason"
+! grep -q "Deferred to the person" "$STATE_DIR/waivers/C2" || fail "unattended setup+human: the setup row keeps its own reason"
+UNATTENDED=0
+rm -rf "$STATE_DIR/waivers"
+
 # --- impossible: declining the waiver stops the run -------------------------
 report $'| C1 | YES | PASS | ok |\n| C2 | YES | BLOCKED-IMPOSSIBLE | no window under 500px |'
 STATE=""

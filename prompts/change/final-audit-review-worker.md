@@ -9,6 +9,11 @@ required behavior or check fails, or a required row is unverified and nothing wa
 worth recording but not a reason to stop (an optional check not run, a coverage gap with a passing
 required suite, a wording or evidence nit). Do not report a passing check as a finding.
 
+A required row that waits on a person (BLOCKED-HUMAN) and carries a waiver saying it was deferred to the person
+who reviews the PR or the finished application is Medium, not High: an unattended run records that because nobody
+is there to sign, and the reviewer will. Say that the requirement is unverified, and never count it as passed.
+A waiver does not excuse a check a machine could have performed, and a row with no waiver stays High.
+
 Report at most 6 findings, most severe first, one per distinct issue. `summary` is one or two
 sentences; `evidence` is a file, row ID or command output in at most two sentences. A separate final auditor owns the verdict.
 

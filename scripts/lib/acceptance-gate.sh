@@ -37,11 +37,39 @@ acceptance_setup_pause() {
 # Waiting on a person is what this workflow is for, not a fault. Everything a
 # machine could check has been checked, so the run goes on to its audit, which
 # reads the report and decides.
+#
+# Unattended, nobody is there to sign, and a person will review the PR or the
+# finished application when the build is done. So the rows that wait on a person
+# are waived for this run, on the record, with a reason that says exactly that:
+# the check was deferred, not assessed. A waiver is never a pass -- the report
+# keeps saying BLOCKED-HUMAN, the delivery summary lists the check as WAIVED,
+# and the audit reads the waiver and names the requirement as unverified.
+# WORKFLOW_UNATTENDED_HUMAN_WAIVER=0 leaves them open, as an attended run does.
 acceptance_human_continue() {
-    local report="$1" next="$2"
+    local report="$1" next="$2" id
+    local -a pending=()
     echo
     echo "Awaiting human sign-off in $report:"
     acceptance_json_ids "$report" BLOCKED-HUMAN | sed 's/^/  /'
+    if [[ "${UNATTENDED:-0}" == 1 && "${WORKFLOW_UNATTENDED_HUMAN_WAIVER:-1}" == 1 ]]; then
+        while IFS= read -r id; do
+            [[ -n "$id" ]] || continue
+            waived_ids "$id" || pending+=("$id")
+        done < <(acceptance_json_ids "$report" BLOCKED-HUMAN)
+        if [[ "${#pending[@]}" -gt 0 ]] \
+                && write_waivers "$report" \
+                    "Deferred to the person who reviews the PR or the finished application. This check needs a human's judgement and an unattended run has none, so it was not assessed here." \
+                    "${pending[@]}"; then
+            if declare -F record_unattended_gate > /dev/null; then
+                record_unattended_gate "waiver" "$report: human sign-off deferred to the reviewer of the PR or the application: ${pending[*]}"
+            fi
+        fi
+        echo "Unattended: these checks are waived for this run and left to whoever reviews the"
+        echo "PR or the finished application. They stay unperformed; the audit will say so."
+        echo "Continuing to $next."
+        set_state "$next"
+        return 0
+    fi
     echo "Nothing else is outstanding. Continuing to $next, which reads the"
     echo "report and judges it; the run cannot complete on an unsigned"
     echo "required check."

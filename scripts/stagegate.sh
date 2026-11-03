@@ -3933,25 +3933,8 @@ run_parallel_checklist_workers() {
     if [[ "${WORKFLOW_EXECUTE_CHECKLIST_LANES:-1}" != 1 && ! -s "$groups" ]]; then
         return 0
     fi
-    # A worker may not start a server (noinit: `npm run start` was denied and five browser checks were BLOCKED-SETUP after 86 s), so the
-    # driver starts the application and every worker is told where it is.
-    local worker_template="$ROOT/prompts/change/execute-checklist-worker.md" app_url=""
-    if [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]] && app_url="$(python3 -B "$ROOT/scripts/lib/app_server.py" start "$PWD" "$STATE_DIR" 2>/dev/null)" && [[ -n "$app_url" ]]; then
-        worker_template="$STATE_DIR/execute-checklist-worker-template.md"
-        { cat "$ROOT/prompts/change/execute-checklist-worker.md"
-          printf '\n## The application is already running (binding)\n\nThe driver started the application and it answers at %s. Drive that URL in the browser and with curl. Do not start, build or install anything yourself, and do not run `npm run start`, `vite` or any server: it is already up, and you are not allowed to start one.\n' "$app_url"
-        } > "$worker_template"
-        echo "Checklist: the application is running at $app_url for the browser checks."
-    elif [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]]; then
-        echo 'Checklist: the application could not be started by the driver; browser checks that need a running page may be BLOCKED-SETUP.'
-    fi
-    # A streamed lens is its own complete, validated checklist slice. Every
-    # worker gets its exact immutable input instead of guessing the default.
-    local bound_template="$STATE_DIR/execute-checklist-worker-${workers_output##*/}.md"
-    cp "$worker_template" "$bound_template"
-    printf '\n## Checklist input (binding)\n\nRead only `%s` for checklist rows in this lane. Do not read any other checklist document.\n' \
-        "$checklist_input" >> "$bound_template"
-    worker_template="$bound_template"
+    checklist_bind_worker_template "$checklist_input" "${workers_output##*/}"
+    local worker_template="$CHECKLIST_WORKER_TEMPLATE"
     # Lanes, the default: checks that share a resource or depend on one another run in order inside one
     # worker, everything else runs beside them, and nothing waits at a barrier (checklist_lanes.py).
     if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 && "${WORKFLOW_EXECUTE_CHECKLIST_LANES:-1}" == 1 ]]; then

@@ -86,7 +86,7 @@ for family in app change; do
         for unattended in 0 1; do
             digest=different
             out="$(run_policy "$family" "$unattended" "$mode")"
-            if [[ "$family" == app && "$unattended" == 1 ]]; then
+            if [[ "$unattended" == 1 ]]; then
                 check "$family/$mode: unattended reapproves and continues" yes "$([[ "$out" == *approved:IMPLEMENTATION_REVIEW:approve*continued*exit=0* ]] && echo yes || echo no)"
                 check "$family/$mode: no gate reopening" no "$([[ "$out" == *state=* ]] && echo yes || echo no)"
             else

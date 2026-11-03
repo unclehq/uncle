@@ -1207,10 +1207,30 @@ def publish_records(plan, root='.', model=None, stage=None):
                 narrative = renumber_narrative(plan['narrative'], model, revised)
                 if narrative is not None:
                     plan, model = dict(plan, narrative=narrative), revised
+    if stage == 'change-plan' and drop_dangling_dependencies(model):
+        # The narrative is the sections' rendering, so it says the same thing.
+        plan = dict(plan, narrative=render(model)) if plan.get('narrative') else plan
     errors, _ = validate(model, root=root)
     if errors:
         raise PlanError(errors[0])
     return dict(plan, **{key: model[key] for key in ('title', 'intro', 'sections')})
+
+
+def drop_dangling_dependencies(model):
+    """Remove dependencies on step numbers the plan does not have; True when any was removed. Planning runs once, and one stray
+    number (a step the planner merged away) cost a whole stage; a dependency on nothing orders nothing. Self-dependencies and
+    cycles are still errors, and so is a dangling dependency left by an edit (validate)."""
+    steps = steps_of(model)
+    numbers = {s.get('number') for s in steps}
+    dropped = False
+    for step in steps:
+        deps = step.get('depends_on')
+        if isinstance(deps, list) and all(type(d) is int for d in deps):
+            keep = [d for d in deps if d in numbers or d == step.get('number')]
+            if keep != deps:
+                step['depends_on'] = keep
+                dropped = True
+    return dropped
 
 
 def consistent(plan):

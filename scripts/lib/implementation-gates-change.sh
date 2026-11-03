@@ -12,3 +12,7 @@ build_implementation_review() {
 verify_implementation_review() {
     change_verify_implementation_review "$@"
 }
+
+reapprove_implementation_unattended() {
+    app_reapprove_implementation_unattended "$@"
+}

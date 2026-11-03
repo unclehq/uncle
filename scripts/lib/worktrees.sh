@@ -300,15 +300,23 @@ worktree_auto() {
     # `git worktree add` checks out HEAD, and the brief is usually not in HEAD:
     # chat writes it, or a person does, and nobody commits it before starting.
     # Without this the run would begin in a directory with nothing to build.
-    local name
+    #
+    # The brief is at the root when a person wrote it there, and at .uncle/docs/ when uncle did: `uncle --change-request` and the
+    # chat write it to .uncle/docs/ as soon as that folder exists, which it does for any project uncle has built before. Both
+    # places are carried over, each to the same relative path. Only the root was, so a change request on a project uncle had
+    # already built moved into a worktree that had no request, and the driver stopped at once with "Required file missing or empty:
+    # .uncle/docs/CHANGE_REQUEST.md".
+    local name rel
     for name in CHANGE_REQUEST.md REQUIREMENTS.md; do
-        [[ -s "$root/$name" ]] || continue
-        cp -p "$root/$name" "$dir/$name" || {
-            echo "Could not copy $name into $dir; running in place." >&2
-            rm -rf "$dir/.uncle"
-            git worktree remove --force "$dir" >/dev/null 2>&1 || true
-            return 0
-        }
+        for rel in "$name" ".uncle/docs/$name"; do
+            [[ -s "$root/$rel" ]] || continue
+            mkdir -p "$dir/$(dirname "$rel")" && cp -p "$root/$rel" "$dir/$rel" || {
+                echo "Could not copy $rel into $dir; running in place." >&2
+                rm -rf "$dir/.uncle"
+                git worktree remove --force "$dir" >/dev/null 2>&1 || true
+                return 0
+            }
+        done
     done
     printf '%s\n' "$dir"
 }

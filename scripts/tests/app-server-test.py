@@ -93,10 +93,19 @@ class AppServer(unittest.TestCase):
         self.assertEqual(app_server.command_for(root, spec)[-1], '--strictPort')
 
     def test_the_driver_starts_it_for_the_workers_and_stops_it(self):
-        text = (Path(__file__).resolve().parents[1] / 'stagegate.sh').read_text()
+        scripts = Path(__file__).resolve().parents[1]
+        text = (scripts / 'stagegate.sh').read_text()
+        # The start is one shared definition now, used by both drivers (the change workflow had its own copy that never started the
+        # application, and every worker came back BLOCKED-SETUP): the driver binds the template, then runs the lanes.
         block = text[text.index('run_parallel_checklist_workers() {'):]
-        self.assertLess(block.index('app_server.py" start'), block.index('checklist_run_lanes'))
-        self.assertIn('The application is already running', block)
+        self.assertLess(block.index('checklist_bind_worker_template'), block.index('checklist_run_lanes'))
+        helper = (scripts / 'lib' / 'checklist-stage.sh').read_text()
+        helper = helper[helper.index('checklist_bind_worker_template() {'):helper.index('checklist_execute_worker_fastpath() {')]
+        self.assertIn('app_server.py" start', helper)
+        self.assertIn('The application is already running', helper)
+        change = (scripts / 'change-workflow.sh').read_text()
+        change = change[change.index('run_parallel_checklist_workers() {'):]
+        self.assertLess(change.index('checklist_bind_worker_template'), change.index('checklist_run_lanes'))
         self.assertIn('app_server.py" prewarm', text)
         self.assertIn('prewarm refuses to install, build, or navigate a page', text)
         # Stopping lives in the driver's one cleanup path now (it also stops the preview server), not after the snapshot.

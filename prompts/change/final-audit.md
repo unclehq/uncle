@@ -22,6 +22,14 @@ Read:
   failed commands and whether independent functional evidence supports
   continuation; it never turns failures into PASS.
 
+A waiver may say the check was deferred to the person who reviews the PR or the
+finished application. An unattended run records that for a check only a person can
+judge (a subjective look, a sign-off), because nobody is there to sign and a person
+will review the result. That reason is real: a machine cannot supply the judgement.
+Accept it, as a non-blocking issue, when everything a machine can verify about the
+requirement is verified; name the requirement as unverified and never call it passed.
+It does not excuse a check a machine could perform, or a defect the report shows.
+
 Waivers permit review of partial delivery; they do not implement missing behavior
 or make a check pass. Identify waived acceptance rows and the operator's reasons
 in the audit, and assess the remaining delivery honestly.

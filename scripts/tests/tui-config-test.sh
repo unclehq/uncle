@@ -756,7 +756,7 @@ mkdir -p "$GPROJ"
 printf 'node_modules/\n' > "$GPROJ/.gitignore"
 gitignore_load_config "$GPROJ"
 COUNT=$((COUNT + 1))
-[[ "$(cat "$GPROJ/.gitignore")" == $'node_modules/\n.uncle/*\n!.uncle/docs/' ]] \
+[[ "$(cat "$GPROJ/.gitignore")" == $'node_modules/\n.uncle/*\n!.uncle/docs/\n!.uncle/attestation.json\n!.uncle/attestation.sig\n!.uncle/allowed_signers' ]] \
     || fail "first run did not add .uncle to an existing .gitignore: $(cat "$GPROJ/.gitignore")"
 
 GPROJ2="$TMP/gitignore-none"
@@ -770,7 +770,7 @@ mkdir -p "$GPROJ3"
 printf 'dist/\n.uncle/\ncoverage/\n' > "$GPROJ3/.gitignore"
 gitignore_load_config "$GPROJ3"
 COUNT=$((COUNT + 1))
-[[ "$(cat "$GPROJ3/.gitignore")" == $'dist/\n.uncle/*\n!.uncle/docs/\ncoverage/' ]] \
+[[ "$(cat "$GPROJ3/.gitignore")" == $'dist/\n.uncle/*\n!.uncle/docs/\n!.uncle/attestation.json\n!.uncle/attestation.sig\n!.uncle/allowed_signers\ncoverage/' ]] \
     || fail "a bare .uncle entry was not upgraded in place: $(cat "$GPROJ3/.gitignore")"
 
 GPROJ4="$TMP/gitignore-already-upgraded"
@@ -778,7 +778,7 @@ mkdir -p "$GPROJ4"
 printf '.uncle/*\n!.uncle/docs/\n' > "$GPROJ4/.gitignore"
 gitignore_load_config "$GPROJ4"
 COUNT=$((COUNT + 1))
-[[ "$(cat "$GPROJ4/.gitignore")" == $'.uncle/*\n!.uncle/docs/' ]] \
+[[ "$(cat "$GPROJ4/.gitignore")" == $'.uncle/*\n!.uncle/docs/\n!.uncle/attestation.json\n!.uncle/attestation.sig\n!.uncle/allowed_signers' ]] \
     || fail "an already-upgraded .gitignore was changed: $(cat "$GPROJ4/.gitignore")"
 
 # A stale bare entry after prior canonical pairs used to cause every TUI
@@ -789,7 +789,7 @@ mkdir -p "$GPROJ5"
 printf '.uncle/*\n!.uncle/docs/\nnode_modules/\n.uncle/*\n!.uncle/docs/\n.uncle\n' > "$GPROJ5/.gitignore"
 gitignore_load_config "$GPROJ5"
 COUNT=$((COUNT + 1))
-[[ "$(cat "$GPROJ5/.gitignore")" == $'.uncle/*\n!.uncle/docs/\nnode_modules/' ]] \
+[[ "$(cat "$GPROJ5/.gitignore")" == $'.uncle/*\n!.uncle/docs/\n!.uncle/attestation.json\n!.uncle/attestation.sig\n!.uncle/allowed_signers\nnode_modules/' ]] \
     || fail "duplicate .uncle rules were not normalized: $(cat "$GPROJ5/.gitignore")"
 before="$(cat "$GPROJ5/.gitignore")"
 gitignore_load_config "$GPROJ5"
@@ -806,7 +806,7 @@ printf 'implementation.runner self-hosted\n' > "$GPROJ6/.uncle/config"
 printf '.uncle/\n' > "$GPROJ6/.gitignore"
 gitignore_load_config "$GPROJ6"
 COUNT=$((COUNT + 1))
-[[ "$(cat "$GPROJ6/.gitignore")" == $'.uncle/*\n!.uncle/docs/' ]] \
+[[ "$(cat "$GPROJ6/.gitignore")" == $'.uncle/*\n!.uncle/docs/\n!.uncle/attestation.json\n!.uncle/attestation.sig\n!.uncle/allowed_signers' ]] \
     || fail "an existing config did not unignore workflow docs: $(cat "$GPROJ6/.gitignore")"
 
 if [[ "$status" -ne 0 || "$FAILED" -ne 0 ]]; then

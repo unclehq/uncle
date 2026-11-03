@@ -50,6 +50,7 @@ json.dump({'schema': 'uncle.artifact/v1', 'kind': 'checklist-execution-worker-pa
 PY
         }
         . "$ROOT/scripts/lib/checklist-lanes.sh"
+        . "$ROOT/scripts/lib/checklist-stage.sh"   # checklist_bind_worker_template, shared by both drivers
         . "$TMP/checklist_run_worker.sh"
         . "$TMP/run_parallel_checklist_workers.sh"
         run_parallel_checklist_workers > "$STATE_DIR/out" 2>&1; echo $? > "$STATE_DIR/rc"

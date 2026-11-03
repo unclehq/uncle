@@ -11,6 +11,15 @@
 # further attempt can deliver -- and it never becomes a pass: the rejected rows
 # stay in implementation-completion.txt, the waiver records who accepted what,
 # and the final audit reads both.
+# The decision to go on with an acceptance contract that cannot be evaluated, written against the notes it was made for. The guard at the top
+# of the change driver's loop (implementation_complete) sends WAIT_IMPLEMENT_APPROVAL and every later stage back to IMPLEMENT while the
+# contract is unmet, so without this record the guard undid the decision below on the very next pass: IMPLEMENT continued, the guard bounced
+# it back, IMPLEMENT continued -- about twice a second, with no model call in the cycle, until someone stopped it. A new set of notes has a new
+# hash, so a fresh implementation is judged afresh.
+change_record_contract_unevaluated() {
+    hash_file "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" > "$STATE_DIR/implementation-contract-unevaluated" 2> /dev/null || true
+}
+
 change_implementation_incomplete_choice() {
     local completion="$STATE_DIR/implementation-completion.txt" ids="" answer
     # A contract the driver cannot evaluate (the notes have no acceptance rows, or rows in another shape) is not an implementation
@@ -25,6 +34,7 @@ change_implementation_incomplete_choice() {
         echo 'Planning is not run again. The run continues; the final audit reads the unevaluated contract as it stands.'
         if [[ "${UNATTENDED:-0}" == 1 ]]; then
             record_unattended_gate implementation-incomplete "continued: the acceptance contract could not be evaluated; planning is not repeated"
+            change_record_contract_unevaluated
             return 2
         fi
         while true; do
@@ -37,7 +47,7 @@ change_implementation_incomplete_choice() {
                 return 1
             fi
             case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
-                c|continue) return 2 ;;
+                c|continue) change_record_contract_unevaluated; return 2 ;;
                 s|stop|'')
                     echo "Run remains pending at IMPLEMENT."
                     return 1
@@ -183,6 +193,7 @@ change_verify_implementation_review() {
             return 0
         fi
         build_implementation_review
+        reapprove_implementation_unattended && return 0
         set_state WAIT_IMPLEMENT_APPROVAL
         echo "Approved inputs changed; review the current implementation again."
         exit 0
@@ -193,6 +204,7 @@ change_verify_implementation_review() {
         echo
         echo "The working tree changed after the implementation was approved."
         echo "$REVIEW_FILE has been rebuilt from the current tree."
+        reapprove_implementation_unattended && return 0
         set_state WAIT_IMPLEMENT_APPROVAL
         echo "Re-run the driver to review and approve what is there now."
         exit 0

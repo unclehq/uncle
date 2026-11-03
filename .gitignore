@@ -1,7 +1,7 @@
+# Uncle state is ignored, but the change attestation and its trust root are committed on the feature
+# branch; a negation only works under `.uncle/*`, never `.uncle/`.
 .uncle/*
 !.uncle/docs/
-# The change attestation and its trust root are committed on the feature
-# branch; a negation only works under `.uncle/*`, never `.uncle/`.
 !.uncle/attestation.json
 !.uncle/attestation.sig
 !.uncle/allowed_signers

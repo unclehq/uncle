@@ -134,5 +134,23 @@ UNATTENDED=0
 check "the guard checks the record before it asks supervision" bash -c 'f="$1/scripts/change-workflow.sh"; a=$(grep -n "implementation-contract-unevaluated" "$f" | head -1 | cut -d: -f1); b=$(grep -n "supervision_validation_failed implementation_completion" "$f" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$b" && "$a" -lt "$b" ]]' _ "$REPO"
 check "the choice records it on both ways to continue" bash -c '[[ "$(grep -c "change_record_contract_unevaluated" "$1/scripts/lib/implementation-gates.sh")" == 3 ]]' _ "$REPO"
 
+# 8. Notes that carry some rows but omit others (issue 141: AC-1..4 reported, AC-5 and AC-6 in the spec). The completion report holds the
+# "Acceptance IDs must match" line AND row lines. The choice used to call that an unevaluable contract and continue, the guard (rightly) did
+# not excuse it, and the two bounced the run between IMPLEMENT and the guard about once a second. The omitted rows are waivable rows.
+record_waiver() { local report="$1" id; shift; for id in "$@"; do printf 'id: %s\nreport: %s\nreason: waived without human review\n' "$id" "$report" > "$(waive_file "$id")"; done; }
+write_notes '[{"id":"AC-1","status":"IMPLEMENTED","changed_code":"src/theme.css","observed_verification":"T-11 passes"}]'
+reset; UNATTENDED=1
+check "omitted rows: the report has the ID-set line and a row line" bash -c 'grep -q "^Acceptance IDs must match" "$1" && grep -q "^AC-2: requires IMPLEMENTED" "$1"' _ "$STATE_DIR/implementation-completion.txt"
+change_implementation_incomplete_choice > "$TMP/out" 2>&1; rc=$?
+check "omitted rows: unattended waives them (2), it does not call the contract unevaluable" test "$rc" == 2
+check "omitted rows: no unevaluated-contract record is made" test ! -e "$STATE_DIR/implementation-contract-unevaluated"
+check "omitted rows: the waiver names the omitted row" test -s "$(waive_file AC-2)"
+implementation_complete WAIT_IMPLEMENT_APPROVAL > /dev/null 2>&1; rc=$?
+check "omitted rows: the guard accepts the waiver, so the run is not bounced back" test "$rc" == 0
+rm -rf "$STATE_DIR/waivers"; mkdir -p "$STATE_DIR/waivers"
+implementation_complete WAIT_IMPLEMENT_APPROVAL > /dev/null 2>&1; rc=$?
+check "omitted rows: without a waiver the guard still rejects" test "$rc" == 1
+UNATTENDED=0
+
 if [[ "$fails" -ne 0 ]]; then echo "change-contract-unevaluated-test.sh: $fails failed"; exit 1; fi
 echo "change-contract-unevaluated-test.sh: all checks passed"

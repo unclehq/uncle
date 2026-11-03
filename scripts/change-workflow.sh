@@ -3786,7 +3786,11 @@ sys.exit(0 if all(isinstance(f, dict) and f.get("driver_fallback") is True for f
     # Keep rejection evidence intact. Only explicitly waived delivery rows may
     # advance; structural errors, missing IDs, and unrelated waivers still fail.
     [[ -s "$completion" ]] || return 1
+    local waived_rows=0
     while IFS= read -r line; do
+        # The set-comparison line accompanies omitted rows; the rows themselves carry the waivers.
+        [[ "$line" != 'Acceptance IDs must match '* ]] || continue
+        waived_rows=$((waived_rows + 1))
         [[ "$line" =~ ^(AC-[0-9]+[a-z]?):\ requires\ IMPLEMENTED, ]] || return 1
         id="${BASH_REMATCH[1]}"
         waiver="$(waive_file "$id")"
@@ -3795,6 +3799,8 @@ sys.exit(0 if all(isinstance(f, dict) and f.get("driver_fallback") is True for f
         grep -qxF "report: $completion" "$waiver" || return 1
         grep -q '^reason: .*[^[:space:]]' "$waiver" || return 1
     done < "$completion"
+    # The ID-mismatch line alone (no row to waive) is not waivable.
+    [[ "$waived_rows" -gt 0 ]] || return 1
     echo "Continuing with recorded implementation waivers; rejected rows remain on record."
     return 0
 }

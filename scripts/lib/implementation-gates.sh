@@ -27,7 +27,11 @@ change_implementation_incomplete_choice() {
     # ANALYZE, which runs the whole planning pass again -- a second change-plan, and with it a second adversarial review and updated
     # plan, for a change that had nothing left to implement. Planning runs once. The run goes on with the rows as they are: the
     # verification, the test review and the final audit read what is and is not delivered, and say so.
-    if [[ -s "$completion" ]] && grep -qvE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
+    # Rows the notes omit or reject (AC-5: requires IMPLEMENTED ... got []) are a different case: they are rows, and are waived, retried or
+    # stopped on below. The guard (implementation_complete) only excuses a completion report with no such row, so this branch must agree,
+    # or the choice says "continue" and the guard bounces the run straight back to IMPLEMENT, about once a second, forever.
+    if [[ -s "$completion" ]] && grep -qvE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion" \
+        && ! grep -qE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
         echo
         echo 'The acceptance contract cannot be evaluated from the implementation notes: no acceptance rows could be read.'
         sed 's/^/  /' "$completion"
@@ -62,8 +66,10 @@ change_implementation_incomplete_choice() {
         echo "Rejected rows:"
         sed 's/^/  /' "$completion"
         # Format errors cannot be waived as acceptance rows.
-        if ! grep -qvE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
-            ids="$(awk -F: '{ printf "%s ", $1 }' "$completion")"
+        # "Acceptance IDs must match ..." is the same omission seen from the other side: it is what a missing row looks like once
+        # rows are compared as a set, so it does not make the rows themselves unwaivable.
+        if ! grep -vE '^(AC-[0-9]+[a-z]?: requires IMPLEMENTED,|Acceptance IDs must match )' "$completion" | grep -q .; then
+            ids="$(grep -E '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion" | awk -F: '{ printf "%s ", $1 }')"
         fi
     fi
     echo

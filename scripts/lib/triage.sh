@@ -19,6 +19,17 @@ TRIAGE_TOTAL_CAP="${TRIAGE_TOTAL_CAP:-98304}"
 TRIAGE_ID_PREFIXES='AC|B|I|R|S|D|MC|AR|X|INV'
 TRIAGE_PLAN_FILES='.uncle/docs/CHANGE_PLAN.md .uncle/docs/UPDATED_PROJECT_PLAN.md .uncle/docs/CHANGE_SPEC.md .uncle/docs/PROJECT_PLAN.md'
 
+# Where this driver's code really lives, resolved once at start. $ROOT can be a stable link (the Homebrew `opt` path) that survives an
+# upgrade while the versioned directory behind it is deleted and recreated, so a driver started before `brew upgrade` finds helper scripts
+# missing partway through a stage. Nothing was wrong with the run; the install under it changed.
+UNCLE_RUNTIME_KEG=""
+[[ -z "${ROOT:-}" ]] || UNCLE_RUNTIME_KEG="$(cd "$ROOT" 2> /dev/null && pwd -P)"
+
+# triage_runtime_replaced -- true when the directory this driver started from is gone.
+triage_runtime_replaced() {
+    [[ -n "${UNCLE_RUNTIME_KEG:-}" && ! -e "$UNCLE_RUNTIME_KEG/scripts/lib/triage.sh" ]]
+}
+
 # triage_stop_reason <state_dir> <reason> -- record why the driver is about to
 # stop. `human` means a person chose to stop, which is not a failure and must
 # not open triage on its own.
@@ -274,6 +285,12 @@ triage_on_exit() {
         case "$rc" in 130|143|137) return 0 ;; esac
     fi
     [[ -d "$state_dir" ]] || return 0
+    # Say so first: a stage that died on a missing helper reads like a model or product failure (grove/uncle issue 141: final-audit
+    # reviewers "did not deliver a valid packet", a repair pass, exit 1, stop reason MISSING -- after `brew upgrade` replaced the
+    # install). The run's own state is intact and a rerun resumes it on the new install.
+    if triage_runtime_replaced && [[ ! -s "$state_dir/stop-reason" ]]; then
+        triage_stop_reason "$state_dir" "uncle was reinstalled or upgraded while this run was in progress ($UNCLE_RUNTIME_KEG no longer exists); the run's state is intact, rerun to resume on the new install"
+    fi
     if ! TRIAGE_EXIT_STATUS="$rc" write_triage "$state_dir" "$state_dir/TRIAGE.md" 2>/dev/null; then
         echo "triage: could not write $state_dir/TRIAGE.md" >&2
     fi

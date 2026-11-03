@@ -15,7 +15,14 @@
 # run_claude.
 derive_module_interfaces() {
     local plan="${1:-.uncle/docs/UPDATED_PROJECT_PLAN.md}"
-    [[ "${WORKFLOW_MODULE_INTERFACES:-1}" == 1 ]] || return 1
+    # 1 always, 0 never, `auto` only for a plan with a vertical module (a step owning source and its own tests): those workers each
+    # write against the others' exports and cannot read them, and run 28 lost a repair to `useReducer(reduce, undefined, initialState)`
+    # against an `initialState` that is a value. A plan with no module step keeps the cheaper path.
+    case "${WORKFLOW_MODULE_INTERFACES:-1}" in
+        1) ;;
+        auto) [[ "$(python3 -B "$ROOT/scripts/lib/step_groups.py" has-module "$plan" 2> /dev/null)" == 1 ]] || return 1 ;;
+        *) return 1 ;;
+    esac
     local canonical="$STATE_DIR/documents/MODULE_INTERFACES.json"
     local hash_file_path="$STATE_DIR/module-interfaces-plan.sha256" plan_hash
     [[ -s "$plan" ]] || return 1

@@ -109,12 +109,60 @@ PYTEST
 final_audit="$(sed -n '/^        FINAL_AUDIT)/,/^        VALIDATE_AUDIT)/p' "$ROOT/scripts/stagegate.sh")"
 [[ "$final_audit" == *'green_wait_final'* ]] || { echo 'final audit lost green-check reuse guard' >&2; exit 1; }
 
-if route_unrunnable_application; then
-    echo 'persistent runtime failure should stop rather than loop' >&2
+# The repair was spent and the verdict stands. Unattended there is nobody to answer a triage prompt, so the failure is recorded for
+# the audit and the run goes on (the checklists look at the application directly); it must not ask for a person, and not twice.
+printf '%s\n' 'run-1' > "$STATE_DIR/run-started-at"
+record_nonblocking_failure() { printf '%s\n' "$*" >> "$temp/nonblocking"; }
+record_test_failure_disposition() { return 0; }
+rm -f "$STATE_DIR/next"
+route_unrunnable_application || { echo 'a repeated runtime failure must be carried to the audit unattended, not stop the run' >&2; exit 1; }
+[[ ! -e "$STATE_DIR/next" ]] || { echo 'carrying the failure to the audit must not change the state' >&2; exit 1; }
+[[ "$(wc -l < "$temp/nonblocking" | tr -d ' ')" == 1 ]] || { echo 'the failure must be recorded exactly once' >&2; exit 1; }
+route_unrunnable_application || exit 1
+[[ "$(wc -l < "$temp/nonblocking" | tr -d ' ')" == 1 ]] || { echo 'a second pass recorded the same failure again' >&2; exit 1; }
+UNATTENDED=0
+rm -f "$STATE_DIR/runtime-unrunnable-recorded"
+if route_unrunnable_application 2> /dev/null; then
+    echo 'attended, a persistent runtime failure should still stop for a person' >&2
     exit 1
 else
     [[ "$?" == 1 ]]
 fi
+
+# The mutation runner's own output says nothing about the application (run 14: two preview servers on one port).
+cat > "$LOG_DIR/green-check.log" <<'LOG'
+$ npx playwright test --config playwright.config.js
+  10 passed (4.2s)
+
+$ node tests/mutations/run.mjs
+CONTROL FAIL  npm run build && npx playwright test 'tests/e2e/theme.spec.js'  (0.9s)
+[WebServer] error when starting preview server:
+[WebServer] Error: Port 4173 is already in use
+Error: Process from config.webServer was not able to start. Exit code: 1
+LOG
+if green_application_not_runnable; then
+    echo 'a port collision inside the mutation runner was treated as an unrunnable application' >&2
+    exit 1
+fi
+# The same lines from the application's own e2e command still count.
+cat > "$LOG_DIR/green-check.log" <<'LOG'
+$ npx playwright test --config playwright.config.js
+[WebServer] error when starting preview server:
+Error: Process from config.webServer was not able to start. Exit code: 1
+
+$ node tests/mutations/run.mjs
+CONTROL OK    npx vitest run 'tests/unit/calc.test.js'  (0.7s)
+LOG
+green_application_not_runnable || { echo 'a real webServer failure in the e2e command was ignored' >&2; exit 1; }
+# A failure after the mutation section belongs to the next command, not to the mutation runner.
+cat > "$LOG_DIR/green-check.log" <<'LOG'
+$ node tests/mutations/run.mjs
+CONTROL OK    x  (0.7s)
+
+$ npx vite build
+Build failed with 1 error
+LOG
+green_application_not_runnable || { echo 'a build failure after the mutation section was ignored' >&2; exit 1; }
 
 # Static check on the real REPAIR state: an unrunnable-application repair
 # must be an eligible source (so it gets a real attempt when the budget

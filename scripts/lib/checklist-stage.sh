@@ -111,7 +111,43 @@ checklist_execute_worker_fastpath() {
     local post_workers_fn="${1:-}"
     local uncovered_file="$STATE_DIR/execute-checklist-uncovered.md"
     rm -f "$uncovered_file"
-    run_parallel_checklist_workers
+    # Rows the early run already passed, on the same row and the same application files, are not executed again (early_checklist.py);
+    # only the rest run, and the two are merged into the one workers document the rest of the stage reads. Nothing reusable, or any
+    # problem with it, and every row runs exactly as it always did.
+    # Rows started beside the test review finish (and are recorded against the application they started on) before anything is reused.
+    # The rows the reconciliation changed or added cannot reuse anything, so they start now, beside the early rows still running.
+    if declare -F early_checklist_changed_start > /dev/null; then early_checklist_changed_start || true; fi
+    if declare -F early_checklist_beside_review_finish > /dev/null; then early_checklist_beside_review_finish || true; fi
+    if declare -F early_checklist_reuse_prepare > /dev/null && early_checklist_reuse_prepare 2> /dev/null; then
+        local early_dir="$STATE_DIR/early-checklist" fresh="$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.fresh.json" fresh_arg=-
+        : > "$fresh"
+        # Rows already run beside the early rows (changed or added by the reconciliation) are not run again.
+        if [[ -s "$early_dir/changed.workers.json" ]]; then
+            python3 -B "$ROOT/scripts/lib/early_checklist.py" exclude "$early_dir/reduced.json" "$early_dir/changed.workers.json" "$early_dir/reduced.rest.json" \
+                && cp "$early_dir/reduced.rest.json" "$early_dir/reduced.json"
+        fi
+        if python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("checks") else 1)' "$early_dir/reduced.json" 2> /dev/null; then
+            run_parallel_checklist_workers "$early_dir/reduced.json" "$fresh"
+        fi
+        if [[ -s "$early_dir/changed.workers.json" ]]; then
+            if [[ -s "$fresh" ]]; then
+                python3 -B "$ROOT/scripts/lib/early_checklist.py" merge-early "$early_dir/changed.workers.json" "$fresh" "$early_dir/fresh.merged.json" \
+                    && cp "$early_dir/fresh.merged.json" "$fresh"
+            else
+                cp "$early_dir/changed.workers.json" "$fresh"
+            fi
+        fi
+        [[ ! -s "$fresh" ]] || fresh_arg="$fresh"
+        if python3 -B "$ROOT/scripts/lib/early_checklist.py" merge "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$early_dir/reused.json" \
+                "$fresh_arg" "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json"; then
+            echo "Checklist: $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$early_dir/reused.json") row(s) already passed in the early run on this exact application; executing the rest."
+        else
+            : > "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json"
+            run_parallel_checklist_workers
+        fi
+    else
+        run_parallel_checklist_workers
+    fi
     [[ -z "$post_workers_fn" ]] || "$post_workers_fn"
     [[ -s "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" ]] || return 2
     # Only when the workers covered every required check; the rest go to the one agent.

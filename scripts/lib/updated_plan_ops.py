@@ -57,7 +57,9 @@ Legacy schemas may instead request comma-separated strings for these lists.
 - `{"op":"insert_section","after":"<section id>","heading":"13. Title","blocks":[ ...block shapes as above... ]}`.
 
 Change as little as the finding needs: one `set_fields` on the row, not a new row. Other writers edit this plan at the
-same time; two edits to the same field of the same id are rejected, so edit only what your findings require.'''
+same time; two edits to the same field of the same id are rejected, so edit only what your findings require. When a decision
+sets a value, format, limit or rule, every row you may edit that gives an example or expected result for the same thing must
+agree with it: change any example the new rule makes impossible.'''
 
 SLICE_NOTE = '''
 
@@ -69,6 +71,10 @@ Their ops are merged mechanically with yours.
 - You own exactly these findings: %s. The other rows above are context only.
 - Write one disposition for each of your findings and none for any other.
 - Edit only what your findings require. Never rewrite what another finding obviously owns.
+- When your decision sets a value, format, limit or rule, every row of yours that states an example or an expected result for
+  the same thing must agree with it. Change any example your own rule makes impossible (a sample longer than the limit you set,
+  a value your rounding rule would not produce); a test row that keeps the old example sends the build after a result the plan
+  itself forbids.
 - Your reply has `ops`, not `patch`.
 %s'''
 

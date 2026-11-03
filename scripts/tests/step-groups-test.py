@@ -115,6 +115,28 @@ class MergeSteps(unittest.TestCase):
         self.assertEqual(roles, {1: 'scaffold', 2: 'app', 3: 'app', 4: 'app', 5: 'test', 6: 'test', 7: 'test', 8: 'test',
                                  9: 'mixed', 10: 'mixed'})
 
+    def test_the_entry_page_beside_application_source_belongs_to_the_application(self):
+        self.assertEqual(module.role({'index.html', 'src/App.jsx', 'src/main.jsx'}), 'app')
+
+    def test_the_entry_page_alone_or_beside_config_stays_scaffold(self):
+        self.assertEqual(module.role({'index.html'}), 'scaffold')
+        self.assertEqual(module.role({'index.html', 'package.json', 'vite.config.js'}), 'scaffold')
+
+    def test_a_scaffold_step_that_also_writes_the_entry_files_belongs_to_the_application(self):
+        self.assertEqual(module.role({'package.json', 'index.html', 'src/App.jsx', 'src/main.jsx'}), 'app')
+
+    def test_a_manifest_beside_application_source_with_no_entry_file_is_still_mixed(self):
+        self.assertEqual(module.role({'package.json', 'src/helpers.js'}), 'mixed')
+
+    def test_an_entry_file_beside_tests_is_still_mixed(self):
+        self.assertEqual(module.role({'src/App.jsx', 'tests/app.test.js'}), 'mixed')
+
+    def test_the_entry_step_merges_with_the_steps_whose_files_it_imports(self):
+        owned = {1: {'src/calc.js'}, 2: {'src/Calculator.jsx'}, 3: {'index.html', 'src/App.jsx', 'src/main.jsx'},
+                 4: {'src/theme.css'}}
+        with unittest.mock.patch.dict(os.environ, {'WORKFLOW_IMPLEMENT_MERGE_APP': '1'}):
+            self.assertEqual(module.merge_map(owned, [1, 2, 3, 4]), {1: [2, 3, 4]})
+
     def test_a_test_path_is_a_test_whatever_directory_holds_it(self):
         for path in ('src/App.test.jsx', 'src/__tests__/a.js', 'tests/e2e/keyboard.spec.js', 'scripts/mutate.mjs',
                      'tests/mutations/run.mjs'):
@@ -151,6 +173,162 @@ class MergeSteps(unittest.TestCase):
         self.assertFalse(module.provided_runner({'tests/mutations/list.mjs'}))
         self.assertFalse(module.provided_runner({'tests/mutations/run.mjs', 'tests/mutations/list.mjs'}))
         self.assertFalse(module.provided_runner({'src/run.mjs'}))               # not a mutation path
+
+class WaveTests(unittest.TestCase):
+    OWNED = {1: {'package.json'}, 2: {'src/calc.js'}, 3: {'src/App.jsx'}, 4: {'tests/calc.test.js'},
+             5: {'tests/e2e/a.spec.js'}, 6: {'tests/mutations/list.mjs'}, 7: {'tests/mutations/run.mjs'}, 8: set()}
+
+    def test_tests_wait_for_the_source_and_the_mutation_list_waits_for_the_tests(self):
+        self.assertEqual(module.waves([[1, 2, 3, 4, 5, 6, 7]], self.OWNED), [[1, 2, 3], [4, 5], [6, 7]])
+
+    def test_a_step_that_declared_nothing_stays_with_the_source(self):
+        self.assertEqual(module.waves([[8, 4]], self.OWNED), [[8], [4]])
+
+    def test_the_opt_out_restores_one_group(self):
+        with unittest.mock.patch.dict(os.environ, {'WORKFLOW_IMPLEMENT_TEST_WAVES': '0'}):
+            self.assertEqual(module.waves([[1, 4, 6]], self.OWNED), [[1, 4, 6]])
+
+    def test_groups_without_tests_are_untouched(self):
+        self.assertEqual(module.waves([[1, 2], [3]], self.OWNED), [[1, 2], [3]])
+
+
+class ModuleTests(unittest.TestCase):
+    def test_source_with_its_own_tests_is_a_module(self):
+        self.assertTrue(module.is_module({'src/engine/engine.js', 'src/engine/engine.test.js', 'src/engine/CONTRACT.md'}))
+
+    def test_a_module_may_own_its_styles_too(self):
+        self.assertTrue(module.is_module({'src/keypad/Keypad.jsx', 'src/keypad/keypad.css', 'src/keypad/keypad.test.jsx'}))
+
+    def test_layers_are_not_modules(self):
+        self.assertFalse(module.is_module({'src/engine.js'}))                         # source alone
+        self.assertFalse(module.is_module({'tests/engine.test.js'}))                  # tests alone
+        self.assertFalse(module.is_module({'package.json', 'vite.config.js'}))        # scaffold alone
+        self.assertFalse(module.is_module({'package.json', 'tests/a.test.js'}))       # scaffold and a test, no source
+
+    def test_nothing_declared_and_star_are_not_modules(self):
+        self.assertFalse(module.is_module(set()))
+        self.assertFalse(module.is_module({'*'}))
+
+    def test_a_step_that_declared_a_test_runner_config_is_not_made_a_module_by_it(self):
+        self.assertFalse(module.is_module({'vitest.config.js', 'tests/setup.js'}))
+
+
+class ModuleWaveTests(unittest.TestCase):
+    OWNED = {1: {'package.json', 'vite.config.js'}, 2: {'src/engine/engine.js', 'src/engine/engine.test.js'},
+             3: {'src/keyboard/keyboard.js', 'src/keyboard/keyboard.test.js'}, 4: {'src/App.jsx', 'index.html'},
+             5: {'e2e/calc.spec.js'}, 6: {'tests/mutations/list.mjs'}}
+
+    def test_with_modules_the_scaffold_lands_first_alone(self):
+        self.assertEqual(module.waves([[1, 2, 3, 4, 5, 6]], self.OWNED), [[1], [2, 3, 4], [5], [6]])
+
+    def test_without_modules_the_scaffold_stays_beside_the_source(self):
+        layers = {1: {'package.json'}, 2: {'src/engine.js'}, 3: {'tests/engine.test.js'}}
+        self.assertEqual(module.waves([[1, 2, 3]], layers), [[1, 2], [3]])
+
+    def test_modules_and_a_shell_share_a_wave(self):
+        self.assertIn([2, 3, 4], module.waves([[1, 2, 3, 4, 5, 6]], self.OWNED))
+
+    def test_with_waves_off_nothing_is_split(self):
+        with unittest.mock.patch.dict(os.environ, {'WORKFLOW_IMPLEMENT_TEST_WAVES': '0'}):
+            self.assertEqual(module.waves([[1, 2, 3, 4, 5, 6]], self.OWNED), [[1, 2, 3, 4, 5, 6]])
+            self.assertFalse(module.waves_enabled())
+
+    def test_the_manifest_owner_is_the_scaffold_even_with_files_the_scaffold_pattern_does_not_know(self):
+        """Live run 12: the scaffold also owned `vitest.setup.js`, was not separated, and the modules ran their tests with nothing installed."""
+        owned = dict(self.OWNED); owned[1] = {'package.json', 'vite.config.js', 'vitest.setup.js'}
+        self.assertEqual(module.waves([[1, 2, 3, 4, 5, 6]], owned), [[1], [2, 3, 4], [5], [6]])
+
+    def test_a_manifest_owner_with_entry_files_still_lands_first_when_modules_are_present(self):
+        owned = dict(self.OWNED); owned[1] = {'package.json', 'src/main.jsx'}
+        self.assertEqual(module.waves([[1, 2, 3]], owned), [[1], [2, 3]])
+
+    def test_without_modules_a_manifest_owner_stays_with_the_source(self):
+        layers = {1: {'package.json', 'vitest.setup.js'}, 2: {'src/engine.js'}, 3: {'tests/engine.test.js'}}
+        self.assertEqual(module.waves([[1, 2, 3]], layers), [[1, 2], [3]])
+
+    def test_the_manifest_rule_recognizes_other_ecosystems(self):
+        for name in ('package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Gemfile', 'composer.json', 'app/package.json'):
+            self.assertTrue(module.owns_manifest({name}), name)
+        self.assertFalse(module.owns_manifest({'package-lock.json', 'src/package.js', 'tests/a.test.js'}))
+
+
+class WaveGroupsFromAPlan(unittest.TestCase):
+    """The command the prompt builder calls, end to end through a real plan file."""
+    PLAN = (
+        '# Plan\n\n## 12. Implementation steps\n\n'
+        '1. Scaffold. Owns: `package.json`\n'
+        '2. Engine module. Owns: `src/engine.js`, `src/engine.test.js`\n'
+        '3. Shell. Owns: `src/App.jsx`\n'
+    )
+
+    def command(self, *args, env=None):
+        import subprocess, tempfile
+        plan = Path(tempfile.mkdtemp()) / 'plan.md'
+        plan.write_text(self.PLAN)
+        full = dict(os.environ); full.update(env or {})
+        return subprocess.run([sys.executable, str(Path(module.__file__)), *args[:1], str(plan), *args[1:]], capture_output=True,
+                              text=True, env=full).stdout.split()
+
+    def test_module_step_flags_only_the_module(self):
+        self.assertEqual(self.command('module-step', '1', '2', '3'), ['0', '1', '0'])
+
+    def test_module_step_is_zero_everywhere_when_waves_are_off(self):
+        self.assertEqual(self.command('module-step', '1', '2', '3', env={'WORKFLOW_IMPLEMENT_TEST_WAVES': '0'}), ['0', '0', '0'])
+
+
+class WritesSourceTests(unittest.TestCase):
+    def test_application_source_is_source(self):
+        self.assertTrue(module.writes_source({'src/App.jsx'}))
+        self.assertTrue(module.writes_source({'src/engine/engine.js', 'src/engine/engine.test.js'}))
+
+    def test_the_scaffold_alone_is_not(self):
+        self.assertFalse(module.writes_source({'package.json', 'vite.config.js', '.gitignore'}))
+
+    def test_tests_alone_are_not(self):
+        self.assertFalse(module.writes_source({'tests/a.test.js', 'e2e/a.spec.js', 'tests/mutations/list.mjs'}))
+
+    def test_star_and_nothing_are_not(self):
+        self.assertFalse(module.writes_source({'*'}))
+        self.assertFalse(module.writes_source(set()))
+
+    def test_the_entry_page_counts_as_source_beside_nothing_else(self):
+        self.assertFalse(module.writes_source({'index.html'}))             # scaffold by itself
+
+    def test_has_source_reads_a_real_plan(self):
+        plan = ('# Plan\n\n## 12. Implementation steps\n\n1. Scaffold. Owns: `package.json`\n'
+                '2. Engine. Owns: `src/engine.js`\n3. Tests. Owns: `tests/engine.test.js`\n')
+        import subprocess, tempfile
+        path = Path(tempfile.mkdtemp()) / 'plan.md'
+        path.write_text(plan)
+        out = subprocess.run([sys.executable, str(Path(module.__file__)), 'has-source', str(path), '1', '2', '3'],
+                             capture_output=True, text=True).stdout.split()
+        self.assertEqual(out, ['0', '1', '0'])
+
+
+class HasModuleTests(unittest.TestCase):
+    """The module-interfaces stage runs, in `auto` mode, only for a plan with a vertical module."""
+
+    def run_plan(self, plan):
+        import subprocess, tempfile
+        path = Path(tempfile.mkdtemp()) / 'plan.md'
+        path.write_text(plan)
+        return subprocess.run([sys.executable, str(Path(module.__file__)), 'has-module', str(path)], capture_output=True, text=True).stdout.split()
+
+    def test_a_step_owning_source_and_its_tests_is_a_module(self):
+        self.assertEqual(self.run_plan('# Plan\n\n## 12. Implementation steps\n\n1. Scaffold. Owns: `package.json`\n'
+                                       '2. Engine. Owns: `src/engine.js`, `tests/engine.test.js`\n'), ['1'])
+
+    def test_separate_source_and_test_steps_are_not(self):
+        self.assertEqual(self.run_plan('# Plan\n\n## 12. Implementation steps\n\n1. Scaffold. Owns: `package.json`\n'
+                                       '2. Engine. Owns: `src/engine.js`\n3. Tests. Owns: `tests/engine.test.js`\n'), ['0'])
+
+    def test_a_scaffold_alone_or_a_step_owning_everything_is_not(self):
+        self.assertEqual(self.run_plan('# Plan\n\n## 12. Implementation steps\n\n1. Everything. Owns: `*`\n'), ['0'])
+
+    def test_one_module_among_many_steps_is_enough(self):
+        self.assertEqual(self.run_plan('# Plan\n\n## 12. Implementation steps\n\n1. Scaffold. Owns: `package.json`\n2. View. Owns: `src/App.jsx`\n'
+                                       '3. Keys. Owns: `src/keymap.js`, `tests/keymap.test.js`\n4. Spec. Owns: `e2e/a.spec.js`\n'), ['1'])
+
 
 if __name__ == '__main__':
     unittest.main()

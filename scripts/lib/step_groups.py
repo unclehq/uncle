@@ -140,12 +140,21 @@ SCAFFOLD_PATH = re.compile(r'(^|/)(package\.json|package-lock\.json|npm-shrinkwr
                            r'\.gitignore|\.uncle/.*|tsconfig[^/]*\.json|[^/]*\.config\.[cm]?[jt]s|\.eslintrc[^/]*|\.prettierrc[^/]*|\.env[^/]*)$', re.I)
 
 
+# The entry files link everything else: the page links the scripts and stylesheets, `main` and `App` import the components and the
+# theme (live: `src/theme.css` never imported, so the page had no theme, because the step that wrote the entry files and the
+# step that wrote the stylesheet were different workers). A step that owns an entry file beside application source, and
+# otherwise only scaffold, belongs to the application's worker. Scaffold alone stays scaffold; anything with tests stays mixed.
+ENTRY_FILE = re.compile(r'(^|/)(index\.html|main\.[cm]?[jt]sx?|App\.[cm]?[jt]sx?)$', re.I)
+
+
 def role(paths):
     """'test', 'scaffold' or 'app' when every owned path agrees; 'mixed' for anything else, including a step that owns `*`."""
     paths = {p for p in paths if p}
     if not paths or '*' in paths:
         return 'mixed'
     kinds = {'test' if TEST_PATH.search(p) else 'scaffold' if SCAFFOLD_PATH.search(p) else 'app' for p in paths}
+    if kinds == {'scaffold', 'app'} and any(ENTRY_FILE.search(p) for p in paths):
+        return 'app'
     return kinds.pop() if len(kinds) == 1 else 'mixed'
 
 
@@ -161,6 +170,72 @@ def provided_runner(paths):
         return False
     match = re.match(r'^(?:.*/)?([^/]+)\.m?js$', paths[0])
     return bool(match and match.group(1).lower() in RUNNER_NAMES and re.search(r'mutat|defect|inject', paths[0].lower()))
+
+
+MUTATION_PATH = re.compile(r'mutat|defect-inject', re.I)
+
+
+def wave_rank(paths):
+    """0 = scaffold and application source, 1 = tests, 2 = the defect-injection list.
+
+    Tests and the mutation list are written to match code they must name exactly: a selector, an export, a find string
+    that has to occur once in a source file. Written beside that code by workers that cannot see it, they disagree with it
+    (live: six of nine injection patches matched zero or two times, and the digit limit no step owned was never built), and
+    a repair pass was then needed every run. Running them after the source lets them read what they test."""
+    paths = {p for p in paths if p}
+    if not paths or '*' in paths:
+        return 0
+    if all(MUTATION_PATH.search(p) for p in paths):
+        return 2
+    if all(TEST_PATH.search(p) for p in paths):
+        return 1
+    return 0
+
+
+# The step that owns the package manifest is the scaffold, whatever else it owns: it declares the dependencies and the test runner's
+# configuration every other step's checks depend on. Recognizing it by its other files was fragile (live run 12: it also owned
+# `vitest.setup.js`, which the scaffold pattern does not match, so it was not separated and the module workers ran their own tests
+# with no dependencies installed and no test configuration, and passed in an environment the real project does not have).
+MANIFEST = re.compile(r'(^|/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod|Gemfile|composer\.json)$')
+
+
+def owns_manifest(paths):
+    return any(MANIFEST.search(p) for p in paths if p)
+
+
+def is_module(paths):
+    """A vertical module: one step that owns application source and its own tests (and usually its styles and a contract).
+
+    Such a step is not a layer. Its worker writes code and the tests for that code together, so it can run those tests itself, and
+    nothing it owns waits on another worker's files except through a declared contract. Scaffold files alone, tests alone, `*` and a
+    step that declares nothing are not modules."""
+    paths = {p for p in paths if p}
+    if not paths or '*' in paths:
+        return False
+    has_tests = any(TEST_PATH.search(p) for p in paths)
+    has_source = any(not TEST_PATH.search(p) and not SCAFFOLD_PATH.search(p) for p in paths)
+    return has_tests and has_source
+
+
+def waves_enabled():
+    return os.environ.get('WORKFLOW_IMPLEMENT_TEST_WAVES', '1') == '1'
+
+
+def waves(groups, owned):
+    """Split each parallel group into consecutive waves by `wave_rank`, so a step that checks code runs after the code.
+
+    WORKFLOW_IMPLEMENT_TEST_WAVES=0 restores one concurrent group. Steps that mix roles, own `*` or declare nothing stay in wave 0."""
+    if not waves_enabled():
+        return groups
+    out = []
+    for g in groups:
+        # A module worker runs its own tests, which needs the dependencies the scaffold declares: with modules in the group the
+        # scaffold lands first, alone, so the driver can install before they start. Without modules it stays beside the source.
+        modules = any(is_module(owned.get(s, ())) for s in g)
+        ranks = {s: -1 if modules and (role(owned.get(s, ())) == 'scaffold' or owns_manifest(owned.get(s, ()))) else
+                 wave_rank(owned.get(s, ())) for s in g}
+        out.extend([s for s in g if ranks[s] == r] for r in sorted(set(ranks.values())))
+    return out
 
 
 MERGE_MODES = ('0', '1', '2')
@@ -228,10 +303,8 @@ def merge_map_main(plan, group):
     return 0
 
 
-def main():
-    if sys.argv[1:2] == ['merge-map']:
-        return merge_map_main(sys.argv[2], sys.argv[3:])
-    plan, root = sys.argv[1], sys.argv[2]
+def load_plan(plan):
+    """(steps, owned, deps) as the plan declares them."""
     lib = Path(__file__).resolve().parent
 
     def sh(fn):
@@ -242,13 +315,62 @@ def main():
     from plan_records import load, step_data
     model = load(plan)
     if model is not None:
-        steps, owned, deps = step_data(model)
-    else:
-        steps = [s for s in sh('plan_steps') if s.strip()]
-        owned, deps = owns(sh('plan_step_owns')), depends(sh('plan_step_depends'))
+        return step_data(model)
+    return [s for s in sh('plan_steps') if s.strip()], owns(sh('plan_step_owns')), depends(sh('plan_step_depends'))
+
+
+def writes_source(paths):
+    """True when a step owns at least one application source file: not a test, not scaffold, not `*`. Such a wave can be built."""
+    return any(p and p != '*' and not TEST_PATH.search(p) and not SCAFFOLD_PATH.search(p) for p in paths)
+
+
+def has_source_main(plan, steps):
+    """One line per requested step: 1 when it owns application source, else 0."""
+    _, owned, _ = load_plan(plan)
+    for step in steps:
+        print(1 if writes_source(owned.get(int(step), ())) else 0)
+    return 0
+
+
+def module_step_main(plan, steps):
+    """One line per requested step: 1 when it is a vertical module and waves are on, else 0."""
+    _, owned, _ = load_plan(plan)
+    for step in steps:
+        print(1 if waves_enabled() and is_module(owned.get(int(step), ())) else 0)
+    return 0
+
+
+def has_module_main(plan, _steps):
+    """1 when any step of the plan is a vertical module (owns application source and its own tests), else 0."""
+    _, owned, _ = load_plan(plan)
+    print(1 if any(is_module(paths) for paths in owned.values()) else 0)
+    return 0
+
+
+def wave_rank_main(plan, steps):
+    """One rank per requested step, one per line: 0 source and scaffold, 1 tests, 2 the defect-injection list."""
+    _, owned, _ = load_plan(plan)
+    for step in steps:
+        print(wave_rank(owned.get(int(step), ())))
+    return 0
+
+
+def main():
+    if sys.argv[1:2] == ['merge-map']:
+        return merge_map_main(sys.argv[2], sys.argv[3:])
+    if sys.argv[1:2] == ['wave-rank']:
+        return wave_rank_main(sys.argv[2], sys.argv[3:])
+    if sys.argv[1:2] == ['has-source']:
+        return has_source_main(sys.argv[2], sys.argv[3:])
+    if sys.argv[1:2] == ['has-module']:
+        return has_module_main(sys.argv[2], sys.argv[3:])
+    if sys.argv[1:2] == ['module-step']:
+        return module_step_main(sys.argv[2], sys.argv[3:])
+    plan, root = sys.argv[1], sys.argv[2]
+    steps, owned, deps = load_plan(plan)
     total = len(steps)
     ignore_deps = os.environ.get('WORKFLOW_IMPLEMENT_IGNORE_DEPENDS', '1') == '1'
-    groups = group(total, owned, deps, ignore_deps) if total else []
+    groups = waves(group(total, owned, deps, ignore_deps), owned) if total else []
     declared = sorted({p for v in owned.values() for p in v})
     actual = sorted(set(changed_files(root)))
     # Accuracy is measured against *specific* claims only. A reconciling step

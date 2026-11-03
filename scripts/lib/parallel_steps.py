@@ -31,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from triage_guard import make_sandbox, drop_sandbox, copy_entry, walk, git_ok, SANDBOX_EXCLUDES   # noqa: E402
 from step_groups import covers                                # noqa: E402
+from uncle_gitignore import only_adds_managed                    # noqa: E402
 
 SKIP = ('.uncle/', '.git/')
 
@@ -165,7 +166,10 @@ def snapshot(root, project):
         rel = path.relative_to(root).as_posix()
         if any(rel.startswith(prefix) for prefix in SKIP) and rel not in MERGEABLE_WORKFLOW_FILES:
             continue
-        if any(rel == prefix or rel.startswith(prefix.rstrip('/') + '/') for prefix in ignored):
+        # The launch manifest is exempt from the ignore rules as well as from SKIP: the scaffold's .gitignore carries a bare `.uncle`
+        # line, which made all of `.uncle/` look ignored and dropped the file (run 19: the worker wrote it, nothing merged it, and
+        # the early checklist could not start the app).
+        if rel not in MERGEABLE_WORKFLOW_FILES and any(rel == prefix or rel.startswith(prefix.rstrip('/') + '/') for prefix in ignored):
             continue
         try:
             out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -193,6 +197,41 @@ def changed(before, after, project=None):
             except OSError:
                 pass
         found.add(rel)
+    return found
+
+
+def read_text(path):
+    try:
+        return Path(path).read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def managed_ignore_only(before_text, after_text):
+    """True when a .gitignore differs from its baseline only by Uncle's own ignore lines.
+
+    The driver normalizes ignore rules in every sandbox next to the worker (it appends a bare `.uncle`). That is not a write any step
+    made, and counting it as one refused whole waves: in live run 9 the scaffold worker dropped `.uncle`, every later-wave sandbox got
+    it back, five correct workers were each blamed for `.gitignore`, nothing merged, and one serial agent redid the work (+3 minutes).
+    The other guards already tolerate exactly this and nothing more (uncle_gitignore.only_adds_managed): any rule of the project's own
+    that is added or removed still counts."""
+    return before_text is not None and after_text is not None and only_adds_managed(before_text, after_text)
+
+
+def project_leaks(before, after, owned, ignore=()):
+    """Files that changed in the live project while a group ran, which only a worker writing outside its sandbox can explain.
+
+    Workers choose an absolute path for Write, and in practice about half chose the project root over their own copy (live runs 3, 5
+    and 6): the ownership check then never saw the file. `owned` maps step number to its declared paths. Returns {step: [paths]}, with
+    the key 'unowned' for a path no step in the group declared. Reporting only: the driver also touches the project root, so this
+    must never fail a group."""
+    found = {}
+    for rel in sorted(changed(before, after)):
+        if rel in ignore:
+            continue
+        owners = [number for number, paths in owned.items() if covers(paths, rel)]
+        for key in (owners or ['unowned']):
+            found.setdefault(key, []).append(rel)
     return found
 
 
@@ -319,9 +358,12 @@ def run_step(spec, results):
         before = spec['baseline']
         proc = subprocess.run(spec['command'], cwd=sandbox, env=spec['env'],
                               stdout=open(spec['log'], 'wb'), stderr=subprocess.STDOUT)
+        wrote = sorted(changed(before, snapshot(sandbox, spec['project']), spec['project']))
+        if '.gitignore' in wrote and managed_ignore_only(spec.get('gitignore_before'), read_text(Path(sandbox) / '.gitignore')):
+            wrote.remove('.gitignore')
         results[number] = {'exit': proc.returncode,
                            'seconds': round(time.monotonic() - started, 3),
-                           'wrote': sorted(changed(before, snapshot(sandbox, spec['project']), spec['project']))}
+                           'wrote': wrote}
     except Exception as error:  # noqa: BLE001 - see docstring: must never leave results[number] unset.
         results[number] = {'exit': 1, 'seconds': round(time.monotonic() - started, 3),
                            'wrote': [], 'detail': str(error)}
@@ -428,6 +470,21 @@ def tree_fingerprint(project):
     return digest.hexdigest()
 
 
+# Installed dependency directories a worker needs in order to run what it writes. A sandbox leaves generated directories out, so
+# without these a later-wave worker, whose source already exists, still cannot run its own tests. Opt-in per group
+# (UNCLE_LINK_DEPENDENCIES=1, set by the driver for waves after the first): a first-wave worker has nothing to run, and
+# copying or exposing these directories costs more than it saves.
+LINKED_DEPENDENCIES = ('node_modules',)
+
+
+def link_dependencies(project, sandbox):
+    """Point the sandbox at the project's installed dependencies. A link is never a file the step wrote: `snapshot` skips symlinks."""
+    for name in LINKED_DEPENDENCIES:
+        source, target = Path(project) / name, Path(sandbox) / name
+        if source.is_dir() and not (target.exists() or target.is_symlink()):
+            target.symlink_to(source.resolve(), target_is_directory=True)
+
+
 def refresh_overlay(project, sandbox):
     """Synchronize a sandbox with current, non-generated project inputs.
 
@@ -526,10 +583,12 @@ def main():
                 if attempt == 2:      # git can refuse two worktree adds at the same instant; once more, alone
                     raise
                 time.sleep(0.2 * number)
+        if os.environ.get('UNCLE_LINK_DEPENDENCIES') == '1':
+            link_dependencies(project, sandbox)
         return {'number': number, 'project': project, 'sandbox': str(sandbox),
                 'command': step['command'], 'log': step['log'],
                 'env': dict(os.environ, **step.get('env', {})),
-                'baseline': snapshot(sandbox, project)}
+                'baseline': snapshot(sandbox, project), 'gitignore_before': read_text(sandbox / '.gitignore')}
 
     try:
         jobs = max(1, min(len(steps), int(os.environ.get('WORKFLOW_SANDBOX_JOBS') or 8)))
@@ -542,12 +601,21 @@ def main():
         print('Could not mirror the tree for a step: %s' % error, file=sys.stderr)
         return 2
 
+    project_before = snapshot(project, project)
+    ignore_before = read_text(Path(project) / '.gitignore')
     for spec in specs:
         thread = threading.Thread(target=run_step, args=(spec, results))
         thread.start()
         threads.append(thread)
     for thread in threads:
         thread.join()
+    quiet = ['.gitignore'] if managed_ignore_only(ignore_before, read_text(Path(project) / '.gitignore')) else []
+    leaks = project_leaks(project_before, snapshot(project, project), owned, quiet)
+    for number, files in sorted(leaks.items(), key=lambda item: str(item[0])):
+        who = 'Step %s' % number if number != 'unowned' else 'A step'
+        where = 'in its own declared paths' if number != 'unowned' else 'outside every declared path'
+        print('%s wrote to the live project root instead of its sandbox, %s: %s' % (who, where, ', '.join(files[:8])),
+              file=sys.stderr)
 
     numbers = [s['number'] for s in steps]
     failed = [n for n in numbers if results.get(n, {}).get('exit')]
@@ -573,7 +641,7 @@ def main():
 
     for number in numbers:
         drop_sandbox(project, base / ('step-%d' % number))
-    print(json.dumps({'merged': numbers,
+    print(json.dumps({'merged': numbers, 'leaks': {str(k): v for k, v in leaks.items()},
                       'files': sorted({f for n in numbers for f in results[n]['wrote']}),
                       'elapsed_seconds': round(time.monotonic() - started, 3),
                       'step_seconds': {str(n): results[n]['seconds'] for n in numbers},

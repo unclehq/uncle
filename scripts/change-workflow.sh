@@ -96,6 +96,9 @@ REPAIR_BASE_PROMPT=prompts/change/repair.md
 # final audit.  Set to 0 for the legacy stop-at-the-diff-gate behaviour.
 WORKFLOW_AUTO_REPAIR="${WORKFLOW_AUTO_REPAIR:-1}"
 WORKFLOW_CONTINUE_ON_TEST_FAILURE="${WORKFLOW_CONTINUE_ON_TEST_FAILURE:-1}"
+# Tests after source is for a new application, whose tests are written against code that does not exist yet. A change plan's
+# regression-first steps write tests that are meant to fail before the fix, so its groups stay whole unless this is set to 1.
+export WORKFLOW_IMPLEMENT_TEST_WAVES="${WORKFLOW_IMPLEMENT_TEST_WAVES:-0}"
 
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then

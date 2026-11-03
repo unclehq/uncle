@@ -135,5 +135,96 @@ class Apply(unittest.TestCase):
             self.assertFalse((root / 'o2.json').exists())
 
 
+PLAN = """| B-7 | Operator in OpPending | Replaces the stored operator without evaluating | None | R-5 |
+| I-4 | Backspace in Error is ignored |
+"""
+
+
+class PlanRows(unittest.TestCase):
+    """Run 25: the draft expected `0 * - 1 =` to show 0, the plan (B-7) says a second operator replaces the first, so -1. The check is
+    brought into line with the plan, naming the row; the build is never the authority."""
+
+    def setUp(self):
+        self.draft = draft(check('MC-100'), check('MC-101'))
+
+    def modify(self, **entry):
+        base = {'id': 'MC-100', 'reason': GOOD, 'fields': {'expected_result': 'shows -1 (B-7: the second operator replaces the first)'}}
+        return packet(modify=[dict(base, **entry)])
+
+    def test_a_cited_plan_row_is_audited(self):
+        final, audit = r.apply(self.draft, self.modify(plan_row='B-7'), PLAN)
+        self.assertEqual(audit['modified'][0]['plan_row'], ['B-7'])
+        self.assertIn('-1', final['checks'][0]['expected_result'])
+
+    def test_several_rows_may_be_cited(self):
+        _, audit = r.apply(self.draft, self.modify(plan_row='B-7, I-4'), PLAN)
+        self.assertEqual(audit['modified'][0]['plan_row'], ['B-7', 'I-4'])
+
+    def test_a_list_of_rows_is_accepted_too(self):
+        _, audit = r.apply(self.draft, self.modify(plan_row=['B-7']), PLAN)
+        self.assertEqual(audit['modified'][0]['plan_row'], ['B-7'])
+
+    def test_a_row_the_plan_does_not_have_is_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            r.apply(self.draft, self.modify(plan_row='B-99'), PLAN)
+        self.assertIn('the plan has no row B-99', str(caught.exception))
+
+    def test_one_missing_row_among_real_ones_is_refused(self):
+        with self.assertRaises(ValueError):
+            r.apply(self.draft, self.modify(plan_row='B-7, B-99'), PLAN)
+
+    def test_something_that_is_not_a_row_id_is_refused(self):
+        for bad in ('the plan', 'b-7', 'B7', 'B-7;DROP'):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                r.apply(self.draft, self.modify(plan_row=bad), PLAN)
+
+    def test_the_citation_is_optional_and_nothing_is_recorded_without_it(self):
+        _, audit = r.apply(self.draft, self.modify(), PLAN)
+        self.assertNotIn('plan_row', audit['modified'][0])
+
+    def test_without_the_plan_the_shape_is_still_checked_but_existence_is_not(self):
+        r.apply(self.draft, self.modify(plan_row='B-99'))
+        with self.assertRaises(ValueError):
+            r.apply(self.draft, self.modify(plan_row='nonsense'))
+
+    def test_citing_a_plan_row_does_not_lift_the_other_rules(self):
+        with self.assertRaises(ValueError):
+            r.apply(self.draft, packet(modify=[{'id': 'MC-100', 'reason': GOOD, 'plan_row': 'B-7',
+                                                'fields': {'expected_result': '   '}}]), PLAN)
+        with self.assertRaises(ValueError):
+            r.apply(self.draft, packet(modify=[{'id': 'MC-100', 'reason': GOOD, 'plan_row': 'B-7', 'fields': {'required': False}}]), PLAN)
+
+    def test_the_command_line_reads_the_plan_when_given(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'd.json').write_text(json.dumps(self.draft))
+            (root / 'plan.md').write_text(PLAN)
+            run = lambda *a: subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/lib/checklist_reconcile.py'), 'apply', *a],
+                                            capture_output=True, text=True)
+            (root / 'p.json').write_text(json.dumps(self.modify(plan_row='B-99')))
+            refused = run(str(root / 'd.json'), str(root / 'p.json'), str(root / 'o.json'), str(root / 'a.json'), str(root / 'plan.md'))
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn('the plan has no row B-99', refused.stderr)
+            (root / 'p.json').write_text(json.dumps(self.modify(plan_row='B-7')))
+            done = run(str(root / 'd.json'), str(root / 'p.json'), str(root / 'o.json'), str(root / 'a.json'), str(root / 'plan.md'))
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(json.loads((root / 'a.json').read_text())['modified'][0]['plan_row'], ['B-7'])
+            self.assertEqual(run(str(root / 'd.json'), str(root / 'p.json'), str(root / 'o.json'), str(root / 'a.json'),
+                                 str(root / 'missing.md')).returncode, 0)
+
+
+class Prompt(unittest.TestCase):
+    def test_the_reconciler_is_told_to_check_the_checklist_against_the_plan(self):
+        text = ' '.join((ROOT / 'prompts/manual-checklist-reconcile.md').read_text(encoding='utf-8').split())
+        self.assertIn('`.uncle/docs/UPDATED_PROJECT_PLAN.md`', text)
+        self.assertIn('modify** a draft check whose expected result contradicts a row of the approved plan', text)
+        self.assertIn('The plan is the authority; the build is not.', text)
+        self.assertIn('Never change an expected result to match the build instead of the plan.', text)
+
+    def test_the_stage_hands_the_plan_to_the_driver(self):
+        text = ' '.join((ROOT / 'scripts/stagegate.sh').read_text(encoding='utf-8').split())
+        self.assertIn('MANUAL_CHECKLIST_RECONCILIATION.json" .uncle/docs/UPDATED_PROJECT_PLAN.md', text)
+
+
 if __name__ == '__main__':
     unittest.main()

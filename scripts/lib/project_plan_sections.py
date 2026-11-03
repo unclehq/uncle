@@ -118,11 +118,18 @@ SPECIFIC = {
         '- `## Steps`: numbered implementation steps, `1. Title -- Owns: `a`, `b` -- Depends on: 2`. Every file the '
         'project needs (source, tests, test and runner configuration, fixtures, `.gitignore`, `.uncle/launch.json`) is '
         'under exactly one step\'s `Owns:`. At most three dependencies per step; most steps have none. Steps are '
-        'implemented at the same time and the slowest sets the time: give independent unit, UI, keyboard, and other '
-        'test suites separate steps with disjoint owned files. Keep test configuration and shared fixtures in their '
-        'own steps. Specify exact shared exports, data shapes, selectors, test titles and fixture contracts before '
+        'implemented at the same time and the slowest sets the time. A source file that unit tests can exercise alone '
+        '(an engine, a key map, a formatter) is one step together with its own unit test file: the worker who writes the '
+        'code writes and runs its tests, so they cannot disagree. Say in that step that its tests cover every behavior, '
+        'invariant and failure row that concerns the module, the cases where an input does nothing included. '
+        'Browser, keyboard and theme specs need the whole '
+        'application: give each its own step with disjoint owned files. Keep test configuration and shared fixtures in '
+        'their own steps. Specify exact shared exports, data shapes, selectors, test titles and fixture contracts before '
         'fan-out; tests must not wait for implementation files to be written. For browser projects, assign reusable '
         'acceptance probes and per-probe `*.acceptance.md` handoffs to the test steps, beside their test files. '
+        'For a browser application with keyboard input, the step that owns the entry file mounts the app synchronously (React: '
+        '`flushSync` around `render`) so the key listener exists when the page loads, and every browser spec that presses a '
+        'key first waits for the display to show its initial value. '
         'Handoffs map requirement IDs to exact invocations, runtime URL arguments, assertions and human-only gaps. '
         'Probes use isolated state/output, no installs/builds/server startup or snapshot updates, and fail nonzero '
         'on assertion failure. Keep probes outside automatic discovery unless they support the normal test runner. '
@@ -198,7 +205,10 @@ SPECIFIC = {
         'three requirements, there is nothing for you: write the single word NONE as one prose block and no table.'),
     'behaviors': (
         'Give every behavior an ID `B-n` in one table: trigger, observable result, failure behavior, requirement '
-        'IDs. Cite requirements by their interpretation IDs. Do not name test IDs or test files here. You start before the '
+        'IDs. Cite requirements by their interpretation IDs. Do not name test IDs or test files here. Where the application '
+        'has states (an error showing, a result showing, an entry in progress), give each kind of input its own behavior row '
+        'in each state, including the inputs that do nothing there, so no combination is left for a reader to guess: the '
+        'checklist and the code are written apart from each other and read this table alone. You start before the '
         'outline exists: work from the requirements alone and do not name components. The failure '
         'handling, concurrency and manual-test sections are written beside you by another worker.'),
     'handling': (
@@ -228,7 +238,11 @@ SPECIFIC = {
         '`see 10`. Enforcement points name components (`C-n`) and files from the outline. Map only the requirements your '
         'invariants cover in `trace`; the other worker maps the rest.'),
     'tests': (
-        'Give every automated test an ID `T-n`. Use only test files, configuration and the runner that the outline '
+        'Give every automated test an ID `T-n`. Do not work out a long number by hand: for an expected value that is a long '
+        'computed result (a product of large numbers, a rounded or formatted value) state the rule and the input in words '
+        '(for example "the 12-significant-digit rounding of 99999999999 squared") and write digits only when you are certain; '
+        'a wrong digit string is copied into every test and checklist row, and the driver checks products of whole numbers '
+        'against the exact value. Use only test files, configuration and the runner that the outline '
         'assigns to a step; never invent a path it does not own. Plan tests from the requirements and acceptance '
         'criteria, not from behaviors or invariants, which are being written beside you. Write the runner matrix and '
         'the test table only: the defect injections, the acceptance obligations and the protected verification paths '

@@ -1,0 +1,44 @@
+{
+  "schema": "uncle.artifact/v1",
+  "kind": "manual-checklist",
+  "checks": [
+    {
+      "exact_action": "Open the built app in a desktop browser and look at the page on load without interacting.",
+      "exclusive_resources": [],
+      "expected_result": "A calculator is visible with display showing 0, and a themed page background with a psychedelic gradient.",
+      "id": "MC-100"
+    },
+    {
+      "exact_action": "Click 2, +, 3, x, 4, = with the mouse, then click C, then enter 5, /, 0, = and then click 7.",
+      "exclusive_resources": [],
+      "expected_result": "2+3x4= shows 20; C resets to 0; 5/0= shows Error; pressing 7 afterward starts a fresh number showing 7.",
+      "id": "MC-101"
+    },
+    {
+      "exact_action": "Without clicking any button, press keys 2 + 3 * 4 Enter, then Backspace, Escape, then the letter x, then 1 . . 2.",
+      "exclusive_resources": [],
+      "expected_result": "Mapped keys behave like their buttons (20 after Enter, Escape clears to 0), letter x changes nothing, and a second decimal point is ignored (1.2); pressed keys briefly highlight their buttons.",
+      "id": "MC-102"
+    },
+    {
+      "exact_action": "Enter 0.1 + 0.2 = and then type a 20-digit number and compute 999999999999 x 999999999999.",
+      "exclusive_resources": [],
+      "expected_result": "0.3 displays; typed entry stops at 12 digits; the huge product shows in exponential form; text never spills outside the display box.",
+      "id": "MC-103"
+    },
+    {
+      "exact_action": "Visually judge the page background, button colors, fonts and rounded buttons for a groovy 1970s feel (burnt orange, mustard, avocado, brown, cream) and label readability.",
+      "exclusive_resources": [],
+      "expected_result": "Reviewer records a verdict of groovy and legible, or marks it waived/unverified; it is never assumed to pass.",
+      "id": "MC-104"
+    },
+    {
+      "evidence_to_capture": "Screenshot or typed display values after each Enter.",
+      "exact_action": "Open the app in a desktop browser. Without clicking anything, press 2, +, 3, *, 4, Enter. Then press 0, ., 1, +, 0, ., 2, Enter.",
+      "expected_result": "First chain shows 20 (left-to-right, no precedence). Second shows 0.3, not 0.30000000000000004.",
+      "id": "MC-200",
+      "required": true,
+      "section": "Invariants"
+    }
+  ]
+}

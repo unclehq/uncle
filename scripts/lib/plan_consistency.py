@@ -7,6 +7,11 @@ independently. The commonest result is two names for one file: the components sa
 no step owns it and no validator notices; a model asked to "check consistency" found it, and
 when it reported rather than fixed, the driver threw the assembled plan away.
 
+It also checks arithmetic literals, because a digit string a model computed by hand is where a plan goes wrong and every test and
+checklist row then copies the mistake (run 30: `99999999999*99999999999` "formats exactly as `9.99999999998e+21`"; the product rounded to
+that many significant digits is `9.9999999998e+21`, and two repairs followed). A product of two whole numbers followed, on the same line,
+by a number in scientific notation is evaluated exactly and compared at that number's own precision.
+
 This reads the plan's own model (steps' `owns`, components' `files`) and every backticked path
 the prose mentions, and reports a mentioned source file that no step owns when an owned file
 sits beside it with the same extension, or it lives under a directory the plan owns files in.
@@ -16,6 +21,7 @@ sits beside it with the same extension, or it lives under a directory the plan o
 import json
 import re
 import sys
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -79,7 +85,7 @@ def mentioned_files(text):
 def findings(text):
     owned = owned_files(text)
     if not owned:
-        return []
+        return literal_findings(text)
     directories = {str(Path(p).parent) for p in owned}
     out = []
     for path in sorted(mentioned_files(text)):
@@ -92,6 +98,44 @@ def findings(text):
                        % (path, '`, `'.join(beside)))
         elif parent in directories and parent != '.':
             out.append('`%s` is mentioned but no step owns it (the plan owns other files in `%s/`).' % (path, parent))
+    return out + literal_findings(text)
+
+
+PRODUCT = re.compile(r'(?<![\w.])(\d{2,})\s*(?:\*|\u00d7|x)\s*(\d{2,})(?![\w.])')
+SCIENTIFIC = re.compile(r'(?<![\w.])(\d\.\d+)e([+-]?\d+)\b')
+
+
+def rounded(value, digits):
+    """`value` (a Decimal) rounded half-even to `digits` significant digits."""
+    with localcontext() as ctx:
+        ctx.prec = digits
+        return +value
+
+
+def literal_findings(text):
+    """One finding for each product of two whole numbers whose own stated result, the first scientific-notation value after it in the same
+    clause, is not that product rounded to the literal's own number of significant digits. A literal with trailing zeros stripped still matches
+    (9.9999999998e+21 is 9.99999999980e+21, each rounded to its own digit count). Only the first value after a product is its result: a later one in the
+    same sentence belongs to something else, and a `;`, a `|` or another long number between them ends the clause."""
+    out = []
+    for line in text.splitlines():
+        for product in PRODUCT.finditer(line):
+            literal = SCIENTIFIC.search(line, product.end())
+            if not literal:
+                continue
+            between = line[product.end():literal.start()]
+            if ';' in between or '|' in between or re.search(r'\d{3,}', between):
+                continue
+            mantissa, exponent = literal.group(1), literal.group(2)
+            digits = len(mantissa.replace('.', ''))
+            wanted = Decimal(mantissa + 'e' + exponent)
+            exact = Decimal(int(product.group(1)) * int(product.group(2)))
+            if rounded(exact, digits) == wanted:
+                continue
+            out.append('The plan says %s*%s gives %se%s, but that product is %d, which to %d significant digits is %s. A digit string worked out by hand '
+                       'is wrong here; every test and checklist row that copies it will fail, or fail the application. Correct it, or state the rule '
+                       'in words and let the check compute the digits.'
+                       % (product.group(1), product.group(2), mantissa, exponent, int(exact), digits, format(rounded(exact, digits), 'e')))
     return out
 
 

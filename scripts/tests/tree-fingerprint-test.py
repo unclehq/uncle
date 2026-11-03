@@ -88,5 +88,148 @@ class Driver(unittest.TestCase):
         self.assertIn('rm -f "$STATE_DIR/green-check.fingerprint"', body)
 
 
+
+class IgnoreFileFingerprint(unittest.TestCase):
+    """Uncle's own ignore lines must not make an identical tree look changed (live run 9: the background verification restarted
+    three times as the driver appended `.uncle` to .gitignore just after it started)."""
+
+    def with_ignore(self, text):
+        root = project()
+        (root / '.gitignore').write_text(text)
+        return root
+
+    def test_the_drivers_bare_uncle_line_does_not_change_it(self):
+        root = self.with_ignore('node_modules\ndist\n'); before = fp.fingerprint(root)
+        (root / '.gitignore').write_text('node_modules\ndist\n.uncle\n')
+        self.assertEqual(fp.fingerprint(root), before)
+
+    def test_the_canonical_managed_block_does_not_change_it(self):
+        root = self.with_ignore('node_modules\n'); before = fp.fingerprint(root)
+        (root / '.gitignore').write_text('node_modules\n.uncle/*\n!.uncle/docs/\n')
+        self.assertEqual(fp.fingerprint(root), before)
+
+    def test_a_rule_of_the_projects_own_changes_it(self):
+        root = self.with_ignore('node_modules\n'); before = fp.fingerprint(root)
+        (root / '.gitignore').write_text('node_modules\nsecret.txt\n')
+        self.assertNotEqual(fp.fingerprint(root), before)
+
+    def test_removing_a_rule_changes_it(self):
+        root = self.with_ignore('node_modules\ndist\n'); before = fp.fingerprint(root)
+        (root / '.gitignore').write_text('node_modules\n')
+        self.assertNotEqual(fp.fingerprint(root), before)
+
+    def test_a_managed_line_beside_a_new_rule_still_changes_it(self):
+        root = self.with_ignore('node_modules\n'); before = fp.fingerprint(root)
+        (root / '.gitignore').write_text('node_modules\n.uncle\nsecret.txt\n')
+        self.assertNotEqual(fp.fingerprint(root), before)
+
+    def test_only_the_ignore_file_gets_this_treatment(self):
+        root = project(); before = fp.fingerprint(root)
+        (root / 'src' / 'a.js').write_text('one\n.uncle\n')
+        self.assertNotEqual(fp.fingerprint(root), before)
+
+    def test_an_ignore_file_in_a_subdirectory_is_treated_the_same_way(self):
+        root = project(); (root / 'src' / '.gitignore').write_text('x\n'); before = fp.fingerprint(root)
+        (root / 'src' / '.gitignore').write_text('x\n.uncle\n')
+        self.assertEqual(fp.fingerprint(root), before)
+
+
+class ApplicationFingerprint(unittest.TestCase):
+    """The early checklist ran against the application; later test waves add files the application does not depend on."""
+
+    def app(self, root):
+        return fp.fingerprint(root, app_only=True)
+
+    def test_a_new_test_file_does_not_change_it(self):
+        root = project(); before = self.app(root)
+        (root / 'tests').mkdir(); (root / 'tests' / 'a.test.js').write_text('x')
+        (root / 'e2e').mkdir(); (root / 'e2e' / 'a.spec.js').write_text('x')
+        (root / 'tests' / 'mutations').mkdir(); (root / 'tests' / 'mutations' / 'list.mjs').write_text('x')
+        self.assertEqual(self.app(root), before)
+
+    def test_a_change_to_a_test_file_does_not_change_it(self):
+        root = project(); (root / 'src' / 'a.test.js').write_text('one'); before = self.app(root)
+        (root / 'src' / 'a.test.js').write_text('two')
+        self.assertEqual(self.app(root), before)
+
+    def test_a_document_does_not_change_it(self):
+        root = project(); before = self.app(root)
+        (root / 'README.md').write_text('hello'); (root / 'src' / 'CONTRACT.md').write_text('hello')
+        self.assertEqual(self.app(root), before)
+
+    def test_a_source_change_does_change_it(self):
+        root = project(); before = self.app(root)
+        (root / 'src' / 'a.js').write_text('changed')
+        self.assertNotEqual(self.app(root), before)
+
+    def test_a_new_source_file_does_change_it(self):
+        root = project(); before = self.app(root)
+        (root / 'src' / 'b.js').write_text('x')
+        self.assertNotEqual(self.app(root), before)
+
+    def test_the_manifest_and_config_are_part_of_it(self):
+        root = project(); before = self.app(root)
+        (root / 'package.json').write_text('{"dependencies": {"react": "1"}}')
+        changed = self.app(root); self.assertNotEqual(changed, before)
+        (root / 'vite.config.js').write_text('export default {}')
+        self.assertNotEqual(self.app(root), changed)
+
+    def test_the_whole_tree_fingerprint_still_sees_tests(self):
+        root = project(); before = fp.fingerprint(root)
+        (root / 'src' / 'a.test.js').write_text('x')
+        self.assertNotEqual(fp.fingerprint(root), before)
+
+    def test_the_drivers_own_ignore_line_still_does_not_change_it(self):
+        root = project(); (root / '.gitignore').write_text('dist\n'); before = self.app(root)
+        (root / '.gitignore').write_text('dist\n.uncle\n')
+        self.assertEqual(self.app(root), before)
+
+    CONFIG = "import {defineConfig} from 'vitest/config';\nexport default defineConfig({\n  server: {port: 5173},\n  test: {\n    include: ['%s'],\n  },\n});\n"
+
+    def test_where_the_unit_tests_look_does_not_change_it(self):
+        root = project(); (root / 'vite.config.js').write_text(self.CONFIG % 'tests/unit/**/*.test.js')
+        before, whole = self.app(root), fp.fingerprint(root)
+        (root / 'vite.config.js').write_text(self.CONFIG % 'tests/*.test.js')
+        self.assertEqual(self.app(root), before)
+        self.assertNotEqual(fp.fingerprint(root), whole)    # the whole-tree fingerprint, used to skip verification, still sees it
+
+    def test_a_change_to_the_server_or_build_part_of_the_config_does_change_it(self):
+        root = project(); (root / 'vite.config.js').write_text(self.CONFIG % 'x')
+        before = self.app(root)
+        (root / 'vite.config.js').write_text((self.CONFIG % 'x').replace('5173', '5174'))
+        self.assertNotEqual(self.app(root), before)
+
+    def test_a_config_without_a_test_block_is_hashed_whole(self):
+        root = project(); (root / 'vite.config.js').write_text('export default {server: {port: 1}}\n')
+        before = self.app(root)
+        (root / 'vite.config.js').write_text('export default {server: {port: 2}}\n')
+        self.assertNotEqual(self.app(root), before)
+
+    def test_other_files_with_a_test_block_are_hashed_whole(self):
+        root = project(); (root / 'src' / 'cfg.js').write_text(self.CONFIG % 'a')
+        before = self.app(root)
+        (root / 'src' / 'cfg.js').write_text(self.CONFIG % 'b')
+        self.assertNotEqual(self.app(root), before)
+
+    def test_what_follows_the_test_block_still_counts(self):
+        root = project()
+        text = "export default {\n  test: {include: ['a']},\n  server: {port: %d},\n}\n"
+        (root / 'vite.config.js').write_text(text % 1); before = self.app(root)
+        (root / 'vite.config.js').write_text(text % 2)
+        self.assertNotEqual(self.app(root), before)
+
+    def test_another_config_file_is_not_trimmed(self):
+        root = project(); (root / 'playwright.config.js').write_text(self.CONFIG % 'a')
+        before = self.app(root)
+        (root / 'playwright.config.js').write_text(self.CONFIG % 'b')
+        self.assertNotEqual(self.app(root), before)
+
+    def test_the_command_line_flag(self):
+        root = project(); script = ROOT / 'scripts' / 'lib' / 'tree_fingerprint.py'
+        whole = subprocess.run([sys.executable, str(script), str(root)], capture_output=True, text=True).stdout.strip()
+        only = subprocess.run([sys.executable, str(script), '--app', str(root)], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(only, fp.fingerprint(root, app_only=True))
+        self.assertEqual(whole, fp.fingerprint(root))
+
 if __name__ == '__main__':
     unittest.main()

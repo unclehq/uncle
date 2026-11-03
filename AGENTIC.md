@@ -81,13 +81,15 @@ A good adversarial review focuses on:
 
 ## Speculative execution
 
-While a human is reading a gated document, the driver starts the next stage in
-the background. The result is adopted only if the document is byte-identical
-when approved. If the human edits the document during review, the speculative
-work is discarded and the stage replays.
+Speculative execution is off by default. When enabled with `WORKFLOW_SPECULATE=1`,
+the driver starts the next stage in the background while a human reads a gated
+document; the result is adopted only if the document is byte-identical when
+approved, and otherwise the work is discarded and the stage replays.
 
-This trades token cost for wall-clock speed. It is optional and can be disabled
-with `WORKFLOW_SPECULATE=0`.
+It is off because it did not pay for itself: an unattended gate is open for 0.0
+seconds, so there is nothing to overlap, and the speculative plan stages ended
+with no artifact, which made the real stage wait and then run again. The checklist
+draft written beside implementation is a separate mechanism and is unaffected.
 
 ## Human authority
 

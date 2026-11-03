@@ -12,10 +12,15 @@ the driver's verification record and the built source, and answers with edits in
 Applying edits keeps the draft's independence and its ids, leaves an audit of every change, and makes the weakening moves the
 reconciler could be tempted into (dropping most of the checklist, loosening a required check, emptying an expectation) rejections.
 
-    checklist_reconcile.py apply DRAFT.json PACKET.json OUT.json AUDIT.json
+A modify may say which rows of the approved plan it follows (`"plan_row": "B-7"`, or `"B-7, I-4"`). The row's expected result is then
+being brought into line with what the plan states, which is the one change to an expectation that is not a loosening: the build is
+never the authority, the plan is. When the plan is given, every row cited must exist in it, so a made-up citation is a rejection.
+
+    checklist_reconcile.py apply DRAFT.json PACKET.json OUT.json AUDIT.json [PLAN.md]
     (exit 1 with the reason on stderr when the packet cannot be applied; the caller then runs the full panel instead)
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -26,6 +31,8 @@ MODIFIABLE = frozenset(TEXT_FIELDS + LIST_FIELDS + ('required',))
 MAX_DROP_FRACTION = 0.5          # never more than half the draft, however good each reason sounds
 MIN_REASON = 12
 MAX_ADDS = 20
+PLAN_ROW = re.compile(r'^[A-Z]{1,3}-\d+$')
+PLAN_ID = re.compile(r'\b[A-Z]{1,3}-\d+\b')
 FIRST_ADDED = 901                # added checks are numbered by the driver, after every range a lens owns
 
 
@@ -47,7 +54,25 @@ def rows(packet, key):
     return value
 
 
-def apply(draft, packet):
+def plan_rows_of(entry, ident, plan_text):
+    """The plan rows a modify cites, as a list. ValueError for a malformed citation, or one the plan does not contain."""
+    raw = entry.get('plan_row')
+    if raw in (None, '', []):
+        return []
+    items = raw if isinstance(raw, list) else str(raw).split(',')
+    cited = [str(item).strip() for item in items if str(item).strip()]
+    for row in cited:
+        if not PLAN_ROW.match(row):
+            fail('%s: plan_row %r is not a plan row id such as B-7' % (ident, row))
+    if plan_text is not None:
+        known = set(PLAN_ID.findall(plan_text))
+        missing = [row for row in cited if row not in known]
+        if missing:
+            fail('%s: the plan has no row %s' % (ident, ', '.join(missing)))
+    return cited
+
+
+def apply(draft, packet, plan_text=None):
     """(the final checklist document, the audit of what changed). ValueError when the packet breaks a rule."""
     if not isinstance(draft, dict) or draft.get('kind') != 'manual-checklist' or not isinstance(draft.get('checks'), list):
         fail('the draft is not a manual-checklist document')
@@ -78,6 +103,7 @@ def apply(draft, packet):
             fail('%s is modified twice' % ident)
         modified.add(ident)
         reason = reason_of(row, 'modifying %s' % ident)
+        cited = plan_rows_of(row, ident, plan_text)
         fields = row.get('fields')
         if not isinstance(fields, dict) or not fields:
             fail('modifying %s names no fields' % ident)
@@ -97,7 +123,7 @@ def apply(draft, packet):
                 if checks[ident].get('required') is True and value is False:
                     fail('%s: a required check cannot be loosened; drop it with a reason instead' % ident)
         checks[ident].update(fields)
-        audit['modified'].append({'id': ident, 'fields': sorted(fields), 'reason': reason})
+        audit['modified'].append({'id': ident, 'fields': sorted(fields), 'reason': reason, **({'plan_row': cited} if cited else {})})
 
     for ident in dropped_ids:
         reason = reason_of(next(row for row in drops if row['id'] == ident), 'dropping %s' % ident)
@@ -142,13 +168,14 @@ def apply(draft, packet):
 
 
 def main(argv):
-    if len(argv) != 5 or argv[0] != 'apply':
+    if len(argv) not in (5, 6) or argv[0] != 'apply':
         print(__doc__, file=sys.stderr)
         return 2
     try:
         draft = json.loads(Path(argv[1]).read_text(encoding='utf-8'))
         packet = json.loads(Path(argv[2]).read_text(encoding='utf-8'))
-        final, audit = apply(draft, packet)
+        plan_text = Path(argv[5]).read_text(encoding='utf-8') if len(argv) == 6 and Path(argv[5]).is_file() else None
+        final, audit = apply(draft, packet, plan_text)
     except (OSError, ValueError) as error:
         print('checklist reconciliation refused: %s' % error, file=sys.stderr)
         return 1

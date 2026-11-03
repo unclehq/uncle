@@ -14,8 +14,8 @@ KIND = 'adversarial-review-worker-packet'
 AREAS = {
     'requirements': (
         'Acceptance criteria, requirement coverage, and omitted user flows.',
-        'Data semantics, calculations, validation, and boundary cases.',
-        'User interactions, accessibility, error states, and recovery.',
+        'Data semantics, calculations, validation, and boundary cases, including numeric limits that cannot both hold (digits against width).',
+        'User interactions, accessibility, error states, and recovery, including every input in every state the plan leaves unspecified.',
         'Cross-section consistency, dependencies, assumptions, and feasibility.'),
     'regression': (
         'Existing behavior, compatibility, interfaces, and scope boundaries.',

@@ -194,6 +194,12 @@ reads as one long chain wastes most of its implementation time:
   a migration, a lockfile) justifies that.
 - One owner per file. Two steps that name the same file cannot run together, so split a
   shared file or assign it to one step.
+- A source file that unit tests can exercise alone (an engine, a key map, a formatter) is one step together with its own
+  unit test file: the worker who writes the code writes and runs its tests, so they cannot disagree. Browser and other
+  whole-application specs stay in their own steps.
+- For a browser application with keyboard input, the step that owns the entry file mounts the app synchronously (React:
+  `flushSync` around `render`) so the key listener exists when the page loads, and every browser spec that presses a key
+  first waits for the display to show its initial value.
 - Prefer several small steps of one to three files to a few large ones, and list independent
   steps next to each other: only adjacent steps are grouped.
 - A step that only runs or checks other steps' files at verification time (a defect-injection runner, an
@@ -231,6 +237,10 @@ whose files genuinely overlap another's should say so by naming the same file,
 not by omitting the field.
 
 <!-- section-context: outline behaviors invariants guards tests defects obligations checks commands -->
+Where the application has states (an error showing, a result showing, an entry in progress), give each kind of input its own
+behavior in each state, including the inputs that do nothing there: the checklist and the code are written apart from each
+other and read the plan alone, so a combination the plan leaves out gets guessed two ways.
+
 Put every behavior a browser can check into the protected automated suite, not
 into the manual checklist. For a web application that means rendering, theme,
 keyboard input, and error states: each gets a browser test in the directory the

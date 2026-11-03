@@ -15,6 +15,13 @@ This is a focused repair pass, not a new implementation of the approved plan.
    If the report has no structured findings, locate its failure summary and
    read enough surrounding evidence to identify the defect. Do not guess or
    silently drop blockers when the report is ambiguous.
+   The repair source is the failure that triggered this pass, and it comes first. Other open failures can sit beside it: required
+   FAIL rows in `.uncle/docs/TEST_REVIEW.md`, entries in `.uncle/docs/DEFECTS.md` whose status is FAIL, and FAIL rows in
+   `.uncle/docs/VERIFICATION_REPORT.md`. Fix every one that a change to the project's files can fix, in this one pass. A pass that
+   fixes only some costs a second repair and a full re-check of everything (run 26: the first pass added missing tests and left a
+   checklist failure it called "outside this gate's findings"; the second pass fixed the display). An open FAIL you do not fix needs
+   a one-line reason in `.uncle/docs/IMPLEMENTATION_NOTES.md` (it needs a person, or the plan, or an unavailable prerequisite), and
+   "not in this report" is not a reason.
 2. Use the failing command, finding IDs, and referenced paths to locate only
    the matching requirements, approved .uncle/docs/UPDATED_PROJECT_PLAN.md rows, and
    relevant implementation dispositions. Search first, then read the matching

@@ -39,12 +39,18 @@ def result(path, expected=()):
     if 'BLOCKED-HUMAN' in statuses: return 'BLOCKED-HUMAN'
     return 'PASS' if statuses <= {'PASS'} else 'UNKNOWN'
 
+# result() reports these four as one outcome, BLOCKED-SETUP, so asking for the rows behind that outcome returns all four. Asking for
+# the literal status found none of a report whose only open row said NOT RUN: the run was BLOCKED-SETUP with nothing to list or waive.
+SETUP_STATUSES = {'BLOCKED', 'BLOCKED-SETUP', 'NOT RUN', 'N/A'}
+
+
 def ids(path, status):
+    wanted = SETUP_STATUSES if status == 'BLOCKED-SETUP' else {status}
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'acceptance-report':
         return ''
     return '\n'.join(str(row['id']) for row in payload.get('rows', [])
-                     if isinstance(row, dict) and row.get('required') is True and row.get('status') == status
+                     if isinstance(row, dict) and row.get('required') is True and row.get('status') in wanted
                      and row.get('id') not in INFORMATIONAL)
 
 

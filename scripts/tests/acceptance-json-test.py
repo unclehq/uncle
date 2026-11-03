@@ -18,6 +18,31 @@ class AcceptanceJsonTests(unittest.TestCase):
     def test_failure_routes_repair(self): self.assertEqual('REPAIR', self.check([{'id':'COVERAGE','required':True,'status':'FAIL','evidence':'e'}, {'id':'RESULTS','required':True,'status':'PASS','evidence':'e'}]))
     def test_missing_expected_is_unknown(self): self.assertEqual('UNKNOWN', self.check([{'id':'RESULTS','required':True,'status':'PASS','evidence':'e'}]))
 
+    def ids(self, rows, status):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'review.json'
+            path.write_text(__import__('json').dumps({'schema':'uncle.artifact/v1','kind':'acceptance-report','rows':rows}))
+            return acceptance.ids(path, status)
+
+    def test_a_not_run_row_is_the_row_behind_a_blocked_setup_result(self):
+        # Run: the only open row said NOT RUN, so the stage was BLOCKED-SETUP but the list of rows to act on (or, unattended, to waive)
+        # was empty, and the driver paused with nothing to do and exited 1.
+        rows = [{'id':'MC-1','required':True,'status':'PASS','evidence':'e'}, {'id':'MC-102','required':True,'status':'NOT RUN','evidence':'e'}]
+        self.assertEqual('BLOCKED-SETUP', self.check([{'id':'COVERAGE','required':True,'status':'PASS','evidence':'e'},
+                                                      {'id':'RESULTS','required':True,'status':'NOT RUN','evidence':'e'}]))
+        self.assertEqual('MC-102', self.ids(rows, 'BLOCKED-SETUP'))
+
+    def test_every_status_that_makes_a_result_blocked_setup_is_listed_with_it(self):
+        rows = [{'id': 'A', 'required': True, 'status': s, 'evidence': 'e'} for s in ('BLOCKED', 'BLOCKED-SETUP', 'NOT RUN', 'N/A')]
+        self.assertEqual(['A', 'A', 'A', 'A'], self.ids(rows, 'BLOCKED-SETUP').split('\n'))
+
+    def test_other_statuses_are_still_matched_exactly(self):
+        rows = [{'id': 'H', 'required': True, 'status': 'BLOCKED-HUMAN', 'evidence': 'e'},
+                {'id': 'S', 'required': True, 'status': 'NOT RUN', 'evidence': 'e'},
+                {'id': 'O', 'required': False, 'status': 'NOT RUN', 'evidence': 'e'}]
+        self.assertEqual('H', self.ids(rows, 'BLOCKED-HUMAN'))
+        self.assertEqual('S', self.ids(rows, 'BLOCKED-SETUP'))      # an optional row is never listed
+
     def test_rendered_evidence_with_a_pipe_passes_the_shell_validator(self):
         # A grep pattern like 'eval\\(|new Function' in evidence used to render as an
         # escaped pipe that acceptance.sh still split on: the renderer's own output

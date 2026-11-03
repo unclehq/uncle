@@ -7,7 +7,8 @@
 if ! declare -f uncle_upper_to > /dev/null 2>&1; then
     # uncle_upper_to VAR STRING [CHARS]: upper-case STRING into VAR; each character listed in CHARS becomes `_`.
     uncle_upper_to() {
-        local _chars="${3:-}" _out="" _c _i _code _oct
+        # C collation: under en_US.UTF-8 bash 3.2 matches [a-z] and [A-Z] against both cases.
+        local LC_ALL=C _chars="${3:-}" _out="" _c _i _code _oct
         for ((_i = 0; _i < ${#2}; _i++)); do
             _c="${2:_i:1}"
             case "$_c" in
@@ -20,7 +21,7 @@ if ! declare -f uncle_upper_to > /dev/null 2>&1; then
     }
     # uncle_lower_to VAR STRING: lower-case STRING into VAR.
     uncle_lower_to() {
-        local _out="" _c _i _code _oct
+        local LC_ALL=C _out="" _c _i _code _oct
         for ((_i = 0; _i < ${#2}; _i++)); do
             _c="${2:_i:1}"
             case "$_c" in
@@ -33,7 +34,7 @@ if ! declare -f uncle_upper_to > /dev/null 2>&1; then
     # uncle_sanitize_to VAR STRING ALLOWED: every character of STRING not in ALLOWED (a bracket-free list of literal characters plus the
     # classes a-z A-Z 0-9, given as the words `az`, `AZ`, `09`, then any extra characters, with no separators: "azAZ09._-") becomes `_`.
     uncle_sanitize_to() {
-        local _out="" _c _i _keep
+        local LC_ALL=C _out="" _c _i _keep
         for ((_i = 0; _i < ${#2}; _i++)); do
             _c="${2:_i:1}"; _keep=0
             case "$_c" in

@@ -53,8 +53,16 @@ if [[ "${UNCLE_TEST_ALLOW_NESTED:-0}" != 1 ]] \
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TMP="$(mktemp -d)"
-TMP="$(cd "$TMP" && pwd -P)"
+export ENGINE_SRC="$ROOT/scripts/lib/change-pr.sh"
+# A failed mktemp must stop the suite: `cd ""` succeeds in place, which would
+# make the scratch directory -- and the EXIT trap's rm -rf -- the checkout.
+TMP="$(mktemp -d)" || { echo "worktree-run-test.sh: mktemp -d failed" >&2; exit 1; }
+[[ -n "$TMP" && -d "$TMP" ]] || { echo "worktree-run-test.sh: no scratch directory" >&2; exit 1; }
+TMP="$(cd "$TMP" && pwd -P)" || exit 1
+if [[ "$TMP" == "$ROOT" || "$TMP" == "/" || "$ROOT" == "$TMP"/* ]]; then
+    echo "worktree-run-test.sh: refusing scratch directory $TMP that contains the checkout" >&2
+    exit 1
+fi
 trap 'if [[ "${UNCLE_KEEP_TEST_TMP:-0}" == 1 ]]; then echo "Kept worktree fixtures: $TMP"; else rm -rf "$TMP"; fi' EXIT
 
 # -E, because this is the whole of the suite's hermeticity and it was silently
@@ -203,6 +211,53 @@ mkdir .uncle/workflow/lock || { echo "lock held"; exit 9; }
 printf 'cwd\t%s\nroot\t%s\nargs\t%s\nstart\t%s\n' "$before" "${UNCLE_PROJECT_ROOT:-}" "$*" "$(date +%s)" >> "$DRIVER_LOG"
 printf '%s\n' "${STAGEGATE_ORIGIN_ISSUE:-}:${FAKE_STATE:-COMPLETE}" > .uncle/workflow/state
 : > .uncle/workflow/approvals/CHANGE_PLAN.md.sha256
+# Opt-in PR journal: only when FAKE_PR_PHASE is set (FAKE_PR_RAW overrides the
+# content wholesale; FAKE_PR_BRANCH adds a branch field).
+if [[ -n "${FAKE_PR_RAW+x}" ]]; then
+    mkdir -p .uncle/workflow/pr
+    printf '%s' "$FAKE_PR_RAW" > .uncle/workflow/pr/journal.json
+elif [[ -n "${FAKE_PR_REAL_WRITER:-}" ]]; then
+    # The journal comes from the real writer: the engine embedded in
+    # lib/change-pr.sh, its record_pr and save run unmodified. Only the
+    # earlier-stage field (head_branch) is seeded, as the engine's own
+    # `start`/bind steps record it before a PR exists.
+    python3 -I - "$ENGINE_SRC" "$(git branch --show-current)" "${FAKE_PR_URL:-https://github.com/owner/repo/pull/1}" <<'WPY'
+import sys
+src = open(sys.argv[1]).read().split("<<'PY'", 1)[1].split('\n', 1)[1].split('\nPY\n', 1)[0]
+ns = {}
+exec(src[:src.rindex('\ntry:\n    main()')], ns)
+ns['record_pr']({'head_branch': sys.argv[2], 'phase': 'published'}, {'url': sys.argv[3], 'number': 1})
+WPY
+elif [[ -n "${FAKE_PR_PHASE:-}" ]]; then
+    mkdir -p .uncle/workflow/pr
+    # Field names as the real writer (lib/change-pr.sh) records them: phase,
+    # url, head_branch; pr_url and branch are the plan's names, emitted too so
+    # either validator spelling sees this run's branch.
+    jb="${FAKE_PR_BRANCH:-$(git branch --show-current)}"
+    jtarget=.uncle/workflow/pr/journal.json
+    if [[ -n "${FAKE_PR_SYMLINK:-}" ]]; then jtarget=.uncle/workflow/pr/real.json; fi
+    printf '{"phase":"%s","url":"%s","pr_url":"%s","branch":"%s","head_branch":"%s"}\n' "$FAKE_PR_PHASE" "${FAKE_PR_URL-https://github.com/owner/repo/pull/1}" "${FAKE_PR_URL-https://github.com/owner/repo/pull/1}" "$jb" "$jb" > "$jtarget"
+    if [[ -n "${FAKE_PR_SYMLINK:-}" ]]; then ln -s real.json .uncle/workflow/pr/journal.json; fi
+fi
+# The real PR step commits its work; do the same so the tree is clean.
+if [[ -n "${FAKE_PR_PHASE:-}${FAKE_PR_RAW+x}${FAKE_PR_REAL_WRITER:-}" ]]; then
+    git add -A && git -c commit.gpgsign=false commit --no-gpg-sign -q -m "fake driver work" || true
+    # The real PR step pushes, which records the remote-tracking ref.
+    if [[ -z "${FAKE_NO_REMOTE_REF:-}" ]]; then
+        git update-ref "refs/remotes/origin/$(git branch --show-current)" HEAD
+    fi
+    # A commit made after the push: on the branch, not on the remote.
+    if [[ -n "${FAKE_UNPUSHED:-}" ]]; then
+        echo later > later.txt
+        git add -A && git -c commit.gpgsign=false commit --no-gpg-sign -q -m "unpushed" || true
+    fi
+fi
+if [[ -n "${FAKE_DIRTY:-}" ]]; then echo dirty >> hello.txt; fi
+if [[ -n "${FAKE_UNTRACKED:-}" ]]; then echo stray > untracked-file.txt; fi
+if [[ -n "${FAKE_IGNORED:-}" ]]; then
+    echo '*.ignored' >> "$(git rev-parse --git-path info/exclude)"
+    echo junk > only.ignored
+fi
 if [[ -n "${FAKE_DRIVER_SLEEP:-}" ]]; then sleep "$FAKE_DRIVER_SLEEP"; fi
 printf 'end\t%s\n' "$(date +%s)" >> "$DRIVER_LOG"
 rmdir .uncle/workflow/lock
@@ -618,6 +673,294 @@ RC=$?
 expect_status 3
 expect_out "change-workflow.sh exited 3"
 expect_not_out "Remove worktree"
+
+# ---------------------------------------------------------------------------
+# Auto-removal after a created PR (Issue 119).
+# ---------------------------------------------------------------------------
+
+pr_run() {
+    # pr_run <mode>: unattended | pty | pipe; env FAKE_* passes through.
+    case "$1" in
+        unattended)
+            run_issue /dev/null 42 --worktree --unattended ;;
+        pty)
+            (cd "$PROJ" && env UNCLE_PROJECT_ROOT="$PROJ" GH_LOG_FILE="$GH_LOG" DRIVER_LOG="$DRIVER_LOG" \
+                python3 "$TMP/pty-run.py" bash "$INSTALL/scripts/from-issue.sh" 42 --worktree > "$OUT" 2>&1)
+            RC=$? ;;
+        pipe)
+            run_issue /dev/null 42 --worktree ;;
+    esac
+}
+
+expect_removed() {
+    expect_status 0
+    expect_out "Removed worktree $CASE/proj-issue-42 (branch kept)"
+    expect_not_out "kept; remove with"
+    expect_not_out "Keeping worktree"
+    expect_not_out "Remove worktree"
+    check "worktree dir removed" test ! -e "$CASE/proj-issue-42"
+    check "branch kept" branch_exists feat/add-widget-42
+}
+
+expect_kept() {
+    check "worktree dir kept" test -d "$CASE/proj-issue-42"
+    expect_not_out "Removed worktree"
+}
+
+expect_kept_at() {
+    check "worktree dir kept at $1" test -d "$1"
+    expect_not_out "Removed worktree"
+    expect_not_out "Remove worktree"
+    expect_out "scripts/lib/worktrees.sh remove"
+}
+
+for mode in unattended pty pipe; do
+    new_case pr-created-removes-$mode
+    FAKE_PR_PHASE=created pr_run $mode
+    expect_removed
+done
+
+new_case pr-created-driver-fails-keeps
+FAKE_PR_PHASE=created FAKE_DRIVER_EXIT=3 pr_run unattended
+expect_status 3
+expect_kept
+
+new_case pr-created-not-complete-keeps
+FAKE_PR_PHASE=created FAKE_STATE=IMPLEMENT pr_run unattended
+expect_kept
+
+new_case pr-no-journal-keeps
+pr_run unattended
+expect_status 0
+expect_kept
+
+new_case pr-phase-not-created-keeps
+FAKE_PR_PHASE=pending pr_run unattended
+expect_status 0
+expect_kept
+
+new_case pr-malformed-journal-keeps
+FAKE_PR_RAW='{not json' pr_run unattended
+expect_status 0
+expect_kept
+
+new_case pr-journal-not-object-keeps
+FAKE_PR_RAW='["created"]' pr_run unattended
+expect_status 0
+expect_kept
+
+for u in "" "not-a-url" "https://github.com/o/r/issues/5" "http://github.com/owner/repo/pull/1"; do
+    new_case "pr-bad-url-keeps-${u:-empty}"
+    FAKE_PR_PHASE=created FAKE_PR_URL="$u" pr_run unattended
+    expect_status 0
+    expect_kept
+done
+
+new_case pr-branch-mismatch-keeps
+FAKE_PR_PHASE=created FAKE_PR_BRANCH=other/branch pr_run unattended
+expect_status 0
+expect_kept
+
+# A journal left by an earlier run of the same worktree is not this run's PR.
+new_case pr-stale-journal-keeps
+run_issue /dev/null 42 --worktree
+expect_status 0
+WT="$CASE/proj-issue-42"
+printf '42:WAIT_UPDATED_PLAN_APPROVAL\n' > "$WT/.uncle/workflow/state"
+rm -f "$WT/.uncle/workflow/origin"
+mkdir -p "$WT/.uncle/workflow/pr"
+printf '{"phase":"created","url":"https://github.com/owner/repo/pull/1"}\n' > "$WT/.uncle/workflow/pr/journal.json"
+run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+expect_kept
+
+new_case pr-rewritten-journal-removes
+run_issue /dev/null 42 --worktree
+expect_status 0
+WT="$CASE/proj-issue-42"
+printf '42:WAIT_UPDATED_PLAN_APPROVAL\n' > "$WT/.uncle/workflow/state"
+rm -f "$WT/.uncle/workflow/origin"
+mkdir -p "$WT/.uncle/workflow/pr"
+printf '{"phase":"created","url":"https://github.com/owner/repo/pull/1"}\n' > "$WT/.uncle/workflow/pr/journal.json"
+FAKE_PR_PHASE=created FAKE_PR_URL=https://github.com/owner/repo/pull/2 run_issue /dev/null 42 --worktree --unattended
+expect_removed
+
+# Refusal: a dirty worktree is kept with the reason and the kept line.
+new_case pr-created-dirty-refused
+FAKE_PR_PHASE=created FAKE_DIRTY=1 run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+expect_kept
+expect_out "Worktree $CASE/proj-issue-42 kept; remove with: scripts/lib/worktrees.sh remove"
+# Fixture shape: modified tracked file, no untracked files, pushed HEAD.
+check "tracked change is the only dirt" test "$(g -C "$CASE/proj-issue-42" status --porcelain | grep -vc '^ M ')" == 0
+check "tracked file is modified" test -n "$(g -C "$CASE/proj-issue-42" status --porcelain | grep '^ M hello.txt')"
+check "HEAD is pushed (no unpushed commits)" test -z "$(g -C "$CASE/proj-issue-42" rev-list HEAD --not --remotes)"
+check "branch survives the refusal" branch_exists feat/add-widget-42
+expect_not_out "Removed worktree"
+expect_not_out "Remove worktree"
+
+# Untracked file: refused, no prompt in either mode, status unchanged.
+for mode in unattended pty; do
+    new_case pr-created-untracked-refused-$mode
+    FAKE_PR_PHASE=created FAKE_UNTRACKED=1 pr_run $mode
+    expect_status 0
+    expect_kept
+    expect_not_out "Remove worktree"
+    expect_out "scripts/lib/worktrees.sh remove"
+done
+
+# Refusal never changes a non-zero run status.
+new_case pr-created-dirty-refused-nonzero-status
+FAKE_PR_PHASE=created FAKE_DIRTY=1 FAKE_DRIVER_EXIT=3 pr_run unattended
+expect_status 3
+expect_kept
+
+# Refusal in attended mode: no prompt either.
+new_case pr-created-dirty-refused-pty
+FAKE_PR_PHASE=created FAKE_DIRTY=1 pr_run pty
+expect_status 0
+expect_kept
+expect_not_out "Remove worktree"
+expect_out "scripts/lib/worktrees.sh remove"
+
+# Byte-identical rewrite of a pre-existing journal is stale (resume rule).
+new_case pr-identical-rewrite-keeps
+run_issue /dev/null 42 --worktree
+expect_status 0
+WT="$CASE/proj-issue-42"
+printf '42:WAIT_UPDATED_PLAN_APPROVAL\n' > "$WT/.uncle/workflow/state"
+rm -f "$WT/.uncle/workflow/origin"
+mkdir -p "$WT/.uncle/workflow/pr"
+SAMEJ='{"phase":"created","url":"https://github.com/owner/repo/pull/1"}'
+printf '%s' "$SAMEJ" > "$WT/.uncle/workflow/pr/journal.json"
+FAKE_PR_RAW="$SAMEJ" run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+expect_kept
+
+# Foreign-repo PR URL: not this project's PR.
+new_case pr-foreign-repo-keeps
+FAKE_PR_PHASE=created FAKE_PR_URL=https://github.com/other/thing/pull/1 pr_run unattended
+expect_status 0
+expect_kept
+
+# URL shapes that must not match exactly.
+for u in "https://github.com/owner/repo/pull/1/" "https://github.com/owner/repo/pull/1?x=1" "https://github.com/owner/repo/pull/1/files"; do
+    new_case "pr-url-shape-keeps-$(printf '%s' "$u" | tr -c 'A-Za-z0-9' '_')"
+    FAKE_PR_PHASE=created FAKE_PR_URL="$u" pr_run unattended
+    expect_status 0
+    expect_kept
+done
+
+# Missing url field.
+new_case pr-missing-url-keeps
+FAKE_PR_RAW='{"phase":"created"}' pr_run unattended
+expect_status 0
+expect_kept
+
+# Symlinked journal file / pr directory: no valid evidence.
+new_case pr-symlink-journal-keeps
+FAKE_PR_PHASE=created FAKE_PR_SYMLINK=1 pr_run unattended
+expect_status 0
+expect_kept
+
+new_case pr-symlink-dir-keeps
+run_issue /dev/null 42 --worktree
+expect_status 0
+WT="$CASE/proj-issue-42"
+printf '42:WAIT_UPDATED_PLAN_APPROVAL\n' > "$WT/.uncle/workflow/state"
+rm -f "$WT/.uncle/workflow/origin"
+mkdir -p "$CASE/elsewhere-pr"
+printf '{"phase":"created","url":"https://github.com/owner/repo/pull/9"}\n' > "$CASE/elsewhere-pr/journal.json"
+ln -s "$CASE/elsewhere-pr" "$WT/.uncle/workflow/pr"
+run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+expect_kept
+
+# The journal is produced by the real PR writer (record_pr/save from
+# lib/change-pr.sh, executed), so a writer/validator field or phase mismatch
+# fails here: the worktree must be removed on that journal alone.
+new_case pr-real-writer-journal-removes
+FAKE_PR_REAL_WRITER=1 pr_run unattended
+expect_status 0
+expect_removed
+
+new_case pr-real-writer-journal-pty-removes
+FAKE_PR_REAL_WRITER=1 pr_run pty
+expect_status 0
+expect_removed
+expect_not_out "Remove worktree"
+
+# Unpushed commit on an otherwise clean worktree: kept, reason and command
+# printed, no prompt, status unchanged.
+for mode in unattended pty; do
+    new_case pr-created-unpushed-refused-$mode
+    FAKE_PR_PHASE=created FAKE_UNPUSHED=1 pr_run $mode
+    expect_status 0
+    expect_kept
+    expect_not_out "Remove worktree"
+    expect_out "not pushed to a remote"
+    expect_out "scripts/lib/worktrees.sh remove"
+done
+new_case pr-created-unpushed-refused-nonzero-status
+FAKE_PR_PHASE=created FAKE_UNPUSHED=1 FAKE_DRIVER_EXIT=3 pr_run unattended
+expect_status 3
+expect_kept
+
+# Path guard (AC-4): outside the managed root (the project's parent directory).
+new_case pr-worktree-outside-managed-root-keeps
+mkdir -p "$TMP/outside-$$"
+FAKE_PR_PHASE=created run_issue /dev/null 42 --worktree-dir "$TMP/outside-$$/wt" --unattended
+expect_status 0
+expect_kept_at "$TMP/outside-$$/wt"
+expect_out "outside the managed worktrees root"
+
+# Path guard: a worktree path that is itself a symlink to a registered worktree.
+new_case pr-worktree-symlink-dir-keeps
+run_issue /dev/null 42 --worktree
+expect_status 0
+WT="$CASE/proj-issue-42"
+ln -s "$WT" "$CASE/wtlink"
+printf '42:WAIT_UPDATED_PLAN_APPROVAL\n' > "$WT/.uncle/workflow/state"
+rm -f "$WT/.uncle/workflow/origin"
+FAKE_PR_PHASE=created run_issue /dev/null 42 --worktree-dir "$CASE/wtlink" --unattended
+expect_status 0
+expect_kept
+expect_out "the worktree path is a symlink"
+expect_out "scripts/lib/worktrees.sh remove"
+
+# Guard function directly: worktree equal to / containing the source checkout
+# (also through a symlink) and an unresolvable path are all refused.
+new_case guard-source-equal-contain
+g -C "$PROJ" init -q 2>/dev/null
+guard() { (STAGEGATE_FROM_ISSUE_SOURCE_ONLY=1 . "$INSTALL/scripts/from-issue.sh"; auto_removal_refusal "$1" "$2") 2>&1; }
+guard_says() { local want="$1"; shift; [[ "$(guard "$@")" == *"$want"* ]]; }
+ln -s "$PROJ" "$CASE/srclink"
+mkdir -p "$PROJ/inner" "$CASE/inner-wt"
+g -C "$CASE/inner-wt" init -q -b main
+g -C "$CASE/inner-wt" -c user.name=t -c user.email=t@t commit --no-gpg-sign -q --allow-empty -m x
+g -C "$CASE/inner-wt" update-ref refs/remotes/origin/main HEAD
+check "worktree == source refused" guard_says "is the source checkout" "$PROJ" "$PROJ"
+check "worktree via symlink to source refused" guard_says "is the source checkout" "$CASE/srclink" "$PROJ"
+check "worktree containing source refused" guard_says "contains the source checkout" "$CASE" "$PROJ"
+check "unresolvable worktree refused" guard_says "cannot be resolved" "$CASE/nope" "$PROJ"
+check "unresolvable source refused" guard_says "cannot be resolved" "$PROJ/inner" "$CASE/nope"
+check "valid sibling worktree gives no refusal" test -z "$(guard "$CASE/inner-wt" "$PROJ")"
+
+# Guard definition: a gitignored file is not an untracked file, so a pushed
+# worktree holding only ignored files is removed.
+new_case pr-created-ignored-file-only-removes
+FAKE_PR_PHASE=created FAKE_IGNORED=1 pr_run unattended
+expect_removed
+
+# Guard definition: no remote-tracking ref at all means HEAD is unpushed.
+new_case pr-created-no-remote-refs-keeps
+FAKE_PR_PHASE=created FAKE_NO_REMOTE_REF=1 pr_run unattended
+expect_status 0
+expect_kept
+expect_out "not pushed to a remote"
+expect_out "scripts/lib/worktrees.sh remove"
+expect_not_out "Remove worktree"
+check "no remote refs in the fixture" test -z "$(g -C "$CASE/proj-issue-42" for-each-ref refs/remotes)"
 
 # ---------------------------------------------------------------------------
 # I-4 across the whole suite, and AC-10.

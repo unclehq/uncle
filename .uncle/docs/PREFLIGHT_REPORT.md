@@ -1,7 +1,11 @@
-No verification commands to probe.
+Deterministic runtime probes completed with no application acceptance claims. Approved commands were not executed.
+
+Dependency installation and application-specific browser, service, credential, and human checks remain subject to implementation and checklist verification.
+
+Findings: bash --version exited 0
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| PF-RUNTIME | YES | N/A | The change plan names no verification commands, so there is no runtime to probe. |
+| PF-RUNTIME | YES | PASS | Recognized verification runtimes started successfully; shell command structure was inspected |

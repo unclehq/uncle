@@ -1,22 +1,29 @@
 # Defects
 
-## None
+## D-1
 
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** None. Driver green-check may cover related script tests but does not replace this live attended end-to-end observation.
-- **Expected result:** No y/N prompt; worktree dir gone; main project on run branch with changed and untracked files; exactly one 'Branch <b>: worktree removed; project switched.' line.
-- **Actual result:** Not performed. No observation made.
+- **Status:** FAIL
+- **Evidence:** D-1 symlink target clobbered
+- **Expected result:** per checklist MC-206
+- **Actual result:** Whitespace-only prompts (driver). Symlink and directory prompt; decline leaves link, target and dir intact. After 'y' on symlink: CHANGE_REQUEST.md stays a symlink but its target hash CHANGED (write followed the link). Expected target not clobbered. Filed D-1.
 
-## None
+## MC-301
 
 - **Status:** NOT RUN
-- **Evidence:** None.
-- **Expected result:** Commit made, worktree removed, main switched, success summary printed once, no prompt, no 'Worktree ... kept; remove with:' line.
-- **Actual result:** Not performed. No observation made.
+- **Evidence:** see finding
+- **Expected result:** per checklist MC-301
+- **Actual result:** Depends on MC-300, which is not in the checklist (README: NOT DECLARED). Equivalent action covered by MC-102 PASS but this ID is not asserted.
 
-## None. Setup needed: a real or stubbed-driver no-PR COMPLETE --worktree run on a clean project, executed once under a pty and once with --unattended, with transcripts captured.
+## MC-303
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Source read of scripts/from-issue.sh lines ~955-980 only; green-check.md shows FIXED for run-shell-tests.sh and run-python-tests.sh, which is not a pty transcript.
-- **Expected result:** No 'Remove worktree <dir>? [y/N]' prompt and no 'Worktree <dir> kept; remove with:' line on the no-PR path; single final line 'Branch <b>: worktree removed; project switched.'; exit status matches driver's.
-- **Actual result:** Not executed live. A real run needs a full change-workflow driver with agent CLIs, a GitHub issue and a pty harness, which this lane cannot set up; the fixture suite scripts/tests/worktree-run-test.sh is covered only by the driver green-check, not a live observation of captured pty/unattended transcripts.
+- **Status:** NOT RUN
+- **Evidence:** see finding
+- **Expected result:** per checklist MC-303
+- **Actual result:** Depends on MC-302, absent from the checklist. Equivalent covered by MC-203 PASS but this ID is not asserted.
+
+## MC-404
+
+- **Status:** NOT RUN
+- **Evidence:** see finding
+- **Expected result:** per checklist MC-404
+- **Actual result:** `uncle --change-request` stdin import not executed; not touched by the diff (scripts/from-issue.sh only). Settled by running that command against an existing file.

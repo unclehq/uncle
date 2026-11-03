@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 141
+Issue 142
 
-Seeded from [unclehq/uncle#141](https://github.com/unclehq/uncle/issues/141).
+Seeded from [unclehq/uncle#142](https://github.com/unclehq/uncle/issues/142).
 
 ## Change Type
 
@@ -10,43 +10,34 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-When no PR is created, remove the worktree and check out the run's branch in the main project
+Ask before starting a new change request when .uncle/docs/CHANGE_REQUEST.md already exists
 
 ## Motivation
 
 ## Problem
 
-A change run in a per-run worktree (for example \`~/src/calculator-change\`, branch \`uncle/change\`) can finish \`COMPLETE\` without a PR being created. The result then sits uncommitted in a sibling worktree, and the original project looks untouched.
+When a user starts a new change request and \`.uncle/docs/CHANGE_REQUEST.md\` already exists (left over from a previous run), uncle does not tell them. The earlier request may be silently reused or overwritten, or the run may resume from stale state, so the user can end up running a different change than the one they asked for.
 
-Seen with a CSS-only change to \`~/src/calculator\`. The run edited \`styles.css\` in \`calculator-change\` and \`calculator-change-2\`, and the main checkout stayed on \`main\` with no sign of the change. Opening \`~/src/calculator/index.html\` shows the old app. Nothing says where the result went or how to view it.
+## Requested behavior
 
-Related: #119 removes the worktree after a PR is created. This covers the case where no PR is created.
+When a new change request is started and \`.uncle/docs/CHANGE_REQUEST.md\` already exists:
 
-## Desired behavior
+1. Tell the user the file exists, and ask whether they want to proceed with the new change request.
+2. If they answer in the affirmative, proceed with the new request.
+3. If they decline, stop without modifying \`.uncle/docs/CHANGE_REQUEST.md\` or any other run state.
 
-When a run completes and no PR is created:
+## Acceptance criteria
 
-1. Remove the worktree, so the result doesn't pile up on disk.
-2. Switch the main project to the branch the run created, so the changed app is what the user sees in their own directory.
-
-## Constraints
-
-- Never discard work. The run's changes must be committed on the branch before the worktree goes. Any uncommitted or untracked output must be committed or the removal refused.
-- Don't switch the main project when it has uncommitted changes that would be overwritten, or when it is on another branch the user is working on. Refuse, print the branch name and the manual \`git switch\` command, and keep the worktree.
-- Keep the branch after the worktree is removed.
-- If removal or the switch fails, keep what remains and print a manual command. The run's exit status doesn't change.
-- Say plainly in the final output what happened: the branch name, whether the worktree was removed and whether the project was switched.
+- Interactive run, existing file, user answers yes: the run proceeds with the new request.
+- Interactive run, existing file, user answers no (or gives no answer): the run stops and the existing file is unchanged.
+- No existing file: no prompt, behavior unchanged.
+- Unattended runs (\`UNCLE_UNATTENDED=1\`) must not hang on the prompt. Decide and document the default; proposed: stop with a clear message unless an explicit opt-in is set.
+- A test covers each case above.
 
 ## Open questions
 
-- Should the commit be automatic for unattended runs, or only after confirmation?
-- Should this apply to attended runs too, or only unattended ones?
-
-## Success criteria
-
-- A completed run with no PR leaves no worktree, and the main project is on the run's branch with the change visible.
-- A dirty main project or a failed removal leaves the worktree and prints the recovery command.
-- Tests cover the no-PR path, the dirty main project, and a failed removal.
+- What counts as "yes" (\`y\`/\`yes\`, case-insensitive), and should an empty answer default to no? Proposed: yes.
+- Should the previous request be archived (e.g. to \`.uncle/workflow-history/\`) before it is replaced?
 
 ## Observed Current Behavior
 

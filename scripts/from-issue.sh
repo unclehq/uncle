@@ -99,6 +99,29 @@ seed_is_current() {
     run_in_flight && origin_matches_this
 }
 
+# Guard against silently replacing a non-empty CHANGE_REQUEST.md. A zero-byte
+# file counts as absent. All messages go to stderr; exits 1 on refusal.
+confirm_replace_change_request() {
+    local target answer
+    target="$(generated_input_path CHANGE_REQUEST.md)"
+    [[ -s "$target" ]] || return 0
+    if [[ "${UNCLE_REPLACE_CHANGE_REQUEST:-}" == 1 ]]; then
+        return 0
+    fi
+    if [[ "$UNATTENDED" == 1 || "${UNCLE_UNATTENDED:-}" == 1 || ! -t 0 ]]; then
+        echo "Refusing to replace existing $target without confirmation; set UNCLE_REPLACE_CHANGE_REQUEST=1 to replace it." >&2
+        exit 1
+    fi
+    printf '%s already exists. Proceed with the new change request and replace it? [y/N] ' "$target" >&2
+    answer=""
+    read -r answer || true
+    case "$answer" in
+        y|Y|yes|YES|Yes) return 0 ;;
+    esac
+    echo "Not replacing $target; leaving it unchanged." >&2
+    exit 1
+}
+
 # .uncle/workflow/origin's third field records how this binding was fetched. Only an
 # authenticated gh fetch can later authorize a close; a two-field file written
 # before this field existed reads as `curl` and fails closed.
@@ -761,6 +784,8 @@ write_change_request() {
     local target
     target="$(generated_input_path CHANGE_REQUEST.md)"
     mkdir -p .uncle/docs
+    # Replace, never write through, a symlink: the link's target is not ours.
+    [[ -L "$target" ]] && rm -f "$target"
     cat > "$target" <<EOF
 # Change Request
 
@@ -920,7 +945,9 @@ EOF
 case "$MODE" in
     change)
         check_origin_or_refuse
+        FRESH_START=0
         if [[ "${UNCLE_NEW_WORKFLOW:-}" == 1 && "$SEED_ONLY" != 1 ]]; then
+            FRESH_START=1
             if worktree_run_locked .; then
                 echo "Refusing to start fresh: this issue worktree has a live workflow." >&2
                 exit 1
@@ -944,6 +971,9 @@ case "$MODE" in
         if seed_is_current; then
             echo "Resuming the existing run for $OWNER/$REPO#$ISSUE_NUM; CHANGE_REQUEST.md left as it is."
         else
+            # An explicit fresh start (UNCLE_NEW_WORKFLOW=1) already archived
+            # the old evidence and is its own confirmation.
+            [[ "$FRESH_START" == 1 ]] || confirm_replace_change_request
             write_change_request
         fi
         PRE_RUN_JOURNAL_SIG="absent"

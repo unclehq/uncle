@@ -292,10 +292,25 @@ TUI, `--unattended`). If a guard refuses, the output is
 `Not removing <dir>: <reason>.` followed by
 `Worktree <dir> kept; remove with: scripts/lib/worktrees.sh remove <dir>`.
 
-When the driver exits 0 with state `COMPLETE` but no PR was created, an
-interactive run asks `Remove worktree <dir>? [y/N]`; `n`, a non-terminal stdin
-(the TUI) and `--unattended` keep the directory and print the removal command
-instead:
+When the driver exits 0 with state `COMPLETE` but no PR was created, the run is
+finalized in every mode (interactive, TUI, `--unattended`), with no prompt:
+
+1. Path guards run first (resolvable paths, no symlinked worktree path, inside
+   the managed root, registered, on a named branch); on refusal nothing is
+   committed.
+2. Everything non-ignored in the worktree, including untracked files, is
+   committed on its branch as `uncle: issue <N> change` with your git config,
+   hooks and signing. `.uncle/workflow` is never committed. A clean tree makes
+   no commit. A failed `git add` or `git commit` keeps the worktree.
+3. The main project must be clean, on a named branch, and that branch's tip must
+   be an ancestor of the run branch; otherwise the worktree is kept.
+4. The worktree is removed (`worktree_remove`; the branch is kept), then the
+   main project runs `git switch <branch>`. A switch failure leaves the branch
+   and commit intact.
+
+The last line states the outcome: `Branch <b>: worktree removed|kept; project
+switched|not switched.` Whenever the project was not switched it also prints
+`git switch <b>`, and whenever the worktree was kept it prints:
 
 ```sh
 bash scripts/lib/worktrees.sh remove <dir>

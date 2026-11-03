@@ -187,6 +187,10 @@ g() {
 
 new_case() {
     CASE_NAME="$1"
+    case "$1" in
+        no-pr-*|*-under-pty) export FAKE_FINALIZE=1 ;;
+        *) unset FAKE_FINALIZE ;;
+    esac
     CASE="$TMP/$1"
     PROJ="$CASE/proj"
     INSTALL="$CASE/install"
@@ -259,8 +263,17 @@ if [[ -n "${FAKE_IGNORED:-}" ]]; then
     echo junk > only.ignored
 fi
 if [[ -n "${FAKE_DRIVER_SLEEP:-}" ]]; then sleep "$FAKE_DRIVER_SLEEP"; fi
+# Issue 141: a COMPLETE run with no PR is now committed, removed and switched.
+# Older cases that predate that and only exercise creation/guards keep their
+# kept-worktree shape because the source checkout is left dirty here; cases that
+# test finalization set FAKE_FINALIZE=1 (see new_case) to skip this.
+if [[ -z "${FAKE_FINALIZE:-}" ]]; then
+    echo stray > "$(dirname "$(git rev-parse --git-common-dir)")/.main-dirty-by-fixture"
+fi
+# Test-only hook: run a command that changes the source checkout mid-run.
+if [[ -n "${FAKE_SOURCE_HOOK:-}" ]]; then eval "$FAKE_SOURCE_HOOK"; fi
 printf 'end\t%s\n' "$(date +%s)" >> "$DRIVER_LOG"
-rmdir .uncle/workflow/lock
+if [[ -z "${FAKE_KEEP_LOCK:-}" ]]; then rmdir .uncle/workflow/lock; fi
 exit "${FAKE_DRIVER_EXIT:-0}"
 DRV
     chmod +x "$INSTALL/scripts/change-workflow.sh"
@@ -496,7 +509,9 @@ expect_status 0
 check "dir removed" test ! -e "$W42"
 check "worktree unregistered" bash -c '! git -C "$1" worktree list --porcelain | grep -q "proj-issue-42$"' _ "$PROJ"
 check "branch survives removal" branch_exists feat/add-widget-42
-# A dirty COMPLETE worktree: git's own refusal, dir kept.
+# A dirty COMPLETE worktree: git's own refusal, dir kept. (No-PR finalization
+# now commits run output, so dirty the tracked file here after the run.)
+echo dirty-after-run >> "$W43/hello.txt"
 bash "$INSTALL/scripts/lib/worktrees.sh" remove "$W43" > "$OUT" 2>&1; RC=$?
 expect_status 1
 expect_out "worktree kept"
@@ -651,9 +666,12 @@ new_case offer-under-pty
     python3 "$TMP/pty-run.py" bash "$INSTALL/scripts/from-issue.sh" 42 --worktree > "$OUT" 2>&1)
 RC=$?
 expect_status 0
-expect_out "Remove worktree $CASE/proj-issue-42? [y/N]"
+# Issue 141: no PR means no prompt; the run is finalized (committed, removed, switched).
+expect_not_out "Remove worktree"
+expect_not_out "[y/N]"
 expect_not_out "PTY TIMEOUT"
-check "n keeps the worktree" test -d "$CASE/proj-issue-42"
+expect_out "Branch feat/add-widget-42: worktree removed; project switched."
+check "worktree removed without a prompt" test ! -e "$CASE/proj-issue-42"
 
 new_case unattended-under-pty
 (cd "$PROJ" && env UNCLE_PROJECT_ROOT="$PROJ" GH_LOG_FILE="$GH_LOG" DRIVER_LOG="$DRIVER_LOG" \
@@ -661,9 +679,10 @@ new_case unattended-under-pty
 RC=$?
 expect_status 0
 expect_not_out "Remove worktree"
-expect_out "kept; remove with: scripts/lib/worktrees.sh remove"
+expect_out "Branch feat/add-widget-42: worktree removed; project switched."
+expect_not_out "kept; remove with"
 check "driver got --unattended" test "$(driver_field args)" == "--unattended"
-check "worktree kept" test -d "$CASE/proj-issue-42"
+check "worktree removed" test ! -e "$CASE/proj-issue-42"
 
 # Driver failure: existing message, no offer.
 new_case driver-fails-no-offer
@@ -961,6 +980,160 @@ expect_out "not pushed to a remote"
 expect_out "scripts/lib/worktrees.sh remove"
 expect_not_out "Remove worktree"
 check "no remote refs in the fixture" test -z "$(g -C "$CASE/proj-issue-42" for-each-ref refs/remotes)"
+
+# ---------------------------------------------------------------------------
+# Issue 141: no-PR finalization (S-1..S-9). Fake driver leaves state COMPLETE.
+# ---------------------------------------------------------------------------
+
+NW="proj-issue-42"
+RB=feat/add-widget-42
+src_branch() { g -C "$PROJ" branch --show-current; }
+log_has_commit() { local l; l="$(g -C "$1" log --format=%s "$RB" 2>&1)"; [[ "$l" == *"uncle: issue 42 change"* ]]; }
+summary() { expect_out "Branch $RB: worktree $1; project $2."; }
+
+new_case no-pr-switches
+FAKE_UNTRACKED=1 FAKE_DIRTY=1 run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+summary removed switched
+expect_not_out "Remove worktree"
+check "worktree removed" test ! -e "$CASE/$NW"
+check "commit made on run branch" log_has_commit "$PROJ"
+check "main switched to run branch" test "$(src_branch)" == "$RB"
+check "untracked output visible in main" test -f "$PROJ/untracked-file.txt"
+check "tracked change visible in main" grep -q dirty "$PROJ/hello.txt"
+check "driver state not committed" bash -c '! git -C "$1" ls-tree -r --name-only "$2" | grep -q "^.uncle/workflow"' _ "$PROJ" "$RB"
+
+new_case no-pr-clean-tree-no-commit
+run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+summary removed switched
+check "main on run branch" test "$(src_branch)" == "$RB"
+
+new_case no-pr-dirty-main-keeps
+FAKE_UNTRACKED=1 FAKE_SOURCE_HOOK='echo local >> "$FAKE_SRC/hello.txt"' FAKE_SRC="$PROJ" \
+    run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+summary kept "not switched"
+expect_out "git switch $RB"
+expect_out "scripts/lib/worktrees.sh remove"
+check "worktree kept" test -d "$CASE/$NW"
+check "work committed on the branch" log_has_commit "$PROJ"
+check "main not switched" test "$(src_branch)" == main
+
+new_case no-pr-other-branch-keeps
+FAKE_SOURCE_HOOK='g() { git -c commit.gpgsign=false "$@"; }; g -C "$FAKE_SRC" switch -q -c other && echo o > "$FAKE_SRC/o.txt" && g -C "$FAKE_SRC" add o.txt && g -C "$FAKE_SRC" commit --no-gpg-sign -q -m other' \
+    FAKE_SRC="$PROJ" run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+summary kept "not switched"
+expect_out "git switch $RB"
+check "worktree kept" test -d "$CASE/$NW"
+check "main still on other" test "$(src_branch)" == other
+
+new_case no-pr-failed-removal-keeps
+FAKE_KEEP_LOCK=1 run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+summary kept "not switched"
+expect_out "scripts/lib/worktrees.sh remove"
+check "worktree kept" test -d "$CASE/$NW"
+check "main not switched" test "$(src_branch)" == main
+
+new_case no-pr-switch-fails-after-removal
+mkdir -p "$CASE/hooks"
+printf '#!/bin/sh\n[ -e "%s" ] && exit 1\nexit 0\n' "$CASE/fail-switch" > "$CASE/hooks/post-checkout"
+chmod +x "$CASE/hooks/post-checkout"
+g -C "$PROJ" config core.hooksPath "$CASE/hooks"
+FAKE_SOURCE_HOOK='touch "$FAKE_FLAG"' FAKE_FLAG="$CASE/fail-switch" run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+summary removed "not switched"
+expect_out "git switch $RB"
+check "worktree removed" test ! -e "$CASE/$NW"
+check "branch intact" branch_exists "$RB"
+
+new_case no-pr-commit-fails-keeps
+mkdir -p "$CASE/hooks"
+printf '#!/bin/sh\nexit 1\n' > "$CASE/hooks/pre-commit"
+chmod +x "$CASE/hooks/pre-commit"
+g -C "$PROJ" config core.hooksPath "$CASE/hooks"
+FAKE_UNTRACKED=1 run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+summary kept "not switched"
+expect_out "Commit failed"
+expect_out "scripts/lib/worktrees.sh remove"
+check "worktree kept" test -d "$CASE/$NW"
+check "no commit made" bash -c '! git -C "$1" log --format=%s "$2" | grep -qx "uncle: issue 42 change"' _ "$PROJ" "$RB"
+
+# No-PR finalization: an unreachable source (cd fails) keeps the worktree and
+# prints the keep summary and remove command; nothing is committed or removed.
+new_case no-pr-unreachable-source-keeps
+WT="$CASE/proj-issue-42"
+g -C "$PROJ" worktree add -q -b feat/unreachable-42 "$WT"
+mkdir -p "$WT/.uncle/workflow"; echo "42:COMPLETE" > "$WT/.uncle/workflow/state"
+echo new > "$WT/new-file.txt"
+head_before="$(g -C "$WT" rev-parse HEAD)"
+(STAGEGATE_FROM_ISSUE_SOURCE_ONLY=1 . "$INSTALL/scripts/from-issue.sh"
+ # Only the function's own cd (same process) fails; path resolution runs in
+ # command-substitution subshells and still resolves the source.
+ SRC_UNREACH="$PROJ"; MAIN_SUB="$BASH_SUBSHELL"
+ cd() { [[ "${1:-}" == "$SRC_UNREACH" && "$BASH_SUBSHELL" == "$MAIN_SUB" ]] && return 1; builtin cd "$@"; }
+ finalize_no_pr_worktree "$WT" "$PROJ") > "$OUT" 2>&1
+RC=$?
+expect_status 0
+check "worktree kept when source unreachable" test -d "$WT"
+check "no commit made when source unreachable" test "$(g -C "$WT" rev-parse HEAD)" = "$head_before"
+expect_out "the source checkout is unreachable"
+expect_out "Branch feat/unreachable-42: worktree kept; project not switched."
+expect_out "scripts/lib/worktrees.sh remove $WT"
+
+# The printed manual remove command must be runnable as written.
+check "scripts/lib/worktrees.sh is executable (printed command is runnable)" test -x "$ROOT/scripts/lib/worktrees.sh"
+
+# Main checkout dirty only by an untracked file: kept, not switched, file intact.
+new_case no-pr-untracked-main-keeps
+FAKE_SOURCE_HOOK='echo local > "$FAKE_SRC/local-untracked.txt"' FAKE_SRC="$PROJ" \
+    run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+summary kept "not switched"
+expect_out "git switch $RB"
+check "worktree kept" test -d "$CASE/$NW"
+check "main not switched" test "$(src_branch)" == main
+check "untracked file intact" test "$(cat "$PROJ/local-untracked.txt")" == local
+check "exactly one summary line" test "$(grep -c "^Branch $RB: worktree" "$OUT")" == 1
+
+# Detached source HEAD: kept, never switched, detached position preserved.
+new_case no-pr-detached-main-keeps
+FAKE_SOURCE_HOOK='git -C "$FAKE_SRC" checkout -q --detach' FAKE_SRC="$PROJ" \
+    run_issue /dev/null 42 --worktree --unattended
+expect_status 0
+summary kept "not switched"
+expect_out "not on a named branch"
+expect_out "git switch $RB"
+check "worktree kept" test -d "$CASE/$NW"
+check "source still detached" test -z "$(src_branch)"
+
+# Source already on the run branch (worktree has nothing to commit, so the
+# source stays clean): switch skipped, reported as switched, worktree removed.
+new_case no-pr-already-on-run-branch
+WT="$CASE/proj-issue-42"
+g -C "$PROJ" worktree add -q -b "$RB" "$WT"
+mkdir -p "$WT/.uncle/workflow"; echo "42:COMPLETE" > "$WT/.uncle/workflow/state"
+g -C "$PROJ" switch -q --ignore-other-worktrees "$RB"
+(STAGEGATE_FROM_ISSUE_SOURCE_ONLY=1 . "$INSTALL/scripts/from-issue.sh"
+ finalize_no_pr_worktree "$WT" "$PROJ") > "$OUT" 2>&1
+RC=$?
+expect_status 0
+summary removed switched
+check "worktree removed" test ! -e "$WT"
+check "main on run branch" test "$(src_branch)" == "$RB"
+check "exactly one summary line" test "$(grep -c "^Branch $RB: worktree" "$OUT")" == 1
+
+# No-PR run whose driver exits non-zero: status propagated, nothing finalized.
+new_case no-pr-driver-fails-nothing-finalized
+FAKE_UNTRACKED=1 FAKE_DRIVER_EXIT=3 run_issue /dev/null 42 --worktree --unattended
+expect_status 3
+expect_not_out "Branch $RB: worktree"
+check "worktree kept" test -d "$CASE/$NW"
+check "no commit made" bash -c '! git -C "$1" log --format=%s "$2" | grep -qx "uncle: issue 42 change"' _ "$PROJ" "$RB"
+check "main not switched" test "$(src_branch)" == main
 
 # ---------------------------------------------------------------------------
 # I-4 across the whole suite, and AC-10.

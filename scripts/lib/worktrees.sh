@@ -3,7 +3,9 @@
 #
 # Sourced by from-issue.sh for worktree_default_dir / worktree_create /
 # worktree_remove; `bash scripts/lib/worktrees.sh remove <dir>` is the CLI for
-# removing a finished run by hand. Every refusal returns 1 before any write.
+# removing a finished run by hand. from-issue.sh prints the command as
+# `scripts/lib/worktrees.sh remove <dir>` (run directly), so this file must stay
+# executable (git mode 100755); worktree-run-test.sh asserts it. Every refusal returns 1 before any write.
 # No path here deletes a branch or forces a removal: a worktree run's branch is
 # the PR head, and git itself refuses to remove a dirty tree.
 #

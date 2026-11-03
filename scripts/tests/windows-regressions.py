@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
 from process_tree import bash_executable, start_check, finish_check, kill_tree
 
-SHELL = 'verification-integrity checklist-groups parallel-checks review-compaction agent-kimi reviewer-claude document-budget provided-inputs windows-probes'.split()
+SHELL = 'verification-integrity checklist-groups parallel-checks agent-kimi reviewer-claude document-budget provided-inputs windows-probes'.split()
 PYTHON = ['self-hosted', 'session-totals', 'audit-findings']
 
 

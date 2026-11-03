@@ -770,7 +770,6 @@ values above 2 are capped at 2. Non-digits and leading zeros are rejected.
 When no pass fits, the run continues with the preserved original: the budget is
 advisory unless `WORKFLOW_DOC_BUDGET_ENFORCE=1` makes it blocking. The checks
 preserve structural anchors; the human still judges whether meaning is retained.
-Covered by `scripts/tests/review-compaction-test.sh`.
 
 Adversarial plan-review retries use `.uncle/workflow/review-cache/` when local
 inputs, Git HEAD, review instructions and reviewer settings match. Budget changes

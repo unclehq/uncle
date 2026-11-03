@@ -156,6 +156,15 @@ def json_delivered(payload):
                 existing[0] = 'INCOMPLETE'
                 existing[1] = '; '.join(part for part in (existing[1], changed_code) if part)
                 continue
+            if existing[0] != status and 'IMPLEMENTED' not in (existing[0], status):
+                # Two steps that both say the row is NOT delivered agree on the only thing the completion check reads; they differ in
+                # why (one INCOMPLETE, one BLOCKED on a live check). Neither can be IMPLEMENTED, so nothing is waved through by merging:
+                # the row keeps the more specific BLOCKED reason (found on grove issue 8, AC-3, which stopped an unattended run).
+                if status == 'BLOCKED':
+                    existing[0] = 'BLOCKED'
+                existing[1] = '; '.join(part for part in (existing[1], changed_code) if part)
+                existing[2] = '; '.join(part for part in (existing[2], observed) if part)
+                continue
             if existing[0] != status:
                 raise ValueError(
                     f'Conflicting delivery status for {identifier}: {existing[0]!r} vs {status!r}')

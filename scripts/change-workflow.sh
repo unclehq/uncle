@@ -3443,6 +3443,10 @@ change_preflight_run() {
     local commands="$STATE_DIR/preflight.commands" report="$STATE_DIR/documents/PREFLIGHT_REPORT.json" why
     rm -f "$report" .uncle/docs/PREFLIGHT_REPORT.md
     verify_commands .uncle/docs/CHANGE_PLAN.md > "$commands" 2>/dev/null || true
+    # The green check reads its commands from the approved baseline report (section 8), and a plan is not required to repeat that block.
+    # Reading only the plan made the probe report "no verification commands" for every run whose plan did not, which the rollup then
+    # read as BLOCKED-SETUP on a required row: a wasted supervisor call and a non-blocking failure for the audit (grove issue 7).
+    if [[ ! -s "$commands" ]]; then verify_commands .uncle/docs/BASELINE_REPORT.md > "$commands" 2>/dev/null || true; fi
     if [[ ! -s "$commands" ]]; then
         python3 -B - "$report" <<'PY'
 import json, sys

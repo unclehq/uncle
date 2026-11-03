@@ -232,6 +232,15 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(merged["AC-1"][0], "INCOMPLETE")
         self.assertNotEqual(completion.check_rows({"AC-1": ["c", "v"]}, merged), [])
 
+    def test_incomplete_and_blocked_fragments_merge_but_never_pass(self):
+        # grove issue 8, AC-3: one step INCOMPLETE, a later one BLOCKED on a live check. Both say "not delivered", so it is not the
+        # IMPLEMENTED-vs-not conflict that must stop for a person; the row keeps BLOCKED and still fails the completion check.
+        for first, second in (("INCOMPLETE", "BLOCKED"), ("BLOCKED", "INCOMPLETE")):
+            merged = completion.json_delivered(self.notes(
+                self.fragment(("AC-3", first, "a", "x")), self.fragment(("AC-3", second, "b", "y"))))
+            self.assertEqual(merged["AC-3"][0], "BLOCKED")
+            self.assertNotEqual(completion.check_rows({"AC-3": ["c", "v"]}, merged), [])
+
     def test_a_row_the_later_step_leaves_without_evidence_does_not_pass(self):
         merged = completion.json_delivered(self.notes(
             self.fragment(("AC-1", "INCOMPLETE", "a", "not built")), self.fragment(("AC-1", "IMPLEMENTED", "b", ""))))

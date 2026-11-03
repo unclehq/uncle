@@ -71,6 +71,15 @@ newproject
 out="$(run_in "$project" 'change_preflight_collect; echo rc=$?')"
 grep -q 'rc=0' <<< "$out" && [[ ! -e "$project/.uncle/workflow/events" ]] || bad "with no probe started there is nothing to collect: $out"
 
+# --- a plan that does not repeat the verification block still gets probed from the baseline report (grove issue 7) ----------------------
+newproject; printf 'echo hello\ntrue\n' > "$project/baseline-commands.txt"
+out="$(run_in "$project" 'verify_commands() { if [[ "$1" == *BASELINE_REPORT.md ]]; then cat baseline-commands.txt; fi; }; change_preflight_run; echo rc=$?')"
+grep -q 'rc=0' <<< "$out" || bad "the baseline-only probe failed: $out"
+eq "commands named only in the baseline report are probed, not reported as none" "$(result "$project")" PASS
+newproject
+out="$(run_in "$project" 'verify_commands() { :; }; change_preflight_run; echo rc=$?')"
+eq "no commands anywhere is still N/A" "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['rows'][0]['status'])" "$project/.uncle/workflow/documents/PREFLIGHT_REPORT.json")" "N/A"
+
 # --- the driver runs the probe after plan approval and before implementation, and collects it at the gate ------------------------------
 grep -q 'set_state PREFLIGHT$' "$CW" || bad "plan approval does not go to PREFLIGHT"
 pf="$(awk '/^        PREFLIGHT\)/{p=1;next} p&&/^        [A-Z_]+\)$/{exit} p{print}' "$CW")"

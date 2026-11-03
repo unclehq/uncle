@@ -115,6 +115,15 @@ uncle_title_end() {
 }
 uncle_cancel() {
     trap '' INT TERM
+    # A SIGTERM is something outside the run reaching in (a person's kill, a closing session, another tool's cleanup). Say so, once,
+    # where the triage bundle and the next resume read it; before, an unattended run killed this way left "stop reason: MISSING" and
+    # nothing to say the run was healthy and only needed resuming. Never over a reason the run already recorded.
+    if [[ "$1" == 143 ]]; then
+        local reason_dir="${STATE_DIR:-.uncle/workflow}"
+        if [[ -d "$reason_dir" && ! -s "$reason_dir/stop-reason" ]]; then
+            printf '%s\n' 'interrupted: the run received SIGTERM from outside; its state is intact, rerun to resume' > "$reason_dir/stop-reason" 2> /dev/null || true
+        fi
+    fi
     bash "$ROOT/scripts/lib/terminal-title.sh" --stop-tree "$$"
     wait 2>/dev/null || true
     exit "$1"

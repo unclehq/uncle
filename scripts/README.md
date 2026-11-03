@@ -261,11 +261,41 @@ change workflow inside it:
   one, so the run uses the same runner and model settings. `.uncle/workflow`
   (lock, state, approvals, origin) is per worktree, so two runs never share
   state; the source project holds none of it.
+- **Automatic removal after a PR.** When the run ends in `COMPLETE` and this run
+  created a PR, the worktree directory is removed (the branch is kept), with no
+  prompt, attended or not. All of these must hold, else the worktree is kept and
+  the guard's reason plus the manual removal command are printed:
+  - the driver state (`.uncle/workflow/state.json`) reads `COMPLETE`; any other
+    or unreadable state keeps it;
+  - `.uncle/workflow/pr/journal.json` is valid: a regular file, phase exactly
+    `created`, a `url` of the form `https://github.com/<owner>/<repo>/pull/<n>`
+    whose owner/repo equals the issue's (case-insensitive; other hosts, forks
+    and GitHub Enterprise are not evidence), and a `head_branch` equal to the
+    worktree's branch. The PR is **not** verified against GitHub; the journal
+    is trusted as written. It must also be fresh: its content differs from
+    before the run (an absent journal counts as different). A byte-identical
+    rewrite, including a resumed run whose PR was created earlier, is stale and
+    keeps the worktree;
+  - none of the journal file, the `.uncle/workflow/pr` directory or the worktree
+    directory is a symlink;
+  - the tree is clean: no tracked changes, untracked files or commits missing
+    from every remote ref;
+  - the worktree is registered with the source project, is not it, does not
+    contain it, and sits in the same parent directory as the source project.
+
+  Removal or refusal never changes the exit status: the script exits as the run
+  did.
 - Without the flag nothing changes: same files, cwd and driver arguments.
 
-When the driver exits 0 with state `COMPLETE`, an interactive run asks
-`Remove worktree <dir>? [y/N]`; `n`, a non-terminal stdin (the TUI) and
-`--unattended` keep the directory and print the removal command instead:
+With valid PR evidence the prompt is never shown, in any mode (interactive,
+TUI, `--unattended`). If a guard refuses, the output is
+`Not removing <dir>: <reason>.` followed by
+`Worktree <dir> kept; remove with: scripts/lib/worktrees.sh remove <dir>`.
+
+When the driver exits 0 with state `COMPLETE` but no PR was created, an
+interactive run asks `Remove worktree <dir>? [y/N]`; `n`, a non-terminal stdin
+(the TUI) and `--unattended` keep the directory and print the removal command
+instead:
 
 ```sh
 bash scripts/lib/worktrees.sh remove <dir>

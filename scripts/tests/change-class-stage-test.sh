@@ -45,6 +45,7 @@ run_stage() {  # <project> <runner-behaviour> -- prints the stage's output; runn
     local p="$1" mode="$2"
     (
         cd "$p" || exit 1
+        PATH="$bin:$PATH"   # the supervisor's defaults apply only when its runner is installed; stub it rather than need a real one
         ROOT="$ROOT_FOR_LIB"; STATE_DIR=.uncle/workflow; LOG_DIR=.uncle/workflow/logs; export ROOT STATE_DIR LOG_DIR
         PACKET='{"schema":"uncle.artifact/v1","kind":"change-class","class":"small","adversarial_lenses":["requirements"],"edit_slice":5,"rationale":"one string"}'
         run_claude() {
@@ -110,6 +111,7 @@ decide() {  # <project> <env...> -- reads answers from stdin; prints the decisio
     local p="$1"; shift
     (
         cd "$p" || exit 1
+        PATH="$bin:$PATH"   # the supervisor's defaults apply only when its runner is installed; stub it rather than need a real one
         ROOT="$ROOT_FOR_LIB"; STATE_DIR=.uncle/workflow; LOG_DIR=.uncle/workflow/logs; export ROOT STATE_DIR LOG_DIR
         for assignment in "$@"; do export "$assignment"; done
         run_claude() { :; }

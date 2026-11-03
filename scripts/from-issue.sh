@@ -192,6 +192,108 @@ offer_worktree_removal() {
 }
 
 
+# journal_signature <dir> — sha256 of the PR journal's bytes, or `absent`.
+journal_signature() {
+    local f="$1/.uncle/workflow/pr/journal.json"
+    if [[ -f "$f" ]]; then
+        shasum -a 256 < "$f" 2>/dev/null | awk '{print $1}'
+    else
+        echo absent
+    fi
+}
+
+# pr_created_in <dir> — success only when this run's PR journal in <dir> records
+# a created PR: a regular non-symlink file, JSON object, phase exactly "created",
+# an https GitHub pull URL in `url` (writer: scripts/lib/change-pr.sh), a
+# required `head_branch` equal to the worktree's, and bytes different from PRE_RUN_JOURNAL_SIG (not stale).
+pr_created_in() {
+    local dir="$1" f sig branch
+    f="$dir/.uncle/workflow/pr/journal.json"
+    [[ -f "$f" && ! -L "$f" && ! -L "$dir/.uncle" && ! -L "$dir/.uncle/workflow" && ! -L "$dir/.uncle/workflow/pr" ]] || return 1
+    sig="$(journal_signature "$dir")"
+    [[ "$sig" != "${PRE_RUN_JOURNAL_SIG:-absent}" ]] || return 1
+    branch="$(git -C "$dir" branch --show-current 2>/dev/null || true)"
+    python3 -I - "$f" "$branch" "${OWNER:-}/${REPO:-}" <<'PY' >/dev/null 2>&1
+import json, re, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+if not isinstance(d, dict) or d.get("phase") != "created":
+    sys.exit(1)
+u = d.get("url")
+m = re.fullmatch(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/[0-9]+", u.strip()) if isinstance(u, str) else None
+if not m or m.group(1).lower() != sys.argv[3].lower():
+    sys.exit(1)
+b = d.get("head_branch")
+if not isinstance(b, str) or not b or b != sys.argv[2]:
+    sys.exit(1)
+PY
+}
+
+# auto_removal_refusal <dir> <source-root> — print why the post-PR worktree must
+# not be removed automatically, or nothing when removal may proceed. Fail-safe:
+# anything unresolvable is a refusal. Checks: both paths resolve (realpath);
+# <dir> sits inside the managed root (the directory holding the source project,
+# where worktree_default_dir puts worktrees) and neither equals nor contains the
+# source root; no untracked files; no HEAD commits missing from every remote ref.
+# (Tracked changes are refused by worktree_remove's git call.)
+auto_removal_refusal() {
+    local dir="$1" src="$2" rdir rsrc managed rhome untracked ahead branch pushed ref
+    rdir="$(worktree_real "$dir")" || rdir=""
+    rsrc="$(worktree_real "$src")" || rsrc=""
+    if [[ -z "$rdir" || -z "$rsrc" ]]; then
+        echo "a worktree or source path cannot be resolved"; return 0
+    fi
+    if [[ "$rdir" == "$rsrc" ]]; then
+        echo "the worktree is the source checkout"; return 0
+    fi
+    case "$rsrc/" in
+        "$rdir"/*) echo "the worktree contains the source checkout"; return 0 ;;
+    esac
+    # Managed root: where worktree_default_dir places worktrees, resolved.
+    managed="$(worktree_real "$(dirname "$(worktree_default_dir "$src" "${ISSUE_NUM:-0}")")")" || managed=""
+    rhome="$(worktree_real "${HOME:-/nonexistent}" 2>/dev/null)" || rhome=""
+    if [[ -z "$managed" || "$managed" == "/" || ( -n "$rhome" && ( "$managed" == "$rhome" || "$rhome/" == "$managed"/* ) ) ]]; then
+        echo "the worktree is outside the managed worktrees root ${managed:-/}"; return 0
+    fi
+    case "$rdir/" in
+        "$managed"/*) ;;
+        *) echo "the worktree is outside the managed worktrees root $managed"; return 0 ;;
+    esac
+    if [[ "$dir" != "$rdir" && -L "$dir" ]]; then
+        echo "the worktree path is a symlink"; return 0
+    fi
+    if ! untracked="$(git -C "$rdir" status --porcelain --untracked-files=all 2>/dev/null)"; then
+        echo "the worktree status cannot be read"; return 0
+    fi
+    if printf '%s\n' "$untracked" | grep -q '^??'; then
+        echo "the worktree contains untracked files"; return 0
+    fi
+    # Any remaining porcelain entry is a modified or staged tracked file.
+    if printf '%s\n' "$untracked" | grep -q '[^[:space:]]'; then
+        echo "the worktree has uncommitted changes to tracked files"; return 0
+    fi
+    # Pushed: HEAD is contained in a remote-tracking ref of this branch.
+    branch="$(git -C "$rdir" branch --show-current 2>/dev/null)" || branch=""
+    if ! ahead="$(git -C "$rdir" rev-list --count HEAD --not --remotes 2>/dev/null)"; then
+        echo "unpushed commits cannot be determined"; return 0
+    fi
+    pushed=0
+    if [[ -n "$branch" ]]; then
+        while IFS= read -r ref; do
+            [[ -n "$ref" ]] || continue
+            if git -C "$rdir" merge-base --is-ancestor HEAD "$ref" 2>/dev/null; then
+                pushed=1; break
+            fi
+        done < <(git -C "$rdir" for-each-ref --format='%(refname)' "refs/remotes/*/$branch" 2>/dev/null)
+    fi
+    if [[ "$pushed" != 1 ]]; then
+        [[ "$ahead" != 0 ]] || ahead="$(git -C "$rdir" rev-list --count HEAD 2>/dev/null || echo 1)"
+        echo "the worktree has $ahead commit(s) not pushed to a remote"; return 0
+    fi
+    return 0
+}
 
 # Test hook: sourcing this script with STAGEGATE_FROM_ISSUE_SOURCE_ONLY=1 yields
 # the functions above without running the CLI, so scripts/tests/close-flow-test.sh
@@ -733,11 +835,35 @@ case "$MODE" in
         else
             write_change_request
         fi
+        PRE_RUN_JOURNAL_SIG="absent"
+        [[ "$WORKTREE" != 1 ]] || PRE_RUN_JOURNAL_SIG="$(journal_signature "$WORKTREE_DIR")"
         run_issue_workflow
+        PR_CREATED=0
+        if [[ "$WORKTREE" == 1 ]] && pr_created_in "$WORKTREE_DIR"; then
+            PR_CREATED=1
+        fi
         if [[ "$WORKTREE" == 1 && "$(workflow_state)" == "COMPLETE" ]]; then
+            if [[ "$PR_CREATED" == 1 ]]; then
+                # Valid PR evidence: never prompt; remove only when every guard
+                # passes, otherwise keep and say why. Exit status is untouched.
+                REFUSAL="$(auto_removal_refusal "$WORKTREE_DIR" "$SOURCE_PROJECT_ROOT")"
+                RESOLVED_DIR="$(worktree_real "$WORKTREE_DIR" 2>/dev/null || true)"
+                if [[ -z "$REFUSAL" ]] && ! worktree_registered "$SOURCE_PROJECT_ROOT" "$WORKTREE_DIR"; then
+                    REFUSAL="the worktree is not registered with the source checkout"
+                fi
+                if [[ -z "$REFUSAL" ]] && ! cd "$SOURCE_PROJECT_ROOT" 2>/dev/null; then
+                    REFUSAL="the source checkout is unreachable"
+                fi
+                if [[ -n "$REFUSAL" ]]; then
+                    echo "Not removing $WORKTREE_DIR: $REFUSAL."
+                    echo "Worktree $WORKTREE_DIR kept; remove with: scripts/lib/worktrees.sh remove $WORKTREE_DIR"
+                elif ! worktree_remove "$RESOLVED_DIR" || [[ -e "$RESOLVED_DIR" ]]; then
+                    # worktree_remove's own error is left visible above this line.
+                    echo "Worktree $WORKTREE_DIR kept; remove with: scripts/lib/worktrees.sh remove $WORKTREE_DIR"
+                fi
             # The TUI drives this script through a pipe and cannot answer;
             # unattended runs have nobody to ask. Both get the command instead.
-            if [[ -t 0 && "$UNATTENDED" != 1 ]]; then
+            elif [[ -t 0 && "$UNATTENDED" != 1 ]]; then
                 cd "$SOURCE_PROJECT_ROOT"
                 # A refused removal (dirty tree) keeps the worktree and its
                 # reason; the run itself succeeded, so the exit status stays 0.

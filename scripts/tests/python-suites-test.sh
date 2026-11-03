@@ -19,7 +19,7 @@ fixture() {   # name -> a project with passing suites (two that sleep 3 s), one 
     printf 'open("%s/not-a-suite-ran", "w").write("x")\n' "$TMP" > "$p/scripts/tests/notes_test.py"   # wrong suffix: _test, not -test
     echo "$p"
 }
-now() { python3 -c 'import time; print(time.monotonic())'; }
+now() { python3 -c 'import time; print(time.time())'; }   # wall clock: monotonic is not comparable across processes everywhere
 secs() { python3 -c "print(round($2 - $1, 1))"; }
 
 P="$(fixture pass)"

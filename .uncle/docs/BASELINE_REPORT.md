@@ -1,93 +1,68 @@
-# Baseline Report
+# Baseline report: Issue 152 terminal tab title
 
-Omitted sections: Reproduction (feature, not a bug); Parallel-group independence beyond section 7 (stated there)
+Omitted sections: Reproduction result (not a bug report, a feature); Existing failures (none documented in-repo; driver baseline is authority)
 
 ## 1. Change-request summary
-Issue 148 (.uncle/docs/CHANGE_REQUEST.md): add `--housekeeping` / `/housekeeping` and a new short driver `scripts/housekeeping-workflow.sh` for non-code tasks, gated by an allowlist plus an editable disallow list.
+See `.uncle/docs/CHANGE_REQUEST.md` (T-1..T-8, I-1..I-4). Tab title must carry the project name, be built by one shared function, restore the previous title via xterm title stack, and honour `UNCLE_TERMINAL_TITLE=0`.
 
 ## 2. Repository architecture
-- `uncle` (bash launcher, 781 lines): arg parsing, usage, did-you-mean, startup action env (`UNCLE_STARTUP_ACTION/TEXT/TEXT_FILE`), TUI launch, line-menu fallback.
-- `uncle_tui.py` (7892 lines): curses TUI, slash commands, Configure screens, startup actions.
-- `scripts/*.sh` drivers (`change-workflow.sh` 4977 lines, `workflow.sh`, `from-issue.sh`); shared libs in `scripts/lib/` (state.sh, gates.sh, stage-config.sh, document-layout.sh, change_request_stdin.py, ...).
-- Tests: `scripts/tests/*-test.sh` (run by `scripts/lib/shell_suites.py`) and `*-test.py` (via `scripts/run-python-tests.sh`); 414 files.
+Bash drivers (`scripts/stagegate.sh`, `change-workflow.sh`, `from-issue.sh`), launcher `uncle` (TUI via `uncle_tui.py`, curses; line-based menu fallback in `uncle`), helpers in `scripts/lib/`. Python suites `scripts/tests/*-test.py`, shell suites `scripts/tests/*-test.sh`.
 
 ## 3. Relevant code paths
-- `uncle:57-105` usage; `uncle:108-190` arg loop; `uncle:122` `--unattended`; `uncle:123-141` `--change-request` (mutual-exclusion via `UNCLE_STARTUP_ACTION`, python3 stdin validator); `uncle:142-190` `--application`, `--issue`; `uncle:198` did-you-mean option list; `uncle:219` export of startup env; `uncle:233-263` TUI lock; `uncle:276-289` startup-action TUI launch; `uncle:394-463` unattended relaunch loop.
-- `uncle:612-632` line-menu `configure_menu`, option 3 Miscellaneous uses `config_get`/`config_set` (`misc.*` keys).
-- `uncle_tui.py:980` reads `UNCLE_STARTUP_ACTION`; `:4022-4058` `_handle_startup_action` (create_app, github_issue, change_request); `:4062` `_start_change_request`; `:1292-1295` `_config_items` (Miscellaneous entry); `:1686` `save_config`; `:5914-5949` `_slash_choices`/command table; `:6016,6081,6361` slash handling and help strings.
-- `scripts/lib/change_request_stdin.py`: stdin validation (CAP 1048576, UTF-8, control-char regex, empty check).
-- `.uncle/workflow/driver.lock` (flock) is the per-checkout driver lock (`uncle:233`).
+- `uncle_tui.py:1927-1949` `_write_title`, `_begin_title`, `_end_title`; callers at 2133, 2144, 1953, 3095.
+- `uncle_tui.py:6363` status-bar project name: `os.path.basename(_project_root()) or _project_root()`; `_project_root` at 135 (`UNCLE_PROJECT_ROOT` if absolute, else cwd).
+- `uncle_tui.py:7911-7914` `__main__`: `curses.wrapper(main)`; no idle title is written.
+- `scripts/lib/terminal-title.sh:100-115` `uncle_title_begin/end` (second copy of the format); `--stop-tree` and `uncle_cancel` in same file must stay untouched.
+- `scripts/from-issue.sh:37,582-585`; `scripts/change-workflow.sh:470,487,495-497`. `scripts/stagegate.sh` has no title handling and does not source terminal-title.sh.
+- `uncle:304-320` TUI launch and line-based menu; no title handling.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `uncle --change-request < f` | Validated text becomes CHANGE_REQUEST.md, change flow starts in TUI | uncle:123-141 | Yes |
-| B-2 | two of --application/--issue/--change-request | `Error: ... mutually exclusive`, exit 1 | uncle:124,144,162 | Yes (extend message) |
-| B-3 | unknown flag | did-you-mean from fixed list | uncle:198 | Yes (add flag to list) |
-| B-4 | `--unattended` | forwarded to driver, gates auto-satisfied and recorded | uncle:122,406-463 | Yes |
-| B-5 | TUI slash commands | `/issue /change /triage ...` only | uncle_tui.py:5915 | Yes |
-| B-6 | Configure > Miscellaneous | TUI Markdown viewer etc.; line menu auto_mode/approval_name | uncle_tui.py:1295, uncle:617 | Yes |
-| B-7 | second driver on same checkout | refused by driver.lock | uncle:233 | Yes |
+| B-1 | TUI run with issue number, not already owned | OSC 2 `uncle issue #N`; sets `UNCLE_TITLE_OWNER` in child env | uncle_tui.py:1938-1944 | Owner gating yes; text MODIFY |
+| B-2 | Run ends / TUI closes | OSC 2 literal `uncle` | uncle_tui.py:1946-1949 | No (replace) |
+| B-3 | Run with no issue number, idle TUI, line menu, stagegate.sh | No title written | code read | No (replace) |
+| B-4 | Non-tty or TERM empty/dumb | Nothing written | 1929-1930; terminal-title.sh:103-104,113 | Yes |
+| B-5 | Driver launched by TUI (owner set) | Driver writes nothing | terminal-title.sh:103 | Yes |
+| B-6 | Status bar | `<dir basename> (<branch>)` | uncle_tui.py:6363-6369 | Yes (non-goal) |
+| B-7 | `uncle_cancel`, `--stop-tree` | Kill process tree, exit code | cancel-stop-reason-test.sh | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| V-1 | Start modes mutually exclusive | `UNCLE_STARTUP_ACTION` non-empty check | launcher tests (not individually verified) | Medium |
-| V-2 | stdin request: UTF-8, <=1048576 B, no control chars, non-empty | change_request_stdin.py | change-request-exists-prompt-test.sh and siblings | Medium |
-| V-3 | One driver per checkout | flock driver.lock | launcher-tui-lock-test.sh | Medium |
-| V-4 | Drivers never bypass human gates except via --unattended, recorded | gates libs | gate suites | Medium |
+| E-1 | Title written only when stdout and stderr are ttys and TERM not empty/dumb | both copies | none found | High |
+| E-2 | Only one owner writes titles per process tree | `UNCLE_TITLE_OWNER` | none found | Medium |
+| E-3 | Title issue is digits only | `_title_issue` regex, bash `*[!0-9]*` | none found | High |
 
-## 6. Current API, schema, and interface contracts
-- CLI flags/usage text above; env `UNCLE_STARTUP_ACTION` values `create_app|github_issue|change_request`; TUI raises ValueError on unknown action (uncle_tui.py:4056).
-- `.uncle/config`: flat dotted keys (`stage.runner`, `misc.*`, `supervision.*`) accessed by `config_get/config_set/config_clear` (bash) and `save_config` (TUI). Exact on-disk syntax not inspected; implementation must reuse the helpers. UNRESOLVED only as to syntax, not as to approach.
-- Workflow state/records under `.uncle/workflow/`; docs under `.uncle/docs/`.
+## 6. Interface contracts
+Env `UNCLE_TITLE_OWNER` (pid), new `UNCLE_TERMINAL_TITLE`. Shell functions `uncle_title_begin <issue>` / `uncle_title_end` (signature kept). Tests mock `_begin_title`/`_end_title` (chat-test.py:647, tui-support-test.py:136, tui-hotkeys-test.py:179), so those method names must stay.
 
 ## 7. Existing automated-test coverage
-- Shell suites (`scripts/tests/*-test.sh`) and Python suites (`*-test.py`) cover launcher, TUI config, gates, locks (e.g. tui-config-test.sh, launcher-tui-lock-test.sh, tui-hotkeys-test.py).
-- Shell and Python runners use separate temp dirs and bind no shared ports, so they run as one parallel group (per runner docs: shell ~297 s, Python ~196 s, both at once ~297 s).
-- No housekeeping tests exist. Some existing tests may assert exact usage text, did-you-mean list or slash-command help strings; not individually checked.
-
-## 8. Exact build and test commands
-See `verification_commands` field.
+No test asserts OSC bytes or title text (grep for `uncle issue #`, `title_active`, `_write_title` in scripts/tests found only Mock uses). `terminal-title.sh` is exercised via `cancel-stop-reason-test.sh` and `triage-chat-test.py:167` (file copy list). Shell and Python runners use separate temp dirs and ports, so they run as one parallel group.
 
 ## 9. Baseline test results
-Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (Uncle's documented runners). Not run here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Per runner docs, some Python suites already fail on a clean checkout.
-
-## 10. Existing failures, warnings, flaky behavior
-Some Python suites fail on a clean checkout (documented in stage instructions); specifics deferred to the driver baseline. UNRESOLVED: which ones.
+Commands come from `scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh` (CLAUDE.md-mandated runners). Not run by this stage; driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authority. Some Python suites may already fail on a clean checkout.
 
 ## 12. Likely change surface
-`uncle`, `uncle_tui.py`, new `scripts/housekeeping-workflow.sh`, new `scripts/lib/housekeeping_*.py`, new prompt file, new tests, docs (README/usage).
+`uncle_tui.py`, `scripts/lib/terminal-title.sh`, new `scripts/lib/terminal_title.py`, `scripts/from-issue.sh`, `scripts/change-workflow.sh`, `scripts/stagegate.sh`, `uncle`, new test `scripts/tests/terminal-title-test.py`.
 
 ## 13. Regression-sensitive components
-Launcher arg loop and mutual-exclusion logic; did-you-mean list; TUI startup-action dispatch and slash table; Configure item numbering (`_config_items`); config read/write helpers; existing tests asserting usage/help text.
+`uncle_cancel`/`--stop-tree` in terminal-title.sh (same file); EXIT traps in from-issue.sh/change-workflow.sh/stagegate.sh/uncle; TUI teardown ordering after curses.
 
-## 14. Areas explicitly outside the change
-`change-workflow.sh`, `workflow.sh`, `from-issue.sh`, gate libs (reused, not edited), `change_request_stdin.py`, other drivers' stage plumbing.
+## 14. Outside the change
+Status bar rendering, GUI app window titles, per-stage progress titles.
 
 ## 15. Unknowns and assumptions
-- Exact `.uncle/config` serialization and TUI list-editing widgets (assume reusable helpers; reuse rather than invent).
-- Whether existing tests pin usage text.
-- Assume agent runner invocation for the plan stage can reuse `stage-config.sh` lookups.
+- Whether stagegate.sh/uncle already own an EXIT trap: implementer must read and chain, not replace.
+- Terminal support for title stack cannot be detected; plan writes project-only title before popping.
 
 ## 16. Initial risk assessment
-| Risk | Level |
-|---|---|
-| Policy bypass via parser gaps (safety boundary in unattended mode) | High |
-| Breaking launcher arg parsing / existing tests | Medium |
-| TUI edit flow complexity in a 7.9k-line file | Medium |
-| Verify step reporting false pass | Medium |
+Medium-low: terminal escapes only, but multiple EXIT traps and two languages. Main risk is unsanitized text reaching the terminal (I-3).
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-```
-
-## Parallel verification groups
-
-```text
-1 2
 ```
 

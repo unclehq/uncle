@@ -317,6 +317,17 @@ elif [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
     exit 1
 fi
 
+# Line-based menu: own the terminal title for this process, then mark ownership
+# so child drivers push and retitle nothing. The EXIT trap chains onto the
+# existing cleanup and releases ownership before ending the title.
+if [[ -f "$ROOT/scripts/lib/terminal-title.sh" ]]; then
+    . "$ROOT/scripts/lib/terminal-title.sh" 2>/dev/null || true
+    if declare -f uncle_title_begin > /dev/null; then
+        uncle_title_begin "" 2>/dev/null || true
+        export UNCLE_TITLE_OWNER="$$"
+        trap '[[ -n "$UNCLE_CR_DIR" ]] && rm -rf "$UNCLE_CR_DIR"; unset UNCLE_TITLE_OWNER; uncle_title_end 2>/dev/null || true' EXIT
+    fi
+fi
 
 # Per-stage settings, as the drivers' variables.
 #

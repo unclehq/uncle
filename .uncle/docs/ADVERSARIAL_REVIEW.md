@@ -1,184 +1,184 @@
-## AR-001: Plan never says how argv is matched to an allowlist shape versus the model's `op` label.
+## AR-001: D-6/D-7 owner semantics conflict with BH-3/BH-5 (drivers write on no-issue runs) and BH-9 (driver silent under TUI).
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 (ops carry op and argv); AC-8 'exact command shapes'.
-- Failure: Plan never says how argv is matched to an allowlist shape versus the model's `op` label. Settle: 'The policy derives the operation from argv alone; it refuses if argv matches no allowlist shape or the op label disagrees.'
+- References: CHANGE_PLAN D-6/D-7 vs CHANGE_SPEC BH-3, BH-9, AC-6; terminal-title.sh:103.
+- Failure: D-6/D-7 owner semantics conflict with BH-3/BH-5 (drivers write on no-issue runs) and BH-9 (driver silent under TUI). Settle: 'When UNCLE_TITLE_OWNER is set, uncle_title_begin/end write nothing; only the TUI retitles on run start and run end.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Floor and default disallow list are conflated; spec leaves the floor list UNRESOLVED while D-1 lists a smaller set.
+## AR-002: Exit path is unspecified when the stack was never pushed (guard false) or when exit is via signal/exception.
 
 - Severity: HIGH
-- References: CHANGE_SPEC s15 UNRESOLVED; CHANGE_PLAN D-1; AC-7; I-7.
-- Failure: Floor and default disallow list are conflated; spec leaves the floor list UNRESOLVED while D-1 lists a smaller set. Settle: 'Default list equals the change-request lists verbatim; the locked floor is exactly D-1 and always applies.'
+- References: CHANGE_PLAN D-3, D-6; BH-4; terminal-title.sh:110 ACTIVE flag.
+- Failure: Exit path is unspecified when the stack was never pushed (guard false) or when exit is via signal/exception. Settle: 'end() writes project-only title and CSI 23;2 t only if begin() pushed in this process; it runs in finally and on SIGTERM/SIGHUP, and is idempotent.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Remote branch delete is allowed, but deleting the default or current branch is unspecified.
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-1, D-2, D-7; AC-8.
-- Failure: Remote branch delete is allowed, but deleting the default or current branch is unspecified. Settle: 'git push origin --delete <branch> is refused for the default branch, HEAD, or refspec/colon forms.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-004: Verify argv source is ambiguous: the model emits verify argv, yet D-4 says verify is deterministic.
+## AR-003: Non-numeric/empty issue has no expected title, and 60-char truncation is ambiguous about whether the issue suffix surviv
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 vs D-4 and D-6.
-- Failure: Verify argv source is ambiguous: the model emits verify argv, yet D-4 says verify is deterministic. Settle: 'Verify argv comes from a fixed per-op template; model-supplied verify argv must equal it, and expected is compared by exact string.'
+- References: CHANGE_SPEC AC-1, section 10; CHANGE_PLAN D-4.
+- Failure: Non-numeric/empty issue has no expected title, and 60-char truncation is ambiguous about whether the issue suffix survives. Settle: 'Non-numeric or empty issue yields the no-issue title; the project name is truncated so the full title is at most 60 chars and the suffix is kept.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Behavior after mid-run failure and process exit codes are undefined.
+## AR-004: Project name edge cases undefined: relative or empty UNCLE_PROJECT_ROOT, root '/', or name empty after sanitizing.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s7 state transitions; spec s8; AC-6, AC-10.
-- Failure: Behavior after mid-run failure and process exit codes are undefined. Settle: 'After a failure, read-only verify still runs for completed ops; exit is nonzero for REFUSED, FAILED, VERIFY_FAILED and zero for DECLINED and success.'
+- References: CHANGE_PLAN D-4, D-5; CHANGE_SPEC section 8 vs AC-1.
+- Failure: Project name edge cases undefined: relative or empty UNCLE_PROJECT_ROOT, root '/', or name empty after sanitizing. 'Fallback uncle' conflicts with the AC-1 format 'project first'. Settle: 'Ignore non-absolute UNCLE_PROJECT_ROOT and use cwd; an empty name yields the title exactly `uncle`.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Edge inputs unspecified: zero-op plan, duplicate or floor-equal patterns, user patterns versus the allowlist.
+## AR-005: Opt-out values are unspecified (empty, false, unset) and I-4 requires both stdout and stderr ttys though writes go to on
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5; AC-12; I-4, I-7.
-- Failure: Edge inputs unspecified: zero-op plan, duplicate or floor-equal patterns, user patterns versus the allowlist. Settle: 'A zero-op plan is refused; duplicate or floor-equal patterns are rejected leaving the list unchanged; user patterns only add refusals.'
+- References: CHANGE_SPEC I-4, BH-7; CHANGE_PLAN R-3.
+- Failure: Opt-out values are unspecified (empty, false, unset) and I-4 requires both stdout and stderr ttys though writes go to one stream. Settle: 'Only the exact value 0 disables; any other value enables; writes go to stdout, and both stdout and stderr must be ttys.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan allows minimal edits to protected existing tests for usage/help text, but AC-14 requires the existing suites to pas
-
-- Severity: HIGH
-- References: CHANGE_PLAN section 10 and risk row 2 allow expected-string updates; AC-14 requires the suites to pass as at baseline.
-- Failure: Plan allows minimal edits to protected existing tests for usage/help text, but AC-14 requires the existing suites to pass as at baseline. Settle with: 'Existing tests are never edited; usage changes must pass every existing assertion, otherwise stop for human re-approval.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: Flag combinations beyond the three exclusive flags are unspecified, as is bare --housekeeping with empty TTY stdin.
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-1 and H-11 list only three exclusive flags; H-12 says existing flags are unchanged.
-- Failure: Flag combinations beyond the three exclusive flags are unspecified, as is bare --housekeeping with empty TTY stdin. Settle with: 'Other flag combinations keep prior behavior; --housekeeping with no text and TTY stdin is refused as empty input.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: The new Configure entry position in the line menu is unspecified, so existing numbered selections or item-count tests co
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN section 10 says the entry is appended; H-9 places it in both menus without fixing its number.
-- Failure: The new Configure entry position in the line menu is unspecified, so existing numbered selections or item-count tests could shift. Settle with: 'The entry takes the last number in each menu and no existing item moves.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-010: The driver sources state.sh and reuses driver.lock, but the plan does not say whether it touches shared .uncle/workflow
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN section 1 sources state.sh while section 7 says existing state is untouched; R-4 defers the lock helper choice.
-- Failure: The driver sources state.sh and reuses driver.lock, but the plan does not say whether it touches shared .uncle/workflow state or releases the lock on refusal. Settle with: 'Housekeeping reads and writes no state or gate files outside .uncle/workflow/housekeeping/, and releases driver.lock on every exit path.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-011: Writing housekeeping.disallow into the shared .uncle/config could disturb other keys; the plan does not say how they are
+## AR-006: Nested drivers started from the uncle line menu may push the stack again, giving mismatched pops.
 
 - Severity: LOW
-- References: CHANGE_PLAN risk row 3 says the .uncle/config syntax is unknown; D-5 stores a JSON array string.
-- Failure: Writing housekeeping.disallow into the shared .uncle/config could disturb other keys; the plan does not say how they are preserved. Settle with: 'Config writes change only the housekeeping.disallow entry and leave all other keys unchanged.'
+- References: CHANGE_PLAN D-7, step 4 (uncle begin/end around line menu); AC-6.
+- Failure: Nested drivers started from the uncle line menu may push the stack again, giving mismatched pops. Settle: 'The line menu exports UNCLE_TITLE_OWNER, so child drivers push and retitle nothing.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Allowlisted ops are said to match 'exact command shapes' but the argv grammar is undefined (global options, `--`, `git -
+## AR-007: Plan never says what a driver does when the TUI skipped its own begin (non-tty, opt-out) yet runs children.
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-8 'exact command shapes'; CHANGE_PLAN s1 'matches program/subcommand/flag sets'.
-- Failure: Allowlisted ops are said to match 'exact command shapes' but the argv grammar is undefined (global options, `--`, `git -c`, `gh --repo`, env prefixes). Decision: match the full argv exactly (program, subcommand, fixed flag set, exact positional arity); refuse any global option, unlisted flag or env-assignment token.
+- References: CHANGE_PLAN D-6/D-7; terminal-title.sh:103-106 sets the owner only after the guard passes.
+- Failure: Plan never says what a driver does when the TUI skipped its own begin (non-tty, opt-out) yet runs children. Settle with: the TUI exports UNCLE_TITLE_OWNER only when it actually began, and drivers push only when it is unset.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Remote `git push origin --delete` is allowed, but the plan doesn't protect the default branch or say how 'merged-only' i
+## AR-008: EXIT-trap and repeat-call behavior is unspecified.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2/D-7; D-1 covers only force-push to the default branch.
-- Failure: Remote `git push origin --delete` is allowed, but the plan doesn't protect the default branch or say how 'merged-only' is enforced for remotes. Decision: refuse `--delete` and `:ref` refspecs for the default branch, HEAD, main and master; require a merged check at execute time for any remote delete.
+- References: terminal-title.sh:100-115,116-130; CHANGE_PLAN section 12 says only 'chain onto existing ones'.
+- Failure: EXIT-trap and repeat-call behavior is unspecified. Settle with: end is idempotent and runs from the EXIT trap on every exit path including uncle_cancel, and a second begin in the same process is a no-op.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: The floor lists fixed strings, and variants are unspecified: `rm -fr`, `--recursive --force`, `/*`, `$HOME`, wrappers (`
+## AR-009: Non-numeric, non-empty issue in bash is unspecified: the old guard rejected it, the plan accepts an empty one.
+
+- Severity: MEDIUM
+- References: terminal-title.sh:103 rejects non-digits; CHANGE_SPEC AC-1 lists 'non-numeric issue'; CHANGE_PLAN section 8.
+- Failure: Non-numeric, non-empty issue in bash is unspecified: the old guard rejected it, the plan accepts an empty one. Settle with: a non-numeric issue is treated as empty and produces `<project> · uncle`.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-010: The bash path now spawns python3 per begin/end, and the plan does not say what happens if python3 is missing, or which f
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN section 1 'terminal-title.sh calls the CLI'; terminal-title.sh:103-107 uses -t 1 -t 2 in bash.
+- Failure: The bash path now spawns python3 per begin/end, and the plan does not say what happens if python3 is missing, or which fds the helper's isatty checks see. Settle with: the helper inherits fds 1/2 unchanged, and a missing or failing python3 yields silence with exit 0.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-011: Plan does not say whether end writes the project-only title when this process never did the matching begin (TUI-owned, o
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC BH-4; CHANGE_PLAN D-3/D-6; terminal-title.sh:110 gates on UNCLE_TITLE_ACTIVE.
+- Failure: Plan does not say whether end writes the project-only title when this process never did the matching begin (TUI-owned, or end without begin). Settle with: end writes nothing unless this process performed the matching begin.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: The 60-char cap is ambiguous: whole title or project name.
+
+- Severity: LOW
+- References: CHANGE_PLAN D-4 'truncate to 60 chars'; CHANGE_SPEC AC-1.
+- Failure: The 60-char cap is ambiguous: whole title or project name. Truncating the whole title could cut off the issue number. Settle with: the project name is truncated to 60 chars before the suffix is appended.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-013: Sanitization covers only C0/C1/DEL, so bidi overrides and line separators can still reach the OSC payload.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1; the D-2 allowlist contains no rm.
-- Failure: The floor lists fixed strings, and variants are unspecified: `rm -fr`, `--recursive --force`, `/*`, `$HOME`, wrappers (`env`, `xargs`, `sh -c`), `+refspec`, `--force-with-lease`. Decision: rm and wrapper programs are never allowlisted; `--force-with-lease` and `+refspec` count as force.
+- References: CHANGE_PLAN D-4 and CHANGE_SPEC section 10 name only C0/C1/DEL; I-3 says 'no ESC/BEL/control chars'.
+- Failure: Sanitization covers only C0/C1/DEL, so bidi overrides and line separators can still reach the OSC payload. Plan should say: sanitize drops all Unicode categories Cc, Cf, Zl and Zp before truncation.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: Nothing binds the approved plan to the executed argv (TOCTOU), or says the displayed argv is escaped.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1 stages plan -> policy -> approval -> execute, with no integrity binding.
-- Failure: Nothing binds the approved plan to the executed argv (TOCTOU), or says the displayed argv is escaped. Decision: hash the policy-checked plan, approve that hash, execute only it, and render argv with control characters escaped.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: The editable disallow config is unspecified for empty or over-broad patterns, and for whether it can do anything except
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-5; CHANGE_SPEC I-4/I-7.
-- Failure: The editable disallow config is unspecified for empty or over-broad patterns, and for whether it can do anything except add refusals. Decision: config can only add refusals; empty or bare `*` patterns are rejected; the floor is hard-coded, not read from config.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: Read-only verify commands (`git ls-remote`, `gh issue view`) can take arbitrary URLs and targets, and the issue-triage c
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-6; D-2 'issue-triage' has no defined command shape.
-- Failure: Read-only verify commands (`git ls-remote`, `gh issue view`) can take arbitrary URLs and targets, and the issue-triage command shape is undefined. Decision: verify argv is limited to the same repo and refs as the operation; issue-triage allows only fixed label/close/comment shapes.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: Plan never says whether a plan-supplied verify argv is also checked against the disallow list, or what happens when it i
+## AR-014: Order of sanitize and truncate, and what the 60 chars covers, is unspecified.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-6; CHANGE_SPEC section 10; AC-10 covers only mismatch, failure and not-run.
-- Failure: Plan never says whether a plan-supplied verify argv is also checked against the disallow list, or what happens when it is off the verify allowlist (refuse whole plan vs NOT VERIFIED). Settle: 'A verify argv off the read-only verify allowlist or matching a disallow pattern refuses the whole plan before any command runs, in every mode.'
+- References: AC-1 says 'truncates to 60 chars, never returns empty'; D-4 and BH-8 do not say which part is truncated.
+- Failure: Order of sanitize and truncate, and what the 60 chars covers, is unspecified. Plan should say: strip first, truncate only the project name to 60 code points, then append the fixed suffix; an empty result falls back to 'uncle'.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: Floor patterns and the default branch are undefined, so AC-7 tests lack an oracle.
+## AR-015: The CLI's handling of a non-numeric, empty or flag-like issue, and how the root reaches it, is unspecified.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN section 1 CLI 'begin|retitle|end [issue]'; CHANGE_SPEC section 10 says 'digits-only issue' without naming the enforcing layer.
+- Failure: The CLI's handling of a non-numeric, empty or flag-like issue, and how the root reaches it, is unspecified. Plan should say: the CLI accepts the issue only if it matches ^[0-9]+$, else treats it as no issue, and reads the root only from the env var, never argv.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: The plan does not say how end() behaves if the tty guard fails at exit, or how a stale or environment-set UNCLE_TITLE_OW
+
+- Severity: MEDIUM
+- References: Existing terminal-title.sh:103-114 checks only that UNCLE_TITLE_OWNER is non-empty; D-6, D-7 and AC-6 do not change that.
+- Failure: The plan does not say how end() behaves if the tty guard fails at exit, or how a stale or environment-set UNCLE_TITLE_OWNER is treated. Plan should say: end() re-checks the full guard and writes nothing on failure; the owner variable is honored only when it names a live ancestor PID.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: Push/pop balance is unspecified for a double begin, an end without begin, or a signal during teardown.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-3, D-6, D-7 and 'EXIT traps chain'; uncle_cancel calls exit, but the plan does not say the TUI finally covers SIGTERM.
+- Failure: Push/pop balance is unspecified for a double begin, an end without begin, or a signal during teardown. Plan should say: begin pushes at most once per process, end pops only if that process pushed, and end is idempotent and also runs on signal paths.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: The plan names no stream for title bytes and does not say what happens when only one of stdout/stderr is a tty.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1; CHANGE_SPEC section 15 marks the exact floor list UNRESOLVED.
-- Failure: Floor patterns and the default branch are undefined, so AC-7 tests lack an oracle. Settle: 'Default branch means main, master, or origin HEAD; rm with any recursive or force flag spelling on /, /*, ~, $HOME is refused.'
+- References: terminal-title.sh:103-104 needs -t 1 and -t 2; plan R-3 says 'isatty both' but AC-5 says 'stdout or stderr is not a tty'.
+- Failure: The plan names no stream for title bytes and does not say what happens when only one of stdout/stderr is a tty. Decision: 'Title and stack sequences go to stderr in the TUI and stdout in shell, and only when both are ttys; otherwise nothing is written.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: Pattern grammar `program [subcommand...] [--flag...]` leaves open short-flag clusters, --flag=value, flags before subcom
+## AR-019: End-sequence order and the run-end versus session-exit behavior conflict.
 
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-5; AC-7 'flag-order and quoting variants'; AC-12 invalid pattern.
-- Failure: Pattern grammar `program [subcommand...] [--flag...]` leaves open short-flag clusters, --flag=value, flags before subcommand, and all-vs-any flags. Settle: 'A pattern matches when program and subcommands are a prefix of the command tokens and every pattern flag appears in any order, clusters expanded, --flag=value matched by name.'
+- Severity: HIGH
+- References: CHANGE_SPEC BH-4 says run end or exit gives project-only title then pop, but plan D-6 says per-run the TUI only retitles and pops once at session end.
+- Failure: End-sequence order and the run-end versus session-exit behavior conflict. Decision: 'On exit write the project-only title, then CSI 23;2 t. A run end while the TUI lives writes only the idle title and no pop.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: A valid-JSON plan with zero ops, duplicate ids or missing fields is unspecified; only bad JSON is covered.
+## AR-020: The 60-char cap scope, unit and order against sanitizing are ambiguous.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN risk table 'Plan model emits bad JSON'; section 7 has no schema rule.
-- Failure: A valid-JSON plan with zero ops, duplicate ids or missing fields is unspecified; only bad JSON is covered. Settle: 'A plan that is invalid JSON, has zero ops, or has any op missing id, op, argv, expected or verify is REFUSED with exit 1 before approval.'
+- References: CHANGE_SPEC AC-1 says 'truncates to 60 chars'; plan D-4 gives no order, scope or unit.
+- Failure: The 60-char cap scope, unit and order against sanitizing are ambiguous. Decision: 'The 60 cap applies to the project name only, in code points, after stripping controls and trimming; the suffix is appended afterwards.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: Exit statuses and whether verify runs after an execute failure are unspecified for DECLINED, FAILED, VERIFY_FAILED, NOT_
+## AR-021: The title for a non-numeric, empty or very long issue argument is not defined.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 7 transitions; CHANGE_SPEC section 8 gives exit 1 only for input refusals.
-- Failure: Exit statuses and whether verify runs after an execute failure are unspecified for DECLINED, FAILED, VERIFY_FAILED, NOT_VERIFIED. Settle: 'After FAILED, executed ops are still verified and unexecuted ops are NOT_VERIFIED; exit 0 only for DECLINED or fully VERIFIED, else 1.'
+- References: CHANGE_SPEC AC-1 verification lists 'non-numeric issue' and section 10 says digits-only, but no BH row gives the expected title.
+- Failure: The title for a non-numeric, empty or very long issue argument is not defined. Decision: 'A non-numeric or empty issue is treated as no issue and yields `<project> · uncle`; digits are never truncated.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-023: AC-13 static and mutation tests have no defined mechanism for a bash driver.
+## AR-022: The CLI `end` runs in a separate python3 process and is stateless, so it cannot know whether begin pushed.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-13; CHANGE_PLAN section 16.
-- Failure: AC-13 static and mutation tests have no defined mechanism for a bash driver. Settle: 'The driver executes plan commands only via one function that consumes the check_plan output; the static test asserts it is the sole execution call site and the mutation test removes the check_plan call and expects the suite to fail.'
+- References: terminal-title.sh:110 gates end on UNCLE_TITLE_ACTIVE; plan D-7 and the CLI `end` define no such state.
+- Failure: The CLI `end` runs in a separate python3 process and is stateless, so it cannot know whether begin pushed. Decision: 'Any non-empty UNCLE_TITLE_OWNER makes begin and end no-ops, and bash end acts only if this shell's begin pushed, tracked by UNCLE_TITLE_ACTIVE.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-023: AC-8 defect injection does not name the mutants or how the mutated copy is exercised, and it is on the cut list.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC AC-8 versus plan section 16 ('a mutated temp copy') and section 21 listing defect-injection automation as cut first.
+- Failure: AC-8 defect injection does not name the mutants or how the mutated copy is exercised, and it is on the cut list. Decision: 'The test runs terminal_title.py from a temp copy with (a) end writing bare uncle and (b) sanitize disabled, and requires the suite to fail for each; this check is never cut.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

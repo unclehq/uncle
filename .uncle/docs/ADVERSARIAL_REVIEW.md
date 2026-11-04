@@ -1,152 +1,176 @@
-## AR-001: The plan skips the prompt when SEED_ONLY=1, but the spec never mentions SEED_ONLY in S3/S5/S6/AC-5.
+## AR-001: Plan never says if the attended y/n prompt shows when detection is ambiguous, headless, or a live pid file exists.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 guard (SEED_ONLY != 1) vs CHANGE_SPEC S5/S6 and V3.
-- Failure: The plan skips the prompt when SEED_ONLY=1, but the spec never mentions SEED_ONLY in S3/S5/S6/AC-5. Add: 'With SEED_ONLY=1 and an existing request file, no prompt is shown and existing no-overwrite behavior (V3) is unchanged.'
+- References: CHANGE_SPEC D-1, D-4; CHANGE_PLAN section 1 and DEC-8.
+- Failure: Plan never says if the attended y/n prompt shows when detection is ambiguous, headless, or a live pid file exists. Say: 'The prompt is shown only for a single detected command, non-headless, no live pid file; otherwise print the reason or candidates, record skipped, no prompt.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Unattended detection differs between spec and plan.
+## AR-002: Unattended and headless signals overlap with no precedence (attended TUI with no stdin TTY, or over SSH).
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-4/S4 vs CHANGE_PLAN s1 and R-1.
-- Failure: Unattended detection differs between spec and plan. The spec says UNCLE_UNATTENDED=1; the plan also accepts UNATTENDED==1. Add: 'Unattended means UNATTENDED=1 or UNCLE_UNATTENDED=1 exactly; other values are interactive; UNCLE_REPLACE_CHANGE_REQUEST counts only when equal to 1.'
+- References: CHANGE_PLAN DEC-4, DEC-5, launch_decision signature.
+- Failure: Unattended and headless signals overlap with no precedence (attended TUI with no stdin TTY, or over SSH). Say: 'Unattended is true if any signal holds; launch_decision checks opt-out, then unattended, then headless, then asks.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: The plan does not say whether a zero-byte request file counts as existing.
+## AR-003: D-5 says opt-out does no detection, but D-7 suppresses web preview when desktop is detected and enabled.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 'non-empty existing file' vs CHANGE_SPEC AC-3/V1.
-- Failure: The plan does not say whether a zero-byte request file counts as existing. The plan guard requires non-empty, but AC-3/V1 say 'existing'. Add: 'A zero-byte request file is treated as absent: no prompt, overwritten silently.'
+- References: CHANGE_SPEC D-5 vs D-7.
+- Failure: D-5 says opt-out does no detection, but D-7 suppresses web preview when desktop is detected and enabled. Say: 'With WORKFLOW_PREVIEW_DESKTOP=0 the web preview runs as before, even for Electron projects.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: V2 claims .uncle/workflow is byte-identical after a decline, but the plan accepts that the worktree may already be creat
+## AR-004: Unclear whether the web preview stays suppressed on a desktop project when the flow ends in decline, skip, ambiguous or
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC V2 vs CHANGE_PLAN s22 risk 2.
-- Failure: V2 claims .uncle/workflow is byte-identical after a decline, but the plan accepts that the worktree may already be created before the decline. Add: 'V2 covers CHANGE_REQUEST.md and .uncle/workflow in the current worktree; a worktree created earlier in the same invocation is out of scope.'
+- References: CHANGE_PLAN section 1; CHANGE_SPEC D-7.
+- Failure: Unclear whether the web preview stays suppressed on a desktop project when the flow ends in decline, skip, ambiguous or failure. Say: 'The web preview is suppressed for any detected desktop project with the flow enabled, whatever the outcome.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: The plan leaves two cases open: the existing file is identical to the new request, or the issue number differs from the
+## AR-005: Live pid file blocks relaunch, but PID reuse and a crash after the grace period are unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 guard; CHANGE_SPEC S5 defines only same-issue in-flight resume.
-- Failure: The plan leaves two cases open: the existing file is identical to the new request, or the issue number differs from the seeded one. Add: 'The prompt is shown whenever the file exists and seed_is_current is false, even if content is identical.'
+- References: CHANGE_PLAN DEC-7, DEC-8, section 12.
+- Failure: Live pid file blocks relaunch, but PID reuse and a crash after the grace period are unspecified. Say: 'A pid file is live only if the PID is alive and the recorded command matches; a later crash is reported only while the TUI is open.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: The plan does not say which stream the prompt goes to or how answers are normalized (CRLF, trailing space).
+## AR-006: Empty, unparsable or non-desktop-project `desktop.launch_command` behavior is undefined.
 
 - Severity: LOW
-- References: CHANGE_PLAN s1 'print the file path and prompt', 'trim, lowercase'; CHANGE_SPEC S1.
-- Failure: The plan does not say which stream the prompt goes to or how answers are normalized (CRLF, trailing space). Add: 'The prompt goes to stderr; input is trimmed of whitespace and CR, lowercased, and matched exactly against y|yes.'
+- References: CHANGE_PLAN DEC-9; CHANGE_SPEC D-8.
+- Failure: Empty, unparsable or non-desktop-project `desktop.launch_command` behavior is undefined. Say: 'An empty or unparsable value is ignored with a one-line warning; the override applies only when a desktop framework is detected.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Non-TTY callers without the unattended flag (TUI, driver, closed stdin) hit EOF, which counts as no, so runs that used t
+## AR-007: Plan says the desktop prompt precedes `_completion_dialog` and that web CompletionPreview is skipped for desktop project
 
 - Severity: HIGH
-- References: CHANGE_PLAN s22 risk 1 accepts that callers with no stdin 'now stop'; spec S2 makes EOF a decline.
-- Failure: Non-TTY callers without the unattended flag (TUI, driver, closed stdin) hit EOF, which counts as no, so runs that used to overwrite now exit 1. Settle with: 'When stdin is not a TTY and neither UNATTENDED nor UNCLE_REPLACE_CHANGE_REQUEST=1 is set, treat the run as unattended: print the opt-in message and exit 1 without reading.'
+- References: CHANGE_PLAN s1 'web CompletionPreview and unattended _show_early_preview are skipped (D-7)' vs s5/s8 'launch.json contract unchanged'; spec D-7 says 'may open browser'.
+- Failure: Plan says the desktop prompt precedes `_completion_dialog` and that web CompletionPreview is skipped for desktop projects, but never says how a project with a `launch.json` web/command entry and desktop detection interacts. Plan should say: when desktop is detected and enabled, `launch.json` kind is ignored for the preview, and the launch.json file is left untouched and still validated.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The plan never says whether UNCLE_REPLACE_CHANGE_REQUEST=1 skips the prompt in interactive mode, or which seeding paths
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1 mentions the opt-in only inside the unattended branch; spec V3 keeps stdin imports as existing no-clobber.
-- Failure: The plan never says whether UNCLE_REPLACE_CHANGE_REQUEST=1 skips the prompt in interactive mode, or which seeding paths the guard covers. Settle with: 'UNCLE_REPLACE_CHANGE_REQUEST=1 also skips the prompt interactively; the guard does not run on stdin-import or seed-only paths.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: The guard reads the answer from stdin, which may carry piped request content for change_request_stdin.py, so the prompt
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s5 keeps change_request_stdin.py unmodified; s1 uses `read -r` from stdin in the change) case.
-- Failure: The guard reads the answer from stdin, which may carry piped request content for change_request_stdin.py, so the prompt could consume the request body or take it as an answer. Settle with: 'When stdin is piped request content (non-TTY), the guard never reads it and follows the unattended rule.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-010: The meaning of an empty or whitespace-only existing file is left open: s1 says non-empty, while the spec's AC-3 says onl
-
-- Severity: LOW
-- References: CHANGE_PLAN s1 'non-empty existing file' versus CHANGE_SPEC AC-3.
-- Failure: The meaning of an empty or whitespace-only existing file is left open: s1 says non-empty, while the spec's AC-3 says only 'no existing file'. Settle with: 'A zero-byte or whitespace-only CHANGE_REQUEST.md counts as no file and is replaced without a prompt.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-011: Unattended is read from either UNATTENDED or UNCLE_UNATTENDED, but the spec names only UNCLE_UNATTENDED.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 says `UNATTENDED==1` (or `UNCLE_UNATTENDED==1`). CHANGE_SPEC AC-4 mentions only UNCLE_UNATTENDED=1.
-- Failure: Unattended is read from either UNATTENDED or UNCLE_UNATTENDED, but the spec names only UNCLE_UNATTENDED. Fix: 'Unattended is true if the flag or UNCLE_UNATTENDED=1 sets UNATTENDED=1; the confirm function checks only UNATTENDED.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-012: The plan does not say how the opt-in value is validated.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 'proceed only if UNCLE_REPLACE_CHANGE_REQUEST==1'. AC-4 and V1 give no other-value behavior.
-- Failure: The plan does not say how the opt-in value is validated. Unset, 0, empty and 'true' are unspecified, and an ambient exported value could silently allow overwrites. Fix: 'Only the exact string 1 in UNCLE_REPLACE_CHANGE_REQUEST permits replacement; every other value refuses.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-013: 'Non-empty existing file' leaves a zero-byte file, a symlink, a dangling symlink or a directory unspecified.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1.1: 'non-empty existing file'. CHANGE_SPEC V1 says an existing file is never replaced without consent.
-- Failure: 'Non-empty existing file' leaves a zero-byte file, a symlink, a dangling symlink or a directory unspecified. The plan also does not cover a change between the guard and the write, so V1 and V2 can be broken. Fix: 'Any existing path entry at CHANGE_REQUEST.md triggers confirmation, and the write does not follow symlinks.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-014: The plan does not say where the prompt text goes, or whether the printed path is sanitized.
-
-- Severity: LOW
-- References: CHANGE_PLAN s1.1 'print the file path and ... read -r'. s19 mentions stderr only for decision messages.
-- Failure: The plan does not say where the prompt text goes, or whether the printed path is sanitized. Fix: 'Prompt and messages go to stderr, the path is printed with control characters escaped, and the answer is read from stdin only.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: Isolated function tests can't verify gating or decline-before-archive (V2); end-to-end case is optional and cut first.
+## AR-008: Skipping the early preview (and web preview) for a detected-desktop project is unconditional even when the desktop flow
 
 - Severity: HIGH
-- References: CHANGE_PLAN s16 'if from-issue.sh's test hook allows'; s21 cuts end-to-end case first; AC-5/V2 need state checks.
-- Failure: Isolated function tests can't verify gating or decline-before-archive (V2); end-to-end case is optional and cut first. Say: 'The new test MUST invoke from-issue.sh end to end, covering no prompt for NEW_WORKFLOW, SEED_ONLY, seed_is_current, and empty file, and asserting unchanged file hash and .uncle/workflow after decline; never cut.'
+- References: CHANGE_PLAN s1 'When desktop is detected and enabled... skipped'; D-3/D-4 produce no launch; AC-8 only tests opt-out and non-desktop projects.
+- Failure: Skipping the early preview (and web preview) for a detected-desktop project is unconditional even when the desktop flow then declines, is ambiguous, is headless, or is unattended. A user whose Electron-detected project also has a web preview loses it, contradicting D-6/AC-8. Plan should say: web previews are skipped only when a desktop launch actually occurs or is offered, not on detection alone.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: Unattended mechanism ambiguous: plan accepts UNATTENDED or UNCLE_UNATTENDED, AC-4 names only the env var, manual check u
+## AR-009: Unattended detection includes `not sys.stdin.isatty()`, which may be true in existing TUI tests or piped usage, silently
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1; AC-4; s18 manual '--unattended run'.
-- Failure: Unattended mechanism ambiguous: plan accepts UNATTENDED or UNCLE_UNATTENDED, AC-4 names only the env var, manual check uses --unattended. Say: 'Tests cover both the --unattended flag and UNCLE_UNATTENDED=1, each with and without UNCLE_REPLACE_CHANGE_REQUEST=1.'
+- References: CHANGE_PLAN DEC-5 vs s17 'existing suites must pass unchanged'; spec D-3.
+- Failure: Unattended detection includes `not sys.stdin.isatty()`, which may be true in existing TUI tests or piped usage, silently changing the attended path of `_offer_support` and the existing quit flow. Plan should say: existing suites run with the desktop flow disabled via `WORKFLOW_PREVIEW_DESKTOP=0` or on non-desktop fixtures, and the TUI's own attended state takes precedence over isatty.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: 'Non-empty existing file' leaves zero-byte, whitespace-only, directory files and non-1 opt-in values (true, 0, empty) un
+## AR-010: The new `prompt_kind='desktop'` is inserted before the support/finished dialog, but key handling, resize, quit and Esc b
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1; AC-3 says only 'No existing file'.
-- Failure: 'Non-empty existing file' leaves zero-byte, whitespace-only, directory files and non-1 opt-in values (true, 0, empty) unspecified. Say: 'Zero-byte counts as absent; whitespace-only counts as existing; opt-in proceeds only when exactly 1.'
+- References: CHANGE_PLAN s7 'New prompt_kind=desktop (confirm/decline)'; key handling at uncle_tui.py ~6878 only referenced as to read.
+- Failure: The new `prompt_kind='desktop'` is inserted before the support/finished dialog, but key handling, resize, quit and Esc behavior while the desktop prompt is showing are unspecified, and so is what happens if the workflow-exit event arrives twice. Plan should say: any key other than y/Y confirms decline, Esc/q declines, and `_offer_support` is idempotent per run.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: Prompt stream and wording not pinned, so tests can't assert 'prompt shown' or 'no prompt'.
+## AR-011: Cleanup on stop_workflow/_quit kills the process, but the plan does not say what happens when the desktop app is still r
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 vs s19; AC-1 'message names the file'.
-- Failure: Prompt stream and wording not pinned, so tests can't assert 'prompt shown' or 'no prompt'. Say: 'Prompt and stop messages go to stderr; prompt contains the file path and "Proceed with the new change request and replace it? [y/N]"; the unattended message contains UNCLE_REPLACE_CHANGE_REQUEST=1.'
+- References: CHANGE_PLAN DEC-8 'live one blocks relaunch with a message' vs s7 flow.
+- Failure: Cleanup on stop_workflow/_quit kills the process, but the plan does not say what happens when the desktop app is still running at the time the TUI starts the next workflow run, or when the live-pid-file relaunch block (DEC-8) fires in the attended prompt. Plan should say: a live pid blocks the prompt, prints a message, and the flow continues to `_completion_dialog`.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: Answer parsing undefined for CRLF, 'y please', and a final 'y' with no newline (read -r returns nonzero but fills variab
+## AR-012: Plan auto-detects and runs project-defined commands (npm start/dev) from a freshly built, possibly untrusted repo; the p
+
+- Severity: HIGH
+- References: CHANGE_PLAN DEC-2 and D-1/D-2; I-2 requires confirmation but sets no default or disclosure rule.
+- Failure: Plan auto-detects and runs project-defined commands (npm start/dev) from a freshly built, possibly untrusted repo; the prompt only shows the command. Plan should say: the prompt displays the resolved argv, warns that project scripts run with user privileges, and defaults to No.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-013: `desktop.launch_command` is read from `.uncle/config`, which lives in the project and may be repo-controlled, yet the sp
+
+- Severity: HIGH
+- References: CHANGE_SPEC section 10 Security; DEC-9 and D-8.
+- Failure: `desktop.launch_command` is read from `.uncle/config`, which lives in the project and may be repo-controlled, yet the spec calls it 'the operator's own'. Plan should say: a config-supplied command is shown in full and never launches without confirmation.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-014: Cleanup behavior is unspecified for a stale pid file whose PID has been reused by another process.
+
+- Severity: MEDIUM
+- References: DEC-8, D-9 and R-2 do not define pid-reuse verification.
+- Failure: Cleanup behavior is unspecified for a stale pid file whose PID has been reused by another process. Plan should say: cleanup kills only the process tree of this session's Popen handle, or verifies pid, start time and command before killing, and never kills a pid taken only from the file.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-015: Log tail is displayed in the TUI and files are created with unspecified permissions.
+
+- Severity: MEDIUM
+- References: DEC-7 and section 12 ('last 20 log lines'); no sanitization or permission rule.
+- Failure: Log tail is displayed in the TUI and files are created with unspecified permissions. Plan should say: pid, log and record files are created mode 0600 and the log tail is stripped of control/escape sequences before display.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: Precedence between attended, unattended and headless signals is unspecified, for example workflow_unattended false but s
+
+- Severity: MEDIUM
+- References: DEC-4/DEC-5 and `launch_decision(attended, unattended, headless, opted_out)`.
+- Failure: Precedence between attended, unattended and headless signals is unspecified, for example workflow_unattended false but stdin not a TTY. Plan should say: any positive unattended or headless signal always wins, and the desktop prompt reads only from the TUI's TTY.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: The plan never says which of opted_out, unattended, headless and attended wins when they conflict, or which skip reason
+
+- Severity: HIGH
+- References: CHANGE_PLAN s1 and DEC-4/DEC-5; AC-5 and AC-6 are tested separately, with no combined-case row.
+- Failure: The plan never says which of opted_out, unattended, headless and attended wins when they conflict, or which skip reason is recorded. Say: 'Precedence is opted_out, then unattended, then headless, then attended-confirm; each skip records only its own reason.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: D-2 says a crash or non-zero exit within grace is failed.
+
+- Severity: HIGH
+- References: CHANGE_SPEC D-2; CHANGE_PLAN DEC-6; AC-7 covers only non-zero.
+- Failure: D-2 says a crash or non-zero exit within grace is failed. DEC-6 says alive after grace is success. An exit 0 within grace is covered by neither rule. Say: 'Any exit within grace, including 0, is failed with the log tail.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-019: The stale-pid rule is untestable: it doesn't say how a live pid is told from a reused one, or what a corrupt pid file do
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN DEC-8; no AC covers it, though CHANGE_SPEC s8 lists it.
+- Failure: The stale-pid rule is untestable: it doesn't say how a live pid is told from a reused one, or what a corrupt pid file does. Say: 'Liveness is os.kill(pid,0) plus a matching recorded command; an unparseable pid file is stale; a blocked relaunch records status skipped, reason already running.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: The desktop prompt's keys other than y and n are unspecified, as is quit while the prompt is open.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s7; AC-4 tests decline only.
+- Failure: The desktop prompt's keys other than y and n are unspecified, as is quit while the prompt is open. Say: 'y launches. n, Esc and Enter decline and record declined. Other keys are ignored. Quit while the prompt is open counts as decline.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: D-5 says opt-out means no output.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC D-5 and D-7; CHANGE_PLAN s8 ('0 disables').
+- Failure: D-5 says opt-out means no output. D-7 skips the web preview only when desktop is detected and enabled, and opt-out does no detection. It's unspecified whether opted-out runs write files or keep the web preview. Say: 'With =0, nothing is detected, written or printed, and the web preview is unchanged.' Also say which values count as disabled.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: The plan gives no result for malformed package.json, an empty or invalid launch_command, or an invalid or zero grace val
 
 - Severity: LOW
-- References: CHANGE_PLAN s1 'read -r (EOF => empty); trim, lowercase'; AC-2 EOF.
-- Failure: Answer parsing undefined for CRLF, 'y please', and a final 'y' with no newline (read -r returns nonzero but fills variable). Say: 'Only trimmed, lowercased y or yes proceed, with CR stripped and an unterminated final line accepted; all else declines.'
+- References: CHANGE_PLAN DEC-1, DEC-2, DEC-6 and DEC-9; AC-1 and AC-2 cover only the happy path.
+- Failure: The plan gives no result for malformed package.json, an empty or invalid launch_command, or an invalid or zero grace value. Say: 'Invalid package.json gives none. Invalid launch_command is ignored with a warning and falls back to guessing. Invalid or negative grace uses 3 s; 0 checks immediately.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

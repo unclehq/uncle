@@ -64,6 +64,7 @@ import build_memory
 import gate_answer
 import worktree_runs
 import model_catalog as model_catalog_lib
+import desktop_launch as desktop_lib
 
 
 
@@ -1940,7 +1941,7 @@ class UncleTUI:
                 self.steering_channels = {}
                 # EOF handling can open the completion dialog just before
                 # this poll observes process exit. Keep that dialog focused.
-                if getattr(self, 'prompt_kind', '') not in ('support', 'finished', 'complete'):
+                if getattr(self, 'prompt_kind', '') not in ('support', 'finished', 'complete', 'desktop'):
                     self.prompt_kind = ''
                     self.chat_focus = 'chat'
                 self._ensure_chat()
@@ -2184,6 +2185,7 @@ class UncleTUI:
             self._detect_prompt()
         self._poll_early_preview()
         preview_changed = self._poll_completion_preview()
+        preview_changed = self._poll_desktop() or preview_changed
         return got or preview_changed or before != (self.proc_done, self.prompt_kind)
 
     def finished_build_lines(self):
@@ -2248,6 +2250,7 @@ class UncleTUI:
         self.prompt_kind = ""
         if code != 0 or not getattr(self, "workflow_completed", False):
             return
+        desktop = self._desktop_begin()
         if finish_decision(getattr(self, "workflow_unattended", False),
                            getattr(self, "workflow_completed", False), code) == 'exit':
             # Unattended and finished: nobody is here to dismiss a dialog,
@@ -2257,7 +2260,7 @@ class UncleTUI:
             # and _quit() would kill it mid-flight; _show_early_preview's
             # fire-and-forget webbrowser.open is the one already proven safe
             # to call without a dialog or any further loop turns.
-            if _workflow_family() == "app":
+            if _workflow_family() == "app" and desktop == "none":
                 self._show_early_preview()
             self.unattended_finished = True
             self._quit()
@@ -2272,9 +2275,156 @@ class UncleTUI:
         # workflow_family.py regardless of how this TUI session got here;
         # trust it over self.workflow_idx, which only reflects the menu
         # choice that started this specific session.
+        if desktop == "prompt":
+            return
+        if desktop == "handled":
+            self._completion_dialog(False)
+            return
         if _workflow_family() == "app":
             self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
+
+    # ---- desktop app launch (both workflow families) ----
+    _DESKTOP_OFF = ("0", "false", "no", "off")
+
+    def _desktop_note(self, text):
+        self._ensure_chat()
+        self.home_history.append(('system', sanitize(text)))
+
+    def _desktop_record(self, status, reason):
+        directory = os.path.join(_project_root(), ".uncle", "workflow")
+        try:
+            os.makedirs(directory, exist_ok=True)
+            fd = os.open(os.path.join(directory, "desktop-launch.json"),
+                         os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({"status": status, "reason": reason}, handle)
+            os.chmod(os.path.join(directory, "desktop-launch.json"), 0o600)
+        except OSError:
+            pass
+
+    def _desktop_config_command(self):
+        try:
+            with open(os.path.join(_project_root(), ".uncle", "config"), encoding="utf-8") as handle:
+                for line in handle:
+                    key, sep, value = line.strip().partition("=")
+                    if sep and key.strip() == "desktop.launch_command":
+                        value = value.strip()
+                        if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+                            value = value[1:-1]
+                        return value
+        except OSError:
+            pass
+        return None
+
+    def _desktop_begin(self):
+        """Returns 'none' (flow not applicable), 'handled' (printed and recorded,
+        web preview suppressed) or 'prompt' (confirmation dialog opened)."""
+        if getattr(self, "_desktop_offered", False):
+            return "handled"
+        if os.environ.get("WORKFLOW_PREVIEW_DESKTOP", "").strip().lower() in self._DESKTOP_OFF:
+            return "none"
+        root = _project_root()
+        try:
+            found = desktop_lib.detect(root)
+        except Exception:
+            return "none"
+        if not found or not found.get("framework") or found.get("framework") == "none":
+            return "none"
+        self._desktop_offered = True
+        argv = found.get("command")
+        override = self._desktop_config_command()
+        if override is not None:
+            try:
+                parsed = shlex.split(override)
+            except ValueError:
+                parsed = []
+            if parsed:
+                argv, found["candidates"] = parsed, []
+            else:
+                self._desktop_note("desktop.launch_command is empty or unparsable; ignoring it")
+        unattended = bool(getattr(self, "workflow_unattended", False)
+                          or os.environ.get("WORKFLOW_UNATTENDED") == "1"
+                          or not sys.stdin.isatty())
+        headless = desktop_lib.headless_reason(os.environ, sys.platform)
+        decision = str(desktop_lib.launch_decision(True, unattended, headless, False)).lower()
+        shown = " ".join(shlex.quote(a) for a in argv) if argv else ""
+        if "unattended" in decision:
+            self._desktop_note("Desktop app (%s) not launched: unattended run. Command: %s"
+                               % (found["framework"], shown or ", ".join(" ".join(c) if isinstance(c, (list, tuple)) else str(c) for c in (found.get("candidates") or []))))
+            self._desktop_record("skipped", "unattended")
+            return "handled"
+        if "headless" in decision or headless:
+            self._desktop_note("Desktop app not launched: headless environment (%s)" % headless)
+            self._desktop_record("skipped", "headless")
+            return "handled"
+        if not argv:
+            self._desktop_note("Desktop app (%s) not launched: ambiguous command; candidates: %s"
+                               % (found["framework"], ", ".join(" ".join(c) if isinstance(c, (list, tuple)) else str(c) for c in (found.get("candidates") or []))))
+            self._desktop_record("skipped", "ambiguous")
+            return "handled"
+        live = getattr(desktop_lib, "live_pid", None)
+        pid = live(root) if live else None
+        if pid:
+            self._desktop_note("desktop app already running (pid %s)" % pid)
+            self._desktop_record("skipped", "already running")
+            return "handled"
+        self._desktop_argv = list(argv)
+        self.prompt_kind = "desktop"
+        self.prompt_text = ("Launch the %s desktop app?\n\nCommand: %s\n\n"
+                            "Project-defined scripts run with your privileges.") % (found["framework"], shown)
+        self.chat_focus = "gate"
+        return "prompt"
+
+    def _desktop_decline(self):
+        self.prompt_kind = ""
+        self.prompt_text = ""
+        self._desktop_record("declined", "declined")
+        self._desktop_note("Desktop app launch declined")
+
+    def _desktop_key(self, k):
+        if k in (ord("y"), ord("Y")):
+            self.prompt_kind = ""
+            self.prompt_text = ""
+            try:
+                self.desktop_run = desktop_lib.DesktopLaunch(_project_root(), self._desktop_argv)
+                self.desktop_run.start(wait=False)
+                self._desktop_note("Launching desktop app: " + " ".join(shlex.quote(a) for a in self._desktop_argv))
+            except Exception as exc:
+                self.desktop_run = None
+                self._desktop_note("Desktop app failed to start: " + str(exc))
+                self._desktop_record("failed", str(exc))
+            self._completion_dialog(False)
+        elif k in (ord("n"), ord("N"), 27, 10, 13):
+            self._desktop_decline()
+            self._completion_dialog(False)
+        elif k == 3:
+            self._desktop_decline()
+            self._quit()
+
+    def _poll_desktop(self):
+        run = getattr(self, "desktop_run", None)
+        if run is None:
+            return False
+        fetch = getattr(run, "events", None) or getattr(run, "poll", None)
+        try:
+            events = fetch() if fetch else []
+        except Exception:
+            return False
+        for event in events or []:
+            self._desktop_note(event if isinstance(event, str) else " ".join(str(x) for x in event))
+        return bool(events)
+
+    def _desktop_close(self):
+        if getattr(self, "prompt_kind", "") == "desktop":
+            self._desktop_decline()
+        run = getattr(self, "desktop_run", None)
+        self.desktop_run = None
+        if run is not None:
+            try:
+                run.close()
+            except Exception:
+                pass
 
     # How often to look for a page. Not a settling delay: the first
     # sighting opens it.
@@ -2914,6 +3064,7 @@ class UncleTUI:
         return sent
 
     def stop_workflow(self):
+        self._desktop_close()
         if getattr(self, "completion_preview", None):
             self.completion_preview.close()
             self.completion_preview = None
@@ -6875,6 +7026,8 @@ class UncleTUI:
             footer = "[s] Skip  [r] Human reviewed — OK  [n] Keep blocking"
         elif self.prompt_kind == "finished":
             footer = "[Enter/Esc] dismiss"
+        elif self.prompt_kind == "desktop":
+            footer = "[y] launch      [n/Enter/Esc] decline"
         elif self.prompt_kind == "complete":
             footer = "[Enter] return to home"
         elif self.prompt_kind == "support":
@@ -6918,7 +7071,7 @@ class UncleTUI:
         top = max(0, (h - box_h) // 2)
         left = max(0, (w - box_w) // 2)
         title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle ", "finished": " Finished ",
-                 "complete": " build complete "}.get(
+                 "complete": " build complete ", "desktop": " desktop app "}.get(
             self.prompt_kind, " uncle ")
         if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")):
             title = " signed commit required "
@@ -7025,6 +7178,9 @@ class UncleTUI:
                 return
         # A finished build's only way back is through its dialog; chat must
         # not see these keys, or Esc there would jump straight to the menu.
+        if self.state == "running" and getattr(self, "prompt_kind", "") == "desktop":
+            self._desktop_key(k)
+            return
         if self.state == "running" and getattr(self, "prompt_kind", "") == "complete":
             self._complete_key(k)
             return
@@ -7384,6 +7540,7 @@ class UncleTUI:
         self.start_workflow()
 
     def _quit(self):
+        self._desktop_close()
         if getattr(self, "completion_preview", None):
             self.completion_preview.close()
         self._close_early_preview()

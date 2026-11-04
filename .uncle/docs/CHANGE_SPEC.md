@@ -1,61 +1,75 @@
-# Change Spec
+# Change spec (issue 145)
 
-Omitted sections: Performance (none); Security (no new surface beyond input parsing); Migration (none); Prototype isolation (not applicable)
+Omitted sections: Migration (none); Prototype isolation (not a prototype); Performance (only the grace period, in AC)
 
 ## 1. Change type
 Feature.
 
 ## 2. Problem statement
-A new change request silently replaces a leftover `.uncle/docs/CHANGE_REQUEST.md`, so the user may run a different change than intended.
+At the end of a build of a desktop app the operator must find the launch command themselves; the web preview has no desktop equivalent.
 
 ## 3. Current behavior
-See baseline B1.
+Baseline B-1..B-6.
 
 ## 4. Desired behavior
-When seeding a new change request in change mode and the request file already exists (and is not the same in-flight issue run), tell the user, ask to proceed; yes proceeds, otherwise stop with the file and run state untouched.
+After a successful workflow, for a project detected as Electron or Tauri, Uncle shows the framework and command, asks (attended) before launching, launches the project's own command with a pid file and log under `.uncle/workflow/`, reports command/PID/log, and stops it when the run is cleaned up (same as the web preview). Unattended or headless runs print the command and launch nothing.
 
 ## 5. Observable behavior table
-| ID | Class | Trigger | Current behavior | Expected behavior | Verification |
+| ID | Class | Trigger | Current | Expected | Verification |
 |---|---|---|---|---|---|
-| S1 | ADD | Interactive, file exists, answer `y`/`yes` (case-insensitive) | Overwrites silently | Message names the file, prompt shown, run proceeds and file is replaced | AC-1 test |
-| S2 | ADD | Interactive, file exists, answer anything else, empty, or EOF | Overwrites | Exit nonzero with message; file bytes and run state unchanged | AC-2 test |
-| S3 | PRESERVE | No existing file | Written, no prompt | Same, no prompt | AC-3 test |
-| S4 | ADD | `UNCLE_UNATTENDED=1`, file exists | Overwrites | No read from stdin; stop nonzero with clear message unless `UNCLE_REPLACE_CHANGE_REQUEST=1`, then proceed | AC-4 test |
-| S5 | PRESERVE | Same-issue in-flight run (seed_is_current) | Resume, file untouched | Same, no prompt | AC-5 test |
-| S6 | PRESERVE | `UNCLE_NEW_WORKFLOW=1` fresh start (old evidence archived first) | Archive then reseed | Same, no prompt | AC-5 test |
+| D-1 | ADD | Build completes, attended, desktop detected | Nothing | Prints framework + command, asks to launch; ambiguous detection lists candidates and launches nothing | unit detection + TUI test |
+| D-2 | ADD | User confirms | n/a | App starts; PID and log path printed. Exit non-zero or crash within grace period (default 3 s, `WORKFLOW_PREVIEW_DESKTOP_GRACE`): exit code and log tail reported, status failed, never passed | stub-command driver test |
+| D-3 | ADD | Unattended (`--unattended`, `WORKFLOW_UNATTENDED=1`, or no TTY) | n/a | Nothing launched, command printed and recorded in `.uncle/workflow/desktop-launch.json`; never waits for input | driver test |
+| D-4 | ADD | Headless (no DISPLAY/WAYLAND_DISPLAY on Linux, `CI` set, SSH session) | n/a | Skip with clear reason; no launch reported | env-matrix test |
+| D-5 | ADD | `WORKFLOW_PREVIEW_DESKTOP=0` | n/a | No detection, no launch, no output | test |
+| D-6 | PRESERVE | Web or non-desktop project (B-1..B-5) | as baseline | unchanged | existing suites + fixture test |
+| D-7 | MODIFY | Desktop project, desktop flow enabled | web `CompletionPreview` may open browser (B-6) | desktop flow replaces web completion preview and early-preview browser open for that project | TUI test |
+| D-8 | ADD | `.uncle/config` has `desktop.launch_command` | n/a | That command (shell-split to argv) overrides guessing | unit test |
+| D-9 | ADD | Run cleanup (stop_workflow/quit) with app running | n/a | Process tree killed, pid file removed | test |
 
 ## 6. Invariant table
-| ID | Status | Invariant | Scope | Enforcement point | Verification |
+| ID | Status | Invariant | Scope | Enforcement | Verification |
 |---|---|---|---|---|---|
-| V1 | NEW | An existing CHANGE_REQUEST.md is never replaced without an explicit yes or explicit unattended opt-in | from-issue.sh change mode | confirm function before write | AC-1..4 |
-| V2 | NEW | Declining or unattended refusal leaves CHANGE_REQUEST.md and `.uncle/workflow` state byte-identical | same | guard runs before archive, write_origin, and workflow launch | AC-2, AC-4 |
-| V3 | EXISTING | Seed-only and stdin imports never overwrite | same | noclobber / EXISTS | existing tests |
+| I-1 | EXISTING | Launching is not evidence: writes no test-report row, never turns a check into PASS | all launches | desktop_launch.py writes only desktop-launch.json/log/pid | test asserts no report files touched |
+| I-2 | NEW | No launch without confirmation attended; no launch ever unattended | desktop flow | gate function `launch_decision` | decision-matrix test |
+| I-3 | NEW | Launched process is tracked by pid file in `.uncle/workflow/` and killed on cleanup | desktop flow | launch/stop functions | test |
+| I-4 | NEW | Launch never alters tracked files; only untracked `.uncle/workflow/*` written | desktop flow | write paths restricted | git-status test |
+| I-5 | EXISTING | Launch commands are argv arrays | all | no shell=True | test |
 
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-No-file and resume flows unchanged. Callers with closed or empty stdin now stop instead of overwriting.
+launch.json schema, existing env vars and web preview unchanged.
 
 ## 8. Error behavior
-Decline/EOF/unattended-without-opt-in: message on stderr naming the file and (unattended) the env opt-in, exit 1.
+Ambiguous detection, headless, crash, missing executable (OSError), stale live pid file: each reports a one-line reason, launches nothing or marks failed, and never blocks.
+
+## 10. Security
+Argv arrays only; command from `.uncle/config` is the operator's own; no network.
 
 ## 12. Rollback
-Revert the from-issue.sh guard and test; no persisted state.
+Set `WORKFLOW_PREVIEW_DESKTOP=0`, or revert the commit; no persisted schema change beyond untracked runtime files.
 
 ## 14. Non-goals
-Archiving the previous request (open question: deferred, not requested as required); changing stdin import behavior; prompting in the new-app flow.
+Packaging/signing, GUI testing, mobile, early preview for desktop, Windows/Linux live verification.
 
 ## 15. Assumptions
-Yes = `y`/`yes` case-insensitive after trimming; empty = no. Unattended default is stop, opt-in via `UNCLE_REPLACE_CHANGE_REQUEST=1`. The worktree may already exist when declining; it is not modified beyond that.
+- Scope: Electron first, Tauri second; end-of-build only (resolves open question 1, 2).
+- Launch from project root (`_project_root()`), killed before worktree removal because cleanup kills it (open question 3).
+- Windows/Linux quirks are handled by display detection and `launch_command`; not live-verified.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | Interactive run, existing request file, answer y/yes (any case): message names the file, run proceeds and the new request is written. | New shell test feeds `y`, `YES` on stdin; asserts exit 0 and new content. |
-| AC-2 | Interactive run, existing file, answer n, other text, empty line, or EOF: run stops nonzero and file bytes and workflow state are unchanged. | Shell test with hash comparison of file and `.uncle/workflow` inventory. |
-| AC-3 | No existing file: no prompt is printed and behavior is unchanged. | Shell test asserts no prompt text and file written; existing issue-document-test.sh still passes. |
-| AC-4 | With UNCLE_UNATTENDED=1 the run never reads stdin: it stops with a clear message naming UNCLE_REPLACE_CHANGE_REQUEST=1 unless that is set, in which case it proceeds. Documented in scripts/README.md. | Shell test with stdin closed/hanging pipe under timeout; both cases; README grep. |
-| AC-5 | In-flight same-issue resume and UNCLE_NEW_WORKFLOW=1 fresh start do not prompt. | Shell test or existing worktree-auto-seed-test.sh plus new case. |
-| AC-6 | Full shell and Python suites show no new failures versus baseline. | Driver runs bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh. |
+| AC-1 | Detection returns framework+argv for fixture package.json with electron (start script), Tauri (src-tauri + scripts.tauri), none for plain web, and ambiguous (with candidate list) for electron with both start and dev scripts or electron with no run script | scripts/tests/desktop-launch-test.py detection cases |
+| AC-2 | `.uncle/config` key `desktop.launch_command` overrides guessed command | desktop-launch-test.py config case |
+| AC-3 | Attended confirm launches the stub command, prints PID and log path, and writes pid file and log under .uncle/workflow/ | desktop-launch-test.py and tui-desktop-launch-test.py with stub command |
+| AC-4 | Attended decline launches nothing and prints the command | tui-desktop-launch-test.py |
+| AC-5 | Unattended (flag, env, or no TTY) never launches, never prompts, prints command and records it | decision-matrix test |
+| AC-6 | Headless (Linux without display, CI set, SSH session) skips with a stated reason and reports no launch | env-matrix test |
+| AC-7 | Stub that exits non-zero within the grace period is reported failed with exit code and log tail; pid file removed | crash-on-start test |
+| AC-8 | WORKFLOW_PREVIEW_DESKTOP=0 performs no detection and launches nothing; web/non-desktop projects behave as before | opt-out test plus existing completion-preview-test.py and tui-complete-dialog-test.py pass |
+| AC-9 | Cleanup kills the launched process tree and removes the pid file; launching leaves tracked files and git status unchanged and writes no test-report rows | cleanup test and git-status assertion |
+| AC-10 | Both repository runner commands show no regression versus the baseline | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh |
 

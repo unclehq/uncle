@@ -2,143 +2,103 @@
 
 ## Findings
 
-### MC-102
+### MC-100
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-102
-- **Actual result:** Cases n, empty Enter, Ctrl-D (\x04), 'y please', 'maybe', 'yy': nonzero exit, 'unchanged' message, request and .uncle/workflow byte-identical.
+- **Action:** None performed. The check needs an attended interactive TUI session on a desktop with a display and an Electron fixture project. This non-interactive worker cannot provide that.
+- **Expected result:** Prompt shows framework, full resolved argv, a privilege warning, and defaults to No; no web preview opens.
+- **Actual result:** Not observed. A person must watch the live TUI prompt and confirm no browser window opens.
 - **Defects:** None
 
-### MC-104
+### MC-101
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-104
-- **Actual result:** Flag and env, with/without opt-in, never-written fifo: refusal exit 1 naming UNCLE_REPLACE_CHANGE_REQUEST=1, opt-in 1 replaces; no hang (30s harness timeout, not 10s; elapsed not recorded).
+- **Action:** None performed. It depends on MC-100, and a real Electron window plus the TUI 'y' keypress need a person at a desktop session.
+- **Expected result:** A real Electron window opens; history prints framework, command, PID and log path; the pid file and log exist under .uncle/workflow/ with 0600 permissions.
+- **Actual result:** Not observed. A person must press y at the prompt and view the window.
+- **Defects:** None
+
+### MC-102
+
+- **Action:** None performed. It depends on MC-101, which was not run, and requires a human to see the Electron window close when the TUI quits.
+- **Expected result:** The Electron window closes, the process tree is gone, and the pid file is removed.
+- **Actual result:** Not observed, because no Electron app was launched.
+- **Defects:** None
+
+### MC-103
+
+- **Action:** Ran narrow prepared probe scripts/tests/tui-desktop-launch-test.py (10 tests) against the TUI desktop prompt; no live attended TUI session was driven.
+- **Expected result:** Unrelated key leaves prompt open; Enter, n, Esc decline, launch nothing, record declined in desktop-launch.json, then normal completion dialog.
+- **Actual result:** Probe tests test_unrelated_keys_leave_prompt_open, test_decline_keys_record_declined_without_spawn and test_prompt_shows_argv_and_warning_and_enter_declines passed (10/10 OK). Not observed in a real attended terminal run, and the completion dialog following the decline was not separately observed.
 - **Defects:** None
 
 ### MC-105
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-105
-- **Actual result:** Piped/devnull stdin with values 0/true/empty refuse exit 1 and file kept; value 1 on a pty proceeds with no prompt. Piped 'y' input not consumed (see MC-204).
+- **Action:** Ran probe test_disabled_values_do_nothing_and_web_preview_runs (part of the 10-test run). No live Electron fixture workflow run was performed.
+- **Expected result:** With WORKFLOW_PREVIEW_DESKTOP=0: no desktop detection output, no desktop-* files, web preview unchanged.
+- **Actual result:** Automated probe test passed. A live run on an Electron fixture with browser observation was not performed here.
 - **Defects:** None
 
-### MC-106
+### MC-107
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-106
-- **Actual result:** No prompt for NEW_WORKFLOW, --seed-only, in-flight same-issue resume on a pty. Resume and seed-only leave file untouched. NEW_WORKFLOW (state COMPLETE, same issue 142): exit 0, .uncle/workflow-history created, request reseeded.
+- **Action:** Read the MC-107 row from the canonical checklist JSON. Did not run the workflow: it needs an attended, end-to-end TUI run on a separate plain web project, with a real system browser opening.
+- **Expected result:** Behavior is unchanged: the web completion preview opens the browser, and no desktop prompt or desktop files appear.
+- **Actual result:** Not performed. The check needs a person to run the whole workflow to completion on a plain web project and watch the system browser open. A worker lane cannot do that, and it must not start a nested workflow run.
 - **Defects:** None
 
-### MC-203
+### MC-200
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-203
-- **Actual result:** Unattended 1 replaces; 0/true/empty refuse exit 1, file kept. Interactive pty value 1: no prompt, replaced, exit 0. Interactive 0/true/empty still prompt (not treated as opt-in).
+- **Action:** Ran probes test_prompt_shows_argv_and_warning_and_enter_declines, test_unrelated_keys_leave_prompt_open, test_decline_keys_record_declined_without_spawn, test_y_launches_and_records. No attended TUI screen capture or process list was taken.
+- **Expected result:** Prompt shows full argv and privilege warning; unrelated keys leave it open; Enter/n/Esc/quit decline with no spawn; only y launches.
+- **Actual result:** All related automated probe tests passed (10/10). Quit-while-open and a human-visible screen capture were not independently observed.
 - **Defects:** None
 
 ### MC-204
 
-- **Action:** bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-204
-- **Actual result:** printf 'y\ny\n' piped: exit 1, opt-in message, file hash unchanged, workflow stub not run.
+- **Action:** Drove DesktopLaunch (scripts/lib/desktop_launch.py) directly with two stub python processes emitting ANSI CSI/OSC/BEL sequences, one exiting 0 and one exiting 3, grace=3s, in isolated temp roots. Did not drive the full TUI; observed the launcher's failure message/state that the TUI reports.
+- **Expected result:** Both reported failed with exit code and log tail; log tail has no escape/control characters; pid file removed; neither reported passed.
+- **Actual result:** Exit 0: status=failed, exit_code=0, message 'desktop app exited with code 0 within 3.0s; log tail:\nred boom'. Exit 3: status=failed, exit_code=3, same format with code 3. No control characters in either message; pid file absent in both. Neither passed.
 - **Defects:** None
-
-### MC-205
-
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-205
-- **Actual result:** No-file, zero-byte, NEW_WORKFLOW, resume, seed-only: no prompt phrase in stderr; file states as expected.
-- **Defects:** None
-
-### MC-206
-
-- **Action:** bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-206
-- **Actual result:** Whitespace-only prompts (driver). Symlink and directory prompt; decline leaves link, target and dir intact. After 'y' on symlink: CHANGE_REQUEST.md stays a symlink but its target hash CHANGED (write followed the link). Expected target not clobbered. Filed D-1.
-- **Defects:** D-1
 
 ### MC-301
 
-- **Action:** none
-- **Expected result:** per checklist MC-301
-- **Actual result:** Depends on MC-300, which is not in the checklist (README: NOT DECLARED). Equivalent action covered by MC-102 PASS but this ID is not asserted.
+- **Action:** Read the checklist row. No live action performed: it requires an attended TUI workflow run to completion, a y answer at the desktop prompt, a real Electron install, and a human-visible window screenshot.
+- **Expected result:** The prompt shows the full argv and a privilege warning; after y a real Electron window opens and the TUI prints framework, command, PID and log path.
+- **Actual result:** Not executed. The check needs a person to attend the TUI and observe a real GUI window on macOS, which this non-interactive worker cannot do.
 - **Defects:** None
 
-### MC-303
+### MC-302
 
-- **Action:** none
-- **Expected result:** per checklist MC-303
-- **Actual result:** Depends on MC-302, absent from the checklist. Equivalent covered by MC-203 PASS but this ID is not asserted.
+- **Action:** Read the checklist row. Not executed: it depends on the Electron window from MC-301, which was never opened.
+- **Expected result:** The window closes, the process tree is gone, and desktop-app.pid is removed.
+- **Actual result:** Not executed. The prerequisite window from MC-301 does not exist. A human must quit the TUI and observe the window and PID.
 - **Defects:** None
 
-### MC-304
+### MC-306
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-304
-- **Actual result:** Action equivalent executed (no file, zero-byte, pty): no prompt, request written. Dependency IDs MC-300/302 are undefined in the checklist; noted in Open questions.
+- **Action:** Did not drive the attended TUI y-dialog. Ran scripts/lib/desktop_launch.py DesktopLaunch (the engine the TUI uses) directly against a temp project whose main.js prints ANSI-colored text then calls process.exit(1), with grace=3s.
+- **Expected result:** Launch reported failed with the exit code and a log tail free of escape sequences; pid file removed.
+- **Actual result:** status=failed, exit_code=1, message 'desktop app exited with code 1 within 3.0s; log tail:\nboom starting'. No ESC characters in message or log_tail. .uncle/workflow listing afterwards: desktop-app.log, desktop-launch.json (no desktop-app.pid).
 - **Defects:** None
 
 ### MC-401
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-401
-- **Actual result:** 'no request: no prompt' and 'no request: written' on a pty.
-- **Defects:** None
-
-### MC-402
-
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-402
-- **Actual result:** seed_is_current case: no prompt, 'Resuming' printed, request hash unchanged.
-- **Defects:** None
-
-### MC-403
-
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-403
-- **Actual result:** NEW_WORKFLOW: no prompt, archived (.uncle/workflow-history), reseeded. Seed-only: no prompt, file hash unchanged, workflow not started.
-- **Defects:** None
-
-### MC-404
-
-- **Action:** none
-- **Expected result:** per checklist MC-404
-- **Actual result:** `uncle --change-request` stdin import not executed; not touched by the diff (scripts/from-issue.sh only). Settled by running that command against an existing file.
-- **Defects:** None
-
-### MC-405
-
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-405
-- **Actual result:** Existing request with no in-flight state: 'n' exits nonzero, file and workflow unchanged; 'y' replaces and proceeds (driver cases). My live run with a different-issue in-flight origin was refused earlier by the existing origin check, so it did not exercise this guard and is not used.
-- **Defects:** None
-
-### MC-406
-
-- **Action:** bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-406
-- **Actual result:** Stdin fifo, /dev/null: exit 1 naming UNCLE_REPLACE_CHANGE_REQUEST=1, file kept; opt-in 1 replaces exit 0; --unattended without opt-in refuses.
+- **Action:** Read the checklist row. It requires an attended interactive TUI build completion on a scratch plain-web project, with a human observing the browser opening and the star/finished dialog. I did not run it, because this unattended worker has no interactive TUI session or visible browser.
+- **Expected result:** The web completion preview starts and opens the browser, and the star/finished dialog appears as before. No desktop prompt, history line, or .uncle/workflow/desktop-* file appears.
+- **Actual result:** Not performed. The check needs a person watching an attended TUI session and the system browser.
 - **Defects:** None
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-102 | YES | PASS | see finding |
-| MC-104 | YES | PASS | see finding |
-| MC-105 | YES | PASS | see finding |
-| MC-106 | YES | PASS | see finding |
-| MC-203 | YES | PASS | see finding |
-| MC-204 | YES | PASS | see finding |
-| MC-205 | YES | PASS | see finding |
-| MC-206 | YES | FAIL | D-1 symlink target clobbered |
-| MC-301 | YES | NOT RUN | see finding |
-| MC-303 | YES | NOT RUN | see finding |
-| MC-304 | YES | PASS | see finding |
-| MC-401 | YES | PASS | see finding |
-| MC-402 | YES | PASS | see finding |
-| MC-403 | YES | PASS | see finding |
-| MC-404 | YES | NOT RUN | see finding |
-| MC-405 | YES | PASS | see finding |
-| MC-406 | YES | PASS | see finding |
+| MC-100 | YES | BLOCKED-HUMAN | None. Automated coverage of prompt logic is in the driver green-check, which this check does not substitute for. |
+| MC-101 | YES | BLOCKED-HUMAN | None. |
+| MC-102 | YES | BLOCKED-HUMAN | None. |
+| MC-103 | YES | BLOCKED-HUMAN | python3 scripts/tests/tui-desktop-launch-test.py -> 'Ran 10 tests in 0.139s OK'. Driver green-check rows are PREEXISTING (no regressions). |
+| MC-105 | YES | BLOCKED-HUMAN | Probe output: 10 tests OK. |
+| MC-107 | YES | BLOCKED-HUMAN | None captured. No screenshot, transcript or .uncle/workflow listing was produced for this check. |
+| MC-200 | YES | BLOCKED-HUMAN | Probe output: 'Ran 10 tests OK'. |
+| MC-204 | YES | PASS | Script output: '0 failed 0 ... pid exists False ctrl False' and '3 failed 3 ... pid exists False ctrl False'. Not observed: the TUI history rendering and test-report files; those were not examined, so coverage is launcher-level only. |
+| MC-301 | YES | BLOCKED-HUMAN | None. No window, screenshot, PID or log was observed. |
+| MC-302 | YES | BLOCKED-HUMAN | None. No window or PID was observed. |
+| MC-306 | YES | PASS | Console output of the python run: 'failed 1 ...', 'esc False', ['desktop-app.log','desktop-launch.json']. Not observed: the TUI's own rendering of the message (no screen capture); the TUI path is only covered by the driver green-check's tui-desktop-launch-test, which I did not re-run or verify. |
+| MC-401 | YES | BLOCKED-HUMAN | None. No live observation was made. Driver green-check results were not cited as a substitute for the attended observation. |

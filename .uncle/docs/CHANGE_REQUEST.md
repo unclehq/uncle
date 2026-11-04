@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 142
+Issue 145
 
-Seeded from [unclehq/uncle#142](https://github.com/unclehq/uncle/issues/142).
+Seeded from [unclehq/uncle#145](https://github.com/unclehq/uncle/issues/145).
 
 ## Change Type
 
@@ -10,34 +10,61 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Ask before starting a new change request when .uncle/docs/CHANGE_REQUEST.md already exists
+Preview and launch the desktop app (e.g. Electron) at the end of a build
 
 ## Motivation
 
 ## Problem
 
-When a user starts a new change request and \`.uncle/docs/CHANGE_REQUEST.md\` already exists (left over from a previous run), uncle does not tell them. The earlier request may be silently reused or overwritten, or the run may resume from stale state, so the user can end up running a different change than the one they asked for.
+Uncle can preview a web application while a build is running: `scripts/lib/preview-build.sh` starts a preview, `scripts/lib/preview_server.py` serves it, and a browser tab is opened (`WORKFLOW_PREVIEW_OPEN_BROWSER`). That flow assumes the app is a web app.
+
+When Uncle is building a desktop app (Electron, Tauri, or similar), or changing an existing one, there is nothing equivalent. The run ends and the operator has to work out how to launch the app themselves before they can see whether it works.
 
 ## Requested behavior
 
-When a new change request is started and \`.uncle/docs/CHANGE_REQUEST.md\` already exists:
+At the end of a build (after implementation and automated verification), if the project is a desktop app, Uncle should:
 
-1. Tell the user the file exists, and ask whether they want to proceed with the new change request.
-2. If they answer in the affirmative, proceed with the new request.
-3. If they decline, stop without modifying \`.uncle/docs/CHANGE_REQUEST.md\` or any other run state.
+1. **Detect** that it is a desktop app. Examples: `electron` in `package.json` dependencies, a `main` entry that is an Electron main process, `electron-builder` or `electron-forge` config, `src-tauri/`, or a plan that says so.
+2. **Offer to launch** it: show the launch command and ask before starting. The default must be safe for unattended runs, which should not launch a GUI.
+3. **Launch** the app with the project's own run command (for example `npm start`, `npm run dev`, or `electron .`). Prefer an explicit `.uncle/config` setting over guessing.
+4. **Report** what was launched: command, PID, and log path. Stop the process when the run is cleaned up, or leave it running and say so. Behavior should match how the web preview server is handled.
 
-## Acceptance criteria
+## Observable behaviors (draft)
 
-- Interactive run, existing file, user answers yes: the run proceeds with the new request.
-- Interactive run, existing file, user answers no (or gives no answer): the run stops and the existing file is unchanged.
-- No existing file: no prompt, behavior unchanged.
-- Unattended runs (\`UNCLE_UNATTENDED=1\`) must not hang on the prompt. Decide and document the default; proposed: stop with a clear message unless an explicit opt-in is set.
-- A test covers each case above.
+| Id | Trigger | Expected result | Failure behavior |
+|---|---|---|---|
+| D-1 | Build completes for a project detected as a desktop app, attended | Uncle prints the detected framework and launch command and asks to launch | Detection is ambiguous: say so, show the candidate commands, and launch nothing |
+| D-2 | User confirms | The app window opens; Uncle prints PID and log path | Launch command exits non-zero or crashes within a short grace period: report the exit code and the tail of the log, and mark the preview as failed (never as passed) |
+| D-3 | Unattended run (`WORKFLOW_UNATTENDED` or no TTY) | No GUI is launched and the command is printed for later | Never block waiting for input |
+| D-4 | Headless environment (no display, CI, SSH session) | Skip with a clear reason | Never report a launch that did not happen |
+| D-5 | Opt-out (`WORKFLOW_PREVIEW_DESKTOP=0`) | Nothing is detected or launched | n/a |
+| D-6 | Web project | No behavior change | n/a |
+
+## Invariants
+
+- Launching is a convenience, **not evidence**. It writes no test report row and never turns a manual check into PASS (same rule as the preview build).
+- Nothing is launched without confirmation in an attended run, and never in an unattended one.
+- The launched process is owned and tracked (pid file in `.uncle/workflow/`) so it cannot be orphaned silently.
+- Launching never alters tracked files or the working tree.
 
 ## Open questions
 
-- What counts as "yes" (\`y\`/\`yes\`, case-insensitive), and should an empty answer default to no? Proposed: yes.
-- Should the previous request be archived (e.g. to \`.uncle/workflow-history/\`) before it is replaced?
+- Should this extend `preview-build.sh` (early preview from the brief) as well, or only run at the end of the build? The request is the end of the build, so start there.
+- Which frameworks are in scope first? Suggest Electron, then Tauri.
+- Should the launch happen from the issue/change worktree or from the source checkout? Worktrees are removed after a PR, so the app must be stopped before removal.
+- Windows and Linux launch quirks (display detection, `npm` shims).
+
+## Verification ideas
+
+- Unit tests for desktop detection over fixture `package.json` files (Electron, Tauri, plain web, ambiguous).
+- Driver test with a stub launch command: attended confirm, attended decline, unattended, headless, crash-on-start, opt-out.
+- Manual check: build a minimal Electron app with Uncle and confirm the window opens.
+
+## Non-goals
+
+- Packaging or signing installers.
+- Automated GUI testing of the launched app.
+- Mobile apps.
 
 ## Observed Current Behavior
 

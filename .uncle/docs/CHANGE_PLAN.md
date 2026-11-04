@@ -1,139 +1,165 @@
-# Change Plan
+# Change plan (issue 145)
 
-Issue 142
+Seeded from [unclehq/uncle#145](https://github.com/unclehq/uncle/issues/145).
 
-Seeded from [unclehq/uncle#142](https://github.com/unclehq/uncle/issues/142).
+Issue 145
 
-Omitted sections: Schema (none); Migration (none); Concurrency (none beyond existing locks); Feature flag (env opt-in is the containment)
+Omitted sections: Schema/persistence (only untracked runtime files); Migration (none); Concurrency (single daemon thread, as CompletionPreview); Feature flag beyond env opt-out (see 15)
 
 ## 1. Selected technical approach
 
-Add `confirm_replace_change_request` to `scripts/from-issue.sh`. Call it in the `change)` case right after `check_origin_or_refuse`, only when `UNCLE_NEW_WORKFLOW != 1`, `SEED_ONLY != 1`, `! seed_is_current`, and an entry exists at `generated_input_path CHANGE_REQUEST.md` (tested with `-e` or `-L`: regular file, symlink, dangling symlink or directory) that is not a zero-byte or whitespace-only regular file. A zero-byte or whitespace-only regular CHANGE_REQUEST.md counts as absent: no prompt, replaced without asking. The prompt is shown whenever such an entry exists and seed_is_current is false, regardless of content (even identical to the new request) or the issue number it was seeded for. The guard does not run on stdin-import or seed-only paths; those keep their existing no-clobber behavior (V3). The replacing write must not follow symlinks: remove the entry or write via a temp file and `mv -f`, so a change between guard and write cannot redirect the write through a link.
+New pure-ish module `scripts/lib/desktop_launch.py` with: `detect(root)` -> {framework, command|None, candidates}; `headless_reason(env, platform)`; `launch_decision(attended, unattended, headless, opted_out)`; `DesktopLaunch` class (Popen with `group_options`, log file, pid file, grace-period watcher, `close()`). `uncle_tui.py` calls it from `_offer_support` for BOTH families when desktop is detected. Opt-out: with `WORKFLOW_PREVIEW_DESKTOP=0` the desktop flow is bypassed before any detection, so nothing is detected, written or printed, and the web `CompletionPreview` and unattended `_show_early_preview` run exactly as before, even for Electron/Tauri projects. Prompt eligibility: the attended y/n `prompt_kind='desktop'` gate is shown ONLY when detection yields a single resolved command, the environment is not headless, and no live pid file exists. Otherwise no prompt is shown: for ambiguous detection print the candidates, for headless print the headless reason, for a live pid file print the already-running message; each case records `.uncle/workflow/desktop-launch.json` with status skipped and its reason, then the flow continues to `_completion_dialog`. Unattended -> print the command to history and record `.uncle/workflow/desktop-launch.json`, then continue the existing quit path. Web-preview suppression rule (D-7): when the desktop flow is enabled and a desktop project is detected, the web `CompletionPreview` and unattended `_show_early_preview` are suppressed whatever the outcome (launched, declined, skipped, ambiguous, headless, unattended or failed). Only the opt-out case keeps the web preview.
 
-Logic, in order: (1) if `UNCLE_REPLACE_CHANGE_REQUEST` is exactly the string `1`, proceed without prompting, in both interactive and unattended modes; unset, empty, `0`, `true`, `yes` and every other value do not count. (2) Else, if `UNATTENDED==1` (set to 1 by the `--unattended` flag or `UNCLE_UNATTENDED=1`; the function checks `UNATTENDED` only for this) OR stdin is not a TTY (`! [ -t 0 ]`, which covers the TUI, the driver, closed stdin and piped request content), treat the run as unattended: print a stderr message naming the file and `UNCLE_REPLACE_CHANGE_REQUEST=1` and `exit 1` without ever reading stdin, so piped request content is never consumed as an answer. (3) Else (interactive TTY) print the file path and `Proceed with the new change request and replace it? [y/N] `, then `read -r ans || true` so an unterminated final line (e.g. `y` with no newline) is still used; EOF with no data yields empty. Normalize the answer by stripping all CR characters, trimming leading/trailing whitespace and lowercasing; only the exact strings `y` or `yes` proceed. Everything else (empty, EOF, `n`, `y please`, junk) prints a stop message and `exit 1`.
+- Opt-out rule (AR-021): when `WORKFLOW_PREVIEW_DESKTOP` is a disabled value (`0`, `false`, `no`, `off`), `desktop_launch.detect` is never called, no `.uncle/workflow/desktop-*` file is written, nothing is printed to history, and the web `CompletionPreview` and `_show_early_preview` run unchanged. This is a strict no-op for the desktop flow.
+- Precedence in `launch_decision`: opted_out, then unattended, then headless, then attended-confirm. The first signal that holds wins and short-circuits the rest; each skip records only its own reason (`opted-out`, `unattended`, `headless`). Only when none holds does the attended y/n prompt appear. Unattended and headless signals are not merged, so with both true the recorded reason is `unattended`. With opted_out and any other signal true, the outcome is the opt-out no-op above.
+- launch.json interaction: when desktop is detected and the flow is enabled, the `launch.json` kind (webpage/command) is not used to drive the preview for that run. `.uncle/launch.json` is never modified by the desktop flow and is still read and validated by the existing code, so an invalid file reports the same error as before. Which previews are suppressed for each desktop outcome is decided under AR-008. With the flow disabled or no desktop detected, launch.json behaves exactly as today.
 
-Streams and display: the prompt and all stop/refusal messages go to stderr; the answer is read from stdin only. The printed path has control characters escaped (for example via `printf '%q'`) so a hostile path cannot inject terminal sequences.
+## 2. Alternatives considered
+- Extend `CompletionPreview`/launch.json with a `desktop` kind: rejected, changes a public contract and mixes confirm-gating into web flow.
+- Shell hook in change-workflow.sh: rejected, driver has no TTY/dialog and the launch must live with the TUI cleanup.
+- Extend preview-build.sh early preview: deferred (request says end of build).
 
-Decision D1: guard before the archive step so a decline modifies nothing. D2: skip for UNCLE_NEW_WORKFLOW (old evidence is archived, so nothing is lost). D3: no archiving of the old request (not required; deferred). D4: prompt on stdin like `offer_worktree_removal`, only when stdin is a TTY.
+## 3. Why preferred
+Isolated module is unit-testable without curses; minimal TUI edit; web path untouched.
 
-- Unattended rule (AR-001): unattended means `UNATTENDED` equals exactly `1` (set by the --unattended flag or by `UNCLE_UNATTENDED=1`); any other value is interactive.
-- Opt-in rule (AR-002): `UNCLE_REPLACE_CHANGE_REQUEST` permits replacement only when it is exactly the string `1`; unset, empty, `0`, `true` and every other value refuse.
-- SEED_ONLY rule: with `SEED_ONLY=1` and an existing request file, no prompt is shown and the existing no-overwrite behavior (V3) is unchanged.
-- Existence rule (AR-003): a zero-byte CHANGE_REQUEST.md counts as absent (no prompt, overwritten silently); a file with at least one byte, including whitespace-only content, counts as existing and triggers the guard.
-- Output rule: the prompt and all stop/refusal messages go to stderr; stdout is unchanged. The prompt text contains the CHANGE_REQUEST.md file path and the exact phrase `Proceed with the new change request and replace it? [y/N]`.
-- Message rule: the unattended refusal message goes to stderr and contains the literal `UNCLE_REPLACE_CHANGE_REQUEST=1`; the decline stop message states that the existing request was left unchanged. Tests assert prompt shown or not shown by matching this stderr text.
-- V2 scope (AR-004): the decline guarantee covers CHANGE_REQUEST.md and .uncle/workflow in the current worktree, which stay byte-identical after a decline. A worktree created earlier in the same invocation is out of scope.
+## 4. Decisions (settled)
 
-## 2-3. Alternatives and rationale
-| Alternative | Rejected because |
-|---|---|
-| Prompt inside write_change_request | Runs after archive/origin steps; decline would not be side-effect free |
-| Prompt in change-workflow.sh | File already seeded by then; too late |
-| Archive then overwrite | Not requested; larger surface |
+| ID | Decision | Reason |
+|---|---|---|
+| DEC-1 | Electron: dep/devDep `electron`, `electron-builder`, `@electron-forge/cli`; Tauri: `src-tauri/tauri.conf.json` or `@tauri-apps/cli` dep | request examples; an unreadable or invalid-JSON package.json yields framework none (no launch, no error). |
+| DEC-2 | Command: config override; else Electron `npm start` if only `start`, `npm run dev` if only `dev`; both -> ambiguous; neither + `main` + node_modules/.bin/electron -> `[node_modules/.bin/electron, .]`; Tauri `npm run tauri dev` if scripts.tauri else ambiguous (candidate `cargo tauri dev`) | never guess between candidates; the attended desktop prompt shows the full resolved argv, warns that project-defined scripts run with the user's privileges, and defaults to No (only an explicit y launches; Enter declines); an invalid or empty launch_command override is ignored with a one-line warning and detection falls back to the guessing rules. |
+| DEC-3 | Both frameworks detected -> ambiguous | safe default |
+| DEC-4 | Headless: Linux without DISPLAY/WAYLAND_DISPLAY; `CI` non-empty; `SSH_CONNECTION`/`SSH_TTY` set (any OS). `launch_decision` precedence is opted_out > unattended > headless > attended-confirm: headless is evaluated after opt-out and unattended, and any positive headless signal wins over attended state. A headless environment never shows the desktop prompt; the launch is skipped, the reason is printed, and the skip records only its own reason `headless` (status skipped). | D-4; precedence resolves overlap with unattended (AR-002) |
+| DEC-5 | Unattended is true if ANY signal holds: TUI `workflow_unattended`, `WORKFLOW_UNATTENDED=1`, or `not sys.stdin.isatty()`. Any positive unattended signal wins over the TUI's attended state and over headless; the TUI's own attended state never overrides a positive signal. `launch_decision` order is opted_out, then unattended, then headless, then attended-confirm prompt. An unattended skip records only reason `unattended`, even when headless also holds. The desktop y/n prompt reads keys only from the TUI's own TTY/curses input, never from piped stdin. Existing suites run with WORKFLOW_PREVIEW_DESKTOP=0 or non-desktop fixtures so the attended `_offer_support` path is unchanged. | D-3; explicit precedence so overlapping signals (e.g. attended TUI with no stdin TTY, or over SSH) give one deterministic outcome (AR-002); AR-009: existing tests and piped usage keep their current behavior via opt-out/non-desktop fixtures |
+| DEC-6 | Grace 3 s default via `WORKFLOW_PREVIEW_DESKTOP_GRACE`; process still alive after grace = success reported; ANY exit within grace, including exit code 0, = failed, reported with exit code and the log tail (pid file removed). Non-numeric or negative grace uses 3 s; 0 checks exit status immediately once (an exit at that check is failed, still alive = success). | D-2; an immediate clean exit means no window stayed open, so it is not a successful launch; defined results for invalid grace values. |
+| DEC-7 | Files: `.uncle/workflow/desktop-app.pid` (JSON pid/command/log/started), `desktop-app.log`, `desktop-launch.json` (status launched/failed/skipped/declined + reason). All three are created with mode 0600 (os.open with 0o600, not widened by umask) and remain untracked. | invariant I-3; all untracked; app output and commands may be sensitive, so owner-only access |
+| DEC-8 | Cleanup on stop_workflow/_quit kills only the process tree of this session's own Popen handle (via process_tree.kill_tree); a PID read only from the pid file is NEVER signalled. Pid-file liveness: a pid file is live only if its PID is alive (os.kill(pid, 0) succeeds) AND the recorded `command` field matches that PID's actual command. A dead PID, mismatched command (PID reuse) or unparseable/corrupt pid file is stale and is overwritten. A live pid file (app still running) blocks relaunch and never shows the desktop prompt: the TUI prints a 'desktop app already running (pid N)' message, records desktop-launch.json status `skipped` with reason `already running`, and the flow continues to `_completion_dialog`. Starting a new workflow run from the TUI does not kill a still-running desktop app; the next run's end-of-build flow applies the same live-pid rule. | no silent orphan from this session; PID reuse must never cause killing an unrelated process; no duplicate launch; flow never blocks; testable liveness rule (AR-019) |
+| DEC-9 | Config key `desktop.launch_command` parsed with `shlex.split` from `.uncle/config`. `.uncle/config` is project-local and may be repo-controlled, so the command is untrusted: it is shown in full (resolved argv) in the confirmation prompt and never launches without explicit attended confirmation (same gate as detected commands; unattended/headless skip still applies and only prints it). It is never treated as pre-trusted. An empty or unparsable value (shlex error, or no tokens) is ignored with a one-line warning and detection falls back to the DEC-2 command guess. The override applies only when a desktop framework is detected; on a non-desktop project it is never read or applied. | prefer explicit setting, but not trusted as operator-authored (AR-013); invalid or irrelevant values have defined behavior and never block or crash the flow. |
 
-## 4. Components to modify
-See change-impact table.
+## 5. Components not to modify
+preview-build.sh, preview_server.py, preview_kind.py, completion_preview.py (launch.json contract), bash drivers, process_tree.py (reused as-is), test-report writers.
 
-## 5. Not to modify
-`scripts/lib/change_request_stdin.py`, `change-workflow.sh`, `new)` flow, existing tests.
+## 6. Data flow
+workflow exit 0 -> `_offer_support` -> `desktop_launch.detect` -> `launch_decision` -> {print+record | prompt -> `DesktopLaunch.start`} -> events into `home_history`.
 
-## 6-8. Data flow / state / interface
+## 7. State transitions
 
-No state change on decline. New env var `UNCLE_REPLACE_CHANGE_REQUEST=1` (unattended/non-TTY opt-in); no flag or API changes. The guard never reads piped (non-TTY) stdin, so request content destined for change_request_stdin.py is neither consumed nor taken as an answer. When stdin is a TTY, the prompt and stop messages are written to stderr and the answer is read from stdin and normalized (CR and whitespace stripped, lowercased, exact match on y|yes).
+New `prompt_kind='desktop'` (confirm/decline) before the existing support/finished dialog; after answer, flow continues to `_completion_dialog`. If a live desktop pid already exists (DEC-8), the prompt is not entered: a message is printed, `skipped` is recorded, and the flow goes straight to `_completion_dialog`. Key handling while the prompt is open: `y`/`Y` launches; `n`/`N`, Esc and Enter decline and record `declined`; all other keys are ignored (prompt stays open); resize redraws the prompt without changing state. Quit/stop of the TUI while the prompt is open counts as decline (nothing launched, `declined` recorded) and then proceeds through the normal quit path. The prompt reads keys only from the TUI's own input loop. `_offer_support` is idempotent per workflow run: a guard flag set on first entry makes a duplicate workflow-exit event a no-op, so no second prompt, launch or record is produced.
+
+## 8. Interfaces
+
+Env `WORKFLOW_PREVIEW_DESKTOP` (opt-out), `WORKFLOW_PREVIEW_DESKTOP_GRACE`; config `desktop.launch_command`. Disabled values (case-insensitive, whitespace-trimmed): `0`, `false`, `no`, `off`; unset, empty or any other value leaves the flow enabled. With the flow disabled, nothing is detected, written or printed, no prompt is shown, and the web preview and early preview behave exactly as before, even for Electron/Tauri projects. The launch.json file format and contract are unchanged: the desktop flow never writes it, and still validates it. When the desktop flow applies, its `kind` is ignored for the preview.
 
 ## 10. Compatibility
-B2-B6 preserved; only B1 modified (spec S1/S2/S4).
+
+Non-desktop projects take no new code path beyond a cheap detect that returns none (D-6). A `desktop.launch_command` in `.uncle/config` does not bypass the confirmation gate.
 
 ## 12. Error and recovery
-Decline/EOF/unattended refusal: exit 1, message, no side effects; rerun after removing file or answering yes.
+
+OSError on spawn -> failed status with message; any exit within grace -> exit code + last 20 log lines, pid file removed; a crash after the grace period is reported only while the TUI is open (no reporting after TUI exit); the log tail is stripped of ANSI/CSI/OSC escape sequences and control characters (except newline and tab) before any display in the TUI history or record file; all paths non-blocking.
 
 ## 14. Rollback plan
-Revert the from-issue.sh hunk, README lines and new test; no persisted data.
+Revert commit, or set `WORKFLOW_PREVIEW_DESKTOP=0`. Remove untracked `.uncle/workflow/desktop-*` files if desired; nothing else persisted.
 
-## 16. Automated-test strategy
+## 15. Containment
+Env opt-out; default-safe (confirmation / never unattended).
 
-New `scripts/tests/change-request-exists-prompt-test.sh`, mandatory end-to-end invocations of from-issue.sh (function-extraction cases per issue-document-test.sh pattern are supplementary only) in temp dirs with fixtures. Cases: answers y, YES, n, empty, EOF, junk; answer parsing `y\r\n`, ` Yes `, unterminated final `y` accept, `y please`, `yes!`, `yy` decline; no prompt for no file, zero-byte file, UNCLE_NEW_WORKFLOW=1, SEED_ONLY=1 with existing request (assert no prompt and V3 no-overwrite unchanged), seed_is_current; whitespace-only file prompts; symlink, dangling symlink and directory at CHANGE_REQUEST.md trigger confirmation and the symlink target is not clobbered; opt-in values unset, empty, 0, true refuse versus exactly 1 proceeds; non-TTY piped request content with an existing file: guard does not read it, follows the unattended rule, piped content left unconsumed; unattended via --unattended and UNCLE_UNATTENDED=1 with and without opt-in (never-writing fifo under timeout); after decline assert CHANGE_REQUEST.md hash and .uncle/workflow tree byte-identical; assert stderr strings for prompt shown/not shown and README grep.
+## 16. Restrictions
 
-## 17. Regression strategy
-Existing issue-document-test.sh, worktree-auto-seed-test.sh, unattended-test.sh stay unchanged and green; driver full suites (verification commands in baseline).
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
+|---|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST Invariants | I-2, D-3 | No unattended/unconfirmed launch | `launch_decision` pure gate + TUI prompt that displays the resolved argv, warns that project scripts run with the user's privileges, and defaults to No | testable matrix | CAP-PY | uncle_tui.py:2250 unattended branch inspected | CODING |
+| R-2 | USER | CHANGE_REQUEST Invariants | I-3, D-9 | Tracked pid file, no silent orphan, no kill of reused pid | pid file + close hooks at uncle_tui.py 2917, 7387; close() acts only on the in-memory Popen handle of this session, never on a pid read from the file | same as web | CAP-PY | process_tree.kill_tree exists (line 279) | CODING |
+| R-3 | USER | CHANGE_REQUEST Invariants | I-4 | Working tree untouched | write only under .uncle/workflow (gitignored via .uncle/*) | .gitignore inspected | CAP-PY | .gitignore lines 1-6 | CODING |
+| R-4 | REPOSITORY | CLAUDE.md | I-1 | No test report row | module imports no report writers | boundary | CAP-PY | grep | CODING |
+| R-5 | PLATFORM | GUI | D-2 live | Real Electron window opens | manual check only | no GUI automation in scope | CAP-GUI | not available here | LIVE_VERIFICATION |
+
+Runner binding: Python `unittest` via `bash scripts/run-python-tests.sh` (collects `scripts/tests/*-test.py`).
+
+## 17. Automated-test strategy
+
+New `scripts/tests/desktop-launch-test.py` (detection fixtures in tmp dirs, decision matrix, config override, stub launch/crash/cleanup, git-status unchanged) and `scripts/tests/tui-desktop-launch-test.py` (TUI hook with stub, following tui-complete-dialog-test.py patterns). Stub command is a `python3 -c` sleep/exit argv. No real GUI. Regression: existing completion-preview, tui-complete-dialog, tui-support suites must pass unchanged, run with stdin non-TTY and with WORKFLOW_PREVIEW_DESKTOP=0 or on non-desktop fixtures; verification commands are those in the baseline. Added test cases: (a) launch_decision parametrized over all 16 combinations of opted_out/unattended/headless/attended asserting outcome and recorded reason under precedence opted_out > unattended > headless > attended-confirm. (b) Child exits 0 within grace -> failed with log tail, alongside non-zero exit and alive-past-grace. (c) Pid file: dead pid overwritten; live pid with matching command blocks and records skipped/already running; live pid with mismatched command stale; unparseable file stale. (d) close() with a pid file naming an unrelated live sleeper and an instance that never started leaves the sleeper alive; close() terminates the child it started. (e) os.stat mode 0600 on pid, log and record files; stub emitting ANSI/control bytes yields a displayed tail free of them. (f) Invalid package.json -> none; empty/unparsable launch_command -> warning and guessing; grace invalid/negative -> 3 s, 0 -> immediate check. (g) TUI: desktop prompt text contains full resolved argv and the privilege warning, Enter declines; keys y launches, n/Esc/Enter/quit record declined with no spawn, unrelated keys leave prompt open; config-supplied launch_command shown in full, never spawned without y in attended or unattended runs. (h) TUI with Electron fixture plus valid web launch.json: launch.json bytes unchanged; web/early preview behavior asserted for launched, declined, ambiguous, headless, unattended, opted-out outcomes per the D-7 rule. (i) Each disabled value (0/false/no/off) on an Electron fixture: no `.uncle/workflow/desktop-*` files, no history lines, web preview still invoked. (j) TUI attended state outranks isatty; non-desktop fixtures never reach the desktop path.
 
 ## 18. Manual verification
-Run `scripts/from-issue.sh` change mode in a scratch repo with an existing request: confirm prompt, y proceeds, n stops with file intact.
+Build a minimal Electron app and confirm the window opens, PID/log printed, and window closes on cleanup (CAP-GUI, LIVE_VERIFICATION). Not PASS-able by automation.
 
 ## 19. Observability
-One-line stderr messages stating decision and the opt-in variable.
+History lines: framework, command, PID, log path, skip/failure reason; `desktop-launch.json` status record.
 
 ## Change-impact table
+
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/from-issue.sh` | Add confirm function and call in `change)` | Requested behavior | Medium: non-interactive callers | New test; issue-document, worktree-auto-seed, unattended tests |
-| `scripts/tests/change-request-exists-prompt-test.sh` | New test | AC-1..5 | Low | Self |
-| `scripts/README.md` | Document prompt and `UNCLE_REPLACE_CHANGE_REQUEST` | AC-4 | Low | grep in new test |
+| scripts/lib/desktop_launch.py | New module | detection, gating, launch, cleanup | Low (isolated) | desktop-launch-test.py |
+| uncle_tui.py | Hook in `_offer_support`, `_poll_completion_preview`, prompt handling, close paths | integrate offer/launch/cleanup | Medium (dialog sequencing) | tui-desktop-launch-test.py, tui-complete-dialog-test.py (run with WORKFLOW_PREVIEW_DESKTOP=0 or on non-desktop fixtures so the desktop flow cannot alter them) |
+| scripts/tests/desktop-launch-test.py | New | AC-1..AC-9 | None | self |
+| scripts/tests/tui-desktop-launch-test.py | New | TUI behavior | None | self |
+| scripts/README.md | Document env/config | operator discovery | None | none |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1: when a non-empty CHANGE_REQUEST.md exists and the seed is not current, the user is prompted on stderr; the prompt names the file path and contains `Proceed with the new change request and replace it? [y/N]`; y/yes proceeds. | S1 | V1 | from-issue.sh | new test y/YES | prompt y |
-| AC-2 | S2 | V1, V2 | from-issue.sh | new test n/empty/EOF, new test answer parsing: CRLF `y\r`, ` Yes `, unterminated final `y` accept; `y please`, `yy`, `n` decline | prompt n |
-| AC-3: With no existing CHANGE_REQUEST.md, or a zero-byte one (treated as absent), no prompt is shown and the file is written/replaced silently as before. A whitespace-only file counts as existing and prompts. | S3 | V1 | from-issue.sh | new test no-file, new test zero-byte file: no prompt, replaced silently, new test whitespace-only file: treated as existing, prompts | scratch repo |
-| AC-4: Unattended means UNATTENDED=1 or UNCLE_UNATTENDED=1 exactly (other values are interactive). In that mode an existing request file is never replaced unless UNCLE_REPLACE_CHANGE_REQUEST is exactly 1; otherwise exit 1 with a message naming that variable, without reading stdin. | S4 | V1, V2 | from-issue.sh, README | new test: --unattended flag and UNCLE_UNATTENDED=1, each with and without UNCLE_REPLACE_CHANGE_REQUEST=1, end to end | run once with --unattended and once with UNCLE_UNATTENDED=1 |
-| AC-5: In-flight resume (seed_is_current), UNCLE_NEW_WORKFLOW=1 and SEED_ONLY=1 never show the prompt; with SEED_ONLY=1 and an existing request file, existing no-overwrite behavior (V3) is unchanged. | S5, S6 | V3 | from-issue.sh | new test end to end: no prompt for NEW_WORKFLOW, SEED_ONLY, seed_is_current, empty file; hash and .uncle/workflow unchanged after decline; plus existing tests | resume run |
-| AC-6 | all | all | all | driver suites | n/a |
-
-## Restrictions
-
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
-|---|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST.md Acceptance criteria | AC-4 | Unattended never hangs; unattended means UNATTENDED=1 or UNCLE_UNATTENDED=1 exactly, opt-in only when UNCLE_REPLACE_CHANGE_REQUEST is exactly 1 | Check UNATTENDED (set by --unattended or UNCLE_UNATTENDED=1) and stdin-is-not-a-TTY before any read; never read piped stdin. Opt-in replacement is honored only when UNCLE_REPLACE_CHANGE_REQUEST is exactly 1; unset, empty, 0, true and all else refuse. All prompt and refusal text goes to stderr, the displayed path is control-character-escaped, and the answer is read from stdin only. | DESIGN, revisable | CAP-NONE | `UNATTENDED` var from-issue.sh L462-470 inspected; set by --unattended flag or UNCLE_UNATTENDED=1; tests cover both | CODING |
-| R-2 | USER | CHANGE_REQUEST.md Requested behavior 3 | AC-2 | Decline modifies nothing in the current worktree (CHANGE_REQUEST.md and .uncle/workflow stay byte-identical); a worktree created earlier in the same invocation is out of scope | Guard before archive/write_origin; any existing path entry (file, symlink, dangling symlink, directory) triggers confirmation, and the replacing write does not follow symlinks | DESIGN, revisable | CAP-NONE | change) case order L918-948 inspected | CODING |
-
-No live-authentication prerequisites; all verification is local shell tests.
+| AC-1,AC-2 | D-1, D-8 | I-5 | desktop_launch.py | desktop-launch-test.py (includes: config-supplied command is shown in full in the prompt and never launches without confirmation) | Electron fixture |
+| AC-1,AC-2 edge inputs (AR-022) | D-1, D-2, D-8 | I-5 | desktop_launch.py | desktop-launch-test.py: malformed package.json -> none; empty/unparsable launch_command -> warning + guessing; grace invalid/negative -> 3 s; grace 0 -> immediate check | none |
+| AC-3,AC-4 (prompt shown only for a single detected command, non-headless, no live pid file; ambiguous/headless/live-pid print reason or candidates, record skipped, no prompt; y launches; n, Esc, Enter and quit-while-open decline and record declined; other keys ignored) | D-1, D-2 | I-2 | uncle_tui.py, desktop_launch.py | tui-desktop-launch-test.py | window opens |
+| AC-5,AC-6 (plus combined-signal precedence: opted_out > unattended > headless > attended-confirm) | D-3, D-4 | I-2 | desktop_launch.py | desktop-launch-test.py (includes a combined-case matrix asserting winner and recorded reason for every conflicting signal combination) | none |
+| AC-7 | D-2 | I-1 | desktop_launch.py | desktop-launch-test.py (stub exits non-zero within grace -> failed; stub exits 0 within grace -> failed with log tail; stub alive past grace -> launched) | none |
+| AC-8: with WORKFLOW_PREVIEW_DESKTOP set to a disabled value (0/false/no/off), nothing is detected, written or printed and the web preview runs unchanged, even for an Electron project; non-desktop projects are likewise unchanged. For a detected desktop project with the flow enabled, the web/early preview is suppressed whatever the desktop outcome (launched, declined, skipped, ambiguous, failed). | D-5, D-6, D-7 | I-4 | uncle_tui.py | existing + new (suppression asserted for launched, declined, skipped, ambiguous and failed outcomes; opt-out asserted as a strict no-op) | none |
+| AC-9 | D-9 | I-3, I-4 | both | both, desktop-launch-test.py: close() with a pid file naming a foreign live pid and no Popen handle sends no signal to that pid | cleanup stops window |
+| AC-10 | D-6 | all | all | both runner commands | none |
 
 ## Implementation sequence
 
-1. Add `confirm_replace_change_request` and its call in the `change)` case; this step owns the pinned prompt and stop-message wording (stderr; file path plus `Proceed with the new change request and replace it? [y/N]`; unattended/non-TTY refusal containing `UNCLE_REPLACE_CHANGE_REQUEST=1`) that steps 2 and 3 consume; `bash -n` check
-   Owns: `scripts/from-issue.sh`
-2. Write the new shell test. It MUST invoke from-issue.sh end to end (not only the extracted function) and cover: no prompt for UNCLE_NEW_WORKFLOW=1, SEED_ONLY=1, seed_is_current, and an empty/zero-byte request file; prompt shown with y/YES/n/empty/EOF/junk answers; after decline assert CHANGE_REQUEST.md hash and the .uncle/workflow tree are byte-identical; unattended cases using both the --unattended flag and UNCLE_UNATTENDED=1, each with and without UNCLE_REPLACE_CHANGE_REQUEST=1 (stdin from a never-writing fifo under timeout to prove no hang). These end-to-end cases are never cut.
-   Owns: `scripts/tests/change-request-exists-prompt-test.sh`
-   Depends on: 1, 3
-3. Document prompt, answers, unattended default and opt-in
-   Owns: `scripts/README.md`
+1. Desktop module: detection, gating, headless, launch, grace watcher, pid/log/record files, close
+   Owns: `scripts/lib/desktop_launch.py`
+2. Module tests (independent of TUI; written against the contract in step 1's interfaces: `detect`, `launch_decision`, `DesktopLaunch`), covering cases (a)-(f) of the automated-test strategy
+   Owns: `scripts/tests/desktop-launch-test.py`
+3. TUI integration: import, `_offer_support` branch for both families (idempotent per run via a guard flag), `desktop` prompt with the key handling in section 7 (y launches; n/Esc/Enter/q decline; other keys ignored; resize redraws; quit = decline), poll events, close hooks, skip web preview when desktop enabled (builds on the existing functions in uncle_tui.py; sole writer of that file)
+   Owns: `uncle_tui.py`
    Depends on: 1
-4. Run the new test and existing issue-document, worktree-auto-seed, unattended tests
-   none (read-only)
-   Depends on: 1, 2, 3
+4. TUI tests covering cases (g)-(j) of the automated-test strategy; sole owner of any environment setup (WORKFLOW_PREVIEW_DESKTOP=0) needed for regression runs; existing test files are not edited
+   Owns: `scripts/tests/tui-desktop-launch-test.py`
+   Depends on: 3
+5. Docs
+   
+   Before coding step 3, read `_offer_support`, `_poll_completion_preview`, and the `complete`/`support` prompt key handling (uncle_tui.py ~6878) to mirror their patterns.
+   Owns: `scripts/README.md`
 
 ## 21. Scope cuts under time pressure
-
-Cut first: README wording polish. Never cut the end-to-end from-issue.sh test cases, the unattended no-hang behavior, or decline-leaves-state-unchanged.
+Cut first: Tauri support, then `desktop.launch_command` config, then README docs. Never cut: confirmation gate, unattended/headless skip, pid tracking, cleanup.
 
 ## 22. Risks and unresolved questions
-
-- Non-interactive callers (TUI) with no stdin now stop instead of overwriting; mitigation: EOF = no, clear message; env opt-in available. Tests cover both the --unattended flag and UNCLE_UNATTENDED=1, each with and without UNCLE_REPLACE_CHANGE_REQUEST=1.
-- Worktree may already be created before decline; accepted.
-- Archiving the old request: deferred.
+| Risk | Mitigation |
+|---|---|
+| Dialog ordering regresses star prompt | keep existing suites green; desktop prompt precedes `_completion_dialog` |
+| Windows `npm` shims | argv passed through `launch_command` |
+| Linux/Windows not live-verified | stated in non-goals; manual check on darwin only |
+No blocking planning decisions remain.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | The plan skips the prompt for SEED_ONLY=1 but never states the behavior as a requirement; it should be explicit and tied to V3. | Added SEED_ONLY clarification to s1.1 and AC-5 requirement; s6.1 notes no prompt and V3 unchanged. |
-| AR-002 | Accepted | Unattended detection must be one pinned rule shared by plan and spec: UNATTENDED=1 or UNCLE_UNATTENDED=1 exactly, opt-in only when exactly 1. | Added exact unattended definition to s1.1, AC-4 requirement and R-1 property. |
-| AR-003 | Accepted | Real ambiguity; a zero-byte request file holds no content to lose, so treating it as absent is safe. | s1.1 adds a rule that a zero-byte CHANGE_REQUEST.md counts as absent (no prompt, silent overwrite); AC-3 states the same. |
-| AR-004 | Accepted | Real inconsistency between V2's byte-identical claim and the accepted pre-decline worktree creation. | s1.1 and R-2 scope V2 to CHANGE_REQUEST.md and .uncle/workflow in the current worktree; a worktree created earlier in the same invocation is out of scope. |
-| AR-005 | Accepted | Pinning the rule removes ambiguity for identical-content and different-issue files. | s1.1 states the prompt is shown whenever the file exists and seed_is_current is false, regardless of content or issue number. |
-| AR-006 | Accepted | Stream and answer normalization must be fixed so tests can assert them. | s1.1 specifies stderr output and trimmed, CR-stripped, lowercased exact match on y\|yes. |
-| AR-007 | Accepted | Non-TTY callers with closed or EOF stdin would otherwise silently regress from overwrite to exit 1 after an ambiguous read; treating them as unattended gives a deterministic, no-read refusal with an opt-in message. | s1.1: non-TTY stdin (not -t 0) without UNCLE_REPLACE_CHANGE_REQUEST=1 is treated as unattended: print opt-in message, exit 1, never read. |
-| AR-008 | Accepted | The opt-in's interactive effect and the guard's coverage of stdin-import and seed-only paths were unstated. | s1.1: UNCLE_REPLACE_CHANGE_REQUEST=1 also skips the prompt interactively; the guard does not run on stdin-import or SEED_ONLY paths (V3 unchanged). |
-| AR-009 | Accepted | Reading the answer from piped request content would consume the request body or misread it as an answer, so the guard must never read non-TTY stdin. | s1.1 now treats non-TTY stdin as unattended (no read); s5.1 states the guard never reads piped stdin; R-1 mechanism updated. |
-| AR-010 | Accepted | The plan said non-empty but the spec said only existing; pinning empty/whitespace-only as absent resolves the mismatch. | s1.1 defines zero-byte or whitespace-only CHANGE_REQUEST.md as absent (no prompt, replaced); AC-3 requirement and tests updated. |
-| AR-011 | Accepted | Real ambiguity: the plan named two variables; the flag and UNCLE_UNATTENDED=1 already both set UNATTENDED, so one check suffices. | s1.1 and R-1: the confirm function checks only UNATTENDED, which is 1 when --unattended or UNCLE_UNATTENDED=1 is used. |
-| AR-012 | Accepted | An unvalidated opt-in could let an ambient value silently allow overwrites; exact-match is the safe rule. | s1.1 and R-1: only the exact string 1 in UNCLE_REPLACE_CHANGE_REQUEST permits replacement; unset, empty, 0, true and all else refuse. |
-| AR-013 | Accepted | Existing-path semantics and the guard-to-write race were unspecified and could break V1/V2. | s1.1 now triggers on any existing path entry and requires a no-follow write; R-2 mechanism updated. |
-| AR-014 | Accepted | Prompt stream and path sanitization were unspecified, so tests could not assert on them. | s1.1 pins prompt/messages to stderr, escaped path, answer from stdin only; R-1 mechanism updated. |
-| AR-015 | Accepted | Function-only tests cannot prove gating or decline-before-archive; end-to-end invocation must be mandatory and uncuttable. | step-2 text and AC-5 tests now require end-to-end from-issue.sh cases with hash and .uncle/workflow checks, never cut. |
-| AR-016 | Accepted | Unattended mechanisms differ across spec, plan and manual check; tests must cover both flag and env var with and without opt-in. | AC-4, R-1 evidence, step-2 and risk s18.1.i1 now cover --unattended and UNCLE_UNATTENDED=1, each with/without UNCLE_REPLACE_CHANGE_REQUEST=1. |
-| AR-017 | Accepted | Edge cases of the existing-file test and opt-in value were unspecified and need pinning so tests have a single expected result. | s1 new block pins: zero-byte is absent, whitespace-only is existing, opt-in only when exactly 1; AC-3 updated. |
-| AR-018 | Accepted | Prompt stream and wording must be fixed so tests can assert prompt shown or not shown. | s1 new block pins stderr output, prompt wording with file path, and unattended message containing UNCLE_REPLACE_CHANGE_REQUEST=1; AC-1 updated. |
-| AR-019 | Accepted | Answer parsing was undefined for CRLF, trailing text and an unterminated final line; pinning it makes the tests deterministic. | s1.1 now specifies CR stripping, trim, lowercase, exact y\|yes match, and acceptance of an unterminated final line; AC-2 requirement updated. |
+| AR-001 | Accepted | The plan did not say when the attended prompt is shown; an explicit eligibility rule is needed. | Section 1 prose, DEC-4 and traceability row s18.1.r2 now state the prompt shows only for a single command, non-headless, no live pid file. |
+| AR-002 | Accepted | Unattended and headless signals can overlap and the plan gave no precedence, making the gate untestable. | DEC-5 now says unattended is true if any signal holds; DEC-4 and DEC-5 state the order opt-out, unattended, headless, then ask. |
+| AR-003 | Accepted | D-5 (opt-out does no detection) and D-7 (suppress web preview on detection) conflict; opt-out must leave the web preview unchanged. | Section 1 text states that with WORKFLOW_PREVIEW_DESKTOP=0 nothing is detected and the web preview runs as before, even for Electron projects; AC-8 traceability row updated. |
+| AR-004 | Accepted | Real ambiguity; a single rule (suppress whenever a desktop project is detected with the flow enabled) is simple and predictable. | Section 1 now states the web preview and early preview are suppressed for any detected desktop project with the flow enabled, whatever the outcome; AC-8 aligned. |
+| AR-005 | Accepted | PID reuse and post-grace crashes were unspecified; a command-matching liveness rule and TUI-bound crash reporting make both testable. | Edited DEC-8 (liveness = alive PID plus matching recorded command) and s10.1 (post-grace crash reported only while TUI is open). |
+| AR-006 | Accepted | The behavior of an empty, unparsable or non-desktop-project launch_command was undefined and is cheap to specify. | DEC-9 now states empty/unparsable values are ignored with a one-line warning and the override applies only when a desktop framework is detected. |
+| AR-007 | Accepted | The plan was silent on how a desktop project's launch.json web/command entry interacts with the desktop flow; the interaction needs a stated rule. | Added a launch.json interaction block after s1.1 and clarified s8.1: kind ignored for the preview, file untouched and still validated. |
+| AR-008 | Accepted | Unconditional suppression on detection alone removes a user's web preview when no desktop launch happens, contradicting D-6/AC-8. | s1.1 now suppresses web previews only when a desktop launch is offered or occurs; AC-8 gains tests for decline/ambiguous/headless/unattended keeping the web preview. |
+| AR-009 | Accepted | Real risk: isatty may be false under test or piped runs and would silently change the attended path of existing suites. | DEC-5 makes TUI attended state take precedence over isatty; s17 runs existing suites with WORKFLOW_PREVIEW_DESKTOP=0 or non-desktop fixtures. |
+| AR-010 | Accepted | Key handling, resize, quit and duplicate workflow-exit behavior for the desktop prompt were unspecified. Decline-on-other-keys is rejected in favor of ignoring them, to avoid accidental declines. | Section 7 now specifies y/n/Esc/Enter/q keys, ignore-other-keys, resize redraw, quit as decline, and idempotent _offer_support; step 3 updated. |
+| AR-011 | Accepted | The plan left unspecified what happens when the app is already running at the attended prompt or at the next workflow run. | Edited DEC-8 and s7.1: live pid skips the prompt, prints a message, records skipped, continues to _completion_dialog; next-run behavior defined. |
+| AR-012 | Accepted | Auto-detected project scripts run with user privileges from a possibly untrusted repo, so the prompt must disclose the argv and default to No. | DEC-2 and R-1 now require the prompt to show the resolved argv, warn that project scripts run with user privileges, and default to No. |
+| AR-013 | Accepted | `.uncle/config` lives in the project and may be repo-controlled, so a config command is untrusted like detected scripts and needs the same gate. | DEC-9 now says a config-supplied command is shown in full, never launches without confirmation, and is never treated as pre-trusted; s9.1 and AC-1/AC-2 traceability row r1 updated. |
+| AR-014 | Accepted | A PID taken only from a file can be reused by an unrelated process, so cleanup must never signal it. | Edit DEC-8 and R-2 so cleanup kills only this session's Popen handle tree and a file-only pid is never killed; AC-9 tests it. |
+| AR-015 | Accepted | Log tail is shown in the TUI and files may hold sensitive output, so permissions and escape stripping are warranted. | DEC-7 now requires 0600 files; s10.1 requires log tail control/escape sequences be stripped before display. |
+| AR-016 | Accepted | Precedence between unattended, headless and attended signals was unspecified; any positive signal must win and the prompt must read only from the TUI's TTY. | DEC-4 and DEC-5 now state that any positive unattended or headless signal wins and the prompt reads only from the TUI's TTY. |
+| AR-017 | Accepted | Conflicting opt-out/unattended/headless/attended signals need a single deterministic precedence and per-skip reason. | Section 1 (s1.1) states the precedence; DEC-4 and DEC-5 reference it; s18.1.r3 gains a combined-case test. |
+| AR-018 | Accepted | Exit 0 within the grace period was covered by neither D-2 nor DEC-6; a desktop app that exits immediately did not launch successfully. | DEC-6 now says any exit within grace, including 0, is failed with log tail; AC-7 row s18.1.r2/AC-7 tests cover exit 0. |
+| AR-019 | Accepted | The stale-pid rule was untestable without a liveness definition and corrupt-file behavior. | DEC-8 now defines liveness (os.kill(pid,0) plus matching command), corrupt file as stale, and blocked relaunch recording skipped/already running. |
+| AR-020 | Accepted | Real gap: prompt key handling and quit-while-open were unspecified. | s7.1 now defines keys (y launches; n/Esc/Enter decline; others ignored; quit = decline); s18.1.r2 test coverage extended. |
+| AR-021 | Accepted | Opt-out semantics were ambiguous between D-5 and D-7; a strict no-op rule resolves it and keeps the web preview unchanged. | Edit s8.1 to define disabled values and the strict no-op rule; add the same to s1.1 and AC-8 requirement. |
+| AR-022 | Accepted | Malformed package.json, invalid launch_command and invalid grace values were unspecified and need defined results. | Edit DEC-1, DEC-2, DEC-6, DEC-9 and add an s18.1 traceability row for edge-input tests. |

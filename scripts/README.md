@@ -764,6 +764,51 @@ next pass instead of spending a review on what the hashes already show;
 changed nothing is not a repair: it is not reviewed, gives its attempt back,
 and is retried once with the brief; a second such pass stops the run.
 
+### Desktop app launch at end of build (TUI)
+
+When a workflow finishes with exit 0, the TUI (`uncle_tui.py`, logic in
+`scripts/lib/desktop_launch.py`) detects Electron and Tauri projects and offers
+to launch the app.
+
+- **Detection.** Electron: `package.json` depends on `electron`,
+  `electron-builder` or `@electron-forge/cli`. Tauri: `src-tauri/tauri.conf.json`
+  or a `@tauri-apps/cli` dependency. An unreadable or invalid `package.json`
+  means no desktop framework. Both frameworks together are ambiguous.
+- **Command.** `desktop.launch_command` in `.uncle/config` (parsed with
+  `shlex.split`) wins; an empty or unparsable value is ignored with a one-line
+  warning. Otherwise Electron uses `npm start` if only `start` exists, `npm run
+  dev` if only `dev` exists, or `node_modules/.bin/electron .` when there is
+  neither but a `main` entry; Tauri uses `npm run tauri dev` when
+  `scripts.tauri` exists. Anything else is ambiguous: candidates are printed and
+  nothing is launched. The override applies only to a detected desktop project.
+- **Confirmation.** The attended prompt shows the full command, warns that
+  project-defined scripts run with your privileges, and defaults to No: only `y`
+  launches; `n`, Esc, Enter and quitting decline. The config is project-local and
+  untrusted, so even a configured command is never launched without it.
+- **Skips (no prompt).** Precedence is opted-out, unattended, headless, then
+  attended confirm. Unattended (TUI unattended mode, `WORKFLOW_UNATTENDED=1` or
+  stdin not a terminal) prints the command only. Headless (Linux without
+  `DISPLAY`/`WAYLAND_DISPLAY`, non-empty `CI`, or `SSH_CONNECTION`/`SSH_TTY`)
+  prints the reason. A live pid file prints `desktop app already running`.
+- **Result.** A process alive after the grace period is reported as launched;
+  any exit within it, even exit 0, is a failure reported with the log tail. The
+  grace is `WORKFLOW_PREVIEW_DESKTOP_GRACE` seconds (default 3; invalid or
+  negative uses 3; 0 checks once immediately).
+- **Opt-out.** `WORKFLOW_PREVIEW_DESKTOP=0` (also `false`, `no`, `off`) skips
+  the whole flow: no detection, no files, no output, and the web completion
+  preview runs as before. When the flow is enabled and a desktop project is
+  detected, the web preview is suppressed whatever the outcome.
+- **Files** (untracked, mode 0600, under `.uncle/workflow/`): `desktop-app.pid`
+  (JSON pid/command/log/started), `desktop-app.log`, `desktop-launch.json`
+  (status `launched`, `failed`, `skipped` or `declined`, plus reason).
+- **Cleanup.** Stopping the workflow or quitting kills only the process tree of
+  the app this session started. A pid read only from the pid file is never
+  signalled; a pid file is live only if the pid is alive and its recorded command
+  matches. `.uncle/launch.json` is never modified.
+
+Covered by `scripts/tests/desktop-launch-test.py` and
+`scripts/tests/tui-desktop-launch-test.py`.
+
 ### Envelopes and attestation
 
 `scripts/lib/envelope.py` is the one writer of `.uncle/workflow/envelopes/`

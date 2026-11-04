@@ -4044,7 +4044,7 @@ class UncleTUI:
                 # not leave it on the homepage while a supervisor drafts a
                 # nicer brief; the direct path writes the supplied brief and
                 # enters the running build view in this first UI frame.
-                self._startup_direct_action(self._startup_text, 'app')
+                self._startup_direct_action(self._resolve_startup_text(), 'app')
             elif self._startup_action == 'github_issue':
                 # A direct `uncle --issue` launch bypasses the issue-mode
                 # picker.  Preserve the same change-first rule used for a
@@ -4054,19 +4054,17 @@ class UncleTUI:
                 change_request = generated_input_path('CHANGE_REQUEST.md', root)
                 issue_mode = ('--change' if os.path.isfile(change_request)
                               or _project_already_populated(root) else '')
+                issue_text = self._resolve_startup_text()
                 action = {
                     'uncle_action': 'github_issue',
-                    'issue': self._startup_text,
+                    'issue': issue_text,
                     'start': True,
                     'issue_mode': issue_mode,
                     'message': 'Starting GitHub issue build'
                 }
                 self._home_action(action, replace_approved=True)
             elif self._startup_action == 'housekeeping':
-                text = self._startup_text
-                if not text and self._startup_text_file:
-                    text = self._read_startup_text_file(self._startup_text_file)
-                self._start_housekeeping(text)
+                self._start_housekeeping(self._resolve_startup_text())
             elif self._startup_action == 'change_request':
                 text = self._read_startup_text_file(self._startup_text_file)
                 if any(os.path.lexists(os.path.join(_project_root(), *part, 'CHANGE_REQUEST.md'))
@@ -4079,6 +4077,12 @@ class UncleTUI:
             self._startup_action = None
             self._startup_text = None
             self._startup_text_file = None
+
+    def _resolve_startup_text(self):
+        """Startup text: the private file wins over UNCLE_STARTUP_TEXT."""
+        if self._startup_text_file:
+            return self._read_startup_text_file(self._startup_text_file)
+        return self._startup_text
 
     def _start_change_request(self, text):
         """Write piped text to CHANGE_REQUEST.md verbatim and start the change build.
@@ -4127,6 +4131,10 @@ class UncleTUI:
             raise StartupRefused('Error: --change-request input file is missing or untrusted') from None
         try:
             os.unlink(path)
+        except OSError:
+            pass
+        try:
+            os.rmdir(os.path.dirname(path))
         except OSError:
             pass
         return text

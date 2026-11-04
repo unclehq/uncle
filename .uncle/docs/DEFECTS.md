@@ -1,29 +1,29 @@
 # Defects
 
-## D-1
+## D-2
 
 - **Status:** FAIL
-- **Evidence:** D-1 symlink target clobbered
-- **Expected result:** per checklist MC-206
-- **Actual result:** Whitespace-only prompts (driver). Symlink and directory prompt; decline leaves link, target and dir intact. After 'y' on symlink: CHANGE_REQUEST.md stays a symlink but its target hash CHANGED (write followed the link). Expected target not clobbered. Filed D-1.
+- **Evidence:** Case (c) message lacks copyable command. D-2
+- **Expected result:** Each case: draft kept, copyable gh issue create command; (c) says may already exist
+- **Actual result:** (a),(b) pass. (c) message is 'Saved ... The issue may already exist; check github.com/unclehq/uncle/issues before filing again.' with no copyable command; one create, no retry. Literal text of expected result unmet for (c); the omission may be deliberate (avoids duplicates).
 
-## MC-301
+## D-3
 
-- **Status:** NOT RUN
-- **Evidence:** see finding
-- **Expected result:** per checklist MC-301
-- **Actual result:** Depends on MC-300, which is not in the checklist (README: NOT DECLARED). Equivalent action covered by MC-102 PASS but this ID is not asserted.
+- **Status:** FAIL
+- **Evidence:** No banner offer for tool bug. D-3
+- **Expected result:** Refusals, and banner offers /report only for tool bug
+- **Actual result:** Refusals pass. The banner never offers /report, even for tool bug (grep of uncle_tui.py finds /report only in the error string at line 4903).
 
-## MC-303
+## MC-401
 
-- **Status:** NOT RUN
-- **Evidence:** see finding
-- **Expected result:** per checklist MC-303
-- **Actual result:** Depends on MC-302, absent from the checklist. Equivalent covered by MC-203 PASS but this ID is not asserted.
+- **Status:** NOT
+- **Evidence:** Only /report refusal ran; /do N and /resume not run
+- **Expected result:** Recovery chat opens, /do N and /resume work as before, /report refused
+- **Actual result:** /report refusal with no draft observed. Real recovery chat auto-open, /do N and /resume were not executed.
 
-## MC-404
+## MC-402
 
-- **Status:** NOT RUN
-- **Evidence:** see finding
-- **Expected result:** per checklist MC-404
-- **Actual result:** `uncle --change-request` stdin import not executed; not touched by the diff (scripts/from-issue.sh only). Settled by running that command against an existing file.
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Needs a live TUI session and a person. Waiting on Brian to run it
+- **Expected result:** Triage does not auto-open on those stops
+- **Actual result:** Not run.

@@ -1,152 +1,176 @@
-## AR-001: The plan skips the prompt when SEED_ONLY=1, but the spec never mentions SEED_ONLY in S3/S5/S6/AC-5.
+## AR-001: Plan reads ineligible-state /report two ways: spec says refused with a message, plan only hides the banner.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 guard (SEED_ONLY != 1) vs CHANGE_SPEC S5/S6 and V3.
-- Failure: The plan skips the prompt when SEED_ONLY=1, but the spec never mentions SEED_ONLY in S3/S5/S6/AC-5. Add: 'With SEED_ONLY=1 and an existing request file, no prompt is shown and existing no-overwrite behavior (V3) is unchanged.'
+- References: CHANGE_SPEC S2/AC-1 vs CHANGE_PLAN sections 8-9.
+- Failure: Plan reads ineligible-state /report two ways: spec says refused with a message, plan only hides the banner. Plan never says what /report does outside recovery, with no classification, or while report_pending is armed. Settle: '/report outside an eligible recovery prints a refusal and arms nothing; /report while armed cancels the pending report.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Unattended detection differs between spec and plan.
+## AR-002: Confirmation token is undefined: case, whitespace, 'y', empty input, and slash commands such as /clear while armed.
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-4/S4 vs CHANGE_PLAN s1 and R-1.
-- Failure: Unattended detection differs between spec and plan. The spec says UNCLE_UNATTENDED=1; the plan also accepts UNATTENDED==1. Add: 'Unattended means UNATTENDED=1 or UNCLE_UNATTENDED=1 exactly; other values are interactive; UNCLE_REPLACE_CHANGE_REQUEST counts only when equal to 1.'
+- References: CHANGE_PLAN sections 1 and 8; CHANGE_SPEC S4/S5.
+- Failure: Confirmation token is undefined: case, whitespace, 'y', empty input, and slash commands such as /clear while armed. Section 8 says /clear clears pending, which collides with 'next input consumes it'. Settle: 'After trim+lowercase only exact yes publishes; every other input, including slash commands and empty, cancels and is not forwarded to triage chat.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: The plan does not say whether a zero-byte request file counts as existing.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1 'non-empty existing file' vs CHANGE_SPEC AC-3/V1.
-- Failure: The plan does not say whether a zero-byte request file counts as existing. The plan guard requires non-empty, but AC-3/V1 say 'existing'. Add: 'A zero-byte request file is treated as absent: no prompt, overwritten silently.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-004: V2 claims .uncle/workflow is byte-identical after a decline, but the plan accepts that the worktree may already be creat
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC V2 vs CHANGE_PLAN s22 risk 2.
-- Failure: V2 claims .uncle/workflow is byte-identical after a decline, but the plan accepts that the worktree may already be created before the decline. Add: 'V2 covers CHANGE_REQUEST.md and .uncle/workflow in the current worktree; a worktree created earlier in the same invocation is out of scope.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-005: The plan leaves two cases open: the existing file is identical to the new request, or the issue number differs from the
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1 guard; CHANGE_SPEC S5 defines only same-issue in-flight resume.
-- Failure: The plan leaves two cases open: the existing file is identical to the new request, or the issue number differs from the seeded one. Add: 'The prompt is shown whenever the file exists and seed_is_current is false, even if content is identical.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-006: The plan does not say which stream the prompt goes to or how answers are normalized (CRLF, trailing space).
-
-- Severity: LOW
-- References: CHANGE_PLAN s1 'print the file path and prompt', 'trim, lowercase'; CHANGE_SPEC S1.
-- Failure: The plan does not say which stream the prompt goes to or how answers are normalized (CRLF, trailing space). Add: 'The prompt goes to stderr; input is trimmed of whitespace and CR, lowercased, and matched exactly against y|yes.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-007: Non-TTY callers without the unattended flag (TUI, driver, closed stdin) hit EOF, which counts as no, so runs that used t
+## AR-003: Draft rules conflict.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s22 risk 1 accepts that callers with no stdin 'now stop'; spec S2 makes EOF a decline.
-- Failure: Non-TTY callers without the unattended flag (TUI, driver, closed stdin) hit EOF, which counts as no, so runs that used to overwrite now exit 1. Settle with: 'When stdin is not a TTY and neither UNATTENDED nor UNCLE_REPLACE_CHANGE_REQUEST=1 is set, treat the run as unattended: print the opt-in message and exit 1 without reading.'
+- References: CHANGE_SPEC V4/S6 vs CHANGE_PLAN section 1 and 7.
+- Failure: Draft rules conflict. Spec V4 says draft saved on non-publish outcomes; plan says always saved first. File naming is N in the spec and <turn> in the plan, both undefined. Settle: 'Draft is written before preview, kept after publish, N is next unused integer, never overwritten.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The plan never says whether UNCLE_REPLACE_CHANGE_REQUEST=1 skips the prompt in interactive mode, or which seeding paths
+## AR-004: No behavior is defined for missing or empty session-totals, missing failing-stage log, or zero attempts.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 mentions the opt-in only inside the unattended branch; spec V3 keeps stdin imports as existing no-clobber.
-- Failure: The plan never says whether UNCLE_REPLACE_CHANGE_REQUEST=1 skips the prompt in interactive mode, or which seeding paths the guard covers. Settle with: 'UNCLE_REPLACE_CHANGE_REQUEST=1 also skips the prompt interactively; the guard does not run on stdin-import or seed-only paths.'
+- References: CHANGE_SPEC AC-3; CHANGE_PLAN D2, D5, section 10.
+- Failure: No behavior is defined for missing or empty session-totals, missing failing-stage log, or zero attempts. AC-3 lists exit status, excerpt, and artifact validation error, but D2/D5 give no source for the first or last. Settle: 'Any field without a source renders the literal unavailable.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: The guard reads the answer from stdin, which may carry piped request content for change_request_stdin.py, so the prompt
+## AR-005: Path-replacement scrub may corrupt the required relative .uncle/workflow references.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s5 keeps change_request_stdin.py unmodified; s1 uses `read -r` from stdin in the change) case.
-- Failure: The guard reads the answer from stdin, which may carry piped request content for change_request_stdin.py, so the prompt could consume the request body or take it as an answer. Settle with: 'When stdin is piped request content (non-TTY), the guard never reads it and follows the unattended rule.'
+- References: CHANGE_SPEC section 10 and assumptions; CHANGE_PLAN section 10.
+- Failure: Path-replacement scrub may corrupt the required relative .uncle/workflow references. Title cap is unspecified, and the copyable command wraps the title in single quotes, which an apostrophe breaks. Settle: 'Title capped at 80 chars; command uses shlex.quote; relative paths exempt from scrub.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: The meaning of an empty or whitespace-only existing file is left open: s1 says non-empty, while the spec's AC-3 says onl
-
-- Severity: LOW
-- References: CHANGE_PLAN s1 'non-empty existing file' versus CHANGE_SPEC AC-3.
-- Failure: The meaning of an empty or whitespace-only existing file is left open: s1 says non-empty, while the spec's AC-3 says only 'no existing file'. Settle with: 'A zero-byte or whitespace-only CHANGE_REQUEST.md counts as no file and is replaced without a prompt.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-011: Unattended is read from either UNATTENDED or UNCLE_UNATTENDED, but the spec names only UNCLE_UNATTENDED.
+## AR-006: gh create edge outcomes are unspecified: exit 0 with no URL, and timeout after auth passed, where the issue may exist an
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 says `UNATTENDED==1` (or `UNCLE_UNATTENDED==1`). CHANGE_SPEC AC-4 mentions only UNCLE_UNATTENDED=1.
-- Failure: Unattended is read from either UNATTENDED or UNCLE_UNATTENDED, but the spec names only UNCLE_UNATTENDED. Fix: 'Unattended is true if the flag or UNCLE_UNATTENDED=1 sets UNATTENDED=1; the confirm function checks only UNATTENDED.'
+- References: CHANGE_SPEC AC-6 and section 8; CHANGE_PLAN R-4, section 10.
+- Failure: gh create edge outcomes are unspecified: exit 0 with no URL, and timeout after auth passed, where the issue may exist and a retry may duplicate. Settle: 'On timeout or no URL, keep draft, say the issue may already exist, and do not retry.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: The plan does not say how the opt-in value is validated.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 'proceed only if UNCLE_REPLACE_CHANGE_REQUEST==1'. AC-4 and V1 give no other-value behavior.
-- Failure: The plan does not say how the opt-in value is validated. Unset, 0, empty and 'true' are unspecified, and an ambient exported value could silently allow overwrites. Fix: 'Only the exact string 1 in UNCLE_REPLACE_CHANGE_REQUEST permits replacement; every other value refuses.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-013: 'Non-empty existing file' leaves a zero-byte file, a symlink, a dangling symlink or a directory unspecified.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1.1: 'non-empty existing file'. CHANGE_SPEC V1 says an existing file is never replaced without consent.
-- Failure: 'Non-empty existing file' leaves a zero-byte file, a symlink, a dangling symlink or a directory unspecified. The plan also does not cover a change between the guard and the write, so V1 and V2 can be broken. Fix: 'Any existing path entry at CHANGE_REQUEST.md triggers confirmation, and the write does not follow symlinks.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-014: The plan does not say where the prompt text goes, or whether the printed path is sanitized.
-
-- Severity: LOW
-- References: CHANGE_PLAN s1.1 'print the file path and ... read -r'. s19 mentions stderr only for decision messages.
-- Failure: The plan does not say where the prompt text goes, or whether the printed path is sanitized. Fix: 'Prompt and messages go to stderr, the path is printed with control characters escaped, and the answer is read from stdin only.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: Isolated function tests can't verify gating or decline-before-archive (V2); end-to-end case is optional and cut first.
+## AR-007: The plan does not say what happens to input while a report confirmation is pending, including slash commands.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s16 'if from-issue.sh's test hook allows'; s21 cuts end-to-end case first; AC-5/V2 need state checks.
-- Failure: Isolated function tests can't verify gating or decline-before-archive (V2); end-to-end case is optional and cut first. Say: 'The new test MUST invoke from-issue.sh end to end, covering no prompt for NEW_WORKFLOW, SEED_ONLY, seed_is_current, and empty file, and asserting unchanged file hash and .uncle/workflow after decline; never cut.'
+- References: CHANGE_PLAN s8 'next chat input consumes it (yes -> publish; else cancel)'; the change-impact table rates the chat input path Medium regression risk.
+- Failure: The plan does not say what happens to input while a report confirmation is pending, including slash commands. Settle it with: while report_pending is set, the next input is consumed by the report flow and never reaches triage chat; `yes` (trimmed, case-insensitive) publishes and anything else cancels. /clear cancels and then runs normally.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: Unattended mechanism ambiguous: plan accepts UNATTENDED or UNCLE_UNATTENDED, AC-4 names only the env var, manual check u
+## AR-008: The refusal of /report for ineligible classes has no command-level guard in the plan.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1; AC-4; s18 manual '--unattended run'.
-- Failure: Unattended mechanism ambiguous: plan accepts UNATTENDED or UNCLE_UNATTENDED, AC-4 names only the env var, manual check uses --unattended. Say: 'Tests cover both the --unattended flag and UNCLE_UNATTENDED=1, each with and without UNCLE_REPLACE_CHANGE_REQUEST=1.'
+- References: CHANGE_SPEC S2 says '/report refused with message'; CHANGE_PLAN step 3 gates only the banner hint on eligible().
+- Failure: The refusal of /report for ineligible classes has no command-level guard in the plan. Step 3 gates only the banner hint. Settle it with: the /report handler calls eligible(self.triage_classification) and, if false, prints a fixed refusal line without setting report_pending, saving a draft, or calling gh.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: 'Non-empty existing file' leaves zero-byte, whitespace-only, directory files and non-1 opt-in values (true, 0, empty) un
+## AR-009: Draft naming and lifecycle are unspecified: what <turn> means, what a repeated /report does, and whether a draft survive
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1; AC-3 says only 'No existing file'.
-- Failure: 'Non-empty existing file' leaves zero-byte, whitespace-only, directory files and non-1 opt-in values (true, 0, empty) unspecified. Say: 'Zero-byte counts as absent; whitespace-only counts as existing; opt-in proceeds only when exactly 1.'
+- References: CHANGE_PLAN s1 'bug-report-<turn>.md' versus CHANGE_SPEC V4/S6 'bug-report-N.md'.
+- Failure: Draft naming and lifecycle are unspecified: what <turn> means, what a repeated /report does, and whether a draft survives a successful publish. Settle it with: the draft is bug-report-N.md with N one higher than the highest existing bug-report-*.md, never overwritten, and kept after a successful publish.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: Prompt stream and wording not pinned, so tests can't assert 'prompt shown' or 'no prompt'.
+## AR-010: The failed-stage fallback in D2 (last record) contradicts the rule that missing records render as `unavailable`.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 vs s19; AC-1 'message names the file'.
-- Failure: Prompt stream and wording not pinned, so tests can't assert 'prompt shown' or 'no prompt'. Say: 'Prompt and stop messages go to stderr; prompt contains the file path and "Proceed with the new change request and replace it? [y/N]"; the unattended message contains UNCLE_REPLACE_CHANGE_REQUEST=1.'
+- References: CHANGE_PLAN D2 'fall back to last record' versus s20 'falls back to unavailable' and CHANGE_SPEC S7.
+- Failure: The failed-stage fallback in D2 (last record) contradicts the rule that missing records render as `unavailable`. Settle it with: if no record has a non-success status, the stage, attempt, role, exit status, runner, model and effort all render `unavailable`, and the last record is never used.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: Answer parsing undefined for CRLF, 'y please', and a final 'y' with no newline (read -r returns nonzero but fills variab
+## AR-011: The title limits and quoting are unspecified.
 
 - Severity: LOW
-- References: CHANGE_PLAN s1 'read -r (EOF => empty); trim, lowercase'; AC-2 EOF.
-- Failure: Answer parsing undefined for CRLF, 'y please', and a final 'y' with no newline (read -r returns nonzero but fills variable). Say: 'Only trimmed, lowercased y or yes proceed, with CR stripped and an unterminated final line accepted; all else declines.'
+- References: CHANGE_SPEC s15 'redacted and capped'; CHANGE_PLAN s10 command uses --title '...' with no quoting or length rule.
+- Failure: The title limits and quoting are unspecified. Settle it with: the title is scrubbed first, then truncated to 100 characters, and the copyable command shell-quotes the scrubbed title.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: Plan never says what happens if scrub leaves a likely secret or absolute path in title or body.
+
+- Severity: HIGH
+- References: CHANGE_PLAN s1/R-1/Risks: redaction relies on patterns; the excerpt is free text; no post-scrub check is specified.
+- Failure: Plan never says what happens if scrub leaves a likely secret or absolute path in title or body. Decision: if any path or token pattern still matches after scrub, publish is refused and only the draft is saved; preview shows the exact final text.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-013: Plan does not say whether publish sends the previewed draft or rebuilds the report.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s1/s7/s8: draft written before prompt; publish(report, runner); no match rule for `yes`.
+- Failure: Plan does not say whether publish sends the previewed draft or rebuilds the report. Decision: publish sends the exact saved, previewed bytes; `yes` matches trimmed and case-insensitive; a repeat `/report` replaces the pending state.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-014: Fallback command embeds a title in shell quoting, and the title cap and scrub are unspecified.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s10: `--title '...'`; CHANGE_SPEC Assumptions: title redacted and capped, with no value given.
+- Failure: Fallback command embeds a title in shell quoting, and the title cap and scrub are unspecified. Decision: title is scrubbed, newlines and quotes removed, capped at 80 chars; the copyable command uses shlex.quote.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-015: Values from state files (stage, runner, model) go into the body and the draft filename without validation.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s1 build_report(stage=None) and bug-report-<turn>.md; R-1 allow-lists field names only.
+- Failure: Values from state files (stage, runner, model) go into the body and the draft filename without validation. Decision: values must match [A-Za-z0-9._:/-]{1,64} or become `unavailable`; <turn> must be an integer; relative references must stay inside the state dir with no `..`.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: Draft filename collision and symlink behavior are unspecified.
+
+- Severity: LOW
+- References: CHANGE_PLAN R-5/s1: bug-report-N.md with no collision handling.
+- Failure: Draft filename collision and symlink behavior are unspecified. Decision: exclusive create without following symlinks, taking the next free suffix rather than overwriting.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: /report and the pending confirmation are unspecified in several states: already pending, ineligible, no records, and 'ye
+
+- Severity: HIGH
+- References: CHANGE_PLAN s1/s8: 'next input yes publishes, anything else cancels'. CHANGE_SPEC S2: refusal message has no text.
+- Failure: /report and the pending confirmation are unspecified in several states: already pending, ineligible, no records, and 'yes' with different case or whitespace. Say: 'Confirmation accepts only trimmed case-insensitive `yes`; /report while pending re-renders and replaces it; /report when ineligible prints a refusal and arms nothing.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: The AC-4 redaction test has no oracle: no token pattern list, no replacement string, no path rule.
+
+- Severity: HIGH
+- References: CHANGE_SPEC AC-4 and s10; CHANGE_PLAN R-1 says 'chat.sanitize extension' with no list. Tests are written independently (s12).
+- Failure: The AC-4 redaction test has no oracle: no token pattern list, no replacement string, no path rule. Say: 'scrub maps project root, uncle root and home to <project>, <uncle> and ~, and replaces a named token-pattern list (ghp_, github_pat_, sk-, Bearer, AKIA, URL userinfo, cookie headers) with [REDACTED]; tests use that list.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-019: Draft timing and naming conflict.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s1/s7 ('bug-report-<turn>.md') against CHANGE_SPEC V4/S6 ('bug-report-N.md').
+- Failure: Draft timing and naming conflict. The plan saves the draft before confirmation, but the spec says it is saved on every non-publish outcome. Numbering key (<turn> or N), draft survival after publish, and a second /report are unspecified. Say: 'Draft is written before the preview as the lowest unused bug-report-N.md, kept after publish; each /report makes a new file.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: The D2 failed-stage rule is ambiguous: several failures, all-success stages, and speculative records in the attempt coun
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D2 against s20 and s10.
+- Failure: The D2 failed-stage rule is ambiguous: several failures, all-success stages, and speculative records in the attempt count. Its last-record fallback conflicts with the 'unavailable' fallback. Say: 'Failing stage is the most recent non-speculative non-success record; if none, all stage fields are unavailable with no last-record fallback; attempt counts non-speculative records for that stage.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: Publish outcomes are underspecified: whether the auth check and the create call each get a timeout, and what happens whe
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC AC-6 and s8; CHANGE_PLAN R-4 and s10.
+- Failure: Publish outcomes are underspecified: whether the auth check and the create call each get a timeout, and what happens when create exits 0 with no URL or extra output. Say: 'Auth check and create each time out at 30s; the URL is the last stdout line starting with https://; if none is found, treat it as failure and show the draft fallback.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: The title and excerpt limits are unspecified, and a scrub replacement can change lengths.
+
+- Severity: LOW
+- References: CHANGE_SPEC s15 ('redacted and capped') against CHANGE_PLAN D5.
+- Failure: The title and excerpt limits are unspecified, and a scrub replacement can change lengths. The bounded-length test has no constant to assert. Say: 'Title is at most 80 chars, truncated after scrub; excerpt is 20 lines of at most 300 chars each, truncated after scrub.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

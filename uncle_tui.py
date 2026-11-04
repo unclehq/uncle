@@ -4135,6 +4135,7 @@ class UncleTUI:
         self.chat_focus = 'chat'
         self.home_menu_open = False
         self.home_history.append(('system', 'Recovery: ask about the failure, /do N to apply a proposal, or /resume to continue.'))
+        self.report_pending = None
         self.triage_error = ''
         # The first open, and every failure exit after a resume, gets one
         # diagnosis turn on the bundle the driver just wrote. An open on
@@ -4827,7 +4828,53 @@ class UncleTUI:
                         '. /clear #N clears that issue\'s run; /clear <path> any other.')
         return message
 
+    def _report_say(self, text):
+        self.triage_history.append(('system', sanitize(text)))
+
+    def _report_eligible(self):
+        import bug_report
+        return bool(getattr(self, 'recovery_active', False)) and bug_report.eligible(self.triage_classification)
+
+    def _report_command(self):
+        """/report: save and preview a sanitized draft, then arm one confirmation."""
+        import bug_report
+        self.report_pending = None
+        if not self._report_eligible():
+            self._report_say('/report is only available when recovery is classified as a tool bug.')
+            return
+        root = _project_root()
+        state_dir = os.path.join(root, '.uncle', 'workflow')
+        report = bug_report.build_report(state_dir, root, ROOT)
+        path = bug_report.save_draft(state_dir, report)
+        rel = os.path.join('.uncle', 'workflow', os.path.basename(path))
+        self._report_say('Draft saved to %s. Exact text that would be published:\n%s\n\n%s'
+                         % (rel, report['title'], report['body']))
+        if report.get('blocked'):
+            self._report_say('Publish refused: %s. Draft kept at %s.' % (report.get('reason', ''), rel))
+            return
+        self.report_pending = {'path': path, 'rel': rel, 'title': report['title']}
+        self._report_say('Publish this to unclehq/uncle? Type yes to publish; anything else cancels. Nothing is sent otherwise.')
+
+    def _report_consume(self, text):
+        """Consume exactly one input while a report is pending; never forwarded to chat."""
+        import bug_report
+        pending = self.report_pending
+        self.report_pending = None
+        if text.strip().lower() != 'yes':
+            self._report_say('Report cancelled. Draft kept at %s.' % pending['rel'])
+            return
+        result = bug_report.publish(pending['path'], pending['title'], confirm=True, relative=pending['rel'])
+        self._report_say(result['message'])
+
     def _triage_command(self, text):
+        pending = getattr(self, 'report_pending', None)
+        if pending:
+            if text.strip().lower().split(maxsplit=1)[:1] in (['/clear'], ['/report']):
+                self.report_pending = None
+                self._report_say('Report cancelled. Draft kept at %s.' % pending['rel'])
+            else:
+                self._report_consume(text)
+                return
         if not text:
             return
         try:
@@ -4835,7 +4882,9 @@ class UncleTUI:
                 parts = text.split(maxsplit=1)
                 command = parts[0].lower()
                 argument = parts[1].strip() if len(parts) > 1 else ''
-                if command == '/do':
+                if command == '/report':
+                    self._report_command()
+                elif command == '/do':
                     self._triage_do(argument)
                 elif command in ('/resume', '/r'):
                     message = self._resume_build(argument)
@@ -4851,7 +4900,7 @@ class UncleTUI:
                 elif command == '/triage':
                     pass
                 else:
-                    raise ValueError('Commands: /do N  /resume [#N]  /clear  /quit')
+                    raise ValueError('Commands: /do N  /resume [#N]  /clear  /report  /quit')
             else:
                 self._triage_turn('diagnosis', followup=text)
             if self.state == 'triage':

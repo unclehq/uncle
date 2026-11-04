@@ -60,6 +60,7 @@ Usage: uncle [-h|--help|--performance|--runs] [--unattended]
        uncle --application TEXT [--unattended]
        uncle --issue ISSUE [--unattended]
        uncle --change-request [--unattended] < request.md
+       uncle --housekeeping [TEXT] [--unattended]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -89,6 +90,10 @@ starts the change workflow. stdin must be piped or redirected; it refuses to
 overwrite an existing CHANGE_REQUEST.md. The text is untrusted input to
 tool-using agents, especially with --unattended. --application, --issue and
 --change-request are mutually exclusive.
+--housekeeping [TEXT] plans, policy-checks, and (after approval) runs repository
+housekeeping operations described by TEXT (or piped stdin); bare use on a
+terminal is refused as empty input. Exit 0 only for DECLINED or fully verified
+runs. Mutually exclusive with the three flags above.
 --performance reports recorded runtime and token usage for the current project.
 --runs lists the runs across this project's git worktrees (see
 `from-issue.sh --worktree`): one line per worktree holding a run, as
@@ -122,7 +127,7 @@ while [[ $# -gt 0 ]]; do
         --unattended)  UNCLE_ARGS+=(--unattended); UNCLE_UNATTENDED=1; shift ;;
         --change-request)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-                printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
+                printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
                 exit 1
             fi
             if [[ -t 0 ]]; then
@@ -139,9 +144,34 @@ while [[ $# -gt 0 ]]; do
             UNCLE_STARTUP_ACTION="change_request"
             shift
             ;;
+        --housekeeping)
+            if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
+                printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
+                exit 1
+            fi
+            shift
+            if [[ $# -gt 0 && "$1" != --* ]]; then
+                if [[ -z "$1" ]]; then
+                    printf 'Error: --housekeeping text cannot be empty\n' >&2
+                    exit 1
+                fi
+                UNCLE_STARTUP_TEXT="$1"
+                shift
+            elif [[ -t 0 ]]; then
+                printf 'Error: --housekeeping requires TEXT or piped stdin (empty input)\n' >&2
+                exit 1
+            else
+                UNCLE_STARTUP_TEXT="$(cat)"
+                if [[ -z "${UNCLE_STARTUP_TEXT//[[:space:]]/}" ]]; then
+                    printf 'Error: --housekeeping text cannot be empty\n' >&2
+                    exit 1
+                fi
+            fi
+            UNCLE_STARTUP_ACTION="housekeeping"
+            ;;
         --application)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-                printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
+                printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
                 exit 1
             fi
             shift
@@ -159,7 +189,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --issue)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-                printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
+                printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
                 exit 1
             fi
             shift
@@ -195,7 +225,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --unattended --application --issue --change-request verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --unattended --application --issue --change-request --housekeeping verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else
@@ -614,7 +644,7 @@ PYKEYS
 configure_menu() {
     local choice value
     while true; do
-        printf '\nConfigure\n  1) Configure stages\n  2) Configure self hosting\n  3) Miscellaneous\n  q) Back\nChoice: '
+        printf '\nConfigure\n  1) Configure stages\n  2) Configure self hosting\n  3) Miscellaneous\n  4) Housekeeping disallow list\n  q) Back\nChoice: '
         read -r choice || return 0
         case "$choice" in
             1) configure_stages_menu ;;
@@ -628,7 +658,39 @@ configure_menu() {
                 read -r value || return 0
                 [[ -z "$value" ]] || config_set misc.approval_name "$value"
                 ;;
+            4) housekeeping_disallow_menu || true ;;
             q|Q|"") return 0 ;;
+        esac
+    done
+}
+
+# Line-menu editor for housekeeping.disallow; all writes go through the config
+# module's CLI, which touches only that key.
+housekeeping_disallow_menu() {
+    local hk="$ROOT/scripts/lib/housekeeping_config.py" sel pat idx
+    while true; do
+        printf '\nHousekeeping disallow list (built-in floor is locked)\n'
+        python3 "$hk" list "$UNCLE_CONFIG" || true
+        printf '[a]dd, [e]dit, [r]emove, [d]efaults, [q]back: '
+        read -r sel || return 0
+        sel="$(printf '%s' "$sel" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        case "$sel" in
+            a)
+                printf 'Pattern: '; read -r pat || return 0
+                python3 "$hk" add "$UNCLE_CONFIG" "$pat" || true
+                ;;
+            e)
+                printf 'Entry number: '; read -r idx || return 0
+                printf 'New pattern: '; read -r pat || return 0
+                python3 "$hk" edit "$UNCLE_CONFIG" "$idx" "$pat" || true
+                ;;
+            r)
+                printf 'Entry number: '; read -r idx || return 0
+                python3 "$hk" remove "$UNCLE_CONFIG" "$idx" || true
+                ;;
+            d) python3 "$hk" reset "$UNCLE_CONFIG" || true ;;
+            q|"") return 0 ;;
+            *) printf 'Unrecognized choice: %s\n' "$sel" ;;
         esac
     done
 }

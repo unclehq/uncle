@@ -451,6 +451,20 @@ same authority boundary.
 
 These systems operate within Uncle's authority boundaries. Protected approvals, reviewer artifacts, waivers, workflow state, and publication controls remain outside the coding agent's authority.
 
+### Housekeeping
+
+`uncle --housekeeping "rename scratch repo X to Y"` (or `/housekeeping TEXT` in
+the TUI) plans a small set of allowlisted repository chores, such as renaming a
+repository, removing worktrees or branches, and triaging issues or labels. You
+approve the plan before anything runs. Each operation is verified
+deterministically afterwards, and the run exits 0 only when every operation was
+verified (or the plan was declined); refusals, failures and unverified
+operations exit 1. Destructive operations such as `rm -rf /` or `~`, and force
+pushes to `main`/`master`, are always refused; you can add further refusals in
+`.uncle/config` under `housekeeping.disallow` (a JSON array), but never remove
+the built-in ones. Records are written to `.uncle/workflow/housekeeping/`
+(untracked), with the report in `REPORT.md`.
+
 See the workflow documentation for the detailed supervision, triage, recovery, security, and configuration model.
 
 ## Ideas and feedback

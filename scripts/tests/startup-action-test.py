@@ -167,12 +167,61 @@ class ChangeRequestStartup(StartupAction):
         self.assertEqual(loose.read_text(), 'keep')
         self.assertFalse(self.target().exists())
 
-    def test_app_and_issue_unchanged_with_text_file_set(self):
+    def test_app_value_case_unchanged_when_no_text_file(self):
+        # AR-007: the file now wins when set (see AppTextFileStartup); the value
+        # case, with no file, is unchanged and leaves unrelated files alone.
         self.ui._startup_action, self.ui._startup_text = 'create_app', DESCRIPTION
+        self.ui._startup_text_file = None
         self.ui._handle_startup_action()
         self.assertIn(DESCRIPTION, self.brief())
         self.assertEqual(self.ui.workflow_idx, 0)
         self.assertTrue(self.file.exists())
+
+
+class AppTextFileStartup(StartupAction):
+    # `uncle --application < brief.md`: the launcher hands over a text file.
+    test_description_starts_the_build_immediately = None
+    test_no_supervisor_is_needed_for_a_launch_flag = None
+    test_existing_brief_is_replaced_without_a_proposal = None
+    test_typed_messages_are_unchanged = None
+
+    def setUp(self):
+        super().setUp()
+        self.private = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(self.private, ignore_errors=True))
+        self.private.chmod(0o700)
+        self.file = self.private / 'app'
+        self.file.write_bytes(('piped brief: ' + DESCRIPTION).encode())
+        self.file.chmod(0o600)
+        self.ui._startup_action = 'create_app'
+        self.ui._startup_text = ''
+        self.ui._startup_text_file = str(self.file)
+
+    def test_create_app_reads_text_file_and_deletes_it(self):
+        self.ui._handle_startup_action()
+        self.assertIn('piped brief: ' + DESCRIPTION, self.brief())
+        self.assertEqual(self.ui.state, 'running')
+        self.assertFalse(self.file.exists())
+
+    def test_file_wins_when_both_are_set(self):
+        self.ui._startup_text = 'ignored env text'
+        self.ui._handle_startup_action()
+        self.assertIn('piped brief: ' + DESCRIPTION, self.brief())
+        self.assertNotIn('ignored env text', self.brief())
+
+    def test_value_case_unchanged_without_file(self):
+        self.ui._startup_text, self.ui._startup_text_file = DESCRIPTION, None
+        self.ui._handle_startup_action()
+        self.assertIn(DESCRIPTION, self.brief())
+        self.assertNotIn('piped brief', self.brief())
+
+    def test_untrusted_file_refused_and_not_deleted(self):
+        self.file.chmod(0o600)
+        self.private.chmod(0o755)
+        with self.assertRaises(tui.StartupRefused):
+            self.ui._handle_startup_action()
+        self.assertTrue(self.file.exists())
+        self.assertEqual(self.ui.state, 'menu')
 
 
 if __name__ == '__main__':

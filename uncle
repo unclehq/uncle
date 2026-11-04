@@ -57,7 +57,7 @@ fi
 usage() {
     cat <<'EOF'
 Usage: uncle [-h|--help|--performance|--runs] [--unattended]
-       uncle --application TEXT [--unattended]
+       uncle --application [TEXT] [--unattended]
        uncle --issue ISSUE [--unattended]
        uncle --change-request [--unattended] < request.md
        uncle --housekeeping [TEXT] [--unattended]
@@ -76,8 +76,10 @@ and per-stage overrides from `.uncle/config` (menu option 4).
   q) Quit
 
 Runs with no arguments. -h / --help print this message and exit 0.
---application TEXT starts a new application build immediately with the given
-description, skipping interactive input. The homepage supervisor drafts
+--application [TEXT] starts a new application build immediately with the given
+description (or piped stdin when TEXT is omitted), skipping interactive input.
+For --application and --housekeeping, text beginning with -- must use the
+--OPT=TEXT form (e.g. --application=--flag); an empty value is refused. The homepage supervisor drafts
 REQUIREMENTS.md from TEXT, as if it had been typed there, and starts the
 build; without a supervisor the build starts from TEXT as written. Composes
 with --unattended.
@@ -116,6 +118,59 @@ UNCLE_STARTUP_TEXT=""
 UNCLE_STARTUP_TEXT_FILE=""
 UNCLE_UNATTENDED=""
 UNCLE_CR_DIR=""
+UNCLE_PENDING_STDIN=""
+UNCLE_SHIFT=1
+
+# Handles --application / --housekeeping. $1 option, $2 action, rest = the
+# remaining arguments starting at the option itself. Sets UNCLE_SHIFT. Only a
+# next argument beginning with -- is an option (stdin mode); anything else,
+# including "", -h and verify, is the value. Stdin is read later, once, by
+# read_stdin_option, after the whole argument list has parsed.
+parse_text_option() {
+    local opt="$1" action="$2" arg
+    shift 2
+    arg="$1"
+    if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
+        printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
+        exit 1
+    fi
+    UNCLE_STARTUP_ACTION="$action"
+    if [[ "$arg" == "$opt="* ]]; then
+        UNCLE_STARTUP_TEXT="${arg#"$opt="}"
+        UNCLE_SHIFT=1
+        if [[ -z "$UNCLE_STARTUP_TEXT" ]]; then
+            printf 'Error: %s text cannot be empty\n' "$opt" >&2
+            exit 1
+        fi
+    elif [[ $# -gt 1 && "$2" != --* ]]; then
+        if [[ -z "$2" ]]; then
+            printf 'Error: %s text cannot be empty\n' "$opt" >&2
+            exit 1
+        fi
+        UNCLE_STARTUP_TEXT="$2"
+        UNCLE_SHIFT=2
+    else
+        UNCLE_PENDING_STDIN="$opt"
+        UNCLE_SHIFT=1
+    fi
+}
+
+# Reads the pending stdin option's text through the validated reader into a
+# private 0600 file; UNCLE_STARTUP_TEXT stays empty (the TUI prefers the file).
+read_stdin_option() {
+    local opt="$UNCLE_PENDING_STDIN"
+    if [[ -t 0 ]]; then
+        printf 'Error: %s requires TEXT or piped stdin (empty input)\n' "$opt" >&2
+        exit 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        printf 'Error: %s requires python3\n' "$opt" >&2
+        exit 1
+    fi
+    UNCLE_CR_DIR="$(mktemp -d)" || exit 1
+    UNCLE_STARTUP_TEXT_FILE="$(python3 "$ROOT/scripts/lib/housekeeping_input.py" --label "$opt" "$UNCLE_CR_DIR")" || exit 1
+    [[ -n "$UNCLE_STARTUP_TEXT_FILE" ]] || exit 1
+}
 trap '[[ -n "$UNCLE_CR_DIR" ]] && rm -rf "$UNCLE_CR_DIR"' EXIT
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -144,48 +199,13 @@ while [[ $# -gt 0 ]]; do
             UNCLE_STARTUP_ACTION="change_request"
             shift
             ;;
-        --housekeeping)
-            if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-                printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
-                exit 1
-            fi
-            shift
-            if [[ $# -gt 0 && "$1" != --* ]]; then
-                if [[ -z "$1" ]]; then
-                    printf 'Error: --housekeeping text cannot be empty\n' >&2
-                    exit 1
-                fi
-                UNCLE_STARTUP_TEXT="$1"
-                shift
-            elif [[ -t 0 ]]; then
-                printf 'Error: --housekeeping requires TEXT or piped stdin (empty input)\n' >&2
-                exit 1
-            else
-                UNCLE_STARTUP_TEXT="$(cat)"
-                if [[ -z "${UNCLE_STARTUP_TEXT//[[:space:]]/}" ]]; then
-                    printf 'Error: --housekeeping text cannot be empty\n' >&2
-                    exit 1
-                fi
-            fi
-            UNCLE_STARTUP_ACTION="housekeeping"
+        --housekeeping|--housekeeping=*)
+            parse_text_option --housekeeping housekeeping "$@"
+            shift "$UNCLE_SHIFT"
             ;;
-        --application)
-            if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-                printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
-                exit 1
-            fi
-            shift
-            if [[ $# -eq 0 ]]; then
-                printf 'Error: --application requires an argument\n' >&2
-                exit 1
-            fi
-            if [[ -z "$1" ]]; then
-                printf 'Error: --application text cannot be empty\n' >&2
-                exit 1
-            fi
-            UNCLE_STARTUP_ACTION="create_app"
-            UNCLE_STARTUP_TEXT="$1"
-            shift
+        --application|--application=*)
+            parse_text_option --application create_app "$@"
+            shift "$UNCLE_SHIFT"
             ;;
         --issue)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
@@ -220,6 +240,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             printf 'Unknown argument: %s\n' "$1" >&2
+            if [[ -n "$UNCLE_PENDING_STDIN" && "$1" == --* ]]; then
+                printf 'If the text for %s begins with --, use %s=TEXT.\n' "$UNCLE_PENDING_STDIN" "$UNCLE_PENDING_STDIN" >&2
+            fi
             # A near miss gets the one flag it was reaching for, not the whole
             # usage text to search through.
             hint="$(python3 -c '
@@ -235,6 +258,7 @@ print(close[0] if close else "")' "$1" --help --performance --runs --unattended 
             ;;
     esac
 done
+[[ -z "$UNCLE_PENDING_STDIN" ]] || read_stdin_option
 
 # Per-project paths/config. Resolve and export these BEFORE launching the TUI:
 # the launcher has already cd'd into the install libexec, so without this the

@@ -465,6 +465,14 @@ pushes to `main`/`master`, are always refused; you can add further refusals in
 the built-in ones. Records are written to `.uncle/workflow/housekeeping/`
 (untracked), with the report in `REPORT.md`.
 
+The text can also come from stdin: `uncle --housekeeping < chores.md` or
+`cat spec.md | uncle --application`. A bare `--application` or `--housekeeping`
+with no text reads piped stdin; on an interactive terminal with nothing piped it
+refuses with an "empty input" error. Empty input is refused. A value starting
+with `--` is treated as the next option, not as text, so text that begins with
+`--` must use the `=` form: `uncle --application="--foo bar"` or
+`uncle --housekeeping=--text`.
+
 See the workflow documentation for the detailed supervision, triage, recovery, security, and configuration model.
 
 ## Ideas and feedback

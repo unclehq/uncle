@@ -102,6 +102,9 @@ import build_memory
 import gate_answer
 import worktree_runs
 import model_catalog as model_catalog_lib
+# Take the launcher's refresh-only API key out of the environment before any
+# child process can inherit it.
+model_catalog_lib.take_refresh_key()
 import desktop_launch as desktop_lib
 
 

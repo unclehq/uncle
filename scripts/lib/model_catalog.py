@@ -39,6 +39,23 @@ _KIMI_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 _cache_lock = threading.Lock()
 
 
+_REFRESH_KEY = None
+
+
+def take_refresh_key(environ=None):
+    """Move UNCLE_MODEL_REFRESH_KEY out of the environment into this module.
+
+    The launcher gives the TUI a key solely for the model-list refresh. Popping
+    it here, before anything is spawned, keeps it out of every child process.
+    """
+    global _REFRESH_KEY
+    environ = os.environ if environ is None else environ
+    key = environ.pop("UNCLE_MODEL_REFRESH_KEY", None)
+    if key:
+        _REFRESH_KEY = key
+    return _REFRESH_KEY
+
+
 def refresh_enabled(env=None):
     env = os.environ if env is None else env
     return str(env.get("UNCLE_MODEL_REFRESH", "1")).strip().lower() not in ("0", "off", "false", "no")
@@ -242,12 +259,15 @@ def build_claude_opener():
 
 
 def fetch_claude(env=None, opener=None, which=shutil.which, timeout=CLAUDE_TIMEOUT, taken=()):
-    env = os.environ if env is None else env
-    key = env.get("ANTHROPIC_API_KEY")
+    if env is None:
+        env = os.environ
+        key = env.get("ANTHROPIC_API_KEY") or _REFRESH_KEY
+    else:
+        key = env.get("ANTHROPIC_API_KEY")
     if not which("claude"):
         return ("skipped", [], "claude not on PATH")
     if not key:
-        return ("skipped", [], "ANTHROPIC_API_KEY not set")
+        return ("skipped", [], "no API key for model refresh")
     try:
         req = urllib.request.Request(ANTHROPIC_URL, headers={
             "x-api-key": key, "anthropic-version": "2023-06-01"})

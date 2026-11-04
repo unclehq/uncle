@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The one place an ANTHROPIC_API_KEY is allowed to survive: the TUI's model-list
+# refresh. Hold it in a plain (unexported) shell variable before stage-config.sh
+# scrubs the environment, and hand it only to the TUI process (uncle_run_tui).
+# The TUI moves it out of its environment before it starts anything, so no
+# stage, supervisor, reviewer or helper ever inherits it.
+uncle_model_key="${ANTHROPIC_API_KEY:-}"
+
 # The caller's working directory is the project being configured; the scripts
 # cd to the install dir ($ROOT), so capture it before that happens.
 PROJECT_ROOT="$PWD"
@@ -356,7 +363,7 @@ uncle_run_tui() {
     # this lock needs is recorded by uncle_tui.py itself at startup instead.
     mkdir -p "$PROJECT_ROOT/.uncle"
     uncle_kill_stale_tui
-    "$@"
+    UNCLE_MODEL_REFRESH_KEY="$uncle_model_key" "$@"
 }
 
 # Early-exit commands have already left above. Check before either UI starts.

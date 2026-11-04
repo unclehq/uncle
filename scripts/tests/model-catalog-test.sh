@@ -77,6 +77,31 @@ t5._start_model_refresh(); drain(t5)
 check("AC-3 skipped providers emit no diagnostic", t5.home_history == [])
 check("AC-3 codex skipped without binary", mc.fetch_codex(which=lambda n: None)[0] == "skipped")
 check("AC-3 claude skipped without key", mc.fetch_claude(env={}, which=lambda n: "/x")[0] == "skipped")
+# Refresh-only key: handed over by the launcher, moved out of the environment
+# at TUI import, used by the default fetch, and never visible to children.
+RK = "sk-refresh-only-777"
+probe = (
+    "import os,sys,subprocess,urllib.request\n"
+    "sys.path.insert(0, os.path.join(os.environ['ROOT'],'scripts','lib')); sys.path.insert(0, os.environ['ROOT'])\n"
+    "import uncle_tui, model_catalog as mc\n"
+    "child = subprocess.run(['env'], capture_output=True, text=True).stdout\n"
+    "hdr = []\n"
+    "class R:\n"
+    "    status=200\n"
+    "    def read(s,n=-1): return b'{\"data\":[]}'\n"
+    "    def __enter__(s): return s\n"
+    "    def __exit__(s,*a): return False\n"
+    "class O:\n"
+    "    def open(s,req,timeout=None): hdr.append(req.get_header('X-api-key')); return R()\n"
+    "mc.fetch_claude(opener=O(), which=lambda n:'/x')\n"
+    "print('ENV_CLEAN' if ('UNCLE_MODEL_REFRESH_KEY' not in os.environ and 'ANTHROPIC_API_KEY' not in os.environ and '%s' not in child) else 'ENV_LEAK')\n"
+    "print('USED' if hdr == ['%s'] else 'UNUSED:%%r' %% hdr)\n"
+) % (RK, RK)
+pr = subprocess.run([sys.executable, "-I", "-c", probe], capture_output=True, text=True,
+                    env={"PATH": os.environ["PATH"], "ROOT": os.environ["ROOT"], "UNCLE_MODEL_REFRESH_KEY": RK})
+check("refresh key leaves the TUI environment and child processes", "ENV_CLEAN" in pr.stdout)
+check("refresh key is what authenticates the default claude fetch", "USED" in pr.stdout)
+check("refresh key is not accepted from an explicit env", mc.fetch_claude(env={"UNCLE_MODEL_REFRESH_KEY": RK}, which=lambda n: "/x")[0] == "skipped")
 check("AC-3 kimi skipped without config", mc.fetch_kimi(env={"UNCLE_KIMI_CONFIG": tmp + "/nope"})[0] == "skipped")
 def to(argv, timeout): raise subprocess.TimeoutExpired(argv, timeout)
 check("AC-3 codex timeout -> failed", mc.fetch_codex(runner=to, which=lambda n: "/x")[0] == "failed")

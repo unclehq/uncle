@@ -798,7 +798,7 @@ class WorkerTests(unittest.TestCase):
         env = record['env']
         self.assertNotIn('UNCLE_STATUS_FILE', env)
         self.assertNotIn('GITHUB_TOKEN', env)
-        self.assertEqual(env.get('ANTHROPIC_API_KEY'), 'sk-ant-testkey123456')
+        self.assertNotIn('ANTHROPIC_API_KEY', env, 'an API key must not displace the OAuth login')
         self.assertEqual(env['HOME'], os.path.expanduser('~'))
         self.assertTrue(record['cwd'].endswith('cwd'))
         self.assertEqual(os.listdir(record['cwd']) if os.path.isdir(record['cwd']) else [], [])

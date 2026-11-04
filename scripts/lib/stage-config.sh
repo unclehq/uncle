@@ -1,4 +1,14 @@
 . "$(cd "${BASH_SOURCE[0]%/*}" && pwd)/strings.sh"
+
+# Never let an API key reach a stage. The claude CLI prefers ANTHROPIC_API_KEY
+# over the operator's OAuth/subscription login when both exist, which silently
+# moves every stage onto pay-per-token billing. Every driver and the launcher
+# source this file before spawning anything, so dropping the variable here
+# means each runner, reviewer, supervisor and helper inherits an environment
+# that can only authenticate through the login. The launcher alone hands the
+# TUI a copy (UNCLE_MODEL_REFRESH_KEY) for the model-list refresh; a stray one
+# is dropped here so a driver never inherits it.
+unset ANTHROPIC_API_KEY UNCLE_MODEL_REFRESH_KEY
 # Per-stage settings, read from the project's .uncle/config at the moment a
 # stage starts.
 #

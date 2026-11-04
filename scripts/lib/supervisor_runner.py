@@ -22,13 +22,13 @@ from process_tree import launch_command, kill_tree, start_check, KEEP_STDIN, pyt
 MAX_REPLY = 1024 * 1024
 POLL_SECONDS = 0.1
 GRACE_SECONDS = 12 if os.name == 'nt' else 2
-ENV_ALLOW = ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'USER', 'LOGNAME', 'CLAUDE_CONFIG_DIR')
+ENV_ALLOW = ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'CLAUDE_CODE_OAUTH_TOKEN', 'USER', 'LOGNAME', 'CLAUDE_CONFIG_DIR')
 ENV_ALLOW_WINDOWS = ('SYSTEMROOT', 'SYSTEMDRIVE', 'COMSPEC', 'PATHEXT', 'WINDIR', 'TEMP', 'TMP',
                      'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMDATA')
 
 
 def worker_env(environ, home):
-    """The allowlisted environment: resolved PATH, locale, the API key, login identity and temporary config/cache."""
+    """The allowlisted environment: resolved PATH, locale, login identity (never an API key: the OAuth login must be what authenticates) and temporary config/cache."""
     env = {}
     names = ENV_ALLOW + (ENV_ALLOW_WINDOWS if os.name == 'nt' else ())
     for name in names:

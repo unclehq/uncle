@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 117
+Issue 145
 
-Seeded from [unclehq/uncle#117](https://github.com/unclehq/uncle/issues/117).
+Seeded from [unclehq/uncle#145](https://github.com/unclehq/uncle/issues/145).
 
 ## Change Type
 
@@ -10,57 +10,61 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Offer sanitized GitHub bug reporting for non-recoverable workflow failures
+Preview and launch the desktop app (e.g. Electron) at the end of a build
 
 ## Motivation
 
-## Goal
+## Problem
 
-When Uncle encounters a non-recoverable tool or driver failure, let the user file a sanitized bug report directly to `unclehq/uncle` from the recovery UI. The report must identify the exact runner and model involved.
+Uncle can preview a web application while a build is running: `scripts/lib/preview-build.sh` starts a preview, `scripts/lib/preview_server.py` serves it, and a browser tab is opened (`WORKFLOW_PREVIEW_OPEN_BROWSER`). That flow assumes the app is a web app.
 
-## Current behavior
+When Uncle is building a desktop app (Electron, Tauri, or similar), or changing an existing one, there is nothing equivalent. The run ends and the operator has to work out how to launch the app themselves before they can see whether it works.
 
-Triage can create `.uncle/workflow/triage-issue-N.md`, but it is only a local draft. Users must manually find, redact, and file it.
+## Requested behavior
 
-## Proposed flow
+At the end of a build (after implementation and automated verification), if the project is a desktop app, Uncle should:
 
-```text
-Failure classified as tool bug / non-recoverable driver failure
-→ Recovery UI offers Report Uncle bug
-→ Uncle generates a redacted issue preview
-→ User explicitly confirms publication
-→ gh issue create --repo unclehq/uncle
-```
+1. **Detect** that it is a desktop app. Examples: `electron` in `package.json` dependencies, a `main` entry that is an Electron main process, `electron-builder` or `electron-forge` config, `src-tauri/`, or a plan that says so.
+2. **Offer to launch** it: show the launch command and ask before starting. The default must be safe for unattended runs, which should not launch a GUI.
+3. **Launch** the app with the project's own run command (for example `npm start`, `npm run dev`, or `electron .`). Prefer an explicit `.uncle/config` setting over guessing.
+4. **Report** what was launched: command, PID, and log path. Stop the process when the run is cleaned up, or leave it running and say so. Behavior should match how the web preview server is handled.
 
-If `gh` is unavailable, unauthenticated, or the user declines, preserve the sanitized local draft and show a copyable submission command.
+## Observable behaviors (draft)
 
-## Required issue metadata
+| Id | Trigger | Expected result | Failure behavior |
+|---|---|---|---|
+| D-1 | Build completes for a project detected as a desktop app, attended | Uncle prints the detected framework and launch command and asks to launch | Detection is ambiguous: say so, show the candidate commands, and launch nothing |
+| D-2 | User confirms | The app window opens; Uncle prints PID and log path | Launch command exits non-zero or crashes within a short grace period: report the exit code and the tail of the log, and mark the preview as failed (never as passed) |
+| D-3 | Unattended run (`WORKFLOW_UNATTENDED` or no TTY) | No GUI is launched and the command is printed for later | Never block waiting for input |
+| D-4 | Headless environment (no display, CI, SSH session) | Skip with a clear reason | Never report a launch that did not happen |
+| D-5 | Opt-out (`WORKFLOW_PREVIEW_DESKTOP=0`) | Nothing is detected or launched | n/a |
+| D-6 | Web project | No behavior change | n/a |
 
-- Uncle version, source revision, and install type
-- OS/runtime basics
-- Application or change workflow
-- Current state, failing stage, attempt, role (agent/reviewer/worker), and exit status
-- Resolved runner, model, and effort for the failing stage
-- Concise error excerpt and canonical JSON/artifact validation error, if applicable
-- A reference to locally retained diagnostics, without publishing their absolute paths
+## Invariants
 
-Use stage metrics, envelopes, resolved configuration, and the driver state as sources. Do not infer a runner/model from a global default when the stage record has a resolved value.
+- Launching is a convenience, **not evidence**. It writes no test report row and never turns a manual check into PASS (same rule as the preview build).
+- Nothing is launched without confirmation in an attended run, and never in an unattended one.
+- The launched process is owned and tracked (pid file in `.uncle/workflow/`) so it cannot be orphaned silently.
+- Launching never alters tracked files or the working tree.
 
-## Privacy and safety
+## Open questions
 
-- Never automatically publish an issue. Require a final user confirmation.
-- Do not include API keys, tokens, cookies, model credentials, `.uncle/config`, absolute project paths, raw prompts, source files, or full unredacted logs.
-- Offer an optional separate opt-in diagnostic bundle with preview/redaction before upload.
-- Preserve the existing local triage draft regardless of publication outcome.
+- Should this extend `preview-build.sh` (early preview from the brief) as well, or only run at the end of the build? The request is the end of the build, so start there.
+- Which frameworks are in scope first? Suggest Electron, then Tauri.
+- Should the launch happen from the issue/change worktree or from the source checkout? Worktrees are removed after a PR, so the app must be stopped before removal.
+- Windows and Linux launch quirks (display detection, `npm` shims).
 
-## Acceptance criteria
+## Verification ideas
 
-- The recovery UI offers reporting only for non-recoverable tool/driver failures, not routine test failures or normal recovery proposals.
-- The preview shows the resolved runner, model, and effort of the failed stage.
-- The published issue contains the required metadata and a useful concise failure summary.
-- User cancellation creates no GitHub issue.
-- Missing `gh` authentication produces a saved local draft and an actionable next step.
-- Tests cover redaction, resolved per-stage runner/model attribution, confirmation/cancellation, authenticated publication, and unauthenticated fallback.
+- Unit tests for desktop detection over fixture `package.json` files (Electron, Tauri, plain web, ambiguous).
+- Driver test with a stub launch command: attended confirm, attended decline, unattended, headless, crash-on-start, opt-out.
+- Manual check: build a minimal Electron app with Uncle and confirm the window opens.
+
+## Non-goals
+
+- Packaging or signing installers.
+- Automated GUI testing of the launched app.
+- Mobile apps.
 
 ## Observed Current Behavior
 

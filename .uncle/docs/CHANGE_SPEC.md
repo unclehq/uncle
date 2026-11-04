@@ -1,72 +1,75 @@
-# Change Spec — Issue 117
+# Change spec (issue 145)
 
-Omitted sections: Migration (none); Prototype isolation (n/a); Performance (negligible)
+Omitted sections: Migration (none); Prototype isolation (not a prototype); Performance (only the grace period, in AC)
 
 ## 1. Change type
-Feature + Security (privacy-sensitive).
+Feature.
 
-## 2. Problem
-Triage drafts are local only; users must hand-redact and file them.
+## 2. Problem statement
+At the end of a build of a desktop app the operator must find the launch command themselves; the web preview has no desktop equivalent.
 
 ## 3. Current behavior
-See baseline B3, B6.
+Baseline B-1..B-6.
 
 ## 4. Desired behavior
-When triage classifies a failure `tool bug` (non-recoverable tool/driver failure), the recovery UI offers `/report`. It builds a redacted preview with required metadata, asks explicit confirmation, then runs `gh issue create --repo unclehq/uncle`. Cancel, missing/unauthenticated `gh`, or failure preserves a sanitized local draft and shows a copyable command.
+After a successful workflow, for a project detected as Electron or Tauri, Uncle shows the framework and command, asks (attended) before launching, launches the project's own command with a pid file and log under `.uncle/workflow/`, reports command/PID/log, and stops it when the run is cleaned up (same as the web preview). Unattended or headless runs print the command and launch nothing.
 
 ## 5. Observable behavior table
-| ID | Class | Trigger | Current behavior | Expected behavior | Verification |
+| ID | Class | Trigger | Current | Expected | Verification |
 |---|---|---|---|---|---|
-| S1 | ADD | Recovery with classification `tool bug` | No report offer | Recovery shows `Report Uncle bug (/report)` hint | bug-report test: offer predicate |
-| S2 | PRESERVE | Classification code defect / requirement gap / needs owner decision, or routine test failure, or no classification | Normal recovery | No report offer; /report refused with message | test: predicate false for each |
-| S3 | ADD | /report | n/a | Preview shows metadata, resolved runner/model/effort of failed stage, excerpt; nothing published | test: preview content |
-| S4 | ADD | User confirms (explicit `yes`) with authenticated gh | n/a | One `gh issue create --repo unclehq/uncle --title T --body-file F` call; URL shown | test with fake gh on PATH |
-| S5 | ADD | User cancels / any non-yes | n/a | No gh issue create invoked; draft retained | test: fake gh records no create |
-| S6 | ADD | gh missing or `gh auth status` fails | n/a | Sanitized draft saved at `.uncle/workflow/bug-report-N.md`; actionable message and copyable `gh issue create ...` command | test: unauth fallback |
-| S7 | ADD | Report generated | n/a | Per-stage runner/model/effort from the failed stage's attempt record, never global default; `unavailable` if no record | test: two stages with different runners |
-| S8 | PRESERVE | Any outcome | Local triage-issue draft exists | `triage-issue-N.md` untouched | test: hash before/after |
-| S9 | ADD | Report built from tree containing secrets/abs paths/prompts | n/a | Output has none of: keys, tokens, cookies, absolute project/home paths, raw prompts, source files, `.uncle/config` content | redaction test |
+| D-1 | ADD | Build completes, attended, desktop detected | Nothing | Prints framework + command, asks to launch; ambiguous detection lists candidates and launches nothing | unit detection + TUI test |
+| D-2 | ADD | User confirms | n/a | App starts; PID and log path printed. Exit non-zero or crash within grace period (default 3 s, `WORKFLOW_PREVIEW_DESKTOP_GRACE`): exit code and log tail reported, status failed, never passed | stub-command driver test |
+| D-3 | ADD | Unattended (`--unattended`, `WORKFLOW_UNATTENDED=1`, or no TTY) | n/a | Nothing launched, command printed and recorded in `.uncle/workflow/desktop-launch.json`; never waits for input | driver test |
+| D-4 | ADD | Headless (no DISPLAY/WAYLAND_DISPLAY on Linux, `CI` set, SSH session) | n/a | Skip with clear reason; no launch reported | env-matrix test |
+| D-5 | ADD | `WORKFLOW_PREVIEW_DESKTOP=0` | n/a | No detection, no launch, no output | test |
+| D-6 | PRESERVE | Web or non-desktop project (B-1..B-5) | as baseline | unchanged | existing suites + fixture test |
+| D-7 | MODIFY | Desktop project, desktop flow enabled | web `CompletionPreview` may open browser (B-6) | desktop flow replaces web completion preview and early-preview browser open for that project | TUI test |
+| D-8 | ADD | `.uncle/config` has `desktop.launch_command` | n/a | That command (shell-split to argv) overrides guessing | unit test |
+| D-9 | ADD | Run cleanup (stop_workflow/quit) with app running | n/a | Process tree killed, pid file removed | test |
 
 ## 6. Invariant table
-| ID | Status | Invariant | Scope | Enforcement point | Verification |
+| ID | Status | Invariant | Scope | Enforcement | Verification |
 |---|---|---|---|---|---|
-| V1 | NEW | No issue is published without explicit confirmation in the same flow | bug_report.publish | confirm param required True | test S4/S5 |
-| V2 | NEW | Report body is built from an allow-list of fields then redacted; never includes absolute paths or secrets | bug_report.build | build + scrub | test S9 |
-| V3 | NEW | Runner/model/effort come from stage attempt record, not defaults | bug_report.build | record lookup | test S7 |
-| V4 | NEW | Local sanitized draft is saved on every non-publish outcome and existing triage drafts are never modified | bug_report | save_draft | tests S5,S6,S8 |
-| V5 | EXISTING | Triage guard/sandbox and human-stop non-triage rules unchanged | TUI | unchanged | existing suites |
+| I-1 | EXISTING | Launching is not evidence: writes no test-report row, never turns a check into PASS | all launches | desktop_launch.py writes only desktop-launch.json/log/pid | test asserts no report files touched |
+| I-2 | NEW | No launch without confirmation attended; no launch ever unattended | desktop flow | gate function `launch_decision` | decision-matrix test |
+| I-3 | NEW | Launched process is tracked by pid file in `.uncle/workflow/` and killed on cleanup | desktop flow | launch/stop functions | test |
+| I-4 | NEW | Launch never alters tracked files; only untracked `.uncle/workflow/*` written | desktop flow | write paths restricted | git-status test |
+| I-5 | EXISTING | Launch commands are argv arrays | all | no shell=True | test |
 
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-No change to driver stages, state files, or record schema. Additive only.
+launch.json schema, existing env vars and web preview unchanged.
 
-## 8. Failure behavior
-gh absent, unauthenticated, timeout, or nonzero create: draft saved, message with exact next step and copyable command; no crash; no retry loop.
+## 8. Error behavior
+Ambiguous detection, headless, crash, missing executable (OSError), stale live pid file: each reports a one-line reason, launches nothing or marks failed, and never blocks.
 
 ## 10. Security
-Allow-list + redaction (chat.sanitize plus home/project path replacement, token patterns, URL credentials). gh invoked with argv list (no shell), GH_PROMPT_DISABLED=1, stdin devnull. Local diagnostics referenced by relative id only (`.uncle/workflow/...` relative), no absolute paths.
+Argv arrays only; command from `.uncle/config` is the operator's own; no network.
 
 ## 12. Rollback
-Revert additive commit; no persisted schema changes. Leftover `bug-report-N.md` drafts are inert.
+Set `WORKFLOW_PREVIEW_DESKTOP=0`, or revert the commit; no persisted schema change beyond untracked runtime files.
 
 ## 14. Non-goals
-Auto-publishing; diagnostic bundle upload (opt-in bundle deferred); changing triage classification logic; reporting routine test failures.
+Packaging/signing, GUI testing, mobile, early preview for desktop, Windows/Linux live verification.
 
 ## 15. Assumptions
-- Eligibility is defined as triage classification `tool bug` (existing signal). Decision recorded in plan.
-- Issue title: `[bug] <stage>: <short failure>` redacted and capped.
+- Scope: Electron first, Tauri second; end-of-build only (resolves open question 1, 2).
+- Launch from project root (`_project_root()`), killed before worktree removal because cleanup kills it (open question 3).
+- Windows/Linux quirks are handled by display detection and `launch_command`; not live-verified.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | Report offer appears only when the recovery classification is `tool bug`; not for code defect, requirement gap, owner decision, routine test failure, or unclassified recovery. | Unit test of eligibility predicate over all classes and none; TUI test that the hint/command is refused otherwise. |
-| AC-2 | Preview shows resolved runner, model, and effort of the failed stage taken from its attempt record, not the global default. | Test with session-totals records for two stages using different runners/models/effort and a differing global config; assert preview matches the failed stage. |
-| AC-3 | Generated issue contains Uncle version, source revision, install type, OS/runtime, workflow type, state, failing stage, attempt, role, exit status, runner/model/effort, concise error excerpt, artifact validation error if present, and a relative reference to retained diagnostics. | Test asserts each field label present in built body from a fixture state dir. |
-| AC-4 | Body and preview contain no API keys, tokens, cookies, credentials, `.uncle/config` content, absolute project/home paths, raw prompts, source files, or full logs. | Redaction test with planted secrets, absolute paths, and prompt text in logs; assert absence and bounded excerpt length. |
-| AC-5 | Cancelling at confirmation invokes no `gh issue create` and leaves a sanitized local draft. | Fake gh on PATH logs invocations; assert no create call and draft file present. |
-| AC-6 | Explicit confirmation with authenticated gh runs `gh issue create --repo unclehq/uncle` once and reports the issue URL. | Fake gh returning a URL; assert argv and displayed URL. |
-| AC-7 | Missing gh or failed auth saves a sanitized local draft and shows an actionable next step with a copyable submission command. | Tests with gh absent from PATH and with fake gh failing `auth status`. |
-| AC-8 | Existing `triage-issue-N.md` drafts are never modified or removed regardless of outcome, and existing triage and TUI suites still pass. | Hash comparison in test; bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh show no new failures vs baseline. |
+| AC-1 | Detection returns framework+argv for fixture package.json with electron (start script), Tauri (src-tauri + scripts.tauri), none for plain web, and ambiguous (with candidate list) for electron with both start and dev scripts or electron with no run script | scripts/tests/desktop-launch-test.py detection cases |
+| AC-2 | `.uncle/config` key `desktop.launch_command` overrides guessed command | desktop-launch-test.py config case |
+| AC-3 | Attended confirm launches the stub command, prints PID and log path, and writes pid file and log under .uncle/workflow/ | desktop-launch-test.py and tui-desktop-launch-test.py with stub command |
+| AC-4 | Attended decline launches nothing and prints the command | tui-desktop-launch-test.py |
+| AC-5 | Unattended (flag, env, or no TTY) never launches, never prompts, prints command and records it | decision-matrix test |
+| AC-6 | Headless (Linux without display, CI set, SSH session) skips with a stated reason and reports no launch | env-matrix test |
+| AC-7 | Stub that exits non-zero within the grace period is reported failed with exit code and log tail; pid file removed | crash-on-start test |
+| AC-8 | WORKFLOW_PREVIEW_DESKTOP=0 performs no detection and launches nothing; web/non-desktop projects behave as before | opt-out test plus existing completion-preview-test.py and tui-complete-dialog-test.py pass |
+| AC-9 | Cleanup kills the launched process tree and removes the pid file; launching leaves tracked files and git status unchanged and writes no test-report rows | cleanup test and git-status assertion |
+| AC-10 | Both repository runner commands show no regression versus the baseline | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh |
 

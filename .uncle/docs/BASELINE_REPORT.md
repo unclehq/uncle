@@ -1,77 +1,85 @@
-# Baseline Report — Issue 117
+# Baseline report (issue 145)
 
-Omitted sections: Reproduction (feature, not bug); Baseline test results beyond provenance (driver supplies)
+Omitted sections: Reproduction (feature, not a bug); Existing failures (none documented in-repo; driver baseline is authority)
 
 ## 1. Change-request summary
-See .uncle/docs/CHANGE_REQUEST.md: offer a sanitized, user-confirmed `gh issue create --repo unclehq/uncle` from the recovery UI on non-recoverable tool/driver failures, with per-stage resolved runner/model/effort.
+See .uncle/docs/CHANGE_REQUEST.md: detect a desktop app (Electron, then Tauri) at the end of a build, offer to launch it, launch with the project's run command, report command/PID/log, and track the process. Web preview behavior must not change.
 
 ## 2. Repository architecture
-- Bash drivers (`scripts/workflow.sh`, `scripts/change-workflow.sh`, `scripts/stagegate.sh`) with helpers in `scripts/lib/` (bash + Python).
-- Python TUI `uncle_tui.py` (7.7k lines) hosts the recovery chat (triage master).
-- Tests: `scripts/tests/*-test.sh` and `*-test.py` (hyphenated names).
+- `uncle_tui.py` (curses TUI, large; grep only) drives the workflow, owns the completion dialog and the web `CompletionPreview`.
+- `scripts/lib/completion_preview.py` (417 lines): launch.json reading (`launch_spec` 231, `validate_launch_spec` 240), manifest derivation (`derive_launch_manifest` 108), `CompletionPreview` thread class (268).
+- `scripts/lib/process_tree.py`: `group_options` 203, `kill_tree` 279, `launch_command` 159.
+- `scripts/lib/preview-build.sh` / `preview_server.py` / `preview_kind.py`: the EARLY preview (before code exists, web/CLI only); not touched here.
+- `scripts/change-workflow.sh` / `workflow.sh` are bash drivers; `completion_preview.py --normalize` is called at change-workflow.sh:4321 and 4549.
 
 ## 3. Relevant code paths
-- `scripts/lib/triage.sh` writes `.uncle/workflow/TRIAGE.md` bundle on stage-failure EXIT trap (header lines 1-40).
-- `scripts/lib/triage_chat.py:20` `CLASSES` incl. `tool bug`; `parse_reply` (:48) extracts classification from a triage proposal.
-- `uncle_tui.py:4090` `_triage_init` (state incl. `triage_classification`), `:4109` `_maybe_auto_triage`, `:4129` `open_triage` (recovery banner: /do N, /resume), `:4163` `_triage_turn`.
-- `uncle_tui.py:3076` slash-command handling area for triage/recovery input.
-- `scripts/lib/perf_record.py:57-93` writes one record per model attempt (kind, stage, status, runner, model, effort, ended_at) into `.uncle/workflow/session-totals.json` `records`.
-- `scripts/lib/evidence_io.py:21` `_records(state)` reads them; `scripts/lib/envelope.py:253` `producer()` is an existing precedent for per-stage runner/model from records (never from global default).
-- `scripts/lib/chat.py:21` `sanitize()` redacts keys/auth headers and control chars.
-- `scripts/lib/github_issues.py:26` `gh()` read-only gh wrapper (timeout, no prompt, GH_PROMPT_DISABLED).
-- `prompts/triage.md:73` instructs triage to write local `.uncle/workflow/triage-issue-<turn>.md` draft.
-- `VERSION` file holds Uncle version.
+| Path | Lines | Role |
+|---|---|---|
+| uncle_tui.py `_offer_support` | ~2240-2280 | runs after workflow exit code 0; unattended path calls `finish_decision` -> `_show_early_preview` + `_quit`; attended creates `CompletionPreview` only when `_workflow_family()=="app"` |
+| uncle_tui.py `_poll_completion_preview` | ~2488 | drains preview events into `home_history` |
+| uncle_tui.py `_completion_dialog` | ~2511 | sets `prompt_kind` support/finished |
+| uncle_tui.py `stop_workflow`, `_quit` | ~2916, ~7386 | both close `completion_preview` |
+| uncle_tui.py `_workflow_family`, `_project_root`, `workflow_unattended` | 141, 134, 2121 | family and unattended flag |
+| completion_preview.py `launch_spec` | 231 | `.uncle/launch.json` kinds command/webpage/none |
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B1 | Stage failure exit | TUI auto-opens recovery chat with diagnosis turn | uncle_tui.py:4109-4147 | Yes |
-| B2 | Triage replies with classification | Parsed into one of 4 classes; proposals listed | triage_chat.py:48-90 | Yes |
-| B3 | Triage writes issue draft | Local `triage-issue-N.md` only; guard applies it | triage-chat-test.py:469 | Yes |
-| B4 | Human stop / decline / clean exit | Triage not auto-opened | uncle_tui.py:4110-4120 | Yes |
-| B5 | /do N, /resume in recovery | Execute proposal / resume driver | uncle_tui.py:3076 | Yes |
-| B6 | Any input | No GitHub publication path exists | grep: no `issue create` | n/a |
+| B-1 | App-family build completes, attended, launch.json webpage | Server started, readiness polled, browser opened, star dialog | completion_preview.py:268-370; completion-preview-test.py | Yes |
+| B-2 | Launch.json kind command | Process streamed in chat, Esc stops | completion_preview.py run(); test_command_streams_and_accepts_input | Yes |
+| B-3 | Unattended app-family finish | `_show_early_preview` then quit; no dialog | uncle_tui.py ~2250-2262 | Yes |
+| B-4 | Change-family finish | No completion preview at all | uncle_tui.py ~2273 | Yes (for non-desktop) |
+| B-5 | Quit / stop_workflow | `CompletionPreview.close` kills process tree | uncle_tui.py 2917, 7387 | Yes |
+| B-6 | Electron/Tauri project | Nothing detects it; derive_launch_manifest may treat `npm run dev` as webpage/command | completion_preview.py:108-138 | No (desktop MODIFY) |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I1 | Triage never writes outside sandbox unless operator selected /do N | triage_guard.py | triage-guard-test.sh | High |
-| I2 | Chat text is sanitized of secrets/control chars | chat.py:21 | triage-chat-test.py | Medium |
-| I3 | Attempt records carry resolved runner/model/effort | perf_record.py:64 | envelope tests | Medium |
-| I4 | Triage never auto-opens on human stop | uncle_tui.py:4112-4120 | triage-resume-test.sh | High |
+| E-1 | Launching is not evidence; no test-report row written | CompletionPreview writes no report | completion-preview-test.py | Medium |
+| E-2 | Invalid launch metadata launches nothing | `validate_launch_spec` | test_invalid_manifest_does_not_launch | High |
+| E-3 | Launch commands are argument arrays, not shell strings | validate_launch_spec 240-262 | launch-manifest-test.py | High |
+| E-4 | Preview process is killed on quit | CompletionPreview.close | preview-server-test.py (partial) | Medium |
 
-## 6. Interface contracts
-- `session-totals.json` records schema above; `TRIAGE.md` bundle; triage reply grammar. No GitHub write API exists.
+## 6. Current API/schema/interface contracts
+`.uncle/launch.json` shape (command/webpage/none) is a public contract and stays unchanged. `.uncle/config` is whitespace `key value` lines with `#` comments. Env switches use `WORKFLOW_*`.
 
 ## 7. Existing automated-test coverage
-`scripts/tests/triage-chat-test.py`, `triage-bundle-test.sh`, `triage-guard-test.sh`, `triage-resume-test.sh`, `tui-*-test.py`. No coverage of redaction of absolute paths or of gh publication. Shell and Python runners use separate temp dirs and no shared ports, hence one parallel group.
+Python suites in scripts/tests/*-test.py (completion-preview-test.py, launch-manifest-test.py, preview-server-test.py, tui-complete-dialog-test.py, tui-support-test.py) and shell suites run by the two runner scripts. The shell and Python runners use separate temp dirs and no shared ports, so they are one parallel group (per runner documentation in run-python-tests.sh and project convention).
 
 ## 9. Baseline test results
-Commands taken from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (CLAUDE.md/task guidance). Not run here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites are documented to fail on a clean checkout.
-
-## 10. Existing failures
-UNRESOLVED until driver baseline; some Python suites known to fail pre-change.
+Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh. No results were produced here; the driver baseline (.uncle/workflow/green-check.baseline.tsv) is authoritative. No repository-documented failures found.
 
 ## 12. Likely change surface
-New `scripts/lib/bug_report.py`; `uncle_tui.py` (recovery command + preview/confirm UI); new tests; optionally `prompts/triage.md` unchanged.
+New `scripts/lib/desktop_launch.py`; hook in `uncle_tui.py` `_offer_support`/poll/close; new tests; scripts/README.md note.
 
 ## 13. Regression-sensitive components
-`uncle_tui.py` recovery/chat input handling; triage draft preservation; `chat.sanitize`.
+uncle_tui.py completion/support dialog sequencing (star prompt), CompletionPreview web launch, unattended quit path.
 
 ## 14. Outside the change
-Driver shell stages, triage_guard, perf_record schema, diagnostic bundle upload (opt-in bundle is optional/deferred).
+early preview (preview-build.sh, preview_server.py, preview_kind.py), launch.json schema, packaging/signing, GUI testing, mobile, test-report writers, bash drivers.
 
 ## 15. Unknowns and assumptions
-- Role (agent/reviewer/worker) and attempt number: derive from record `kind` and count of records for the stage; fall back to `unavailable`.
-- Source revision and install type derived from `git rev-parse` of ROOT / path heuristics; `unavailable` on failure.
+- Assumed no existing `WORKFLOW_PREVIEW_DESKTOP` or desktop detection anywhere (grep of scripts/ and uncle_tui.py found none).
+- Whether `.uncle/config.example` exists was not checked; docs go in scripts/README.md.
+- Windows/Linux display quirks cannot be exercised on this darwin host.
 
-## 16. Initial risk
-Medium: leaking paths/secrets into a public repo issue; mitigated by allow-list construction plus redaction.
+## 16. Initial risk assessment
+| Risk | Level |
+|---|---|
+| Dialog sequencing in the large TUI regresses star/finished dialogs | Medium |
+| Orphaned GUI process | Medium (mitigated by pid file + close hooks) |
+| False-positive detection launching GUI | Low (confirmation required, unattended never launches) |
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
+```
+
+## Parallel verification groups
+
+```text
+1 2
 ```
 

@@ -1,176 +1,176 @@
-## AR-001: Plan reads ineligible-state /report two ways: spec says refused with a message, plan only hides the banner.
+## AR-001: Plan never says if the attended y/n prompt shows when detection is ambiguous, headless, or a live pid file exists.
 
 - Severity: HIGH
-- References: CHANGE_SPEC S2/AC-1 vs CHANGE_PLAN sections 8-9.
-- Failure: Plan reads ineligible-state /report two ways: spec says refused with a message, plan only hides the banner. Plan never says what /report does outside recovery, with no classification, or while report_pending is armed. Settle: '/report outside an eligible recovery prints a refusal and arms nothing; /report while armed cancels the pending report.'
+- References: CHANGE_SPEC D-1, D-4; CHANGE_PLAN section 1 and DEC-8.
+- Failure: Plan never says if the attended y/n prompt shows when detection is ambiguous, headless, or a live pid file exists. Say: 'The prompt is shown only for a single detected command, non-headless, no live pid file; otherwise print the reason or candidates, record skipped, no prompt.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Confirmation token is undefined: case, whitespace, 'y', empty input, and slash commands such as /clear while armed.
+## AR-002: Unattended and headless signals overlap with no precedence (attended TUI with no stdin TTY, or over SSH).
 
 - Severity: HIGH
-- References: CHANGE_PLAN sections 1 and 8; CHANGE_SPEC S4/S5.
-- Failure: Confirmation token is undefined: case, whitespace, 'y', empty input, and slash commands such as /clear while armed. Section 8 says /clear clears pending, which collides with 'next input consumes it'. Settle: 'After trim+lowercase only exact yes publishes; every other input, including slash commands and empty, cancels and is not forwarded to triage chat.'
+- References: CHANGE_PLAN DEC-4, DEC-5, launch_decision signature.
+- Failure: Unattended and headless signals overlap with no precedence (attended TUI with no stdin TTY, or over SSH). Say: 'Unattended is true if any signal holds; launch_decision checks opt-out, then unattended, then headless, then asks.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Draft rules conflict.
-
-- Severity: HIGH
-- References: CHANGE_SPEC V4/S6 vs CHANGE_PLAN section 1 and 7.
-- Failure: Draft rules conflict. Spec V4 says draft saved on non-publish outcomes; plan says always saved first. File naming is N in the spec and <turn> in the plan, both undefined. Settle: 'Draft is written before preview, kept after publish, N is next unused integer, never overwritten.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-004: No behavior is defined for missing or empty session-totals, missing failing-stage log, or zero attempts.
+## AR-003: D-5 says opt-out does no detection, but D-7 suppresses web preview when desktop is detected and enabled.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-3; CHANGE_PLAN D2, D5, section 10.
-- Failure: No behavior is defined for missing or empty session-totals, missing failing-stage log, or zero attempts. AC-3 lists exit status, excerpt, and artifact validation error, but D2/D5 give no source for the first or last. Settle: 'Any field without a source renders the literal unavailable.'
+- References: CHANGE_SPEC D-5 vs D-7.
+- Failure: D-5 says opt-out does no detection, but D-7 suppresses web preview when desktop is detected and enabled. Say: 'With WORKFLOW_PREVIEW_DESKTOP=0 the web preview runs as before, even for Electron projects.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Path-replacement scrub may corrupt the required relative .uncle/workflow references.
+## AR-004: Unclear whether the web preview stays suppressed on a desktop project when the flow ends in decline, skip, ambiguous or
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 10 and assumptions; CHANGE_PLAN section 10.
-- Failure: Path-replacement scrub may corrupt the required relative .uncle/workflow references. Title cap is unspecified, and the copyable command wraps the title in single quotes, which an apostrophe breaks. Settle: 'Title capped at 80 chars; command uses shlex.quote; relative paths exempt from scrub.'
+- References: CHANGE_PLAN section 1; CHANGE_SPEC D-7.
+- Failure: Unclear whether the web preview stays suppressed on a desktop project when the flow ends in decline, skip, ambiguous or failure. Say: 'The web preview is suppressed for any detected desktop project with the flow enabled, whatever the outcome.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: gh create edge outcomes are unspecified: exit 0 with no URL, and timeout after auth passed, where the issue may exist an
+## AR-005: Live pid file blocks relaunch, but PID reuse and a crash after the grace period are unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-6 and section 8; CHANGE_PLAN R-4, section 10.
-- Failure: gh create edge outcomes are unspecified: exit 0 with no URL, and timeout after auth passed, where the issue may exist and a retry may duplicate. Settle: 'On timeout or no URL, keep draft, say the issue may already exist, and do not retry.'
+- References: CHANGE_PLAN DEC-7, DEC-8, section 12.
+- Failure: Live pid file blocks relaunch, but PID reuse and a crash after the grace period are unspecified. Say: 'A pid file is live only if the PID is alive and the recorded command matches; a later crash is reported only while the TUI is open.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: The plan does not say what happens to input while a report confirmation is pending, including slash commands.
-
-- Severity: HIGH
-- References: CHANGE_PLAN s8 'next chat input consumes it (yes -> publish; else cancel)'; the change-impact table rates the chat input path Medium regression risk.
-- Failure: The plan does not say what happens to input while a report confirmation is pending, including slash commands. Settle it with: while report_pending is set, the next input is consumed by the report flow and never reaches triage chat; `yes` (trimmed, case-insensitive) publishes and anything else cancels. /clear cancels and then runs normally.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: The refusal of /report for ineligible classes has no command-level guard in the plan.
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC S2 says '/report refused with message'; CHANGE_PLAN step 3 gates only the banner hint on eligible().
-- Failure: The refusal of /report for ineligible classes has no command-level guard in the plan. Step 3 gates only the banner hint. Settle it with: the /report handler calls eligible(self.triage_classification) and, if false, prints a fixed refusal line without setting report_pending, saving a draft, or calling gh.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: Draft naming and lifecycle are unspecified: what <turn> means, what a repeated /report does, and whether a draft survive
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1 'bug-report-<turn>.md' versus CHANGE_SPEC V4/S6 'bug-report-N.md'.
-- Failure: Draft naming and lifecycle are unspecified: what <turn> means, what a repeated /report does, and whether a draft survives a successful publish. Settle it with: the draft is bug-report-N.md with N one higher than the highest existing bug-report-*.md, never overwritten, and kept after a successful publish.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-010: The failed-stage fallback in D2 (last record) contradicts the rule that missing records render as `unavailable`.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D2 'fall back to last record' versus s20 'falls back to unavailable' and CHANGE_SPEC S7.
-- Failure: The failed-stage fallback in D2 (last record) contradicts the rule that missing records render as `unavailable`. Settle it with: if no record has a non-success status, the stage, attempt, role, exit status, runner, model and effort all render `unavailable`, and the last record is never used.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-011: The title limits and quoting are unspecified.
+## AR-006: Empty, unparsable or non-desktop-project `desktop.launch_command` behavior is undefined.
 
 - Severity: LOW
-- References: CHANGE_SPEC s15 'redacted and capped'; CHANGE_PLAN s10 command uses --title '...' with no quoting or length rule.
-- Failure: The title limits and quoting are unspecified. Settle it with: the title is scrubbed first, then truncated to 100 characters, and the copyable command shell-quotes the scrubbed title.
+- References: CHANGE_PLAN DEC-9; CHANGE_SPEC D-8.
+- Failure: Empty, unparsable or non-desktop-project `desktop.launch_command` behavior is undefined. Say: 'An empty or unparsable value is ignored with a one-line warning; the override applies only when a desktop framework is detected.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Plan never says what happens if scrub leaves a likely secret or absolute path in title or body.
+## AR-007: Plan says the desktop prompt precedes `_completion_dialog` and that web CompletionPreview is skipped for desktop project
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1/R-1/Risks: redaction relies on patterns; the excerpt is free text; no post-scrub check is specified.
-- Failure: Plan never says what happens if scrub leaves a likely secret or absolute path in title or body. Decision: if any path or token pattern still matches after scrub, publish is refused and only the draft is saved; preview shows the exact final text.
+- References: CHANGE_PLAN s1 'web CompletionPreview and unattended _show_early_preview are skipped (D-7)' vs s5/s8 'launch.json contract unchanged'; spec D-7 says 'may open browser'.
+- Failure: Plan says the desktop prompt precedes `_completion_dialog` and that web CompletionPreview is skipped for desktop projects, but never says how a project with a `launch.json` web/command entry and desktop detection interacts. Plan should say: when desktop is detected and enabled, `launch.json` kind is ignored for the preview, and the launch.json file is left untouched and still validated.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Plan does not say whether publish sends the previewed draft or rebuilds the report.
+## AR-008: Skipping the early preview (and web preview) for a detected-desktop project is unconditional even when the desktop flow
+
+- Severity: HIGH
+- References: CHANGE_PLAN s1 'When desktop is detected and enabled... skipped'; D-3/D-4 produce no launch; AC-8 only tests opt-out and non-desktop projects.
+- Failure: Skipping the early preview (and web preview) for a detected-desktop project is unconditional even when the desktop flow then declines, is ambiguous, is headless, or is unattended. A user whose Electron-detected project also has a web preview loses it, contradicting D-6/AC-8. Plan should say: web previews are skipped only when a desktop launch actually occurs or is offered, not on detection alone.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: Unattended detection includes `not sys.stdin.isatty()`, which may be true in existing TUI tests or piped usage, silently
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1/s7/s8: draft written before prompt; publish(report, runner); no match rule for `yes`.
-- Failure: Plan does not say whether publish sends the previewed draft or rebuilds the report. Decision: publish sends the exact saved, previewed bytes; `yes` matches trimmed and case-insensitive; a repeat `/report` replaces the pending state.
+- References: CHANGE_PLAN DEC-5 vs s17 'existing suites must pass unchanged'; spec D-3.
+- Failure: Unattended detection includes `not sys.stdin.isatty()`, which may be true in existing TUI tests or piped usage, silently changing the attended path of `_offer_support` and the existing quit flow. Plan should say: existing suites run with the desktop flow disabled via `WORKFLOW_PREVIEW_DESKTOP=0` or on non-desktop fixtures, and the TUI's own attended state takes precedence over isatty.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Fallback command embeds a title in shell quoting, and the title cap and scrub are unspecified.
+## AR-010: The new `prompt_kind='desktop'` is inserted before the support/finished dialog, but key handling, resize, quit and Esc b
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s10: `--title '...'`; CHANGE_SPEC Assumptions: title redacted and capped, with no value given.
-- Failure: Fallback command embeds a title in shell quoting, and the title cap and scrub are unspecified. Decision: title is scrubbed, newlines and quotes removed, capped at 80 chars; the copyable command uses shlex.quote.
+- References: CHANGE_PLAN s7 'New prompt_kind=desktop (confirm/decline)'; key handling at uncle_tui.py ~6878 only referenced as to read.
+- Failure: The new `prompt_kind='desktop'` is inserted before the support/finished dialog, but key handling, resize, quit and Esc behavior while the desktop prompt is showing are unspecified, and so is what happens if the workflow-exit event arrives twice. Plan should say: any key other than y/Y confirms decline, Esc/q declines, and `_offer_support` is idempotent per run.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: Values from state files (stage, runner, model) go into the body and the draft filename without validation.
+## AR-011: Cleanup on stop_workflow/_quit kills the process, but the plan does not say what happens when the desktop app is still r
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 build_report(stage=None) and bug-report-<turn>.md; R-1 allow-lists field names only.
-- Failure: Values from state files (stage, runner, model) go into the body and the draft filename without validation. Decision: values must match [A-Za-z0-9._:/-]{1,64} or become `unavailable`; <turn> must be an integer; relative references must stay inside the state dir with no `..`.
+- References: CHANGE_PLAN DEC-8 'live one blocks relaunch with a message' vs s7 flow.
+- Failure: Cleanup on stop_workflow/_quit kills the process, but the plan does not say what happens when the desktop app is still running at the time the TUI starts the next workflow run, or when the live-pid-file relaunch block (DEC-8) fires in the attended prompt. Plan should say: a live pid blocks the prompt, prints a message, and the flow continues to `_completion_dialog`.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: Draft filename collision and symlink behavior are unspecified.
+## AR-012: Plan auto-detects and runs project-defined commands (npm start/dev) from a freshly built, possibly untrusted repo; the p
+
+- Severity: HIGH
+- References: CHANGE_PLAN DEC-2 and D-1/D-2; I-2 requires confirmation but sets no default or disclosure rule.
+- Failure: Plan auto-detects and runs project-defined commands (npm start/dev) from a freshly built, possibly untrusted repo; the prompt only shows the command. Plan should say: the prompt displays the resolved argv, warns that project scripts run with user privileges, and defaults to No.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-013: `desktop.launch_command` is read from `.uncle/config`, which lives in the project and may be repo-controlled, yet the sp
+
+- Severity: HIGH
+- References: CHANGE_SPEC section 10 Security; DEC-9 and D-8.
+- Failure: `desktop.launch_command` is read from `.uncle/config`, which lives in the project and may be repo-controlled, yet the spec calls it 'the operator's own'. Plan should say: a config-supplied command is shown in full and never launches without confirmation.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-014: Cleanup behavior is unspecified for a stale pid file whose PID has been reused by another process.
+
+- Severity: MEDIUM
+- References: DEC-8, D-9 and R-2 do not define pid-reuse verification.
+- Failure: Cleanup behavior is unspecified for a stale pid file whose PID has been reused by another process. Plan should say: cleanup kills only the process tree of this session's Popen handle, or verifies pid, start time and command before killing, and never kills a pid taken only from the file.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-015: Log tail is displayed in the TUI and files are created with unspecified permissions.
+
+- Severity: MEDIUM
+- References: DEC-7 and section 12 ('last 20 log lines'); no sanitization or permission rule.
+- Failure: Log tail is displayed in the TUI and files are created with unspecified permissions. Plan should say: pid, log and record files are created mode 0600 and the log tail is stripped of control/escape sequences before display.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: Precedence between attended, unattended and headless signals is unspecified, for example workflow_unattended false but s
+
+- Severity: MEDIUM
+- References: DEC-4/DEC-5 and `launch_decision(attended, unattended, headless, opted_out)`.
+- Failure: Precedence between attended, unattended and headless signals is unspecified, for example workflow_unattended false but stdin not a TTY. Plan should say: any positive unattended or headless signal always wins, and the desktop prompt reads only from the TUI's TTY.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: The plan never says which of opted_out, unattended, headless and attended wins when they conflict, or which skip reason
+
+- Severity: HIGH
+- References: CHANGE_PLAN s1 and DEC-4/DEC-5; AC-5 and AC-6 are tested separately, with no combined-case row.
+- Failure: The plan never says which of opted_out, unattended, headless and attended wins when they conflict, or which skip reason is recorded. Say: 'Precedence is opted_out, then unattended, then headless, then attended-confirm; each skip records only its own reason.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: D-2 says a crash or non-zero exit within grace is failed.
+
+- Severity: HIGH
+- References: CHANGE_SPEC D-2; CHANGE_PLAN DEC-6; AC-7 covers only non-zero.
+- Failure: D-2 says a crash or non-zero exit within grace is failed. DEC-6 says alive after grace is success. An exit 0 within grace is covered by neither rule. Say: 'Any exit within grace, including 0, is failed with the log tail.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-019: The stale-pid rule is untestable: it doesn't say how a live pid is told from a reused one, or what a corrupt pid file do
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN DEC-8; no AC covers it, though CHANGE_SPEC s8 lists it.
+- Failure: The stale-pid rule is untestable: it doesn't say how a live pid is told from a reused one, or what a corrupt pid file does. Say: 'Liveness is os.kill(pid,0) plus a matching recorded command; an unparseable pid file is stale; a blocked relaunch records status skipped, reason already running.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: The desktop prompt's keys other than y and n are unspecified, as is quit while the prompt is open.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s7; AC-4 tests decline only.
+- Failure: The desktop prompt's keys other than y and n are unspecified, as is quit while the prompt is open. Say: 'y launches. n, Esc and Enter decline and record declined. Other keys are ignored. Quit while the prompt is open counts as decline.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: D-5 says opt-out means no output.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC D-5 and D-7; CHANGE_PLAN s8 ('0 disables').
+- Failure: D-5 says opt-out means no output. D-7 skips the web preview only when desktop is detected and enabled, and opt-out does no detection. It's unspecified whether opted-out runs write files or keep the web preview. Say: 'With =0, nothing is detected, written or printed, and the web preview is unchanged.' Also say which values count as disabled.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: The plan gives no result for malformed package.json, an empty or invalid launch_command, or an invalid or zero grace val
 
 - Severity: LOW
-- References: CHANGE_PLAN R-5/s1: bug-report-N.md with no collision handling.
-- Failure: Draft filename collision and symlink behavior are unspecified. Decision: exclusive create without following symlinks, taking the next free suffix rather than overwriting.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: /report and the pending confirmation are unspecified in several states: already pending, ineligible, no records, and 'ye
-
-- Severity: HIGH
-- References: CHANGE_PLAN s1/s8: 'next input yes publishes, anything else cancels'. CHANGE_SPEC S2: refusal message has no text.
-- Failure: /report and the pending confirmation are unspecified in several states: already pending, ineligible, no records, and 'yes' with different case or whitespace. Say: 'Confirmation accepts only trimmed case-insensitive `yes`; /report while pending re-renders and replaces it; /report when ineligible prints a refusal and arms nothing.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: The AC-4 redaction test has no oracle: no token pattern list, no replacement string, no path rule.
-
-- Severity: HIGH
-- References: CHANGE_SPEC AC-4 and s10; CHANGE_PLAN R-1 says 'chat.sanitize extension' with no list. Tests are written independently (s12).
-- Failure: The AC-4 redaction test has no oracle: no token pattern list, no replacement string, no path rule. Say: 'scrub maps project root, uncle root and home to <project>, <uncle> and ~, and replaces a named token-pattern list (ghp_, github_pat_, sk-, Bearer, AKIA, URL userinfo, cookie headers) with [REDACTED]; tests use that list.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-019: Draft timing and naming conflict.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1/s7 ('bug-report-<turn>.md') against CHANGE_SPEC V4/S6 ('bug-report-N.md').
-- Failure: Draft timing and naming conflict. The plan saves the draft before confirmation, but the spec says it is saved on every non-publish outcome. Numbering key (<turn> or N), draft survival after publish, and a second /report are unspecified. Say: 'Draft is written before the preview as the lowest unused bug-report-N.md, kept after publish; each /report makes a new file.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: The D2 failed-stage rule is ambiguous: several failures, all-success stages, and speculative records in the attempt coun
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D2 against s20 and s10.
-- Failure: The D2 failed-stage rule is ambiguous: several failures, all-success stages, and speculative records in the attempt count. Its last-record fallback conflicts with the 'unavailable' fallback. Say: 'Failing stage is the most recent non-speculative non-success record; if none, all stage fields are unavailable with no last-record fallback; attempt counts non-speculative records for that stage.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-021: Publish outcomes are underspecified: whether the auth check and the create call each get a timeout, and what happens whe
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-6 and s8; CHANGE_PLAN R-4 and s10.
-- Failure: Publish outcomes are underspecified: whether the auth check and the create call each get a timeout, and what happens when create exits 0 with no URL or extra output. Say: 'Auth check and create each time out at 30s; the URL is the last stdout line starting with https://; if none is found, treat it as failure and show the draft fallback.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-022: The title and excerpt limits are unspecified, and a scrub replacement can change lengths.
-
-- Severity: LOW
-- References: CHANGE_SPEC s15 ('redacted and capped') against CHANGE_PLAN D5.
-- Failure: The title and excerpt limits are unspecified, and a scrub replacement can change lengths. The bounded-length test has no constant to assert. Say: 'Title is at most 80 chars, truncated after scrub; excerpt is 20 lines of at most 300 chars each, truncated after scrub.'
+- References: CHANGE_PLAN DEC-1, DEC-2, DEC-6 and DEC-9; AC-1 and AC-2 cover only the happy path.
+- Failure: The plan gives no result for malformed package.json, an empty or invalid launch_command, or an invalid or zero grace value. Say: 'Invalid package.json gives none. Invalid launch_command is ignored with a warning and falls back to guessing. Invalid or negative grace uses 3 s; 0 checks immediately.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

@@ -1,66 +1,86 @@
 # Manual checklist
 
-### MC-101
-- Exclusive resources: file:sandbox-project-state
+## Coverage
+
+### MC-100
+- Required for acceptance: YES
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: In recovery with each non-`tool bug` classification (code defect, requirement gap, owner decision) and with no classification, check the banner and type `/report`.
-- Expected result: No /report hint in the banner; /report prints the fixed refusal line, arms no confirmation, creates no bug-report draft, and no gh call occurs.
+- Exact action: In an attended TUI session on a desktop (non-CI, non-SSH, display available) with a minimal Electron fixture project (single `start` script, WORKFLOW_PREVIEW_DESKTOP unset), complete a workflow run and observe the desktop prompt.
+- Expected result: Prompt shows framework, the full resolved argv, a warning that project scripts run with user privileges, and defaults to No; no web preview opens.
+- Evidence to capture: Screenshot or transcript of the prompt text and absence of a browser window.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-104
-- Exclusive resources: file:sandbox-project-state
+### MC-101
+- Required for acceptance: YES
+- Exclusive resources: browser:system
+- Depends on: MC-100
+- Exact action: At the desktop prompt press `y` with a real minimal Electron app, then observe the history output and the opened window.
+- Expected result: A real Electron window opens; history prints framework, command, PID and log path; the pid file and log exist under .uncle/workflow/ with 0600 permissions.
+- Evidence to capture: Screenshot of the window, history lines, and `ls -l .uncle/workflow/desktop-app.*` output.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-102
+- Required for acceptance: YES
+- Exclusive resources: browser:system
+- Depends on: MC-101
+- Exact action: With the Electron app launched from MC-101 still running, quit the TUI (or stop the workflow) and check whether the window and process remain.
+- Expected result: The Electron window closes, the process tree is gone, and the pid file is removed.
+- Evidence to capture: Observation that the window closed, `ps` output showing no process, and absence of the pid file.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-103
+- Required for acceptance: YES
+- Exclusive resources: file:.uncle/workflow/desktop-launch.json
 - Depends on: none
-- Exact action: Run /report with a fake `gh` on PATH, then answer `no` (also try empty input and another slash command at the confirmation prompt); check the fake gh log and that the input did not reach triage chat.
-- Expected result: Report cancelled with a one-line message; no `gh issue create` invoked; draft retained; the input was not forwarded to the triage chat; existing triage-issue-N.md files are unchanged.
+- Exact action: At the desktop prompt on a fresh run, press an unrelated key (e.g. `x`), then press Enter; repeat another run pressing `n` and another pressing Esc.
+- Expected result: Unrelated key leaves the prompt open; Enter, n and Esc each decline, launch nothing, and record declined in .uncle/workflow/desktop-launch.json, then the normal completion dialog follows.
+- Evidence to capture: Transcript of each key outcome and contents of desktop-launch.json.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-105
-- Exclusive resources: file:sandbox-project-state
+- Required for acceptance: YES
+- Exclusive resources: file:.uncle/workflow/desktop-launch.json
 - Depends on: none
-- Exact action: Run /report with an authenticated fake gh that prints extra output then a URL last, and answer ` YES ` at confirmation.
-- Expected result: Exactly one `gh issue create --repo unclehq/uncle --title ... --body-file ...` call is made and the issue URL is displayed; the draft remains.
+- Exact action: Run the workflow on the Electron fixture with WORKFLOW_PREVIEW_DESKTOP=0 and a valid web launch.json present.
+- Expected result: No desktop detection output, no .uncle/workflow/desktop-* files, and the web preview behaves exactly as before.
+- Evidence to capture: Transcript, directory listing of .uncle/workflow/, and browser observation.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-106
-- Exclusive resources: file:sandbox-project-state
+### MC-107
+- Required for acceptance: YES
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: Run /report and answer `yes` with (a) gh absent from PATH, (b) gh failing `auth status`, (c) gh create exiting 0 with no URL or timing out.
-- Expected result: Each case keeps the draft and shows an actionable message with a copyable shell-quoted `gh issue create --repo unclehq/uncle ...` command; in (c) the message says the issue may already exist and there is no retry; no crash.
+- Exact action: Run the workflow to completion on a plain web project (no Electron or Tauri) with a webpage launch.json, attended.
+- Expected result: Behavior is unchanged: the web completion preview opens the browser, and no desktop prompt or desktop files appear.
+- Evidence to capture: Screenshot of the browser preview, transcript, and .uncle/workflow/ listing.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-201
-- Exclusive resources: file:.uncle/workflow/bug-report-drafts
+## invariants
+
+### MC-200
+- Required for acceptance: YES
+- Exclusive resources: file:.uncle/workflow/desktop-launch.json
 - Depends on: none
-- Exact action: In a recovery session, run `/report` with classifications code defect, requirement gap, needs owner decision, none, and outside recovery. Check each for the refusal line and for new draft files.
-- Expected result: Each attempt prints the fixed refusal line, arms no confirmation, creates no bug-report draft, and calls no gh. The banner offers /report only for `tool bug`.
+- Exact action: In a disposable Electron fixture project, run the TUI attended to the end of a build, observe the desktop prompt, press unrelated keys, then press Enter; repeat with y, n, Esc, and quit while the prompt is open.
+- Expected result: The prompt shows the full resolved argv and a privilege warning, and unrelated keys leave it open. Enter, n, Esc and quit decline and spawn nothing. Only y launches.
+- Evidence to capture: Screen capture of the prompt and the history lines for each key, plus the process list showing no spawned app on decline.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-204
-- Exclusive resources: file:.uncle/workflow/bug-report-drafts
+- Required for acceptance: YES
+- Exclusive resources: file:.uncle/workflow/desktop-app.pid
 - Depends on: none
-- Exact action: With gh absent from PATH, run `/report` and answer `yes`. Repeat with a gh whose `auth status` fails. Record the message each time and snapshot existing triage-issue-*.md files before and after.
-- Expected result: No issue is created in either case. The sanitized draft is saved, with an actionable message and a copyable `gh issue create --repo unclehq/uncle --title ... --body-file ...` command. Existing triage-issue-*.md files are byte-identical.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-205
-- Exclusive resources: file:.uncle/workflow/bug-report-drafts
-- Depends on: none
-- Exact action: With a fake authenticated gh on PATH that logs argv and prints extra output followed by an https:// URL, run `/report` then answer ` YES `. Then run `/report` and answer `y`.
-- Expected result: The ` YES ` answer triggers exactly one `gh issue create --repo unclehq/uncle` call and the URL is displayed. The draft is kept after publish. The `y` answer cancels with no gh call.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-206
-- Exclusive resources: file:.uncle/workflow/bug-report-drafts
-- Depends on: none
-- Exact action: Run `/report` to arm the confirmation, then type `/clear`. Separately arm again and type `/report`. Then arm and press Enter with empty input. Check whether gh was called and whether the triage chat received any of these inputs.
-- Expected result: None of these inputs publish. `/clear` cancels and then clears as normal. The repeated `/report` replaces the pending state with a fresh draft. Empty input cancels. None of the inputs reach the triage chat.
+- Exact action: Launch a stub that exits 0 (and another that exits non-zero) within the grace period. The stub's output includes ANSI escape sequences. Observe the TUI report.
+- Expected result: Both are reported as failed, with the exit code and a log tail. The log tail shows no escape or control characters, and the pid file is removed. Neither is reported as passed.
+- Evidence to capture: TUI history text, the pid file's absence, and the test-report files showing no new rows.
 - Actual result: 
 - Status: NOT RUN
 
@@ -68,21 +88,31 @@
 
 ### MC-301
 - Required for acceptance: YES
-- Exclusive resources: dir:sandbox-project-bugreport
-- Depends on: MC-300
-- Exact action: In the sandbox, with gh unauthenticated or absent from PATH, run /report and answer `yes`.
-- Expected result: No issue is created; a draft is saved and an actionable message with a copyable shlex-quoted `gh issue create --repo unclehq/uncle --title ... --body-file ...` command is shown; the TUI does not crash.
-- Evidence to capture: Transcript of the message and the saved draft path.
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: On macOS, build a minimal Electron project (package.json with electron dep and only a start script, main.js opening a window), run the TUI workflow to completion attended, and answer y at the desktop prompt.
+- Expected result: The prompt shows the full argv and a privilege warning; after y a real Electron window opens and the TUI prints framework, command, PID and log path.
+- Evidence to capture: Screenshot of the prompt and window, the printed PID/log path, and ls -l of .uncle/workflow/desktop-app.pid and desktop-app.log.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-302
 - Required for acceptance: YES
-- Exclusive resources: dir:sandbox-project-bugreport
+- Exclusive resources: browser:system
 - Depends on: MC-301
-- Exact action: In recovery with an ineligible classification (e.g. code defect) and again with none, type /report and observe the banner and response.
-- Expected result: The banner shows no /report hint, and /report prints the fixed refusal line, arms nothing and creates no bug-report draft.
-- Evidence to capture: Transcript of both refusals and directory listing showing no new draft.
+- Exact action: With the Electron window from MC-301 still open, quit the TUI (or stop the workflow) and then check whether the window and its PID still exist.
+- Expected result: The window closes, the process tree is gone, and desktop-app.pid is removed.
+- Evidence to capture: Screenshot or observation that the window closed, ps output for the PID, and the absence of the pid file.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-306
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: On an Electron project whose start script exits immediately (e.g. process.exit(1) in main.js), run attended and answer y.
+- Expected result: The TUI reports the launch as failed with the exit code and a log tail free of escape sequences, and the pid file is removed.
+- Evidence to capture: Screen capture of the failure message and a listing showing no desktop-app.pid.
 - Actual result: 
 - Status: NOT RUN
 
@@ -92,48 +122,8 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a sandbox project, trigger a stage failure so the recovery chat auto-opens and triage classifies it as a non-tool-bug (e.g. code defect). Observe the banner, then run /do N and /resume, and also type /report.
-- Expected result: Recovery chat opens with diagnosis, banner shows /do N and /resume with no /report hint, /do N and /resume work as before, and /report prints the fixed refusal line with no draft created.
-- Evidence to capture: Terminal transcript of the recovery session and a listing of .uncle/workflow showing no bug-report-N.md file.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-402
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Stop a stage by human stop, decline, or clean exit in the TUI and observe whether triage auto-opens.
-- Expected result: Triage recovery chat does not auto-open on human stop, decline or clean exit, and no report offer appears.
-- Evidence to capture: Terminal transcript or screenshot showing the TUI state after each stop type.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-403
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: In recovery with a tool bug classification, run /report, then reply `no`. Then run /report again and send a normal chat message such as `why did this fail?` as the confirmation input. Then send an ordinary chat message after the cancel.
-- Expected result: Each cancel prints a one-line cancellation, the confirming input is never forwarded to triage chat, no gh issue is created, and the next ordinary message after cancel reaches triage chat and gets a normal reply.
-- Evidence to capture: Terminal transcript of the sequence and a listing of the bug-report-N.md drafts.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-404
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Before using /report, note the contents of any existing .uncle/workflow/triage-issue-N.md and compute its hash. Run /report through preview, cancel, then again with gh unauthenticated and answer yes, then re-hash.
-- Expected result: The triage-issue-N.md files are byte-identical before and after, and new drafts appear only as separate bug-report-N.md files that are never overwritten.
-- Evidence to capture: Before and after hashes of triage-issue-N.md and a listing of bug-report-*.md files.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-405
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: In recovery with a pending /report confirmation armed, type /clear, then check whether the pending report is cancelled and the chat clears. Afterwards type `yes` as an ordinary message.
-- Expected result: /clear cancels the pending report and performs its normal clear; the later `yes` is treated as ordinary input and publishes nothing.
-- Evidence to capture: Terminal transcript showing the cleared chat and no gh invocation.
+- Exact action: In a scratch copy of a plain web project (no Electron/Tauri) with a valid .uncle/launch.json webpage entry, complete a build in the attended TUI and observe the completion flow.
+- Expected result: The web completion preview starts and opens the browser, and the star/finished dialog appears as before. No desktop prompt, history line, or .uncle/workflow/desktop-* file appears.
+- Evidence to capture: Screen capture or transcript of the TUI history and dialog, plus a listing of .uncle/workflow/ showing no desktop-* files.
 - Actual result: 
 - Status: NOT RUN

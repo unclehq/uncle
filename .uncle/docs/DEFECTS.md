@@ -1,71 +1,127 @@
 # Defects
 
-## None
+## MC-102
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Depends on MC-101, which is not in the checklist. Needs a real scratch GitHub repo, gh auth and a live planner
+- **Expected result:** see MANUAL_CHECKLIST.md MC-102
+- **Actual result:** Depends on MC-101, which is not in the checklist. Needs a real scratch GitHub repo, gh auth and a live planner; not available to the agent. Person: Brian, to run on a scratch repo.
+
+## MC-103
 
 - **Status:** BLOCKED-HUMAN
-- **Evidence:** None. Automated coverage of prompt logic is in the driver green-check, which this check does not substitute for.
-- **Expected result:** Prompt shows framework, full resolved argv, a privilege warning, and defaults to No; no web preview opens.
-- **Actual result:** Not observed. A person must watch the live TUI prompt and confirm no browser window opens.
+- **Evidence:** policy-refusal and refused-case tests passed in both attended and unattended modes. Not a live run with a real
+- **Expected result:** see MANUAL_CHECKLIST.md MC-103
+- **Actual result:** policy-refusal and refused-case tests passed in both attended and unattended modes. Not a live run with a real planner.
 
-## None
-
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** None.
-- **Expected result:** A real Electron window opens; history prints framework, command, PID and log path; the pid file and log exist under .uncle/workflow/ with 0600 permissions.
-- **Actual result:** Not observed. A person must press y at the prompt and view the window.
-
-## None
+## MC-105
 
 - **Status:** BLOCKED-HUMAN
-- **Evidence:** None.
-- **Expected result:** The Electron window closes, the process tree is gone, and the pid file is removed.
-- **Actual result:** Not observed, because no Electron app was launched.
+- **Evidence:** Static checks passed. Live slash flow not observed. Needs an attended TUI/terminal session with screen observa
+- **Expected result:** see MANUAL_CHECKLIST.md MC-105
+- **Actual result:** Static checks passed. Live slash flow not observed. Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
 
-## None
-
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** python3 scripts/tests/tui-desktop-launch-test.py -> 'Ran 10 tests in 0.139s OK'. Driver green-check rows are PREEXISTING (no regressions).
-- **Expected result:** Unrelated key leaves prompt open; Enter, n, Esc decline, launch nothing, record declined in desktop-launch.json, then normal completion dialog.
-- **Actual result:** Probe tests test_unrelated_keys_leave_prompt_open, test_decline_keys_record_declined_without_spawn and test_prompt_shows_argv_and_warning_and_enter_declines passed (10/10 OK). Not observed in a real attended terminal run, and the completion dialog following the decline was not separately observed.
-
-## None
+## DEF-2
 
 - **Status:** BLOCKED-HUMAN
-- **Evidence:** Probe output: 10 tests OK.
-- **Expected result:** With WORKFLOW_PREVIEW_DESKTOP=0: no desktop detection output, no desktop-* files, web preview unchanged.
-- **Actual result:** Automated probe test passed. A live run on an Electron fixture with browser observation was not performed here.
+- **Evidence:** Config tests include 1 failure (DEF-2 path) and the TUI/line-menu interaction was not observed. Needs an atten
+- **Expected result:** see MANUAL_CHECKLIST.md MC-106
+- **Actual result:** Config tests include 1 failure (DEF-2 path) and the TUI/line-menu interaction was not observed. Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
 
-## None
-
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** None captured. No screenshot, transcript or .uncle/workflow listing was produced for this check.
-- **Expected result:** Behavior is unchanged: the web completion preview opens the browser, and no desktop prompt or desktop files appear.
-- **Actual result:** Not performed. The check needs a person to run the whole workflow to completion on a plain web project and watch the system browser open. A worker lane cannot do that, and it must not start a nested workflow run.
-
-## None
+## MC-107
 
 - **Status:** BLOCKED-HUMAN
-- **Evidence:** Probe output: 'Ran 10 tests OK'.
-- **Expected result:** Prompt shows full argv and privilege warning; unrelated keys leave it open; Enter/n/Esc/quit decline with no spawn; only y launches.
-- **Actual result:** All related automated probe tests passed (10/10). Quit-while-open and a human-visible screen capture were not independently observed.
+- **Evidence:** Needs two concurrent terminals running a long workflow; only the stubbed lock-held test (housekeeping-workflow
+- **Expected result:** see MANUAL_CHECKLIST.md MC-107
+- **Actual result:** Needs two concurrent terminals running a long workflow; only the stubbed lock-held test (housekeeping-workflow-test.sh, ok: lock-held) was observed, which does not cover this action. Person: Brian.
 
-## None
+## DEF-1
 
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** None. No window, screenshot, PID or log was observed.
-- **Expected result:** The prompt shows the full argv and a privilege warning; after y a real Electron window opens and the TUI prints framework, command, PID and log path.
-- **Actual result:** Not executed. The check needs a person to attend the TUI and observe a real GUI window on macOS, which this non-interactive worker cannot do.
+- **Status:** FAIL
+- **Evidence:** Policy test has 3 failures incl. flag-form matching (DEF-1); exact-shape refusals for git branch -D, git -c, p
+- **Expected result:** see MANUAL_CHECKLIST.md MC-201
+- **Actual result:** Policy test has 3 failures incl. flag-form matching (DEF-1); exact-shape refusals for git branch -D, git -c, push --delete main were not individually observed.
 
-## None
-
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** None. No window or PID was observed.
-- **Expected result:** The window closes, the process tree is gone, and desktop-app.pid is removed.
-- **Actual result:** Not executed. The prerequisite window from MC-301 does not exist. A human must quit the TUI and observe the window and PID.
-
-## None
+## MC-204
 
 - **Status:** BLOCKED-HUMAN
-- **Evidence:** None. No live observation was made. Driver green-check results were not cited as a substitute for the attended observation.
-- **Expected result:** The web completion preview starts and opens the browser, and the star/finished dialog appears as before. No desktop prompt, history line, or .uncle/workflow/desktop-* file appears.
-- **Actual result:** Not performed. The check needs a person watching an attended TUI session and the system browser.
+- **Evidence:** ok: lock-held and ok: decline passed (stubbed). Concurrent real workflow and git status not observed. Needs tw
+- **Expected result:** see MANUAL_CHECKLIST.md MC-204
+- **Actual result:** ok: lock-held and ok: decline passed (stubbed). Concurrent real workflow and git status not observed. Needs two concurrent terminals running a long workflow; only the stubbed lock-held test (housekeeping-workflow-test.sh, ok: lock-held) was observed, which does not cover this action. Person: Brian.
+
+## DEF-2
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Duplicate/floor/invalid config tests ran; TUI not observed. Needs an attended TUI/terminal session with screen
+- **Expected result:** see MANUAL_CHECKLIST.md MC-205
+- **Actual result:** Duplicate/floor/invalid config tests ran; TUI not observed. Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
+
+## MC-206
+
+- **Status:** NOT RUN
+- **Evidence:** Corrupt/empty fallback tests exist but line-menu view and plan refusal were not run for this check.
+- **Expected result:** see MANUAL_CHECKLIST.md MC-206
+- **Actual result:** Corrupt/empty fallback tests exist but line-menu view and plan refusal were not run for this check.
+
+## MC-301
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Needs two concurrent terminals running a long workflow; only the stubbed lock-held test (housekeeping-workflow
+- **Expected result:** see MANUAL_CHECKLIST.md MC-301
+- **Actual result:** Needs two concurrent terminals running a long workflow; only the stubbed lock-held test (housekeeping-workflow-test.sh, ok: lock-held) was observed, which does not cover this action. Person: Brian.
+
+## MC-304
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Needs a real scratch GitHub repo, gh auth and a live planner; not available to the agent. Person: Brian, to ru
+- **Expected result:** see MANUAL_CHECKLIST.md MC-304
+- **Actual result:** Needs a real scratch GitHub repo, gh auth and a live planner; not available to the agent. Person: Brian, to run on a scratch repo.
+
+## DEF-2
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
+- **Expected result:** see MANUAL_CHECKLIST.md MC-305
+- **Actual result:** Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
+
+## MC-306
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** ok: configure menu housekeeping entry is last number (line menu). TUI part not observed, and dependency MC-305
+- **Expected result:** see MANUAL_CHECKLIST.md MC-306
+- **Actual result:** ok: configure menu housekeeping entry is last number (line menu). TUI part not observed, and dependency MC-305 is unrun. Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
+
+## MC-401
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Existing entry points not exercised live; needs real agent CLIs. Needs a real scratch GitHub repo, gh auth and
+- **Expected result:** see MANUAL_CHECKLIST.md MC-401
+- **Actual result:** Existing entry points not exercised live; needs real agent CLIs. Needs a real scratch GitHub repo, gh auth and a live planner; not available to the agent. Person: Brian, to run on a scratch repo.
+
+## MC-402
+
+- **Status:** NOT RUN
+- **Evidence:** Passed for housekeeping combinations and `unknown flag unchanged`; the three existing-flag combinations and `-
+- **Expected result:** see MANUAL_CHECKLIST.md MC-402
+- **Actual result:** Passed for housekeeping combinations and `unknown flag unchanged`; the three existing-flag combinations and `--change-requset` typo not observed.
+
+## MC-404
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
+- **Expected result:** see MANUAL_CHECKLIST.md MC-404
+- **Actual result:** Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
+
+## MC-405
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
+- **Expected result:** see MANUAL_CHECKLIST.md MC-405
+- **Actual result:** Needs an attended TUI/terminal session with screen observation; not performed. Person: Brian.
+
+## MC-406
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Needs two concurrent terminals running a long workflow; only the stubbed lock-held test (housekeeping-workflow
+- **Expected result:** see MANUAL_CHECKLIST.md MC-406
+- **Actual result:** Needs two concurrent terminals running a long workflow; only the stubbed lock-held test (housekeeping-workflow-test.sh, ok: lock-held) was observed, which does not cover this action. Person: Brian.

@@ -1302,7 +1302,8 @@ class UncleTUI:
         if section == "misc":
             return ["Auto mode: " + ("off" if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "false" else "on"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
-                    "Markdown viewer: " + (getattr(self, "misc", {}).get("markdown_viewer") or "auto (first installed)")]
+                    "Markdown viewer: " + (getattr(self, "misc", {}).get("markdown_viewer") or "auto (first installed)"),
+                    "Housekeeping disallow patterns (key housekeeping.disallow)"]
         """One row per stage: the stage, its runner, and what that runner uses."""
         width = max(len(s) for s in BUILD_CONFIG_STAGES)
         rows = []
@@ -1518,7 +1519,22 @@ class UncleTUI:
             if self.issue_mode:
                 cmd.append(self.issue_mode)
             return cmd + auto
+        housekeeping = getattr(self, '_housekeeping_text', None)
+        if housekeeping:
+            return [os.path.join(ROOT, "scripts", "housekeeping-workflow.sh"), housekeeping] + auto
         return list(WORKFLOWS[self.workflow_idx][1]) + auto
+
+    def _start_housekeeping(self, text):
+        """Launch the housekeeping driver with the request text as its argument."""
+        text = (text or '').strip()
+        if not text:
+            raise ValueError('Usage: /housekeeping TEXT')
+        self._housekeeping_text = text
+        self.workflow_idx = 2
+        try:
+            self._run()
+        finally:
+            self._housekeeping_text = None
 
     # ---- config ----
     #
@@ -4046,6 +4062,11 @@ class UncleTUI:
                     'message': 'Starting GitHub issue build'
                 }
                 self._home_action(action, replace_approved=True)
+            elif self._startup_action == 'housekeeping':
+                text = self._startup_text
+                if not text and self._startup_text_file:
+                    text = self._read_startup_text_file(self._startup_text_file)
+                self._start_housekeeping(text)
             elif self._startup_action == 'change_request':
                 text = self._read_startup_text_file(self._startup_text_file)
                 if any(os.path.lexists(os.path.join(_project_root(), *part, 'CHANGE_REQUEST.md'))
@@ -5912,7 +5933,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/runstage', '/delegate', '/app-input']
+        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/runstage', '/delegate', '/app-input', '/housekeeping']
         text = self.chat_composer.lower()
         if self._composer_cursor() != len(text):
             return []
@@ -5942,12 +5963,21 @@ class UncleTUI:
                         '/configure': self.menu_items().index('Configure'),
                         '/settings': self.menu_items().index('Configure'),
                         '/quit': self.menu_items().index('Quit')}
-            if command in ('/new', '/requirements', '/change', '/issue') and (
+            if command in ('/new', '/requirements', '/change', '/issue', '/housekeeping') and (
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command not in ('/issue', '/do', '/run', '/runstage', '/delegate', '/app-input', '/clear', '/resume'):
+            if argument and command not in ('/issue', '/housekeeping', '/do', '/run', '/runstage', '/delegate', '/app-input', '/clear', '/resume'):
                 self.chat_error = command + ' does not take arguments'
+                return True
+            if command == '/housekeeping':
+                try:
+                    self._start_housekeeping(argument)
+                    self.chat_composer = ''
+                    self.chat_choices = []
+                    self.chat_error = ''
+                except (OSError, ValueError) as exc:
+                    self.chat_error = sanitize(str(exc))
                 return True
             if command in ('/run', '/runstage'):
                 try:
@@ -7383,8 +7413,10 @@ class UncleTUI:
                         self._set_field("!misc", "auto_mode", "true" if str(self.misc.get("auto_mode", "")).lower() == "false" else "false")
                     elif self.config_sel == 1:
                         self._open_picker("approval_name", "!misc")
-                    else:
+                    elif self.config_sel == 2:
                         self._open_picker("markdown_viewer", "!misc")
+                    else:
+                        self.notice = "Edit the housekeeping disallow list from the uncle line menu: Configure > Housekeeping."
                 elif section == "opencode" and self.config_sel == 1:
                     self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
                 else:

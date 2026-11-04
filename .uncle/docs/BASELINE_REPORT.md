@@ -1,74 +1,82 @@
-# Baseline report (issue 145)
+# Baseline Report
 
-Omitted sections: Reproduction (feature, not a bug); Existing failures (none documented in-repo; driver baseline is authority)
+Omitted sections: Reproduction (feature, not a bug); Parallel-group independence beyond section 7 (stated there)
 
 ## 1. Change-request summary
-See .uncle/docs/CHANGE_REQUEST.md: detect a desktop app (Electron, then Tauri) at the end of a build, offer to launch it, launch with the project's run command, report command/PID/log, and track the process. Web preview behavior must not change.
+Issue 148 (.uncle/docs/CHANGE_REQUEST.md): add `--housekeeping` / `/housekeeping` and a new short driver `scripts/housekeeping-workflow.sh` for non-code tasks, gated by an allowlist plus an editable disallow list.
 
 ## 2. Repository architecture
-- `uncle_tui.py` (curses TUI, large; grep only) drives the workflow, owns the completion dialog and the web `CompletionPreview`.
-- `scripts/lib/completion_preview.py` (417 lines): launch.json reading (`launch_spec` 231, `validate_launch_spec` 240), manifest derivation (`derive_launch_manifest` 108), `CompletionPreview` thread class (268).
-- `scripts/lib/process_tree.py`: `group_options` 203, `kill_tree` 279, `launch_command` 159.
-- `scripts/lib/preview-build.sh` / `preview_server.py` / `preview_kind.py`: the EARLY preview (before code exists, web/CLI only); not touched here.
-- `scripts/change-workflow.sh` / `workflow.sh` are bash drivers; `completion_preview.py --normalize` is called at change-workflow.sh:4321 and 4549.
+- `uncle` (bash launcher, 781 lines): arg parsing, usage, did-you-mean, startup action env (`UNCLE_STARTUP_ACTION/TEXT/TEXT_FILE`), TUI launch, line-menu fallback.
+- `uncle_tui.py` (7892 lines): curses TUI, slash commands, Configure screens, startup actions.
+- `scripts/*.sh` drivers (`change-workflow.sh` 4977 lines, `workflow.sh`, `from-issue.sh`); shared libs in `scripts/lib/` (state.sh, gates.sh, stage-config.sh, document-layout.sh, change_request_stdin.py, ...).
+- Tests: `scripts/tests/*-test.sh` (run by `scripts/lib/shell_suites.py`) and `*-test.py` (via `scripts/run-python-tests.sh`); 414 files.
 
 ## 3. Relevant code paths
-| Path | Lines | Role |
-|---|---|---|
-| uncle_tui.py `_offer_support` | ~2240-2280 | runs after workflow exit code 0; unattended path calls `finish_decision` -> `_show_early_preview` + `_quit`; attended creates `CompletionPreview` only when `_workflow_family()=="app"` |
-| uncle_tui.py `_poll_completion_preview` | ~2488 | drains preview events into `home_history` |
-| uncle_tui.py `_completion_dialog` | ~2511 | sets `prompt_kind` support/finished |
-| uncle_tui.py `stop_workflow`, `_quit` | ~2916, ~7386 | both close `completion_preview` |
-| uncle_tui.py `_workflow_family`, `_project_root`, `workflow_unattended` | 141, 134, 2121 | family and unattended flag |
-| completion_preview.py `launch_spec` | 231 | `.uncle/launch.json` kinds command/webpage/none |
+- `uncle:57-105` usage; `uncle:108-190` arg loop; `uncle:122` `--unattended`; `uncle:123-141` `--change-request` (mutual-exclusion via `UNCLE_STARTUP_ACTION`, python3 stdin validator); `uncle:142-190` `--application`, `--issue`; `uncle:198` did-you-mean option list; `uncle:219` export of startup env; `uncle:233-263` TUI lock; `uncle:276-289` startup-action TUI launch; `uncle:394-463` unattended relaunch loop.
+- `uncle:612-632` line-menu `configure_menu`, option 3 Miscellaneous uses `config_get`/`config_set` (`misc.*` keys).
+- `uncle_tui.py:980` reads `UNCLE_STARTUP_ACTION`; `:4022-4058` `_handle_startup_action` (create_app, github_issue, change_request); `:4062` `_start_change_request`; `:1292-1295` `_config_items` (Miscellaneous entry); `:1686` `save_config`; `:5914-5949` `_slash_choices`/command table; `:6016,6081,6361` slash handling and help strings.
+- `scripts/lib/change_request_stdin.py`: stdin validation (CAP 1048576, UTF-8, control-char regex, empty check).
+- `.uncle/workflow/driver.lock` (flock) is the per-checkout driver lock (`uncle:233`).
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | App-family build completes, attended, launch.json webpage | Server started, readiness polled, browser opened, star dialog | completion_preview.py:268-370; completion-preview-test.py | Yes |
-| B-2 | Launch.json kind command | Process streamed in chat, Esc stops | completion_preview.py run(); test_command_streams_and_accepts_input | Yes |
-| B-3 | Unattended app-family finish | `_show_early_preview` then quit; no dialog | uncle_tui.py ~2250-2262 | Yes |
-| B-4 | Change-family finish | No completion preview at all | uncle_tui.py ~2273 | Yes (for non-desktop) |
-| B-5 | Quit / stop_workflow | `CompletionPreview.close` kills process tree | uncle_tui.py 2917, 7387 | Yes |
-| B-6 | Electron/Tauri project | Nothing detects it; derive_launch_manifest may treat `npm run dev` as webpage/command | completion_preview.py:108-138 | No (desktop MODIFY) |
+| B-1 | `uncle --change-request < f` | Validated text becomes CHANGE_REQUEST.md, change flow starts in TUI | uncle:123-141 | Yes |
+| B-2 | two of --application/--issue/--change-request | `Error: ... mutually exclusive`, exit 1 | uncle:124,144,162 | Yes (extend message) |
+| B-3 | unknown flag | did-you-mean from fixed list | uncle:198 | Yes (add flag to list) |
+| B-4 | `--unattended` | forwarded to driver, gates auto-satisfied and recorded | uncle:122,406-463 | Yes |
+| B-5 | TUI slash commands | `/issue /change /triage ...` only | uncle_tui.py:5915 | Yes |
+| B-6 | Configure > Miscellaneous | TUI Markdown viewer etc.; line menu auto_mode/approval_name | uncle_tui.py:1295, uncle:617 | Yes |
+| B-7 | second driver on same checkout | refused by driver.lock | uncle:233 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| E-1 | Launching is not evidence; no test-report row written | CompletionPreview writes no report | completion-preview-test.py | Medium |
-| E-2 | Invalid launch metadata launches nothing | `validate_launch_spec` | test_invalid_manifest_does_not_launch | High |
-| E-3 | Launch commands are argument arrays, not shell strings | validate_launch_spec 240-262 | launch-manifest-test.py | High |
-| E-4 | Preview process is killed on quit | CompletionPreview.close | preview-server-test.py (partial) | Medium |
+| V-1 | Start modes mutually exclusive | `UNCLE_STARTUP_ACTION` non-empty check | launcher tests (not individually verified) | Medium |
+| V-2 | stdin request: UTF-8, <=1048576 B, no control chars, non-empty | change_request_stdin.py | change-request-exists-prompt-test.sh and siblings | Medium |
+| V-3 | One driver per checkout | flock driver.lock | launcher-tui-lock-test.sh | Medium |
+| V-4 | Drivers never bypass human gates except via --unattended, recorded | gates libs | gate suites | Medium |
 
-## 6. Current API/schema/interface contracts
-`.uncle/launch.json` shape (command/webpage/none) is a public contract and stays unchanged. `.uncle/config` is whitespace `key value` lines with `#` comments. Env switches use `WORKFLOW_*`.
+## 6. Current API, schema, and interface contracts
+- CLI flags/usage text above; env `UNCLE_STARTUP_ACTION` values `create_app|github_issue|change_request`; TUI raises ValueError on unknown action (uncle_tui.py:4056).
+- `.uncle/config`: flat dotted keys (`stage.runner`, `misc.*`, `supervision.*`) accessed by `config_get/config_set/config_clear` (bash) and `save_config` (TUI). Exact on-disk syntax not inspected; implementation must reuse the helpers. UNRESOLVED only as to syntax, not as to approach.
+- Workflow state/records under `.uncle/workflow/`; docs under `.uncle/docs/`.
 
 ## 7. Existing automated-test coverage
-Python suites in scripts/tests/*-test.py (completion-preview-test.py, launch-manifest-test.py, preview-server-test.py, tui-complete-dialog-test.py, tui-support-test.py) and shell suites run by the two runner scripts. The shell and Python runners use separate temp dirs and no shared ports, so they are one parallel group (per runner documentation in run-python-tests.sh and project convention).
+- Shell suites (`scripts/tests/*-test.sh`) and Python suites (`*-test.py`) cover launcher, TUI config, gates, locks (e.g. tui-config-test.sh, launcher-tui-lock-test.sh, tui-hotkeys-test.py).
+- Shell and Python runners use separate temp dirs and bind no shared ports, so they run as one parallel group (per runner docs: shell ~297 s, Python ~196 s, both at once ~297 s).
+- No housekeeping tests exist. Some existing tests may assert exact usage text, did-you-mean list or slash-command help strings; not individually checked.
+
+## 8. Exact build and test commands
+See `verification_commands` field.
 
 ## 9. Baseline test results
-Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh. No results were produced here; the driver baseline (.uncle/workflow/green-check.baseline.tsv) is authoritative. No repository-documented failures found.
+Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (Uncle's documented runners). Not run here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Per runner docs, some Python suites already fail on a clean checkout.
+
+## 10. Existing failures, warnings, flaky behavior
+Some Python suites fail on a clean checkout (documented in stage instructions); specifics deferred to the driver baseline. UNRESOLVED: which ones.
 
 ## 12. Likely change surface
-New `scripts/lib/desktop_launch.py`; hook in `uncle_tui.py` `_offer_support`/poll/close; new tests; scripts/README.md note.
+`uncle`, `uncle_tui.py`, new `scripts/housekeeping-workflow.sh`, new `scripts/lib/housekeeping_*.py`, new prompt file, new tests, docs (README/usage).
 
 ## 13. Regression-sensitive components
-uncle_tui.py completion/support dialog sequencing (star prompt), CompletionPreview web launch, unattended quit path.
+Launcher arg loop and mutual-exclusion logic; did-you-mean list; TUI startup-action dispatch and slash table; Configure item numbering (`_config_items`); config read/write helpers; existing tests asserting usage/help text.
 
-## 14. Outside the change
-early preview (preview-build.sh, preview_server.py, preview_kind.py), launch.json schema, packaging/signing, GUI testing, mobile, test-report writers, bash drivers.
+## 14. Areas explicitly outside the change
+`change-workflow.sh`, `workflow.sh`, `from-issue.sh`, gate libs (reused, not edited), `change_request_stdin.py`, other drivers' stage plumbing.
 
 ## 15. Unknowns and assumptions
-- Assumed no existing `WORKFLOW_PREVIEW_DESKTOP` or desktop detection anywhere (grep of scripts/ and uncle_tui.py found none).
-- Whether `.uncle/config.example` exists was not checked; docs go in scripts/README.md.
-- Windows/Linux display quirks cannot be exercised on this darwin host.
+- Exact `.uncle/config` serialization and TUI list-editing widgets (assume reusable helpers; reuse rather than invent).
+- Whether existing tests pin usage text.
+- Assume agent runner invocation for the plan stage can reuse `stage-config.sh` lookups.
 
 ## 16. Initial risk assessment
 | Risk | Level |
 |---|---|
-| Dialog sequencing in the large TUI regresses star/finished dialogs | Medium |
-| Orphaned GUI process | Medium (mitigated by pid file + close hooks) |
-| False-positive detection launching GUI | Low (confirmation required, unattended never launches) |
+| Policy bypass via parser gaps (safety boundary in unattended mode) | High |
+| Breaking launcher arg parsing / existing tests | Medium |
+| TUI edit flow complexity in a 7.9k-line file | Medium |
+| Verify step reporting false pass | Medium |
 
 ## Exact build and test commands executed
 

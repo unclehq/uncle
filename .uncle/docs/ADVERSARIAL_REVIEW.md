@@ -1,176 +1,184 @@
-## AR-001: Plan never says if the attended y/n prompt shows when detection is ambiguous, headless, or a live pid file exists.
+## AR-001: Plan never says how argv is matched to an allowlist shape versus the model's `op` label.
 
 - Severity: HIGH
-- References: CHANGE_SPEC D-1, D-4; CHANGE_PLAN section 1 and DEC-8.
-- Failure: Plan never says if the attended y/n prompt shows when detection is ambiguous, headless, or a live pid file exists. Say: 'The prompt is shown only for a single detected command, non-headless, no live pid file; otherwise print the reason or candidates, record skipped, no prompt.'
+- References: CHANGE_PLAN s1 (ops carry op and argv); AC-8 'exact command shapes'.
+- Failure: Plan never says how argv is matched to an allowlist shape versus the model's `op` label. Settle: 'The policy derives the operation from argv alone; it refuses if argv matches no allowlist shape or the op label disagrees.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Unattended and headless signals overlap with no precedence (attended TUI with no stdin TTY, or over SSH).
+## AR-002: Floor and default disallow list are conflated; spec leaves the floor list UNRESOLVED while D-1 lists a smaller set.
 
 - Severity: HIGH
-- References: CHANGE_PLAN DEC-4, DEC-5, launch_decision signature.
-- Failure: Unattended and headless signals overlap with no precedence (attended TUI with no stdin TTY, or over SSH). Say: 'Unattended is true if any signal holds; launch_decision checks opt-out, then unattended, then headless, then asks.'
+- References: CHANGE_SPEC s15 UNRESOLVED; CHANGE_PLAN D-1; AC-7; I-7.
+- Failure: Floor and default disallow list are conflated; spec leaves the floor list UNRESOLVED while D-1 lists a smaller set. Settle: 'Default list equals the change-request lists verbatim; the locked floor is exactly D-1 and always applies.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: D-5 says opt-out does no detection, but D-7 suppresses web preview when desktop is detected and enabled.
+## AR-003: Remote branch delete is allowed, but deleting the default or current branch is unspecified.
+
+- Severity: HIGH
+- References: CHANGE_PLAN D-1, D-2, D-7; AC-8.
+- Failure: Remote branch delete is allowed, but deleting the default or current branch is unspecified. Settle: 'git push origin --delete <branch> is refused for the default branch, HEAD, or refspec/colon forms.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-004: Verify argv source is ambiguous: the model emits verify argv, yet D-4 says verify is deterministic.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC D-5 vs D-7.
-- Failure: D-5 says opt-out does no detection, but D-7 suppresses web preview when desktop is detected and enabled. Say: 'With WORKFLOW_PREVIEW_DESKTOP=0 the web preview runs as before, even for Electron projects.'
+- References: CHANGE_PLAN s1 vs D-4 and D-6.
+- Failure: Verify argv source is ambiguous: the model emits verify argv, yet D-4 says verify is deterministic. Settle: 'Verify argv comes from a fixed per-op template; model-supplied verify argv must equal it, and expected is compared by exact string.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Unclear whether the web preview stays suppressed on a desktop project when the flow ends in decline, skip, ambiguous or
+## AR-005: Behavior after mid-run failure and process exit codes are undefined.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 1; CHANGE_SPEC D-7.
-- Failure: Unclear whether the web preview stays suppressed on a desktop project when the flow ends in decline, skip, ambiguous or failure. Say: 'The web preview is suppressed for any detected desktop project with the flow enabled, whatever the outcome.'
+- References: CHANGE_PLAN s7 state transitions; spec s8; AC-6, AC-10.
+- Failure: Behavior after mid-run failure and process exit codes are undefined. Settle: 'After a failure, read-only verify still runs for completed ops; exit is nonzero for REFUSED, FAILED, VERIFY_FAILED and zero for DECLINED and success.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Live pid file blocks relaunch, but PID reuse and a crash after the grace period are unspecified.
+## AR-006: Edge inputs unspecified: zero-op plan, duplicate or floor-equal patterns, user patterns versus the allowlist.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN DEC-7, DEC-8, section 12.
-- Failure: Live pid file blocks relaunch, but PID reuse and a crash after the grace period are unspecified. Say: 'A pid file is live only if the PID is alive and the recorded command matches; a later crash is reported only while the TUI is open.'
+- References: CHANGE_PLAN D-5; AC-12; I-4, I-7.
+- Failure: Edge inputs unspecified: zero-op plan, duplicate or floor-equal patterns, user patterns versus the allowlist. Settle: 'A zero-op plan is refused; duplicate or floor-equal patterns are rejected leaving the list unchanged; user patterns only add refusals.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Empty, unparsable or non-desktop-project `desktop.launch_command` behavior is undefined.
+## AR-007: Plan allows minimal edits to protected existing tests for usage/help text, but AC-14 requires the existing suites to pas
+
+- Severity: HIGH
+- References: CHANGE_PLAN section 10 and risk row 2 allow expected-string updates; AC-14 requires the suites to pass as at baseline.
+- Failure: Plan allows minimal edits to protected existing tests for usage/help text, but AC-14 requires the existing suites to pass as at baseline. Settle with: 'Existing tests are never edited; usage changes must pass every existing assertion, otherwise stop for human re-approval.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-008: Flag combinations beyond the three exclusive flags are unspecified, as is bare --housekeeping with empty TTY stdin.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC AC-1 and H-11 list only three exclusive flags; H-12 says existing flags are unchanged.
+- Failure: Flag combinations beyond the three exclusive flags are unspecified, as is bare --housekeeping with empty TTY stdin. Settle with: 'Other flag combinations keep prior behavior; --housekeeping with no text and TTY stdin is refused as empty input.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: The new Configure entry position in the line menu is unspecified, so existing numbered selections or item-count tests co
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN section 10 says the entry is appended; H-9 places it in both menus without fixing its number.
+- Failure: The new Configure entry position in the line menu is unspecified, so existing numbered selections or item-count tests could shift. Settle with: 'The entry takes the last number in each menu and no existing item moves.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-010: The driver sources state.sh and reuses driver.lock, but the plan does not say whether it touches shared .uncle/workflow
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN section 1 sources state.sh while section 7 says existing state is untouched; R-4 defers the lock helper choice.
+- Failure: The driver sources state.sh and reuses driver.lock, but the plan does not say whether it touches shared .uncle/workflow state or releases the lock on refusal. Settle with: 'Housekeeping reads and writes no state or gate files outside .uncle/workflow/housekeeping/, and releases driver.lock on every exit path.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-011: Writing housekeeping.disallow into the shared .uncle/config could disturb other keys; the plan does not say how they are
 
 - Severity: LOW
-- References: CHANGE_PLAN DEC-9; CHANGE_SPEC D-8.
-- Failure: Empty, unparsable or non-desktop-project `desktop.launch_command` behavior is undefined. Say: 'An empty or unparsable value is ignored with a one-line warning; the override applies only when a desktop framework is detected.'
+- References: CHANGE_PLAN risk row 3 says the .uncle/config syntax is unknown; D-5 stores a JSON array string.
+- Failure: Writing housekeeping.disallow into the shared .uncle/config could disturb other keys; the plan does not say how they are preserved. Settle with: 'Config writes change only the housekeeping.disallow entry and leave all other keys unchanged.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan says the desktop prompt precedes `_completion_dialog` and that web CompletionPreview is skipped for desktop project
+## AR-012: Allowlisted ops are said to match 'exact command shapes' but the argv grammar is undefined (global options, `--`, `git -
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 'web CompletionPreview and unattended _show_early_preview are skipped (D-7)' vs s5/s8 'launch.json contract unchanged'; spec D-7 says 'may open browser'.
-- Failure: Plan says the desktop prompt precedes `_completion_dialog` and that web CompletionPreview is skipped for desktop projects, but never says how a project with a `launch.json` web/command entry and desktop detection interacts. Plan should say: when desktop is detected and enabled, `launch.json` kind is ignored for the preview, and the launch.json file is left untouched and still validated.
+- References: CHANGE_SPEC AC-8 'exact command shapes'; CHANGE_PLAN s1 'matches program/subcommand/flag sets'.
+- Failure: Allowlisted ops are said to match 'exact command shapes' but the argv grammar is undefined (global options, `--`, `git -c`, `gh --repo`, env prefixes). Decision: match the full argv exactly (program, subcommand, fixed flag set, exact positional arity); refuse any global option, unlisted flag or env-assignment token.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Skipping the early preview (and web preview) for a detected-desktop project is unconditional even when the desktop flow
+## AR-013: Remote `git push origin --delete` is allowed, but the plan doesn't protect the default branch or say how 'merged-only' i
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 'When desktop is detected and enabled... skipped'; D-3/D-4 produce no launch; AC-8 only tests opt-out and non-desktop projects.
-- Failure: Skipping the early preview (and web preview) for a detected-desktop project is unconditional even when the desktop flow then declines, is ambiguous, is headless, or is unattended. A user whose Electron-detected project also has a web preview loses it, contradicting D-6/AC-8. Plan should say: web previews are skipped only when a desktop launch actually occurs or is offered, not on detection alone.
+- References: CHANGE_PLAN D-2/D-7; D-1 covers only force-push to the default branch.
+- Failure: Remote `git push origin --delete` is allowed, but the plan doesn't protect the default branch or say how 'merged-only' is enforced for remotes. Decision: refuse `--delete` and `:ref` refspecs for the default branch, HEAD, main and master; require a merged check at execute time for any remote delete.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: Unattended detection includes `not sys.stdin.isatty()`, which may be true in existing TUI tests or piped usage, silently
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN DEC-5 vs s17 'existing suites must pass unchanged'; spec D-3.
-- Failure: Unattended detection includes `not sys.stdin.isatty()`, which may be true in existing TUI tests or piped usage, silently changing the attended path of `_offer_support` and the existing quit flow. Plan should say: existing suites run with the desktop flow disabled via `WORKFLOW_PREVIEW_DESKTOP=0` or on non-desktop fixtures, and the TUI's own attended state takes precedence over isatty.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-010: The new `prompt_kind='desktop'` is inserted before the support/finished dialog, but key handling, resize, quit and Esc b
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s7 'New prompt_kind=desktop (confirm/decline)'; key handling at uncle_tui.py ~6878 only referenced as to read.
-- Failure: The new `prompt_kind='desktop'` is inserted before the support/finished dialog, but key handling, resize, quit and Esc behavior while the desktop prompt is showing are unspecified, and so is what happens if the workflow-exit event arrives twice. Plan should say: any key other than y/Y confirms decline, Esc/q declines, and `_offer_support` is idempotent per run.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-011: Cleanup on stop_workflow/_quit kills the process, but the plan does not say what happens when the desktop app is still r
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN DEC-8 'live one blocks relaunch with a message' vs s7 flow.
-- Failure: Cleanup on stop_workflow/_quit kills the process, but the plan does not say what happens when the desktop app is still running at the time the TUI starts the next workflow run, or when the live-pid-file relaunch block (DEC-8) fires in the attended prompt. Plan should say: a live pid blocks the prompt, prints a message, and the flow continues to `_completion_dialog`.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-012: Plan auto-detects and runs project-defined commands (npm start/dev) from a freshly built, possibly untrusted repo; the p
+## AR-014: The floor lists fixed strings, and variants are unspecified: `rm -fr`, `--recursive --force`, `/*`, `$HOME`, wrappers (`
 
 - Severity: HIGH
-- References: CHANGE_PLAN DEC-2 and D-1/D-2; I-2 requires confirmation but sets no default or disclosure rule.
-- Failure: Plan auto-detects and runs project-defined commands (npm start/dev) from a freshly built, possibly untrusted repo; the prompt only shows the command. Plan should say: the prompt displays the resolved argv, warns that project scripts run with user privileges, and defaults to No.
+- References: CHANGE_PLAN D-1; the D-2 allowlist contains no rm.
+- Failure: The floor lists fixed strings, and variants are unspecified: `rm -fr`, `--recursive --force`, `/*`, `$HOME`, wrappers (`env`, `xargs`, `sh -c`), `+refspec`, `--force-with-lease`. Decision: rm and wrapper programs are never allowlisted; `--force-with-lease` and `+refspec` count as force.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: `desktop.launch_command` is read from `.uncle/config`, which lives in the project and may be repo-controlled, yet the sp
+## AR-015: Nothing binds the approved plan to the executed argv (TOCTOU), or says the displayed argv is escaped.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s1 stages plan -> policy -> approval -> execute, with no integrity binding.
+- Failure: Nothing binds the approved plan to the executed argv (TOCTOU), or says the displayed argv is escaped. Decision: hash the policy-checked plan, approve that hash, execute only it, and render argv with control characters escaped.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: The editable disallow config is unspecified for empty or over-broad patterns, and for whether it can do anything except
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-5; CHANGE_SPEC I-4/I-7.
+- Failure: The editable disallow config is unspecified for empty or over-broad patterns, and for whether it can do anything except add refusals. Decision: config can only add refusals; empty or bare `*` patterns are rejected; the floor is hard-coded, not read from config.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: Read-only verify commands (`git ls-remote`, `gh issue view`) can take arbitrary URLs and targets, and the issue-triage c
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-6; D-2 'issue-triage' has no defined command shape.
+- Failure: Read-only verify commands (`git ls-remote`, `gh issue view`) can take arbitrary URLs and targets, and the issue-triage command shape is undefined. Decision: verify argv is limited to the same repo and refs as the operation; issue-triage allows only fixed label/close/comment shapes.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: Plan never says whether a plan-supplied verify argv is also checked against the disallow list, or what happens when it i
 
 - Severity: HIGH
-- References: CHANGE_SPEC section 10 Security; DEC-9 and D-8.
-- Failure: `desktop.launch_command` is read from `.uncle/config`, which lives in the project and may be repo-controlled, yet the spec calls it 'the operator's own'. Plan should say: a config-supplied command is shown in full and never launches without confirmation.
+- References: CHANGE_PLAN D-6; CHANGE_SPEC section 10; AC-10 covers only mismatch, failure and not-run.
+- Failure: Plan never says whether a plan-supplied verify argv is also checked against the disallow list, or what happens when it is off the verify allowlist (refuse whole plan vs NOT VERIFIED). Settle: 'A verify argv off the read-only verify allowlist or matching a disallow pattern refuses the whole plan before any command runs, in every mode.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Cleanup behavior is unspecified for a stale pid file whose PID has been reused by another process.
-
-- Severity: MEDIUM
-- References: DEC-8, D-9 and R-2 do not define pid-reuse verification.
-- Failure: Cleanup behavior is unspecified for a stale pid file whose PID has been reused by another process. Plan should say: cleanup kills only the process tree of this session's Popen handle, or verifies pid, start time and command before killing, and never kills a pid taken only from the file.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: Log tail is displayed in the TUI and files are created with unspecified permissions.
-
-- Severity: MEDIUM
-- References: DEC-7 and section 12 ('last 20 log lines'); no sanitization or permission rule.
-- Failure: Log tail is displayed in the TUI and files are created with unspecified permissions. Plan should say: pid, log and record files are created mode 0600 and the log tail is stripped of control/escape sequences before display.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: Precedence between attended, unattended and headless signals is unspecified, for example workflow_unattended false but s
-
-- Severity: MEDIUM
-- References: DEC-4/DEC-5 and `launch_decision(attended, unattended, headless, opted_out)`.
-- Failure: Precedence between attended, unattended and headless signals is unspecified, for example workflow_unattended false but stdin not a TTY. Plan should say: any positive unattended or headless signal always wins, and the desktop prompt reads only from the TUI's TTY.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: The plan never says which of opted_out, unattended, headless and attended wins when they conflict, or which skip reason
+## AR-019: Floor patterns and the default branch are undefined, so AC-7 tests lack an oracle.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 and DEC-4/DEC-5; AC-5 and AC-6 are tested separately, with no combined-case row.
-- Failure: The plan never says which of opted_out, unattended, headless and attended wins when they conflict, or which skip reason is recorded. Say: 'Precedence is opted_out, then unattended, then headless, then attended-confirm; each skip records only its own reason.'
+- References: CHANGE_PLAN D-1; CHANGE_SPEC section 15 marks the exact floor list UNRESOLVED.
+- Failure: Floor patterns and the default branch are undefined, so AC-7 tests lack an oracle. Settle: 'Default branch means main, master, or origin HEAD; rm with any recursive or force flag spelling on /, /*, ~, $HOME is refused.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: D-2 says a crash or non-zero exit within grace is failed.
-
-- Severity: HIGH
-- References: CHANGE_SPEC D-2; CHANGE_PLAN DEC-6; AC-7 covers only non-zero.
-- Failure: D-2 says a crash or non-zero exit within grace is failed. DEC-6 says alive after grace is success. An exit 0 within grace is covered by neither rule. Say: 'Any exit within grace, including 0, is failed with the log tail.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-019: The stale-pid rule is untestable: it doesn't say how a live pid is told from a reused one, or what a corrupt pid file do
+## AR-020: Pattern grammar `program [subcommand...] [--flag...]` leaves open short-flag clusters, --flag=value, flags before subcom
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN DEC-8; no AC covers it, though CHANGE_SPEC s8 lists it.
-- Failure: The stale-pid rule is untestable: it doesn't say how a live pid is told from a reused one, or what a corrupt pid file does. Say: 'Liveness is os.kill(pid,0) plus a matching recorded command; an unparseable pid file is stale; a blocked relaunch records status skipped, reason already running.'
+- References: CHANGE_PLAN D-5; AC-7 'flag-order and quoting variants'; AC-12 invalid pattern.
+- Failure: Pattern grammar `program [subcommand...] [--flag...]` leaves open short-flag clusters, --flag=value, flags before subcommand, and all-vs-any flags. Settle: 'A pattern matches when program and subcommands are a prefix of the command tokens and every pattern flag appears in any order, clusters expanded, --flag=value matched by name.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: The desktop prompt's keys other than y and n are unspecified, as is quit while the prompt is open.
+## AR-021: A valid-JSON plan with zero ops, duplicate ids or missing fields is unspecified; only bad JSON is covered.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s7; AC-4 tests decline only.
-- Failure: The desktop prompt's keys other than y and n are unspecified, as is quit while the prompt is open. Say: 'y launches. n, Esc and Enter decline and record declined. Other keys are ignored. Quit while the prompt is open counts as decline.'
+- References: CHANGE_PLAN risk table 'Plan model emits bad JSON'; section 7 has no schema rule.
+- Failure: A valid-JSON plan with zero ops, duplicate ids or missing fields is unspecified; only bad JSON is covered. Settle: 'A plan that is invalid JSON, has zero ops, or has any op missing id, op, argv, expected or verify is REFUSED with exit 1 before approval.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: D-5 says opt-out means no output.
+## AR-022: Exit statuses and whether verify runs after an execute failure are unspecified for DECLINED, FAILED, VERIFY_FAILED, NOT_
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC D-5 and D-7; CHANGE_PLAN s8 ('0 disables').
-- Failure: D-5 says opt-out means no output. D-7 skips the web preview only when desktop is detected and enabled, and opt-out does no detection. It's unspecified whether opted-out runs write files or keep the web preview. Say: 'With =0, nothing is detected, written or printed, and the web preview is unchanged.' Also say which values count as disabled.
+- References: CHANGE_PLAN section 7 transitions; CHANGE_SPEC section 8 gives exit 1 only for input refusals.
+- Failure: Exit statuses and whether verify runs after an execute failure are unspecified for DECLINED, FAILED, VERIFY_FAILED, NOT_VERIFIED. Settle: 'After FAILED, executed ops are still verified and unexecuted ops are NOT_VERIFIED; exit 0 only for DECLINED or fully VERIFIED, else 1.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: The plan gives no result for malformed package.json, an empty or invalid launch_command, or an invalid or zero grace val
+## AR-023: AC-13 static and mutation tests have no defined mechanism for a bash driver.
 
-- Severity: LOW
-- References: CHANGE_PLAN DEC-1, DEC-2, DEC-6 and DEC-9; AC-1 and AC-2 cover only the happy path.
-- Failure: The plan gives no result for malformed package.json, an empty or invalid launch_command, or an invalid or zero grace value. Say: 'Invalid package.json gives none. Invalid launch_command is ignored with a warning and falls back to guessing. Invalid or negative grace uses 3 s; 0 checks immediately.'
+- Severity: MEDIUM
+- References: CHANGE_SPEC AC-13; CHANGE_PLAN section 16.
+- Failure: AC-13 static and mutation tests have no defined mechanism for a bash driver. Settle: 'The driver executes plan commands only via one function that consumes the check_plan output; the static test asserts it is the sole execution call site and the mutation test removes the check_plan call and expects the suite to fail.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

@@ -262,5 +262,21 @@ sys.stdout.write(out); sys.exit(p.returncode)' "$ROOT/uncle" "$OPT")"; rc=$?
     check "$OPT bare on a TTY: no 'requires an argument'" test -z "$(grep 'requires an argument' <<<"$out")"
 done
 
+# ---- --issue: stdin only when no issue reference is given ----
+printf '#42\n' > "$TMP/in-issue"
+run_uncle "$TMP/in-issue" --issue
+check "--issue bare reads piped ref: exit 0" test "$RC" -eq 0
+check "--issue bare: action" test "$(envval action)" = github_issue
+check "--issue bare: ref normalised" test "$(envval text)" = 42
+run_uncle "$TMP/in-line" --issue 7
+check "--issue 7 ignores stdin: exit 0" test "$RC" -eq 0
+check "--issue 7 ref" test "$(envval text)" = 7
+run_uncle "$TMP/in-issue" --issue --unattended
+check "--issue then option reads stdin" test "$(envval text)" = 42
+run_uncle "$TMP/in-empty" --issue
+check "--issue empty stdin refused" test "$RC" -eq 1
+run_uncle "$TMP/in-line" --issue
+check "--issue invalid piped ref refused" test "$RC" -eq 1
+
 if [[ "$fails" -eq 0 ]]; then echo "all launcher stdin text checks passed"; exit 0; fi
 echo "$fails check(s) failed"; exit 1

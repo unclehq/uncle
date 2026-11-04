@@ -1024,10 +1024,12 @@ class UncleTUI:
         self._startup_unattended = os.environ.get("UNCLE_STARTUP_UNATTENDED") == "1"
         self._startup_injected = False
         self._startup_attended = os.environ.get("UNCLE_STARTUP_ATTENDED") == "1"
-        if self._startup_attended:
-            self.misc['auto_mode'] = 'false'
-        elif self._startup_unattended:
-            self.misc['auto_mode'] = 'true'
+        # The launcher's resolved mode is a launch-time override held outside
+        # self.misc: load_config() rebuilds misc from .uncle/config on every
+        # reload (and a persisted `misc.auto_mode false` would win), which
+        # silently flipped --issue/--application/--change-request to attended.
+        self._startup_mode_override = (False if self._startup_attended
+                                       else True if self._startup_unattended else None)
         # Bind the homepage composer before the first frame or key event.
         self._ensure_chat()
         self.chat_focus = 'chat'
@@ -2113,6 +2115,9 @@ class UncleTUI:
         override = getattr(self, "session_auto_mode", None)
         if override is not None:
             return override
+        startup = getattr(self, "_startup_mode_override", None)
+        if startup is not None:
+            return startup
         return str(getattr(self, "misc", {}).get("auto_mode", "")).lower() != "false"
 
     def _build_live(self):

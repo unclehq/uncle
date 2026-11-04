@@ -10,7 +10,7 @@ B_UN='Mode: unattended (default). Approval gates are delegated to the agent; use
 N_FLAG='uncle: --unattended is deprecated; unattended is now the default. Use --attended to approve gates yourself.'
 N_ENV() { printf 'uncle: %s=1 is deprecated; unattended is now the default. Use UNCLE_ATTENDED=1 to approve gates yourself.' "$1"; }
 R_CONTRA='uncle: --attended and --unattended contradict each other; choose one.'
-R_TTY='uncle: attended mode needs an interactive terminal on stdin; set UNCLE_ATTENDED_STDIN=1 to answer gates from stdin.'
+R_TTY='uncle: attended mode needs an interactive terminal on stdin, or stdin left free to answer gates (not consumed by a bare --application, bare --issue or --change-request).'
 R_INH='uncle: attended mode was requested but this run was already resolved as unattended; start a new run with --attended.'
 
 # run NAME WORKDIR "ENV ASSIGNMENTS" ARGS... ; sets rc, out, err, res

@@ -65,7 +65,7 @@ usage() {
     cat <<'EOF'
 Usage: uncle [-h|--help|--performance|--runs] [--attended]
        uncle --application [TEXT] [--attended]
-       uncle --issue ISSUE [--attended]
+       uncle --issue [ISSUE] [--attended]
        uncle --change-request [--attended] < request.md
        uncle --housekeeping [TEXT] [--attended]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
@@ -94,9 +94,16 @@ For --application and --housekeeping, text beginning with -- must use the
 REQUIREMENTS.md from TEXT, as if it had been typed there, and starts the
 build; without a supervisor the build starts from TEXT as written. Composes
 with --attended.
---issue ISSUE starts a GitHub issue build immediately with the given issue
+--issue [ISSUE] starts a GitHub issue build immediately with the given issue
 reference (number, #number, or full https://github.com/... URL), skipping
-interactive input. Composes with --attended.
+interactive input. Stdin is read only when ISSUE is omitted (reference piped
+in). Composes with --attended; attended gates then need a terminal, since the
+reference consumed stdin.
+
+Only one startup option may be given (--application, --issue, --change-request,
+--housekeeping), and at most one consumer takes stdin: a bare --application,
+a bare --issue, or --change-request. With none of those, attended runs read
+gate answers from stdin automatically; no environment variable is needed.
 --change-request reads the whole change request from stdin (UTF-8, at most
 1048576 bytes, no NUL or control characters), writes it to CHANGE_REQUEST.md and
 starts the change workflow. stdin must be piped or redirected; it refuses to
@@ -138,6 +145,10 @@ UNCLE_FLAG_ATTENDED=""
 UNCLE_FLAG_UNATTENDED=""
 UNCLE_CR_DIR=""
 UNCLE_PENDING_STDIN=""
+# 1 once a startup option (bare --application/--housekeeping, bare --issue,
+# --change-request) takes stdin for its own input. A claimed stdin cannot also
+# answer attended gates.
+UNCLE_STDIN_CLAIMED=0
 UNCLE_SHIFT=1
 
 # Handles --application / --housekeeping. $1 option, $2 action, rest = the
@@ -170,6 +181,7 @@ parse_text_option() {
         UNCLE_SHIFT=2
     else
         UNCLE_PENDING_STDIN="$opt"
+        UNCLE_STDIN_CLAIMED=1
         UNCLE_SHIFT=1
     fi
 }
@@ -191,6 +203,17 @@ read_stdin_option() {
     [[ -n "$UNCLE_STARTUP_TEXT_FILE" ]] || exit 1
 }
 trap '[[ -n "$UNCLE_CR_DIR" ]] && rm -rf "$UNCLE_CR_DIR"' EXIT
+# Refuse combined startup options up front, before any of them reads stdin.
+_exclusive=0
+for _a in "$@"; do
+    case "$_a" in
+        --application|--application=*|--issue|--change-request|--housekeeping|--housekeeping=*) _exclusive=$((_exclusive + 1)) ;;
+    esac
+done
+if [[ "$_exclusive" -gt 1 ]]; then
+    printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
+    exit 1
+fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)     usage; exit 0 ;;
@@ -217,6 +240,7 @@ while [[ $# -gt 0 ]]; do
             UNCLE_STARTUP_TEXT_FILE="$(python3 "$ROOT/scripts/lib/change_request_stdin.py" "$PROJECT_ROOT" "$UNCLE_CR_DIR")" || exit 1
             [[ -n "$UNCLE_STARTUP_TEXT_FILE" ]] || exit 1
             UNCLE_STARTUP_ACTION="change_request"
+            UNCLE_STDIN_CLAIMED=1
             shift
             ;;
         --housekeeping|--housekeeping=*)
@@ -233,15 +257,30 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             shift
-            if [[ $# -eq 0 ]]; then
-                printf 'Error: --issue requires an argument\n' >&2
-                exit 1
+            # An issue reference on the command line wins and stdin is left
+            # alone. Only a bare --issue (nothing after it, or another option)
+            # reads the reference from piped stdin.
+            if [[ $# -eq 0 || "$1" == --* ]]; then
+                if [[ -t 0 ]]; then
+                    printf 'Error: --issue requires an argument or a reference piped on stdin\n' >&2
+                    exit 1
+                fi
+                issue_ref="$(head -c 4096)"
+                issue_ref="${issue_ref//[[:space:]]/}"
+                if [[ -z "$issue_ref" ]]; then
+                    printf 'Error: --issue reference cannot be empty\n' >&2
+                    exit 1
+                fi
+                issue_shift=0
+                UNCLE_STDIN_CLAIMED=1
+            else
+                if [[ -z "$1" ]]; then
+                    printf 'Error: --issue reference cannot be empty\n' >&2
+                    exit 1
+                fi
+                issue_ref="$1"
+                issue_shift=1
             fi
-            if [[ -z "$1" ]]; then
-                printf 'Error: --issue reference cannot be empty\n' >&2
-                exit 1
-            fi
-            issue_ref="$1"
             issue_ref="${issue_ref#\#}"
             if [[ "$issue_ref" =~ ^[0-9]+$ ]]; then
                 if [[ "$issue_ref" == "0" ]]; then
@@ -256,7 +295,7 @@ while [[ $# -gt 0 ]]; do
             fi
             UNCLE_STARTUP_ACTION="github_issue"
             UNCLE_STARTUP_TEXT="$issue_ref"
-            shift
+            shift "$issue_shift"
             ;;
         *)
             printf 'Unknown argument: %s\n' "$1" >&2
@@ -282,8 +321,15 @@ done
 # Resolve the mode once. Unattended is the default; an explicit attended source
 # (--attended or exactly UNCLE_ATTENDED=1) wins over the deprecated --unattended
 # except that --attended with --unattended is refused. Attended needs a TTY on
-# stdin (captured above) unless UNCLE_ATTENDED_STDIN=1.
+# stdin (captured above) unless stdin is free to carry the gate answers, i.e.
+# no startup option claimed it. That is decided here, never by the caller's
+# environment: UNCLE_ATTENDED_STDIN is set for the drivers only when needed.
 . "$ROOT/scripts/lib/mode.sh"
+unset UNCLE_ATTENDED_STDIN
+if [[ -n "$UNCLE_STARTUP_ACTION" && "$UNCLE_STDIN_CLAIMED" != 1 && "$UNCLE_STDIN_TTY" != 1 \
+      && ( -n "$UNCLE_FLAG_ATTENDED" || "${UNCLE_ATTENDED:-}" == 1 ) ]]; then
+    export UNCLE_ATTENDED_STDIN=1
+fi
 if [[ -z "$UNCLE_STARTUP_ACTION" && -z "$UNCLE_FLAG_ATTENDED$UNCLE_FLAG_UNATTENDED" \
       && -z "${UNCLE_ATTENDED:-}${UNCLE_UNATTENDED:-}${WORKFLOW_UNATTENDED:-}${UNCLE_HOUSEKEEPING_UNATTENDED:-}" ]]; then
     # Plain `uncle` opens the interactive TUI/menu: a person is present, so it

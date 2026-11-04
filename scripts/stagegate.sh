@@ -48,7 +48,7 @@ Run the human-gated new-application workflow from REQUIREMENTS.md. The driver
 is a resumable state machine; re-run it to continue from the current stage.
 
 Unattended is the default. --attended keeps every human gate and needs a
-terminal on standard input (or UNCLE_ATTENDED_STDIN=1).
+terminal on standard input, or standard input left free for gate answers.
 
 Unattended mode runs with nobody at the terminal: every gate that would wait for
 a person is auto-waived and recorded, and the run reports how many judgments

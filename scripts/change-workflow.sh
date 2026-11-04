@@ -141,9 +141,12 @@ UNATTENDED_FILE="$STATE_DIR/unattended-gates"
 # Mode resolution is shared (scripts/lib/mode.sh). It refuses (exit 1, stderr) before the mode file is touched; this driver owns its run
 # directory, so it alone writes .uncle/workflow/mode, and only after resolution has succeeded.
 . "$ROOT/scripts/lib/mode.sh"
-uncle_mode_resolve "$STATE_DIR" "$FLAG_ATTENDED" "$FLAG_UNATTENDED" || exit 1
-UNATTENDED="${UNCLE_UNATTENDED:-$UNATTENDED}"
-uncle_mode_write "$STATE_DIR" || exit 1
+mode_flags=()
+[[ "$FLAG_ATTENDED" != 1 ]] || mode_flags+=(--attended)
+[[ "$FLAG_UNATTENDED" != 1 ]] || mode_flags+=(--unattended)
+UNCLE_MODE_DIR="$STATE_DIR" uncle_resolve_mode ${mode_flags[@]+"${mode_flags[@]}"} || exit 1
+mkdir -p "$STATE_DIR"
+uncle_write_mode_file "$STATE_DIR" "$UNATTENDED" || exit 1
 uncle_mode_banner >&2
 
 # An unattended run ledgers what enabled it, so a mode inherited from a wrapper is visible in the run's own record.

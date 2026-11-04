@@ -16,7 +16,7 @@
 uncle_msg_banner_unattended='Mode: unattended (default). Approval gates are delegated to the agent; use --attended to approve each gate yourself.'
 uncle_msg_banner_attended='Mode: attended. Each approval gate waits for your decision.'
 uncle_msg_refuse_contradict='uncle: --attended and --unattended contradict each other; choose one.'
-uncle_msg_refuse_no_tty='uncle: attended mode needs an interactive terminal on stdin; set UNCLE_ATTENDED_STDIN=1 to answer gates from stdin.'
+uncle_msg_refuse_no_tty='uncle: attended mode needs an interactive terminal on stdin, or stdin left free to answer gates (not consumed by a bare --application, bare --issue or --change-request).'
 uncle_msg_refuse_inherited='uncle: attended mode was requested but this run was already resolved as unattended; start a new run with --attended.'
 uncle_msg_notice_flag='uncle: --unattended is deprecated; unattended is now the default. Use --attended to approve gates yourself.'
 

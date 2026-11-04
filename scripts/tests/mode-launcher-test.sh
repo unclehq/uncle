@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Launcher mode resolution: refusals happen before any state is created, a
 # user-supplied UNCLE_MODE_RESOLVED is cleared, and --attended with piped stdin
-# text needs UNCLE_ATTENDED_STDIN=1.
+# text is refused, while stdin left free is detected automatically.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 UNCLE="$ROOT/uncle"
 fail=0
-NOTTY='uncle: attended mode needs an interactive terminal on stdin; set UNCLE_ATTENDED_STDIN=1 to answer gates from stdin.'
+NOTTY='uncle: attended mode needs an interactive terminal on stdin, or stdin left free to answer gates (not consumed by a bare --application, bare --issue or --change-request).'
 CONTRA='uncle: --attended and --unattended contradict each other; choose one.'
 
 check() { # name want_status want_stderr_substr status stderr stdout
@@ -36,12 +36,13 @@ run env-attended-no-tty 1 "$NOTTY" UNCLE_SKIP_UPGRADE=1 UNCLE_ATTENDED=1 --
 # --attended then re-resolves and hits the TTY rule instead of being refused as
 # a contradiction of an inherited decision.
 run resolved-cleared 1 "$NOTTY" UNCLE_SKIP_UPGRADE=1 UNCLE_MODE_RESOLVED=1 UNCLE_UNATTENDED=1 -- --attended
-# Piped text with --attended: refused without the stdin escape.
-run piped-text-attended-refused 1 "$NOTTY" UNCLE_SKIP_UPGRADE=1 -- --application hello --attended
-# UNCLE_ATTENDED_STDIN=1 waives the TTY refusal (it never selects attended alone).
+# Bare --application consumes stdin, so attended has none left for gates: refused.
+run bare-application-attended-refused 1 "$NOTTY" UNCLE_SKIP_UPGRADE=1 -- --application --attended
+run claimed-stdin-env-ignored 1 "$NOTTY" UNCLE_SKIP_UPGRADE=1 UNCLE_ATTENDED_STDIN=1 -- --application --attended
+# Text given on the command line leaves stdin free: no refusal, no env var needed.
 err="$(mktemp)"
-( cd "$(mktemp -d)" && UNCLE_SKIP_UPGRADE=1 UNCLE_ATTENDED_STDIN=1 timeout 5 bash "$UNCLE" --attended --bogus </dev/null >/dev/null 2>"$err" )
-if grep -qF "$NOTTY" "$err"; then echo "FAIL stdin-escape: refusal printed" >&2; fail=1; else echo "ok stdin-escape"; fi
+( cd "$(mktemp -d)" && UNCLE_SKIP_UPGRADE=1 timeout 5 bash "$UNCLE" --application hello --attended --bogus </dev/null >/dev/null 2>"$err" )
+if grep -qF "attended mode needs" "$err"; then echo "FAIL free-stdin-auto: refusal printed" >&2; fail=1; else echo "ok free-stdin-auto"; fi
 rm -f "$err"
 
 exit "$fail"

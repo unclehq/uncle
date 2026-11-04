@@ -13,8 +13,9 @@ through.** Add `--attended` (or `UNCLE_ATTENDED=1`) to keep human gates.
 ## New
 
 - `--attended`: every gate waits for a person. Without a TTY it exits nonzero
-  and starts nothing; it never falls back to unattended. Scripted answers need
-  an explicit `UNCLE_ATTENDED_STDIN=1`.
+  and starts nothing; it never falls back to unattended. Scripted answers are accepted on stdin
+  automatically when no startup option (bare `--application`, bare `--issue`,
+  `--change-request`) consumes it.
 - `UNCLE_ATTENDED=1`: same as `--attended`.
 - `--attended` together with `--unattended` is refused, naming both flags.
 - If attended and unattended are requested through different sources (flag and

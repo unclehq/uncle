@@ -56,11 +56,11 @@ fi
 
 usage() {
     cat <<'EOF'
-Usage: uncle [-h|--help|--performance|--runs] [--unattended]
-       uncle --application [TEXT] [--unattended]
-       uncle --issue ISSUE [--unattended]
-       uncle --change-request [--unattended] < request.md
-       uncle --housekeeping [TEXT] [--unattended]
+Usage: uncle [-h|--help|--performance|--runs] [--attended]
+       uncle --application [TEXT] [--attended]
+       uncle --issue ISSUE [--attended]
+       uncle --change-request [--attended] < request.md
+       uncle --housekeeping [TEXT] [--attended]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -76,16 +76,20 @@ and per-stage overrides from `.uncle/config` (menu option 4).
   q) Quit
 
 Runs with no arguments. -h / --help print this message and exit 0.
+Mode: --application, --issue, --change-request and --housekeeping run unattended
+by default (approval gates are delegated to the agent and recorded as unreviewed).
+--attended (or UNCLE_ATTENDED=1) makes every gate wait for you and needs a
+terminal on stdin. --unattended is deprecated and behaves as the default.
 --application [TEXT] starts a new application build immediately with the given
 description (or piped stdin when TEXT is omitted), skipping interactive input.
 For --application and --housekeeping, text beginning with -- must use the
 --OPT=TEXT form (e.g. --application=--flag); an empty value is refused. The homepage supervisor drafts
 REQUIREMENTS.md from TEXT, as if it had been typed there, and starts the
 build; without a supervisor the build starts from TEXT as written. Composes
-with --unattended.
+with --attended.
 --issue ISSUE starts a GitHub issue build immediately with the given issue
 reference (number, #number, or full https://github.com/... URL), skipping
-interactive input. Composes with --unattended.
+interactive input. Composes with --attended.
 --change-request reads the whole change request from stdin (UTF-8, at most
 1048576 bytes, no NUL or control characters), writes it to CHANGE_REQUEST.md and
 starts the change workflow. stdin must be piped or redirected; it refuses to
@@ -117,6 +121,14 @@ UNCLE_STARTUP_ACTION=""
 UNCLE_STARTUP_TEXT=""
 UNCLE_STARTUP_TEXT_FILE=""
 UNCLE_UNATTENDED=""
+# One mode decision per launch: a user-supplied UNCLE_MODE_RESOLVED is never
+# trusted. Only this launcher sets it, after resolving below. isatty(0) is
+# captured before any stdin text is consumed.
+unset UNCLE_MODE_RESOLVED
+UNCLE_STDIN_TTY=0
+[[ ! -t 0 ]] || UNCLE_STDIN_TTY=1
+UNCLE_FLAG_ATTENDED=""
+UNCLE_FLAG_UNATTENDED=""
 UNCLE_CR_DIR=""
 UNCLE_PENDING_STDIN=""
 UNCLE_SHIFT=1
@@ -179,7 +191,8 @@ while [[ $# -gt 0 ]]; do
         verify)        shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/uncle-verify.py" "$@" ;;
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
         --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
-        --unattended)  UNCLE_ARGS+=(--unattended); UNCLE_UNATTENDED=1; shift ;;
+        --unattended)  UNCLE_FLAG_UNATTENDED=1; shift ;;
+        --attended)    UNCLE_FLAG_ATTENDED=1; shift ;;
         --change-request)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
                 printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
@@ -248,7 +261,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --unattended --application --issue --change-request --housekeeping verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request --housekeeping verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else
@@ -258,6 +271,28 @@ print(close[0] if close else "")' "$1" --help --performance --runs --unattended 
             ;;
     esac
 done
+
+# Resolve the mode once. Unattended is the default; an explicit attended source
+# (--attended or exactly UNCLE_ATTENDED=1) wins over the deprecated --unattended
+# except that --attended with --unattended is refused. Attended needs a TTY on
+# stdin (captured above) unless UNCLE_ATTENDED_STDIN=1.
+. "$ROOT/scripts/lib/mode.sh"
+if [[ -z "$UNCLE_STARTUP_ACTION" && -z "$UNCLE_FLAG_ATTENDED$UNCLE_FLAG_UNATTENDED" \
+      && -z "${UNCLE_ATTENDED:-}${UNCLE_UNATTENDED:-}${WORKFLOW_UNATTENDED:-}${UNCLE_HOUSEKEEPING_UNATTENDED:-}" ]]; then
+    # Plain `uncle` opens the interactive TUI/menu: a person is present, so it
+    # starts attended. Unattended is the default only for the entry points.
+    UNATTENDED=0
+else
+    mode_flags=()
+    [[ -z "$UNCLE_FLAG_ATTENDED" ]] || mode_flags+=(--attended)
+    [[ -z "$UNCLE_FLAG_UNATTENDED" ]] || mode_flags+=(--unattended)
+    uncle_resolve_mode ${mode_flags[@]+"${mode_flags[@]}"} || exit 1
+    uncle_mode_banner
+fi
+UNCLE_UNATTENDED=""
+[[ "$UNATTENDED" != 1 ]] || UNCLE_UNATTENDED=1
+export UNCLE_MODE_RESOLVED=1
+if [[ -n "$UNCLE_UNATTENDED" ]]; then export UNCLE_UNATTENDED=1; else export UNCLE_UNATTENDED=0; fi
 [[ -z "$UNCLE_PENDING_STDIN" ]] || read_stdin_option
 
 # Per-project paths/config. Resolve and export these BEFORE launching the TUI:
@@ -272,7 +307,11 @@ export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
 # parsed and then never seen, and --application opened an idle homepage.
 export UNCLE_STARTUP_ACTION UNCLE_STARTUP_TEXT UNCLE_STARTUP_TEXT_FILE
 # The TUI runs the driver itself, so it needs --unattended told to it as well.
-[[ -z "$UNCLE_UNATTENDED" ]] || export UNCLE_STARTUP_UNATTENDED=1
+if [[ -n "$UNCLE_UNATTENDED" && "$UNCLE_UNATTENDED" != 0 ]]; then
+    export UNCLE_STARTUP_UNATTENDED=1
+else
+    export UNCLE_STARTUP_ATTENDED=1
+fi
 CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation repair test-review manual-checklist execute-checklist final-audit"
 
 # A Python process never picks up a rebuilt uncle_tui.py on its own -- it
@@ -469,7 +508,7 @@ EOF
 # repeatedly broken still surfaces to a person instead of spinning forever.
 launch() {
     local status=0 attempts=0 max_attempts=5 state_dir=".uncle/workflow" unattended=0 arg
-    for arg in "$@"; do [[ "$arg" != --unattended ]] || { unattended=1; break; }; done
+    [[ "${UNCLE_UNATTENDED:-}" != 1 ]] || unattended=1
     while true; do
         status=0
         "$@" || status=$?
@@ -523,9 +562,12 @@ run_workflow() {
     fi
 
     approval_name="$(config_get misc.approval_name)"
-    # Auto mode is the default; only an explicit `misc.auto_mode false` is attended.
-    if [[ "$(config_get misc.auto_mode | tr '[:upper:]' '[:lower:]')" != false ]]; then
-        UNCLE_APPROVAL_NAME="$approval_name" launch "$@" --unattended
+    # The mode was resolved once at launch (UNCLE_MODE_RESOLVED); drivers
+    # inherit it. Only attended needs telling to them explicitly.
+    if [[ "${UNCLE_UNATTENDED:-}" == 1 ]]; then
+        UNCLE_APPROVAL_NAME="$approval_name" launch "$@"
+    elif [[ "${UNCLE_ATTENDED_STDIN:-}" == 1 ]]; then
+        UNCLE_APPROVAL_NAME="$approval_name" launch "$@" --attended
     else
         UNCLE_APPROVAL_NAME="$approval_name" launch "$@"
     fi

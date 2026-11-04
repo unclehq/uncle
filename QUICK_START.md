@@ -21,8 +21,11 @@ Write a project brief in `REQUIREMENTS.md` under `# Project brief`, then run:
 ./scripts/stagegate.sh
 ```
 
-The driver stops at each gate and asks you to approve the produced document.
-Answer `y` to continue; anything else pauses the workflow.
+Drivers run unattended by default (no gates). To have the driver stop at each
+gate and ask you to approve the produced document, run
+`./scripts/stagegate.sh --attended` (or set `UNCLE_ATTENDED=1`); it needs a
+terminal. Answer `y` to continue; anything else pauses the workflow.
+`--unattended` is a deprecated no-op that prints a notice.
 
 ### Start from a GitHub issue
 

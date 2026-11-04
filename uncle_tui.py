@@ -1020,7 +1020,10 @@ class UncleTUI:
         self._startup_text_file = os.environ.get("UNCLE_STARTUP_TEXT_FILE")
         self._startup_unattended = os.environ.get("UNCLE_STARTUP_UNATTENDED") == "1"
         self._startup_injected = False
-        if self._startup_unattended:
+        self._startup_attended = os.environ.get("UNCLE_STARTUP_ATTENDED") == "1"
+        if self._startup_attended:
+            self.misc['auto_mode'] = 'false'
+        elif self._startup_unattended:
             self.misc['auto_mode'] = 'true'
         # Bind the homepage composer before the first frame or key event.
         self._ensure_chat()
@@ -1549,7 +1552,8 @@ class UncleTUI:
         return bool(re.fullmatch(r'[1-9][0-9]*|https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?', value))
 
     def cmd_for(self):
-        auto = ["--unattended"] if self._next_run_unattended() else []
+        # Unattended is the launcher default: pass --attended only when attended.
+        auto = [] if self._next_run_unattended() else ["--attended"]
         if self.workflow_idx == 1:
             if not self._valid_issue(self.issue):
                 raise ValueError('Enter a GitHub issue number or https://github.com/owner/repo/issues/123')
@@ -2174,7 +2178,7 @@ class UncleTUI:
             command = self.cmd_for()
             # Recorded at launch: the boundary guard in _apply_gate_answer must
             # not follow a settings change made while this run is in flight.
-            self.workflow_unattended = "--unattended" in command
+            self.workflow_unattended = "--attended" not in command
             self.proc = subprocess.Popen(command, cwd=_project_root(), env=env,
                                          stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

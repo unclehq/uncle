@@ -49,7 +49,11 @@ DRV="$DRIVER"
 run_driver() {
     local plan="$1" ans="$2"; shift 2
     printf '%s\n' "$ans" > "$TMP/ans$N"
-    (cd "$R" && env PATH="$STUB:$PATH" UNCLE_PROJECT_ROOT="$R" HK_ROOT="$ROOT" STUB_LOG="$LOG" STUB_PLAN="$plan" \
+    # Attended is what these cases mean unless the case asks for unattended:
+    # unattended is now the default, so attended is requested explicitly.
+    local mode_env=(UNCLE_ATTENDED=1 UNCLE_ATTENDED_STDIN=1) a
+    for a in "$@"; do [[ "$a" != UNCLE_HOUSEKEEPING_UNATTENDED=1 ]] || mode_env=(); done
+    (cd "$R" && env "${mode_env[@]+"${mode_env[@]}"}" PATH="$STUB:$PATH" UNCLE_PROJECT_ROOT="$R" HK_ROOT="$ROOT" STUB_LOG="$LOG" STUB_PLAN="$plan" \
         WORKFLOW_AGENT_CMD_HOUSEKEEPING_PLAN="$STUB/agent" HOUSEKEEPING_APPROVAL_FILE="$TMP/ans$N" \
         "$@" bash "$DRV" "rename scratch repo X to Y" > "$TMP/out$N" 2>&1)
     RC=$?
@@ -61,7 +65,7 @@ lock_free() {
 }
 tree_untouched() {
     [[ "$(cat "$R/.uncle/workflow/state")" == sentinel ]] \
-        && [[ -z "$(ls -A "$R/.uncle/workflow" | grep -v -e '^housekeeping$' -e '^driver.lock$' -e '^state$')" ]] \
+        && [[ -z "$(ls -A "$R/.uncle/workflow" | grep -v -e '^housekeeping$' -e '^driver.lock$' -e '^state$' -e '^mode$')" ]] \
         && [[ -z "$(cd "$R" && "$REALGIT" status --porcelain)" ]]
 }
 
@@ -130,7 +134,7 @@ st1="$(awk -F'\t' '$1==1{print $2}' "$HKD/ops.status")"
 new_repo; plan "$(op_rename 1)"; mkfifo "$TMP/fifo$N"
 ( until grep -q 'Run these commands' "$TMP/out$N" 2>/dev/null; do sleep 0.1; done; echo ' ' >> "$HKD/plan.checked.json"; echo y > "$TMP/fifo$N" ) &
 writer=$!
-(cd "$R" && env PATH="$STUB:$PATH" UNCLE_PROJECT_ROOT="$R" HK_ROOT="$ROOT" STUB_LOG="$LOG" STUB_PLAN="$PLAN" \
+(cd "$R" && env UNCLE_ATTENDED=1 UNCLE_ATTENDED_STDIN=1 PATH="$STUB:$PATH" UNCLE_PROJECT_ROOT="$R" HK_ROOT="$ROOT" STUB_LOG="$LOG" STUB_PLAN="$PLAN" \
     WORKFLOW_AGENT_CMD_HOUSEKEEPING_PLAN="$STUB/agent" HOUSEKEEPING_APPROVAL_FILE="$TMP/fifo$N" \
     bash "$DRV" "rename scratch repo X to Y" > "$TMP/out$N" 2>&1); RC=$?
 wait "$writer" 2>/dev/null

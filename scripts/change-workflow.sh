@@ -46,13 +46,14 @@ export UNCLE_LIB_DIR="$ROOT/scripts/lib"
 
 usage() {
     cat <<'EOF'
-Usage: change-workflow.sh [-h|--help] [--version] [--unattended]
+Usage: change-workflow.sh [-h|--help] [--version] [--attended] [--unattended]
 
 Run the human-gated existing-code change workflow from CHANGE_REQUEST.md. The
 driver is a resumable state machine; re-run it to continue from the current
 stage.
 
---unattended runs with nobody at the terminal: every gate that would wait for
+Unattended is the default; --attended makes each approval gate wait for you
+(--unattended is deprecated). In unattended mode nobody is at the terminal: every gate that would wait for
 a person is auto-approved and recorded, and the run reports how many judgments
 no one made. A regressed check or a failing audit still stops the run; those
 wait on a result, not on a person.
@@ -66,11 +67,14 @@ EOF
 # Opt-in only, never inferred from a missing terminal: a piped run is still a
 # run someone is watching, and only the flag says otherwise.
 UNATTENDED=0
+FLAG_ATTENDED=0
+FLAG_UNATTENDED=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)    usage; exit 0 ;;
         --version)    printf '%s\n' "$STAGEGATE_VERSION"; exit 0 ;;
-        --unattended) UNATTENDED=1; shift ;;
+        --attended)   FLAG_ATTENDED=1; shift ;;
+        --unattended) UNATTENDED=1; FLAG_UNATTENDED=1; shift ;;
         *)            printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
     esac
 done
@@ -103,7 +107,8 @@ export WORKFLOW_IMPLEMENT_TEST_WAVES="${WORKFLOW_IMPLEMENT_TEST_WAVES:-0}"
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
     driver_args=(bash "${BASH_SOURCE[0]}")
-    [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
+    [[ "$FLAG_ATTENDED" != 1 ]] || driver_args+=(--attended)
+    [[ "$FLAG_UNATTENDED" != 1 ]] || driver_args+=(--unattended)
     exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
 fi
 python3 "$ROOT/scripts/lib/workflow_family.py" change
@@ -133,12 +138,18 @@ UNATTENDED_FILE="$STATE_DIR/unattended-gates"
 
 . "$ROOT/scripts/lib/workflow-records.sh"
 
-# An unattended run says so up front and ledgers what enabled it, so a mode
-# inherited from a wrapper is visible in the run's own record.
+# Mode resolution is shared (scripts/lib/mode.sh). It refuses (exit 1, stderr) before the mode file is touched; this driver owns its run
+# directory, so it alone writes .uncle/workflow/mode, and only after resolution has succeeded.
+. "$ROOT/scripts/lib/mode.sh"
+uncle_mode_resolve "$STATE_DIR" "$FLAG_ATTENDED" "$FLAG_UNATTENDED" || exit 1
+UNATTENDED="${UNCLE_UNATTENDED:-$UNATTENDED}"
+uncle_mode_write "$STATE_DIR" || exit 1
+uncle_mode_banner >&2
+
+# An unattended run ledgers what enabled it, so a mode inherited from a wrapper is visible in the run's own record.
 if [[ "$UNATTENDED" == 1 ]]; then
-    echo "UNATTENDED RUN: no human prompts; blocking audit findings are skipped and ledgered ($UNATTENDED_FILE)."
     if ! grep -qs $'\tunattended-enabled\t' "$UNATTENDED_FILE" 2>/dev/null; then
-        record_unattended_gate unattended-enabled "enabled by the --unattended flag (UNCLE_UNATTENDED=1)"
+        record_unattended_gate unattended-enabled "enabled by default (or --unattended); UNCLE_UNATTENDED=1"
     fi
 fi
 

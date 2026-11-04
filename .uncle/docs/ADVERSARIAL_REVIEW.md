@@ -1,184 +1,184 @@
-## AR-001: D-6/D-7 owner semantics conflict with BH-3/BH-5 (drivers write on no-issue runs) and BH-9 (driver silent under TUI).
+## AR-001: Resuming a run recorded as attended, with no flag and no TTY, is unspecified.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-6/D-7 vs CHANGE_SPEC BH-3, BH-9, AC-6; terminal-title.sh:103.
-- Failure: D-6/D-7 owner semantics conflict with BH-3/BH-5 (drivers write on no-issue runs) and BH-9 (driver silent under TUI). Settle: 'When UNCLE_TITLE_OWNER is set, uncle_title_begin/end write nothing; only the TUI retitles on run start and run end.'
+- References: CHANGE_PLAN s1.1 precedence (recorded mode) vs TTY rule; CHANGE_SPEC AC-3, AC-8, I-2.
+- Failure: Resuming a run recorded as attended, with no flag and no TTY, is unspecified. Settle with: 'A resume whose recorded mode is attended, with no TTY and no UNCLE_ATTENDED_STDIN=1, refuses with exit 1 and never runs unattended.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Exit path is unspecified when the stack was never pushed (guard false) or when exit is via signal/exception.
+## AR-002: Env and flag conflict rules collide.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-3, D-6; BH-4; terminal-title.sh:110 ACTIVE flag.
-- Failure: Exit path is unspecified when the stack was never pushed (guard false) or when exit is via signal/exception. Settle: 'end() writes project-only title and CSI 23;2 t only if begin() pushed in this process; it runs in finally and on SIGTERM/SIGHUP, and is idempotent.'
+- References: CHANGE_SPEC s4 Environment row; CHANGE_PLAN s1.1 precedence; AC-4, AC-5, AC-8.
+- Failure: Env and flag conflict rules collide. Two CLI flags are refused, but UNCLE_ATTENDED=1 with --unattended resolves to attended, and a legacy env against a recorded attended mode is undefined. Settle with: 'Any explicit attended source wins over any unattended source, except --attended with --unattended on the CLI, which refuses; explicit flag or env overrides the recorded mode.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Non-numeric/empty issue has no expected title, and 60-char truncation is ambiguous about whether the issue suffix surviv
+## AR-003: An absent, empty or corrupt mode file is not specified.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-1, section 10; CHANGE_PLAN D-4.
-- Failure: Non-numeric/empty issue has no expected title, and 60-char truncation is ambiguous about whether the issue suffix survives. Settle: 'Non-numeric or empty issue yields the no-issue title; the project name is truncated so the full title is at most 60 chars and the suffix is kept.'
+- References: CHANGE_PLAN s8 Compatibility, s7 Persistence; CHANGE_SPEC I-2, I-5.
+- Failure: An absent, empty or corrupt mode file is not specified. The plan resumes mode-file-less runs as unattended, which silently flips a previously attended run, against I-2. Settle with: 'An unparseable mode file refuses with exit 1; a missing one on a run with existing state resumes unattended and prints a notice saying so.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Project name edge cases undefined: relative or empty UNCLE_PROJECT_ROOT, root '/', or name empty after sanitizing.
+## AR-004: The UNCLE_MODE_RESOLVED guard leaves open a child driver that inherits UNCLE_MODE_RESOLVED=1 and also gets an explicit -
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-4, D-5; CHANGE_SPEC section 8 vs AC-1.
-- Failure: Project name edge cases undefined: relative or empty UNCLE_PROJECT_ROOT, root '/', or name empty after sanitizing. 'Fallback uncle' conflicts with the AC-1 format 'project first'. Settle: 'Ignore non-absolute UNCLE_PROJECT_ROOT and use cwd; an empty name yields the title exactly `uncle`.'
+- References: CHANGE_PLAN s1.1, risk row 3, R-2; AC-6.
+- Failure: The UNCLE_MODE_RESOLVED guard leaves open a child driver that inherits UNCLE_MODE_RESOLVED=1 and also gets an explicit --attended or --unattended. Settle with: 'When UNCLE_MODE_RESOLVED=1 is inherited, the inherited UNCLE_UNATTENDED is authoritative; a contradicting --attended refuses, and --unattended is ignored silently.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Opt-out values are unspecified (empty, false, unset) and I-4 requires both stdout and stderr ttys though writes go to on
+## AR-005: The effect of UNCLE_ATTENDED_STDIN=1 alone, or when the resolved mode is unattended, is not described.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC I-4, BH-7; CHANGE_PLAN R-3.
-- Failure: Opt-out values are unspecified (empty, false, unset) and I-4 requires both stdout and stderr ttys though writes go to one stream. Settle: 'Only the exact value 0 disables; any other value enables; writes go to stdout, and both stdout and stderr must be ttys.'
+- References: CHANGE_PLAN s1.1 TTY rule, D-5; CHANGE_SPEC AC-3.
+- Failure: The effect of UNCLE_ATTENDED_STDIN=1 alone, or when the resolved mode is unattended, is not described. Settle with: 'UNCLE_ATTENDED_STDIN=1 never changes the selected mode; it only waives the TTY check when the resolved mode is attended.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Nested drivers started from the uncle line menu may push the stack again, giving mismatched pops.
+## AR-006: Only the unattended banner is exact (AC-1).
 
 - Severity: LOW
-- References: CHANGE_PLAN D-7, step 4 (uncle begin/end around line menu); AC-6.
-- Failure: Nested drivers started from the uncle line menu may push the stack again, giving mismatched pops. Settle: 'The line menu exports UNCLE_TITLE_OWNER, so child drivers push and retitle nothing.'
+- References: CHANGE_PLAN s14 Observability; CHANGE_SPEC AC-1, AC-4, AC-8.
+- Failure: Only the unattended banner is exact (AC-1). The attended, resume, TUI and deprecation notice strings are given as 'Mode: <mode> ...', so tests, docs and the checklist will each invent different text. Settle by listing the exact string for each.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan never says what a driver does when the TUI skipped its own begin (non-tty, opt-out) yet runs children.
+## AR-007: Resume precedence is unspecified for existing runs without a mode file that were started attended (the old direct-driver
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-6/D-7; terminal-title.sh:103-106 sets the owner only after the guard passes.
-- Failure: Plan never says what a driver does when the TUI skipped its own begin (non-tty, opt-out) yet runs children. Settle with: the TUI exports UNCLE_TITLE_OWNER only when it actually began, and drivers push only when it is unset.
+- References: CHANGE_PLAN s8 Compatibility: 'Existing runs without a mode file resume as default (unattended) unless flagged'; conflicts with I-2 intent and AC-8.
+- Failure: Resume precedence is unspecified for existing runs without a mode file that were started attended (the old direct-driver default). The plan says they resume unattended, silently dropping human gates. Plan should say: a run with state but no mode file resumes attended (or refuses without an explicit flag), never silently unattended.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: EXIT-trap and repeat-call behavior is unspecified.
+## AR-008: Recorded-mode reuse versus the TTY rule is unspecified.
 
 - Severity: HIGH
-- References: terminal-title.sh:100-115,116-130; CHANGE_PLAN section 12 says only 'chain onto existing ones'.
-- Failure: EXIT-trap and repeat-call behavior is unspecified. Settle with: end is idempotent and runs from the EXIT trap on every exit path including uncle_cancel, and a second begin in the same process is a no-op.
+- References: CHANGE_PLAN s1 precedence puts the recorded mode before the default; the TTY rule is stated only for 'attended', and AC-3/I-2 do not cover resume.
+- Failure: Recorded-mode reuse versus the TTY rule is unspecified. A run recorded attended but resumed with no TTY and no UNCLE_ATTENDED_STDIN is not stated to refuse. Plan should say: a resumed attended run without a TTY refuses with exit 1 and never falls back to unattended.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: Non-numeric, non-empty issue in bash is unspecified: the old guard rejected it, the plan accepts an empty one.
+## AR-009: The UNCLE_MODE_RESOLVED=1 guard can inherit a stale UNCLE_UNATTENDED across entry points.
 
 - Severity: MEDIUM
-- References: terminal-title.sh:103 rejects non-digits; CHANGE_SPEC AC-1 lists 'non-numeric issue'; CHANGE_PLAN section 8.
-- Failure: Non-numeric, non-empty issue in bash is unspecified: the old guard rejected it, the plan accepts an empty one. Settle with: a non-numeric issue is treated as empty and produces `<project> · uncle`.
+- References: CHANGE_PLAN s1 and risk row 3; AC-6 parity covers only identical flags/env.
+- Failure: The UNCLE_MODE_RESOLVED=1 guard can inherit a stale UNCLE_UNATTENDED across entry points. The plan never says whether --attended or UNCLE_ATTENDED=1 in a child still overrides the inherited value. Plan should say: inherited UNCLE_UNATTENDED is authoritative, and child flags that conflict with it are refused.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: The bash path now spawns python3 per begin/end, and the plan does not say what happens if python3 is missing, or which f
+## AR-010: The plan does not say what happens for UNCLE_ATTENDED=0 or empty, or for --unattended combined with UNCLE_ATTENDED=1.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 1 'terminal-title.sh calls the CLI'; terminal-title.sh:103-107 uses -t 1 -t 2 in bash.
-- Failure: The bash path now spawns python3 per begin/end, and the plan does not say what happens if python3 is missing, or which fds the helper's isatty checks see. Settle with: the helper inherits fds 1/2 unchanged, and a missing or failing python3 yields silence with exit 0.
+- References: CHANGE_SPEC AC-4/AC-5 and CHANGE_PLAN s1 precedence list; no empty, 0 or invalid env value is described.
+- Failure: The plan does not say what happens for UNCLE_ATTENDED=0 or empty, or for --unattended combined with UNCLE_ATTENDED=1. Plan should say: only the value 1 counts; other values are ignored; --unattended with UNCLE_ATTENDED=1 resolves attended and prints the deprecation notice.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: Plan does not say whether end writes the project-only title when this process never did the matching begin (TUI-owned, o
+## AR-011: Mode file write timing is ambiguous.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC BH-4; CHANGE_PLAN D-3/D-6; terminal-title.sh:110 gates on UNCLE_TITLE_ACTIVE.
-- Failure: Plan does not say whether end writes the project-only title when this process never did the matching begin (TUI-owned, or end without begin). Settle with: end writes nothing unless this process performed the matching begin.
+- References: CHANGE_PLAN s9 Persistence vs s12 Error and recovery; housekeeping and from-issue rows do not name a state dir.
+- Failure: Mode file write timing is ambiguous. Section 12 says refusals happen before any state is created, but section 9 says drivers write the file at start. A refused resume could overwrite the recorded mode. Plan should say: the mode file is written only after successful resolution, never on refusal, and only by the driver that owns the run directory.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: The 60-char cap is ambiguous: whole title or project name.
+## AR-012: The unattended-enabled ledger text changes to 'enabled by default (or --unattended)', but AC-7/A-8 require byte-identica
 
 - Severity: LOW
-- References: CHANGE_PLAN D-4 'truncate to 60 chars'; CHANGE_SPEC AC-1.
-- Failure: The 60-char cap is ambiguous: whole title or project name. Truncating the whole title could cut off the issue number. Settle with: the project name is truncated to 60 chars before the suffix is appended.
+- References: CHANGE_PLAN s8 Interface changes vs CHANGE_SPEC AC-7 and A-8 'byte-identical wording and fields'.
+- Failure: The unattended-enabled ledger text changes to 'enabled by default (or --unattended)', but AC-7/A-8 require byte-identical ledger entries. These two statements cannot both hold. Plan should say which wording is authoritative, and that the record test compares against the new text only.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Sanitization covers only C0/C1/DEL, so bidi overrides and line separators can still reach the OSC payload.
+## AR-013: The plan never says whether an explicit --attended overrides an inherited UNCLE_MODE_RESOLVED=1 plus UNCLE_UNATTENDED=1.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-4 and CHANGE_SPEC section 10 name only C0/C1/DEL; I-3 says 'no ESC/BEL/control chars'.
-- Failure: Sanitization covers only C0/C1/DEL, so bidi overrides and line separators can still reach the OSC payload. Plan should say: sanitize drops all Unicode categories Cc, Cf, Zl and Zp before truncation.
+- References: CHANGE_PLAN s1: an inherited UNCLE_MODE_RESOLVED=1 stops UNCLE_UNATTENDED being read as legacy input. I-2 says attended never degrades.
+- Failure: The plan never says whether an explicit --attended overrides an inherited UNCLE_MODE_RESOLVED=1 plus UNCLE_UNATTENDED=1. Add: an explicit --attended or UNCLE_ATTENDED=1 always re-resolves, including the TTY check, and wins over inherited derived state.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Order of sanitize and truncate, and what the 60 chars covers, is unspecified.
+## AR-014: With UNCLE_ATTENDED_STDIN=1 the TTY check is skipped, but nothing says what a gate does on EOF or an invalid answer.
 
 - Severity: HIGH
-- References: AC-1 says 'truncates to 60 chars, never returns empty'; D-4 and BH-8 do not say which part is truncated.
-- Failure: Order of sanitize and truncate, and what the 60 chars covers, is unspecified. Plan should say: strip first, truncate only the project name to 60 code points, then append the fixed suffix; an empty result falls back to 'uncle'.
+- References: CHANGE_SPEC s4 'No TTY' row and CHANGE_PLAN R-5 define UNCLE_ATTENDED_STDIN with no EOF behavior.
+- Failure: With UNCLE_ATTENDED_STDIN=1 the TTY check is skipped, but nothing says what a gate does on EOF or an invalid answer. Add: in attended mode, EOF or an unreadable answer at a gate counts as a decline and stops the run. It is never delegated.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: The CLI's handling of a non-numeric, empty or flag-like issue, and how the root reaches it, is unspecified.
+## AR-015: Resume behavior is undefined for a mode file with invalid content, and for a recorded attended mode resumed without a TT
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 1 CLI 'begin|retitle|end [issue]'; CHANGE_SPEC section 10 says 'digits-only issue' without naming the enforcing layer.
-- Failure: The CLI's handling of a non-numeric, empty or flag-like issue, and how the root reaches it, is unspecified. Plan should say: the CLI accepts the issue only if it matches ^[0-9]+$, else treats it as no issue, and reads the root only from the env var, never argv.
+- References: CHANGE_PLAN s7/s8 and I-5 define the file as authoritative on resume with no validation.
+- Failure: Resume behavior is undefined for a mode file with invalid content, and for a recorded attended mode resumed without a TTY. Add: an invalid mode file is an error and is never read as unattended. A recorded attended mode still requires a TTY (or UNCLE_ATTENDED_STDIN=1) on resume.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: The plan does not say how end() behaves if the tty guard fails at exit, or how a stale or environment-set UNCLE_TITLE_OW
+## AR-016: The legacy UNCLE_UNATTENDED=0, WORKFLOW_UNATTENDED=0 and UNCLE_HOUSEKEEPING_UNATTENDED=0 values were the old way to forc
 
 - Severity: MEDIUM
-- References: Existing terminal-title.sh:103-114 checks only that UNCLE_TITLE_OWNER is non-empty; D-6, D-7 and AC-6 do not change that.
-- Failure: The plan does not say how end() behaves if the tty guard fails at exit, or how a stale or environment-set UNCLE_TITLE_OWNER is treated. Plan should say: end() re-checks the full guard and writes nothing on failure; the owner variable is honored only when it names a live ancestor PID.
+- References: CHANGE_PLAN s1 lists only '=1' legacy values; risk row 3 mentions only the inherited UNCLE_UNATTENDED=0 guard.
+- Failure: The legacy UNCLE_UNATTENDED=0, WORKFLOW_UNATTENDED=0 and UNCLE_HOUSEKEEPING_UNATTENDED=0 values were the old way to force attended. After the default flip they could silently mean unattended. Add: those legacy envs set to 0 resolve to attended with a notice, and only the exact value 1 selects unattended.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: Push/pop balance is unspecified for a double begin, an end without begin, or a signal during teardown.
+## AR-017: The plan does not say whether a stale or tampered .uncle/workflow/mode file can escalate a run to unattended on resume.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-3, D-6, D-7 and 'EXIT traps chain'; uncle_cancel calls exit, but the plan does not say the TUI finally covers SIGTERM.
-- Failure: Push/pop balance is unspecified for a double begin, an end without begin, or a signal during teardown. Plan should say: begin pushes at most once per process, end pops only if that process pushed, and end is idempotent and also runs on signal paths.
+- References: CHANGE_PLAN s7 and I-5 give the file authority on resume with no integrity requirement.
+- Failure: The plan does not say whether a stale or tampered .uncle/workflow/mode file can escalate a run to unattended on resume. Add: the file is read only when valid run state exists in the same directory, and a non-regular file or a symlink is rejected.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: The plan names no stream for title bytes and does not say what happens when only one of stdout/stderr is a tty.
+## AR-018: Resume precedence is ambiguous: does an explicit flag or env override the recorded mode, and does the TTY rule apply to
 
 - Severity: HIGH
-- References: terminal-title.sh:103-104 needs -t 1 and -t 2; plan R-3 says 'isatty both' but AC-5 says 'stdout or stderr is not a tty'.
-- Failure: The plan names no stream for title bytes and does not say what happens when only one of stdout/stderr is a tty. Decision: 'Title and stack sequences go to stderr in the TUI and stdout in shell, and only when both are ttys; otherwise nothing is written.'
+- References: CHANGE_PLAN s1.1 precedence list; CHANGE_SPEC AC-8, I-5.
+- Failure: Resume precedence is ambiguous: does an explicit flag or env override the recorded mode, and does the TTY rule apply to a recorded attended run? Settle with: 'On resume an explicit flag/env overrides the recorded mode; recorded attended with no TTY and no UNCLE_ATTENDED_STDIN refuses with exit 1.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: End-sequence order and the run-end versus session-exit behavior conflict.
+## AR-019: Mode file write timing and bad content are unspecified, and 'written at start' conflicts with 'no state before refusal'.
 
 - Severity: HIGH
-- References: CHANGE_SPEC BH-4 says run end or exit gives project-only title then pop, but plan D-6 says per-run the TUI only retitles and pops once at session end.
-- Failure: End-sequence order and the run-end versus session-exit behavior conflict. Decision: 'On exit write the project-only title, then CSI 23;2 t. A run end while the TUI lives writes only the idle title and no pop.'
+- References: CHANGE_PLAN s7.1 vs s9.1 ('before any state is created').
+- Failure: Mode file write timing and bad content are unspecified, and 'written at start' conflicts with 'no state before refusal'. Settle with: 'Written atomically only after resolution succeeds; content other than attended/unattended is ignored with a stderr notice and the default applies.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: The 60-char cap scope, unit and order against sanitizing are ambiguous.
+## AR-020: Interaction of an inherited UNCLE_MODE_RESOLVED=1 with an explicit CLI flag or UNCLE_ATTENDED is unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-1 says 'truncates to 60 chars'; plan D-4 gives no order, scope or unit.
-- Failure: The 60-char cap scope, unit and order against sanitizing are ambiguous. Decision: 'The 60 cap applies to the project name only, in code points, after stripping controls and trimming; the suffix is appended afterwards.'
+- References: CHANGE_PLAN s1.1; risk row 3.
+- Failure: Interaction of an inherited UNCLE_MODE_RESOLVED=1 with an explicit CLI flag or UNCLE_ATTENDED is unspecified. Settle with: 'When UNCLE_MODE_RESOLVED=1, the inherited UNCLE_UNATTENDED is authoritative; contradicting flags are refused; the launcher clears any user-set UNCLE_MODE_RESOLVED.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: The title for a non-numeric, empty or very long issue argument is not defined.
+## AR-021: Exact stderr text for the deprecation notice, refusal messages, and attended/resume banners is unspecified; only the una
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-1 verification lists 'non-numeric issue' and section 10 says digits-only, but no BH row gives the expected title.
-- Failure: The title for a non-numeric, empty or very long issue argument is not defined. Decision: 'A non-numeric or empty issue is treated as no issue and yields `<project> · uncle`; digits are never truncated.'
+- References: CHANGE_SPEC AC-1, AC-4; CHANGE_PLAN s14.1 'Mode: <mode> ...'.
+- Failure: Exact stderr text for the deprecation notice, refusal messages, and attended/resume banners is unspecified; only the unattended banner is fixed. Tests and checklist will assert different strings. Settle by fixing each string verbatim in the plan.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: The CLI `end` runs in a separate python3 process and is stateless, so it cannot know whether begin pushed.
+## AR-022: Which stream counts for the TTY check is unspecified, notably when `--application`/`--housekeeping` read text from stdin
 
 - Severity: MEDIUM
-- References: terminal-title.sh:110 gates end on UNCLE_TITLE_ACTIVE; plan D-7 and the CLI `end` define no such state.
-- Failure: The CLI `end` runs in a separate python3 process and is stateless, so it cannot know whether begin pushed. Decision: 'Any non-empty UNCLE_TITLE_OWNER makes begin and end no-ops, and bash end acts only if this shell's begin pushed, tracked by UNCLE_TITLE_ACTIVE.'
+- References: CHANGE_PLAN s1.1 TTY rule; commit 4948181 (read text from standard input).
+- Failure: Which stream counts for the TTY check is unspecified, notably when `--application`/`--housekeeping` read text from stdin, which makes stdin a non-TTY. Settle with: 'Attended requires isatty(0) only; stdin-supplied text therefore requires UNCLE_ATTENDED_STDIN=1.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-023: AC-8 defect injection does not name the mutants or how the mutated copy is exercised, and it is on the cut list.
+## AR-023: Legacy env set to a value other than 1 (e.g.
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-8 versus plan section 16 ('a mutated temp copy') and section 21 listing defect-injection automation as cut first.
-- Failure: AC-8 defect injection does not name the mutants or how the mutated copy is exercised, and it is on the cut list. Decision: 'The test runs terminal_title.py from a temp copy with (a) end writing bare uncle and (b) sanitize disabled, and requires the suite to fail for each; this check is never cut.'
+- Severity: LOW
+- References: CHANGE_PLAN s1.1 lists only =1; risk row 3 mentions UNCLE_UNATTENDED=0.
+- Failure: Legacy env set to a value other than 1 (e.g. UNCLE_UNATTENDED=0) is unspecified. Settle with: 'Legacy env not equal to 1 is ignored silently and does not select attended.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

@@ -2,9 +2,11 @@
 # Housekeeping driver: plan (model) -> schema -> policy -> approval -> execute
 # (argv, no shell) -> verify (fixed read-only templates) -> report.
 #
-# Usage: housekeeping-workflow.sh [REQUEST TEXT]   (or UNCLE_STARTUP_TEXT_FILE)
-# Env:   UNCLE_HOUSEKEEPING_UNATTENDED=1  run without an approval prompt (the
-#                                         policy still applies; recorded)
+# Usage: housekeeping-workflow.sh [--attended|--unattended] [REQUEST TEXT]
+#        (or UNCLE_STARTUP_TEXT_FILE). Unattended is the default: no approval
+#        prompt (the policy still applies; recorded). --attended prompts.
+# Env:   UNCLE_ATTENDED=1 selects attended; UNCLE_HOUSEKEEPING_UNATTENDED=1 is
+#        deprecated (unattended is the default).
 #        HOUSEKEEPING_APPROVAL_FILE       read the approval answer from this
 #                                         path instead of /dev/tty
 # Exit:  0 only for DECLINED or a run whose ops are all VERIFIED; 1 otherwise.
@@ -206,6 +208,10 @@ hk_refuse() {
 }
 
 # --- Request -----------------------------------------------------------------
+MODE_FLAGS=()
+while [[ "${1:-}" == --attended || "${1:-}" == --unattended ]]; do
+    MODE_FLAGS+=("$1"); shift
+done
 REQUEST="${1:-}"
 if [[ -z "$REQUEST" && -n "${UNCLE_STARTUP_TEXT_FILE:-}" && -r "${UNCLE_STARTUP_TEXT_FILE}" ]]; then
     REQUEST="$(cat "$UNCLE_STARTUP_TEXT_FILE")"
@@ -214,6 +220,13 @@ if [[ -z "${REQUEST//[[:space:]]/}" ]]; then
     echo "housekeeping: empty request refused" >&2
     exit 1
 fi
+
+# --- Mode (resolver owns precedence, notices, TTY rule; refusal exits 1 before
+# any state is created) ---------------------------------------------------------
+. "$ROOT/scripts/lib/mode.sh"
+UNATTENDED=0
+uncle_resolve_mode "${MODE_FLAGS[@]+"${MODE_FLAGS[@]}"}" || exit 1
+export UNCLE_UNATTENDED="$UNATTENDED" UNCLE_MODE_RESOLVED=1
 
 # --- Lock (flock on the shared driver.lock; held by this fd until exit) ------
 mkdir -p "$PROJECT_ROOT/.uncle/workflow"
@@ -224,6 +237,12 @@ if ! python3 -I -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)'
 fi
 
 mkdir -p "$HK_DIR"
+# Mode file: written only here, after successful resolution, never on refusal.
+if [[ "$UNATTENDED" == 1 ]]; then
+    printf 'unattended\n' > "$PROJECT_ROOT/.uncle/workflow/mode"
+else
+    printf 'attended\n' > "$PROJECT_ROOT/.uncle/workflow/mode"
+fi
 rm -f "$HK_DIR"/plan.* "$HK_DIR"/ops.status "$HK_DIR"/run.log "$HK_DIR"/REPORT.md "$HK_DIR"/last.err
 hk_state PLANNED
 hk_log "request: $(printf '%s' "$REQUEST" | head -c 500 | tr '\n\r' '  ')"
@@ -269,7 +288,7 @@ HK_APPROVED_HASH=""
 # --- Approval -----------------------------------------------------------------
 echo "Proposed housekeeping plan (sha256 $HK_ALLOWED_HASH):"
 hk_py render "$HK_CHECKED"
-if [[ "${UNCLE_HOUSEKEEPING_UNATTENDED:-}" == 1 ]]; then
+if [[ "$UNATTENDED" == 1 ]]; then
     mode=unattended
     echo "Unattended run: no approval prompt; policy was enforced."
     hk_log "mode unattended (no approval prompt) plan sha256 $HK_ALLOWED_HASH"

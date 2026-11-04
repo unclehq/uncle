@@ -33,6 +33,18 @@ implemented. That pause is the point: Uncle keeps a human in the loop at the
 decisions that matter, rather than quietly shipping whatever the agent
 produced.
 
+## Passing the description on stdin
+
+For a long description, pipe or redirect it instead of quoting it:
+
+```sh
+uncle --application < idea.md
+```
+
+A bare `--application` reads stdin; on an interactive terminal with nothing
+piped it refuses (empty input). Text that begins with `--` must use the `=`
+form: `uncle --application="--foo bar"`.
+
 ## Running it unattended
 
 Add `--unattended` to skip every approval gate and let the whole build run

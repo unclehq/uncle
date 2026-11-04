@@ -36,7 +36,7 @@ class HousekeepingInput(unittest.TestCase):
         path = r.stdout.decode().strip()
         self.assertEqual(os.path.dirname(path), self.dir)
         with open(path, 'rb') as f:
-            self.assertEqual(f.read(), b'a\nb\nc\n')
+            self.assertEqual(f.read(), b'a\nb\nc')  # AC-7: one trailing newline stripped
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
     def test_argument_text_accepted(self):

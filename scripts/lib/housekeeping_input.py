@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate housekeeping request text for `uncle --housekeeping`.
 
-Usage: housekeeping_input.py PRIVATE_DIR [--text TEXT]
+Usage: housekeeping_input.py [--label OPT] PRIVATE_DIR [--text TEXT]
 
 Text comes from --text when given, otherwise from raw stdin bytes.  Limits
 mirror change_request_stdin.py (size cap, UTF-8, CRLF/CR normalised to LF, no
@@ -24,26 +24,37 @@ def fail(message):
 
 
 def main(argv):
-    if len(argv) < 2:
-        fail('Error: usage: housekeeping_input.py PRIVATE_DIR [--text TEXT]')
-    private = argv[1]
-    if len(argv) >= 3:
-        if argv[2] != '--text' or len(argv) != 4:
-            fail('Error: usage: housekeeping_input.py PRIVATE_DIR [--text TEXT]')
-        data = argv[3].encode('utf-8', 'surrogateescape')
+    usage = 'Error: usage: housekeeping_input.py [--label OPT] PRIVATE_DIR [--text TEXT]'
+    args = argv[1:]
+    label = '--housekeeping'
+    if args[:1] == ['--label']:
+        if len(args) < 2:
+            fail(usage)
+        label = '--' + args[1].lstrip('-')
+        args = args[2:]
+    if not args:
+        fail(usage)
+    private = args[0]
+    stdin_path = len(args) == 1
+    if not stdin_path:
+        if args[1] != '--text' or len(args) != 3:
+            fail(usage)
+        data = args[2].encode('utf-8', 'surrogateescape')
     else:
         data = sys.stdin.buffer.read(CAP + 1)
     if len(data) > CAP:
-        fail('Error: --housekeeping input exceeds %d bytes' % CAP)
+        fail('Error: %s input exceeds %d bytes' % (label, CAP))
     try:
         text = data.decode('utf-8')
     except UnicodeDecodeError:
-        fail('Error: --housekeeping input is not valid UTF-8')
+        fail('Error: %s input is not valid UTF-8' % label)
     text = text.replace('\r\n', '\n').replace('\r', '\n')
+    if stdin_path and text.endswith('\n'):
+        text = text[:-1]
     if REJECTED.search(text):
-        fail('Error: --housekeeping input contains NUL or control characters')
+        fail('Error: %s input contains NUL or control characters' % label)
     if not text.strip():
-        fail('Error: --housekeeping text cannot be empty')
+        fail('Error: %s text cannot be empty' % label)
     fd, path = tempfile.mkstemp(prefix='housekeeping-', dir=private)
     with os.fdopen(fd, 'wb') as stream:
         stream.write(text.encode('utf-8'))

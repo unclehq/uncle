@@ -1,184 +1,168 @@
-## AR-001: Plan never says how argv is matched to an allowlist shape versus the model's `op` label.
+## AR-001: Behavior when the next arg starts with `--` and stdin is an empty non-TTY pipe is unspecified.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 (ops carry op and argv); AC-8 'exact command shapes'.
-- Failure: Plan never says how argv is matched to an allowlist shape versus the model's `op` label. Settle: 'The policy derives the operation from argv alone; it refuses if argv matches no allowlist shape or the op label disagrees.'
+- References: CHANGE_PLAN s1 (value exists iff $1 != --*); CHANGE_SPEC S-4, S-11.
+- Failure: Behavior when the next arg starts with `--` and stdin is an empty non-TTY pipe is unspecified. Settle: 'A next argument starting with `--` is never text; the launcher reads stdin, and empty input exits 1 with `Error: --OPT text cannot be empty`; use `--OPT=--text` for such text.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Floor and default disallow list are conflated; spec leaves the floor list UNRESOLVED while D-1 lists a smaller set.
+## AR-002: Ordering between stdin read and rejecting later unknown arguments is unspecified (`--application --bogus < f`).
 
 - Severity: HIGH
-- References: CHANGE_SPEC s15 UNRESOLVED; CHANGE_PLAN D-1; AC-7; I-7.
-- Failure: Floor and default disallow list are conflated; spec leaves the floor list UNRESOLVED while D-1 lists a smaller set. Settle: 'Default list equals the change-request lists verbatim; the locked floor is exactly D-1 and always applies.'
+- References: uncle:221-235 unknown-argument case; CHANGE_PLAN s1 gives no ordering.
+- Failure: Ordering between stdin read and rejecting later unknown arguments is unspecified (`--application --bogus < f`). Settle: 'Stdin is read only after all arguments parse; an unknown argument exits 1 before any stdin read or temp file creation.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Remote branch delete is allowed, but deleting the default or current branch is unspecified.
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-1, D-2, D-7; AC-8.
-- Failure: Remote branch delete is allowed, but deleting the default or current branch is unspecified. Settle: 'git push origin --delete <branch> is refused for the default branch, HEAD, or refspec/colon forms.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-004: Verify argv source is ambiguous: the model emits verify argv, yet D-4 says verify is deterministic.
+## AR-003: Plan does not say which wins if both UNCLE_STARTUP_TEXT and UNCLE_STARTUP_TEXT_FILE are set (e.g.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 vs D-4 and D-6.
-- Failure: Verify argv source is ambiguous: the model emits verify argv, yet D-4 says verify is deterministic. Settle: 'Verify argv comes from a fixed per-op template; model-supplied verify argv must equal it, and expected is compared by exact string.'
+- References: CHANGE_PLAN s6 and s8 D-2; uncle:115-116,249.
+- Failure: Plan does not say which wins if both UNCLE_STARTUP_TEXT and UNCLE_STARTUP_TEXT_FILE are set (e.g. caller-exported env). Settle: 'When UNCLE_STARTUP_TEXT_FILE is set the TUI ignores UNCLE_STARTUP_TEXT; the launcher leaves UNCLE_STARTUP_TEXT empty in the stdin case.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Behavior after mid-run failure and process exit codes are undefined.
+## AR-004: Where the single trailing-newline strip happens relative to the emptiness check and the `--text` path is undefined.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s7 state transitions; spec s8; AC-6, AC-10.
-- Failure: Behavior after mid-run failure and process exit codes are undefined. Settle: 'After a failure, read-only verify still runs for completed ops; exit is nonzero for REFUSED, FAILED, VERIFY_FAILED and zero for DECLINED and success.'
+- References: CHANGE_SPEC s15 assumptions, AC-7; CHANGE_PLAN s1.
+- Failure: Where the single trailing-newline strip happens relative to the emptiness check and the `--text` path is undefined. Settle: 'The strip occurs only in the stdin branch of housekeeping_input.py, after CRLF normalization and before the emptiness check; --text is never stripped.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Edge inputs unspecified: zero-op plan, duplicate or floor-equal patterns, user patterns versus the allowlist.
+## AR-005: Exclusivity check runs only on option entry, so `--application --application` or `--application --housekeeping` ordering
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5; AC-12; I-4, I-7.
-- Failure: Edge inputs unspecified: zero-op plan, duplicate or floor-equal patterns, user patterns versus the allowlist. Settle: 'A zero-op plan is refused; duplicate or floor-equal patterns are rejected leaving the list unchanged; user patterns only add refusals.'
+- References: uncle:148-151,173-176; CHANGE_SPEC AC-8, S-9.
+- Failure: Exclusivity check runs only on option entry, so `--application --application` or `--application --housekeeping` ordering relative to stdin read is unspecified. Settle: 'A second mode option exits 1 with the mutually-exclusive error before any stdin is read.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan allows minimal edits to protected existing tests for usage/help text, but AC-14 requires the existing suites to pas
-
-- Severity: HIGH
-- References: CHANGE_PLAN section 10 and risk row 2 allow expected-string updates; AC-14 requires the suites to pass as at baseline.
-- Failure: Plan allows minimal edits to protected existing tests for usage/help text, but AC-14 requires the existing suites to pass as at baseline. Settle with: 'Existing tests are never edited; usage changes must pass every existing assertion, otherwise stop for human re-approval.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: Flag combinations beyond the three exclusive flags are unspecified, as is bare --housekeeping with empty TTY stdin.
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-1 and H-11 list only three exclusive flags; H-12 says existing flags are unchanged.
-- Failure: Flag combinations beyond the three exclusive flags are unspecified, as is bare --housekeeping with empty TTY stdin. Settle with: 'Other flag combinations keep prior behavior; --housekeeping with no text and TTY stdin is refused as empty input.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: The new Configure entry position in the line menu is unspecified, so existing numbered selections or item-count tests co
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN section 10 says the entry is appended; H-9 places it in both menus without fixing its number.
-- Failure: The new Configure entry position in the line menu is unspecified, so existing numbered selections or item-count tests could shift. Settle with: 'The entry takes the last number in each menu and no existing item moves.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-010: The driver sources state.sh and reuses driver.lock, but the plan does not say whether it touches shared .uncle/workflow
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN section 1 sources state.sh while section 7 says existing state is untouched; R-4 defers the lock helper choice.
-- Failure: The driver sources state.sh and reuses driver.lock, but the plan does not say whether it touches shared .uncle/workflow state or releases the lock on refusal. Settle with: 'Housekeeping reads and writes no state or gate files outside .uncle/workflow/housekeeping/, and releases driver.lock on every exit path.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-011: Writing housekeeping.disallow into the shared .uncle/config could disturb other keys; the plan does not say how they are
+## AR-006: Whether any `--application` message must still contain `requires an argument` is unstated, though the TTY message replac
 
 - Severity: LOW
-- References: CHANGE_PLAN risk row 3 says the .uncle/config syntax is unknown; D-5 stores a JSON array string.
-- Failure: Writing housekeeping.disallow into the shared .uncle/config could disturb other keys; the plan does not say how they are preserved. Settle with: 'Config writes change only the housekeeping.disallow entry and leave all other keys unchanged.'
+- References: CHANGE_SPEC S-5; CHANGE_PLAN s8 D-1, R-3.
+- Failure: Whether any `--application` message must still contain `requires an argument` is unstated, though the TTY message replaces it. Settle: 'No --application message retains `requires an argument`; existing assertions on it, if any, are recorded as a deviation.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Allowlisted ops are said to match 'exact command shapes' but the argv grammar is undefined (global options, `--`, `git -
+## AR-007: Housekeeping stdin text moves from env to a file, but the plan never says what UNCLE_STARTUP_TEXT holds in the stdin cas
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-8 'exact command shapes'; CHANGE_PLAN s1 'matches program/subcommand/flag sets'.
-- Failure: Allowlisted ops are said to match 'exact command shapes' but the argv grammar is undefined (global options, `--`, `git -c`, `gh --repo`, env prefixes). Decision: match the full argv exactly (program, subcommand, fixed flag set, exact positional arity); refuse any global option, unlisted flag or env-assignment token.
+- References: CHANGE_PLAN s8 D-2 and s6; uncle:158,164 currently set UNCLE_STARTUP_TEXT from stdin; s19 admits existing test assumptions are unverified.
+- Failure: Housekeeping stdin text moves from env to a file, but the plan never says what UNCLE_STARTUP_TEXT holds in the stdin case, or which the TUI prefers if both are set. Plan should say: in the stdin case UNCLE_STARTUP_TEXT is empty and only UNCLE_STARTUP_TEXT_FILE is set; in the value case only UNCLE_STARTUP_TEXT is set.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Remote `git push origin --delete` is allowed, but the plan doesn't protect the default branch or say how 'merged-only' i
+## AR-008: The validated reader replaces the old housekeeping check, which only rejected whitespace-only input.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2/D-7; D-1 covers only force-push to the default branch.
-- Failure: Remote `git push origin --delete` is allowed, but the plan doesn't protect the default branch or say how 'merged-only' is enforced for remotes. Decision: refuse `--delete` and `:ref` refspecs for the default branch, HEAD, main and master; require a merged check at execute time for any remote delete.
+- References: CHANGE_PLAN s19.i2, R-3; uncle:164-168 (old $(cat) path has no limits).
+- Failure: The validated reader replaces the old housekeeping check, which only rejected whitespace-only input. Existing housekeeping stdin tests with control chars, CRLF or large text may now change, yet the plan expects no assertion changes. Plan should say: run the existing housekeeping stdin cases before step 3 and treat any conflict as stop-and-ask.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: The floor lists fixed strings, and variants are unspecified: `rm -fr`, `--recursive --force`, `/*`, `$HOME`, wrappers (`
+## AR-009: The value rule `$1 != --*` makes any value starting with `--` go to stdin mode, regressing `--application "--foo bar"` w
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s1 and s8; uncle:178-187 accepts any non-empty $1 for --application.
+- Failure: The value rule `$1 != --*` makes any value starting with `--` go to stdin mode, regressing `--application "--foo bar"` which works today, while s8 claims value forms are unchanged. Plan should say: this regression is accepted, documented under Compatibility, and pinned by a test (text starting with -- needs the = form).
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-010: The plan does not say when stdin is read relative to the rest of argument parsing.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s1 (function called inline in the arg loop); uncle:221-235 unknown-argument exit.
+- Failure: The plan does not say when stdin is read relative to the rest of argument parsing. With `--application --bogus`, stdin could be consumed and a temp file made before `Unknown argument` exits. Plan should say: stdin is read only after the whole argument list parses successfully.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-011: The one-newline strip is stdin only, but housekeeping_input.py shares one validation path for --text and stdin.
+
+- Severity: LOW
+- References: CHANGE_PLAN s1, D-5; housekeeping_input.py:30-35.
+- Failure: The one-newline strip is stdin only, but housekeeping_input.py shares one validation path for --text and stdin. Plan should say: the strip is applied only on the stdin read path in the helper, never on --text.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: Plan relies on the EXIT trap to delete the private stdin text file, but the launcher later may exec the TUI, which skips
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1; the D-2 allowlist contains no rm.
-- Failure: The floor lists fixed strings, and variants are unspecified: `rm -fr`, `--recursive --force`, `/*`, `$HOME`, wrappers (`env`, `xargs`, `sh -c`), `+refspec`, `--force-with-lease`. Decision: rm and wrapper programs are never allowlisted; `--force-with-lease` and `+refspec` count as force.
+- References: CHANGE_PLAN s9 and s6 rely on the EXIT trap (uncle:119); exec replaces the shell so the trap never fires.
+- Failure: Plan relies on the EXIT trap to delete the private stdin text file, but the launcher later may exec the TUI, which skips the trap. Add: 'The text file lives only in the 0700 mktemp dir, 0600, and is removed on every exit path including exec (TUI deletes it after reading).'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: Nothing binds the approved plan to the executed argv (TOCTOU), or says the displayed argv is escaped.
+## AR-013: Non-TTY stdin that never reaches EOF (FIFO, open pipe in CI) blocks forever; the size cap limits bytes, not time.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 stages plan -> policy -> approval -> execute, with no integrity binding.
-- Failure: Nothing binds the approved plan to the executed argv (TOCTOU), or says the displayed argv is escaped. Decision: hash the policy-checked plan, approve that hash, execute only it, and render argv with control characters escaped.
+- References: CHANGE_SPEC I-2 guards only TTY; housekeeping_input.py:35 does a blocking read.
+- Failure: Non-TTY stdin that never reaches EOF (FIFO, open pipe in CI) blocks forever; the size cap limits bytes, not time. Add: 'Stdin read has no timeout; a non-TTY stdin that never closes blocks, accepted and documented', or specify a timeout.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: The editable disallow config is unspecified for empty or over-broad patterns, and for whether it can do anything except
+## AR-014: I-3 claims identical validation for all inputs, but value-form text (argv, --opt=VALUE) skips size, UTF-8 and control-ch
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5; CHANGE_SPEC I-4/I-7.
-- Failure: The editable disallow config is unspecified for empty or over-broad patterns, and for whether it can do anything except add refusals. Decision: config can only add refusals; empty or bare `*` patterns are rejected; the floor is hard-coded, not read from config.
+- References: CHANGE_SPEC I-3 and S-3/S-11; the plan keeps UNCLE_STARTUP_TEXT unvalidated while housekeeping_input.py already supports --text.
+- Failure: I-3 claims identical validation for all inputs, but value-form text (argv, --opt=VALUE) skips size, UTF-8 and control-character checks. Add: 'Value-form text is also validated via housekeeping_input.py --text', or state that the value path is unvalidated.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: Read-only verify commands (`git ls-remote`, `gh issue view`) can take arbitrary URLs and targets, and the issue-triage c
+## AR-015: Any text beginning with -- is treated as an option, so a brief starting with -- is silently misread.
 
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-6; D-2 'issue-triage' has no defined command shape.
-- Failure: Read-only verify commands (`git ls-remote`, `gh issue view`) can take arbitrary URLs and targets, and the issue-triage command shape is undefined. Decision: verify argv is limited to the same repo and refs as the operation; issue-triage allows only fixed label/close/comment shapes.
+- Severity: LOW
+- References: CHANGE_PLAN s1 guard `$1 != --*`; S-11 covers only the = form.
+- Failure: Any text beginning with -- is treated as an option, so a brief starting with -- is silently misread. Add: 'Positional text beginning with -- is never text; use --opt=VALUE, and the unknown-argument error mentions that form.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: Plan never says whether a plan-supplied verify argv is also checked against the disallow list, or what happens when it i
+## AR-016: Order of CRLF normalization, single-newline strip and empty check is unspecified, and --text shares the helper.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-6; CHANGE_SPEC section 10; AC-10 covers only mismatch, failure and not-run.
-- Failure: Plan never says whether a plan-supplied verify argv is also checked against the disallow list, or what happens when it is off the verify allowlist (refuse whole plan vs NOT VERIFIED). Settle: 'A verify argv off the read-only verify allowlist or matching a disallow pattern refuses the whole plan before any command runs, in every mode.'
+- References: CHANGE_SPEC §15, PLAN D-5; housekeeping_input.py lines 33-46; AC-7.
+- Failure: Order of CRLF normalization, single-newline strip and empty check is unspecified, and --text shares the helper. Settle with: 'Normalize CRLF/CR to LF, then strip exactly one trailing LF on the stdin path only (never --text), then apply the empty check.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: Floor patterns and the default branch are undefined, so AC-7 tests lack an oracle.
+## AR-017: Plan does not say whether the 1048576 cap counts raw bytes before the strip.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1; CHANGE_SPEC section 15 marks the exact floor list UNRESOLVED.
-- Failure: Floor patterns and the default branch are undefined, so AC-7 tests lack an oracle. Settle: 'Default branch means main, master, or origin HEAD; rm with any recursive or force flag spelling on /, /*, ~, $HOME is refused.'
+- References: PLAN §16 boundaries; AC-4; housekeeping_input.py lines 35-36.
+- Failure: Plan does not say whether the 1048576 cap counts raw bytes before the strip. Settle with: 'The cap applies to raw stdin bytes before CRLF normalization and newline stripping.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: Pattern grammar `program [subcommand...] [--flag...]` leaves open short-flag clusters, --flag=value, flags before subcom
+## AR-018: Whether stdin stays unread for empty value forms ("" and =) is unspecified, so the I-4 test is ambiguous.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5; AC-7 'flag-order and quoting variants'; AC-12 invalid pattern.
-- Failure: Pattern grammar `program [subcommand...] [--flag...]` leaves open short-flag clusters, --flag=value, flags before subcommand, and all-vs-any flags. Settle: 'A pattern matches when program and subcommands are a prefix of the command tokens and every pattern flag appears in any order, clusters expanded, --flag=value matched by name.'
+- References: PLAN §12, I-4, AC-5; uncle lines 154-157, 182-185.
+- Failure: Whether stdin stays unread for empty value forms ("" and =) is unspecified, so the I-4 test is ambiguous. Settle with: 'Empty value forms are refused without reading stdin; --OPT= never falls back to stdin.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: A valid-JSON plan with zero ops, duplicate ids or missing fields is unspecified; only bad JSON is covered.
+## AR-019: The value rule leaves next arguments like -h, verify and single-dash words ambiguous.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN risk table 'Plan model emits bad JSON'; section 7 has no schema rule.
-- Failure: A valid-JSON plan with zero ops, duplicate ids or missing fields is unspecified; only bad JSON is covered. Settle: 'A plan that is invalid JSON, has zero ops, or has any op missing id, op, argv, expected or verify is REFUSED with exit 1 before approval.'
+- References: PLAN §1 value rule; uncle lines 122-124.
+- Failure: The value rule leaves next arguments like -h, verify and single-dash words ambiguous. Settle with: 'Only arguments beginning with -- are options; any other next argument, including -h, verify and empty string, is the value.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: Exit statuses and whether verify runs after an execute failure are unspecified for DECLINED, FAILED, VERIFY_FAILED, NOT_
+## AR-020: Order of stdin read versus later parse errors is unspecified (e.g.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 7 transitions; CHANGE_SPEC section 8 gives exit 1 only for input refusals.
-- Failure: Exit statuses and whether verify runs after an execute failure are unspecified for DECLINED, FAILED, VERIFY_FAILED, NOT_VERIFIED. Settle: 'After FAILED, executed ops are still verified and unexecuted ops are NOT_VERIFIED; exit 0 only for DECLINED or fully VERIFIED, else 1.'
+- References: PLAN §1; uncle lines 148-151, 221-234; AC-8, S-9.
+- Failure: Order of stdin read versus later parse errors is unspecified (e.g. --application --bogus < f, or with --issue). Settle with: 'Stdin is read at the option, so its validation errors win over later unknown-argument or mutual-exclusion errors.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-023: AC-13 static and mutation tests have no defined mechanism for a bash driver.
+## AR-021: D-1 TTY message includes 'empty input' for both options while AC-3 requires it only for housekeeping.
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-13; CHANGE_PLAN section 16.
-- Failure: AC-13 static and mutation tests have no defined mechanism for a bash driver. Settle: 'The driver executes plan commands only via one function that consumes the check_plan output; the static test asserts it is the sole execution call site and the mutation test removes the check_plan call and expects the suite to fail.'
+- Severity: LOW
+- References: PLAN §8 D-1 vs CHANGE_SPEC AC-3.
+- Failure: D-1 TTY message includes 'empty input' for both options while AC-3 requires it only for housekeeping. Settle with: 'The D-1 message including empty input is used for both options and tests assert it for both.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

@@ -2187,6 +2187,12 @@ class UncleTUI:
             # Recorded at launch: the boundary guard in _apply_gate_answer must
             # not follow a settings change made while this run is in flight.
             self.workflow_unattended = "--attended" not in command
+            # The TUI answers gates on the stdin pipe below, so an attended
+            # driver needs no TTY. Set only for a launch the TUI itself made
+            # attended; the launcher never trusts this from a caller's env.
+            env.pop("UNCLE_ATTENDED_STDIN", None)
+            if not self.workflow_unattended:
+                env["UNCLE_ATTENDED_STDIN"] = "1"
             self.proc = subprocess.Popen(command, cwd=_project_root(), env=env,
                                          stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

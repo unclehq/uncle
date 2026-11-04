@@ -78,7 +78,8 @@ while [[ $# -gt 0 ]]; do
         *)            printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
     esac
 done
-export UNCLE_UNATTENDED="$UNATTENDED"
+# UNCLE_UNATTENDED is deliberately not exported here: the launcher's resolved mode arrives in it, and writing the 0 default over
+# it made every unflagged driver read as an already-resolved attended run (refused without a TTY). uncle_resolve_mode exports it.
 
 # A change request never opens a preview tab (uncle_tui.py's _early_preview_allowed says the same on its side). Everything this run starts,
 # an agent running a test that drives stagegate.sh included, inherits it.

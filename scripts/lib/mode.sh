@@ -47,6 +47,9 @@ uncle__recorded_mode() {
   for entry in "$dir"/* "$dir"/.[!.]*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     [ "$entry" = "$f" ] && continue
+    # Written by the launcher before the driver resolves the mode (issue seed,
+    # lock, performance log); they do not mean a prior run exists.
+    case "${entry##*/}" in driver.lock|family|origin|origin.bound|performance) continue ;; esac
     have=1; break
   done
   if [ ! -e "$f" ] && [ ! -L "$f" ]; then

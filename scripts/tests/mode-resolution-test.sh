@@ -158,6 +158,10 @@ mkrun "$R"; run "$R" "$NOTTY"; check mode-missing-notty 1 "$R_TTY"
 mkrun "$R"; run "$R" "$NOTTY" --unattended
 check mode-missing-explicit-unattended 0 "$N_FLAG" 1
 
+# launcher-written bookkeeping only (uncle --issue N): a fresh run, not a legacy one
+rm -rf "$R"; mkdir -p "$R/performance"; : >"$R/driver.lock"; : >"$R/family"; : >"$R/origin"; : >"$R/origin.bound"
+run "$R" "$NOTTY"; check mode-launcher-files-fresh 0 "" 1
+
 # stale mode file, no run state: ignored
 rm -rf "$R"; mkdir -p "$R"; echo attended >"$R/mode"; run "$R" "$NOTTY"; check mode-stale-ignored 0 "" 1
 rm -rf "$R"; mkdir -p "$R"; echo bogus >"$R/mode"; run "$R" "$NOTTY"; check mode-stale-garbage-ignored 0 "" 1

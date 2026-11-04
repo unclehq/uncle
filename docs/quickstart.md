@@ -45,19 +45,23 @@ A bare `--application` reads stdin; on an interactive terminal with nothing
 piped it refuses (empty input). Text that begins with `--` must use the `=`
 form: `uncle --application="--foo bar"`.
 
-## Running it unattended
+## Unattended by default, `--attended` to review
 
-Add `--unattended` to skip every approval gate and let the whole build run
-start to finish without you:
+Runs are unattended by default: every approval gate is skipped and the whole
+build runs start to finish without you.
 
 ```sh
-uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support' --unattended
+uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support'
 ```
 
-This is the fastest way to get straight to a finished result, but it also
-means skipping the human approval gates that are the actual point of Uncle.
-Run the interactive version at least once first so you know what you're
-opting out of.
+That is the fastest way to a finished result, but it skips the human approval
+gates. Add `--attended` (or `UNCLE_ATTENDED=1`) to review each gate yourself;
+it needs a terminal and refuses without one. Run attended at least once first
+so you know what you're opting out of.
+
+`--unattended` and the legacy `UNCLE_UNATTENDED`, `WORKFLOW_UNATTENDED` and
+`UNCLE_HOUSEKEEPING_UNATTENDED` variables are deprecated no-ops that print a
+notice on stderr. See [UNATTENDED_DEFAULT_MIGRATION.md](UNATTENDED_DEFAULT_MIGRATION.md).
 
 ## Next steps
 

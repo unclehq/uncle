@@ -491,6 +491,8 @@ while [[ $# -gt 0 ]]; do
         --seed-only) SEED_ONLY=1 ;;
         --new) MODE="new" ;;
         --unattended) ISSUE_WORKFLOW_ARGS+=(--unattended); UNATTENDED=1 ;;
+        # Parse and forward only; the driver resolves the mode and owns the mode file.
+        --attended) ISSUE_WORKFLOW_ARGS+=(--attended) ;;
         --worktree) WORKTREE=1; WORKTREE_EXPLICIT=1 ;;
         --no-worktree) WORKTREE=0; WORKTREE_EXPLICIT=1 ;;
         --worktree-dir)

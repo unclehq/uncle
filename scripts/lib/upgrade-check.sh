@@ -71,6 +71,8 @@ upgrade_fetch_latest_tag() {
 upgrade_should_check() {
     [[ "${UNCLE_SKIP_UPGRADE:-}" != 1 ]] || return 1
     [[ " ${UNCLE_ARGS[*]:-} " != *' --unattended '* ]] || return 1
+    # Unattended (the default) is notice-only: never prompt for an upgrade.
+    [[ "${UNCLE_UNATTENDED:-}" != 1 ]] || return 1
     [[ -t 0 ]] || return 1
     local pids pid
     pids="$(running_workflow_pids 2>/dev/null)" || return 1

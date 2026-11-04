@@ -1212,7 +1212,8 @@ sys.exit(7 if mode=='fail' else 0)
             for index in range(len(module.WORKFLOWS)):
                 ui.workflow_idx = index
                 ui.issue, ui.issue_mode = '123', '--change'
-                self.assertIn('--unattended', ui.cmd_for())
+                self.assertNotIn('--unattended', ui.cmd_for())
+                self.assertNotIn('--attended', ui.cmd_for())
             from unittest.mock import Mock
             ui.stdscr = Mock()
             ui.color = {'title': 1}

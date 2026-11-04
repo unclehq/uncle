@@ -26,7 +26,7 @@ When the verdict is not READY, publication first asks whether to create the PR a
 
 Uncle creates a feature branch when needed and pushes without force. Eligible imported issues are linked with `Closes owner/repo#number`; GitHub closes them on merge into the default branch. Uncle does not merge PRs.
 
-Auto/unattended mode and `WORKFLOW_CLOSE_ISSUE=0` disable a new handoff. A previously approved signing handoff can resume despite these settings after validation. New-application workflows do not use it.
+Unattended mode (now the default; `--attended` opts out) and `WORKFLOW_CLOSE_ISSUE=0` disable a new handoff. A previously approved signing handoff can resume despite these settings after validation. New-application workflows do not use it.
 
 ## Signing and recovery
 

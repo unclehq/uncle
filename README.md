@@ -58,7 +58,7 @@ application is usually done in minutes:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh && bash install.sh
-uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support' --unattended
+uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support'
 ```
 
 **Windows (PowerShell)**
@@ -66,21 +66,26 @@ uncle --application 'build a groovy 1970s themed calculator react webapp with a 
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support' --unattended
+uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support'
 ```
 
-`--unattended` runs the whole thing — planning, implementation, independent
-review, and verification — straight through with no approval gates, so you
+Runs are unattended by default: planning, implementation, independent
+review, and verification go straight through with no approval gates, so you
 can just watch it build. You'll need at least one AI client configured; see
 [Prerequisites](PREREQUISITES.md).
 
-Drop `--unattended` if you'd rather review each stage yourself as it goes.
+Add `--attended` (or set `UNCLE_ATTENDED=1`) if you'd rather review each stage
+yourself as it goes. `--attended` needs a terminal; without one it refuses
+rather than running unattended. `--unattended` and the `UNCLE_UNATTENDED`,
+`WORKFLOW_UNATTENDED` and `UNCLE_HOUSEKEEPING_UNATTENDED` variables still work
+as no-ops with a deprecation notice on stderr; see
+[docs/UNATTENDED_DEFAULT_MIGRATION.md](docs/UNATTENDED_DEFAULT_MIGRATION.md).
 
 Or, in an existing repository:
 
 ```sh
 cd my-project
-uncle --unattended
+uncle
 ```
 
 Give Uncle a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
@@ -88,10 +93,10 @@ Give Uncle a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
 To start a change from a prepared request, pipe it in:
 
 ```sh
-cat request.md | uncle --change-request --unattended
+cat request.md | uncle --change-request
 ```
 
-`--change-request` reads all of stdin (UTF-8, at most 1 MiB, no NUL or control characters), writes it unchanged (CRLF becomes LF) to `CHANGE_REQUEST.md`, and starts the change workflow. It refuses to overwrite an existing `CHANGE_REQUEST.md` and cannot be combined with `--application` or `--issue`. Treat piped text as untrusted input to tool-using agents, especially with `--unattended`.
+`--change-request` reads all of stdin (UTF-8, at most 1 MiB, no NUL or control characters), writes it unchanged (CRLF becomes LF) to `CHANGE_REQUEST.md`, and starts the change workflow. It refuses to overwrite an existing `CHANGE_REQUEST.md` and cannot be combined with `--application` or `--issue`. Treat piped text as untrusted input to tool-using agents, especially in the default unattended mode.
 
 ## Why Uncle?
 

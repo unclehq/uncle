@@ -431,7 +431,8 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.start_workflow.assert_called_once()
         cmd = self.ui.cmd_for()
         self.assertIn('https://github.com/unclehq/uncle/issues/44', cmd)
-        self.assertIn('--unattended', cmd)
+        self.assertNotIn('--unattended', cmd)
+        self.assertNotIn('--attended', cmd)
 
     def test_picker_shows_and_enters_all_directories(self):
         for name in ('.git', '.ssh', '.uncle', 'visible'):

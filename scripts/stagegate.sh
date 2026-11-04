@@ -42,12 +42,15 @@ STAGEGATE_VERSION="0.1.0"
 
 usage() {
     cat <<'EOF'
-Usage: stagegate.sh [-h|--help] [--version] [--unattended]
+Usage: stagegate.sh [-h|--help] [--version] [--attended] [--unattended]
 
 Run the human-gated new-application workflow from REQUIREMENTS.md. The driver
 is a resumable state machine; re-run it to continue from the current stage.
 
---unattended runs with nobody at the terminal: every gate that would wait for
+Unattended is the default. --attended keeps every human gate and needs a
+terminal on standard input (or UNCLE_ATTENDED_STDIN=1).
+
+Unattended mode runs with nobody at the terminal: every gate that would wait for
 a person is auto-waived and recorded, and the run reports how many judgments
 no one made. It never turns a failing check into a passing one -- a failed
 verification suite still stops the run, because that waits on a result and not
@@ -63,15 +66,24 @@ EOF
 # is a piped run, not a licence to approve on the operator's behalf; the only
 # thing that turns the gates off is someone typing the flag.
 UNATTENDED=0
-while [[ $# -gt 0 ]]; do
-    case "$1" in
+ATTENDED_FLAG=0
+for _arg in "$@"; do
+    case "$_arg" in
         -h|--help)    usage; exit 0 ;;
         --version)    printf '%s\n' "$STAGEGATE_VERSION"; exit 0 ;;
-        --unattended) UNATTENDED=1; shift ;;
-        *)            printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
+        --unattended) ;;
+        --attended)   ATTENDED_FLAG=1 ;;
+        *)            printf 'Unknown argument: %s\n' "$_arg" >&2; usage >&2; exit 1 ;;
     esac
 done
+unset _arg
+# One decision per launch: scripts/lib/mode.sh owns every rule, notice and refusal.
+# It sets UNATTENDED (0/1) or refuses (exit 1) before any state is touched. The mode
+# file is written below, only after resolution has succeeded.
+. "$ROOT/scripts/lib/mode.sh"
+uncle_resolve_mode "$@" || exit $?
 export UNCLE_UNATTENDED="$UNATTENDED"
+export UNCLE_MODE_RESOLVED=1
 # A repair is a new implementation attempt, not a harmless validator retry.
 # Verification failures are evidence, not a reason to discard an otherwise
 # complete build.  Keep going by default and give the final audit the complete
@@ -117,9 +129,14 @@ WORKFLOW_MODULE_INTERFACES="${WORKFLOW_MODULE_INTERFACES:-auto}"
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
     driver_args=(bash "${BASH_SOURCE[0]}")
     [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
+    [[ "$UNATTENDED" == 1 ]] || driver_args+=(--attended)
     exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
 fi
 python3 "$ROOT/scripts/lib/workflow_family.py" app
+# Record the resolved mode in the owning run directory, only now that resolution succeeded.
+if declare -F uncle_write_mode_file >/dev/null; then
+    uncle_write_mode_file "$ROOT/.uncle/workflow" "$UNATTENDED" || exit 1
+fi
 # From here the driver is the process that will run the whole workflow (the lock wrapper above re-executed it), so this is where its
 # Python host starts: helper calls are served by a warm interpreter instead of starting one each (docs/driver-cutover-plan.md).
 # UNCLE_PY_HOST=0 turns it off; the call never waits for the host and falls back to a plain python3 whenever it cannot be used.
@@ -409,7 +426,11 @@ record_provided() {
 if [[ "$UNATTENDED" == 1 ]]; then
     echo "UNATTENDED RUN: no human prompts; blocking audit findings are skipped and ledgered ($UNATTENDED_FILE)."
     if ! grep -qs $'\tunattended-enabled\t' "$UNATTENDED_FILE" 2>/dev/null; then
-        record_unattended_gate unattended-enabled "enabled by the --unattended flag (UNCLE_UNATTENDED=1)"
+        if declare -F uncle_unattended_ledger_text >/dev/null; then
+            record_unattended_gate unattended-enabled "$(uncle_unattended_ledger_text)"
+        else
+            record_unattended_gate unattended-enabled "unattended mode (the default; --attended turns it off)"
+        fi
     fi
 fi
 

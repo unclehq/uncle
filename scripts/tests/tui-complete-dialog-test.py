@@ -241,10 +241,14 @@ class UnattendedFinishTests(unittest.TestCase):
             ui.misc = {"auto_mode": auto_mode}
             ui._startup_unattended = False
             ui.workflow_idx = 0
-            self.assertEqual("--unattended" in ui.cmd_for(), expected)
+            cmd = ui.cmd_for()
+            self.assertNotIn("--unattended", cmd)
+            self.assertEqual("--attended" in cmd, not expected)
         ui.session_auto_mode = False  # Shift-Tab to attended affects the next run only
         ui.misc = {"auto_mode": "true"}
-        self.assertNotIn("--unattended", ui.cmd_for())
+        cmd = ui.cmd_for()
+        self.assertNotIn("--unattended", cmd)
+        self.assertIn("--attended", cmd)
 
 
 if __name__ == "__main__":

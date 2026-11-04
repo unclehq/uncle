@@ -1,72 +1,84 @@
-# Change spec: Issue 152 terminal tab title shows project name
+# Change spec: issue 155
 
-Omitted sections: Performance (negligible), Migration (none), Prototype isolation (not a prototype)
+Omitted sections: Performance (no impact); Migration (no data migration; flag/env deprecation covered in Compatibility); Prototype isolation (not a prototype)
 
 ## 1. Change type
-Feature.
+Behavior change (default flip) plus flag/env deprecation.
 
 ## 2. Problem statement
-Tab titles read `uncle` / `uncle issue #N`, so tabs for different projects cannot be told apart.
+Unattended is the common case but needs `--unattended` everywhere. Make it the default; the exception gets `--attended`.
 
-## 3. Current behavior
-Baseline B-1..B-5.
-
-## 4. Desired behavior
-Title is `<project> · uncle` (idle, no-issue runs, line menu, every driver) and `<project> · uncle issue #N` for issue-backed runs. Project is the status-bar name (directory basename of `UNCLE_PROJECT_ROOT` or cwd). On end/exit the previous title is restored with the xterm title stack; the project-only title is written first as fallback. Issue number is kept as before; run state and OSC 1 are not added.
+## 4. Desired behavior and decisions (open questions resolved)
+| Question | Decision |
+|---|---|
+| Deprecation window | `--unattended`, `UNCLE_UNATTENDED`, `WORKFLOW_UNATTENDED`, `UNCLE_HOUSEKEEPING_UNATTENDED` accepted as no-ops with a one-line stderr notice; release notes state removal no earlier than two releases after this one. Not permanent. |
+| Environment | `UNCLE_ATTENDED=1` added. Legacy env honored with notice. Attended always wins on conflict with the env or another flag source, except two contradictory CLI flags, which are refused. |
+| Upgrade check | Never prompts when unattended (default): if a newer version exists, print one line naming it and the upgrade command. Prompts only when attended and a TTY is present (today's flow). |
+| TUI default | Unattended too (already true via `misc.auto_mode`); mode shown in header; Shift-Tab toggles for the session. `--attended` makes the session start attended. |
+| PR text | Behavior unchanged. TUI auto-mode help text corrected to state what actually happens (issue runs publish a PR; other runs do not commit/push). |
+| No TTY | Default unattended runs need no TTY. `--attended` without a TTY refuses; scripted answers need explicit `UNCLE_ATTENDED_STDIN=1`. Forgetting the flag is not detectable, and that is accepted. |
+| Resume | Mode is recorded in `.uncle/workflow/mode`; a resume reuses it unless a flag/env is given; mode printed on resume. |
+| Housekeeping | Same resolver; policy gate unchanged; attended keeps the `[y/N]` prompt. |
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| BH-1 | ADD | TUI idle start, tty | No title | Push `CSI 22;2 t`, write `ESC]2;<project> · uncle BEL` (T-1,T-5) | pty test |
-| BH-2 | MODIFY | Run with issue number | `uncle issue #N` | `<project> · uncle issue #N` (T-2) | pty + unit |
-| BH-3 | ADD | Run with no issue (TUI or driver) | No title | `<project> · uncle` (T-3) | pty test |
-| BH-4 | MODIFY | Run end or exit | Literal `uncle` | Project-only title then `CSI 23;2 t`; never bare `uncle` (T-4) | pty test + defect injection |
-| BH-5 | ADD | Line menu, stagegate.sh, change-workflow.sh, from-issue.sh start | No/partial title | Same format and stack discipline (all entry points) | pty test per entry |
-| BH-6 | PRESERVE | Non-tty, TERM empty/dumb (T-8) | Nothing written | Nothing written, including stack sequences | pty/pipe test |
-| BH-7 | ADD | `UNCLE_TERMINAL_TITLE=0` (T-7) | n/a | No title or stack bytes anywhere | pty test |
-| BH-8 | ADD | Name has control chars/ESC/BEL or is very long (T-6) | n/a | Control chars removed, truncated to 60 chars, fallback to `uncle` when empty | unit test |
-| BH-9 | PRESERVE | Driver started by TUI (owner set) | Driver silent | Driver silent; no nested push | pty test |
-| BH-10 | PRESERVE | Status bar | `<dir> (<branch>)` | Unchanged; project name from same helper (I-2) | consistency test |
+| A-1 | MODIFY | `uncle --application T` / `--issue` / `--change-request` / `--housekeeping`, no mode flag | depends on entry point; direct drivers attended | unattended end to end; banner `Mode: unattended (use --attended to review each gate)`; failing tests still stop | launcher test with fake driver per entry point |
+| A-2 | ADD | `--attended` | flag unknown | every gate waits for a person; no TTY -> exit nonzero with message, nothing started | pty test + no-TTY test |
+| A-3 | MODIFY | `--unattended` | works silently | works as default; one-line deprecation notice on stderr | launcher + driver tests |
+| A-4 | ADD | `--attended` and `--unattended` | n/a | refused naming both; nothing starts | tests per entry point |
+| A-5 | MODIFY | interactive `uncle`/TUI no flag | auto on | auto on, mode always visible; toggle switches session to attended | `startup-action-test.py`, TUI tests |
+| A-6 | MODIFY | `stagegate.sh`, `from-issue.sh`, `change-workflow.sh`, `housekeeping-workflow.sh` direct | attended default | same default and flags as launcher | resolver parity test |
+| A-7 | ADD | `UNCLE_ATTENDED=1`; legacy `UNCLE_UNATTENDED=1` | n/a | former = `--attended`; latter honored with notice; both -> attended | resolver test |
+| A-8 | PRESERVE | attestation, PR body, final report of delegated run | states nobody reviewed | byte-identical wording and fields | record test vs current fixtures |
+| A-9 | MODIFY | upgrade check | prompts unless `--unattended` | per decision table | `upgrade-test.sh` |
+| A-10 | ADD | resume without flag | mode not recorded when attended | mode recorded at start; reused; printed on resume | resume test |
+| A-11 | MODIFY | `--help` of `uncle`, drivers; TUI help | names `--unattended` | names `--attended`, documents default and deprecation | help-text assertions |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| I-1 | NEW | One title builder shared by TUI and shell | all title writes | `scripts/lib/terminal_title.py` | unit + grep test for no literal OSC 2 elsewhere |
-| I-2 | NEW | Title project == status-bar project | TUI | shared `project_name()` | consistency test |
-| I-3 | NEW | Only sanitized text reaches terminal; no ESC/BEL/control chars in OSC payload | all writes | builder | unit test |
-| I-4 | STRENGTHENED (E-1) | Writes only on tty with TERM set and not dumb, and `UNCLE_TERMINAL_TITLE!=0` | all writes | builder guard + bash guard | pty/pipe tests |
-| I-5 | EXISTING (E-2) | Single owner per process tree | drivers under TUI | `UNCLE_TITLE_OWNER` | pty test BH-9 |
-No RELAXED or REMOVED invariants.
+| I-1 | EXISTING | any gate satisfied without a person is delegated, ledgered and reported unreviewed | run state, attestation, PR body | approval-gates-*.sh, change-pr.sh | record test + defect injection |
+| I-2 | NEW | `--attended` never degrades to unattended; unreachable person -> stop | all entry points | mode.sh + drivers | pty/no-TTY test |
+| I-3 | STRENGTHENED | mode resolved once by one shared resolver; every stage/subprocess sees same `UNCLE_UNATTENDED` | launcher, drivers, TUI | scripts/lib/mode.sh | parity test |
+| I-4 | EXISTING | unattended safety rules and waiver wording unchanged | all libs | untouched libs | existing suites |
+| I-5 | NEW | resumed run keeps its recorded mode unless flag/env given; printed on resume | drivers | mode.sh + `.uncle/workflow/mode` | resume test |
+| I-6 | EXISTING | housekeeping policy gate runs before any approval or mode decision and is unaffected | housekeeping | housekeeping-workflow.sh:266 | `housekeeping-workflow-test.sh` |
+
+No RELAXED or REMOVED invariants. The default flip changes which mode is picked, not what either mode records.
 
 ## 7. Compatibility
-Shell function names/signatures, `_begin_title`/`_end_title` names, `UNCLE_TITLE_OWNER` semantics kept.
+Old flag/envs keep working with a notice. Config `misc.auto_mode` unchanged. Release notes must say scripts that relied on the old default to pause now run through.
 
-## 8. Error and failure behavior
-Unresolvable name: basename fallback, then `uncle`; never empty. Write errors (OSError/ValueError) swallowed. Helper failure in bash never aborts the driver (`|| true`).
+## 8. Error behavior
+Contradictory flags: exit 1, message names both. `--attended` without TTY (and without `UNCLE_ATTENDED_STDIN=1`): exit 1, never unattended. Notices go to stderr only so stdout parsing is unaffected.
 
 ## 10. Security
-Project, branch and issue text are never trusted: strip C0/C1 controls and DEL; digits-only issue.
+A person who types the shortest command no longer sees gates; banner and ledger/attestation wording make that visible. No new permissions. Housekeeping allowlist unchanged.
 
 ## 12. Rollback
-Revert the commit; `UNCLE_TERMINAL_TITLE=0` disables at runtime.
+Revert the commit; no persisted format changes beyond the additive `.uncle/workflow/mode` file, which old code ignores.
 
 ## 14. Non-goals
-Status bar changes, GUI window titles, per-stage progress, OSC 1, run state in title.
+Changing unattended semantics or waivers; removing gates; per-gate modes; changing approval record format.
 
 ## 15. Assumptions
-Terminals lacking the title stack ignore `CSI 22/23;2 t`; fallback title remains project-only. Base project in worktrees is not shown (the directory name already matches the status bar).
+`UNCLE_ATTENDED_STDIN` is a new test/scripting escape and counts as a person being reachable only because the caller explicitly declares it. Tests that mean attended get `--attended` plus that variable when they pipe answers; test edits are authorized by the Verification section of CHANGE_REQUEST.md.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | A shared builder returns a title containing the project name first, followed by ` · uncle` (plus ` issue #N` for a numeric issue); sanitizes control/escape characters, truncates to 60 chars, never returns empty. | Unit tests in scripts/tests/terminal-title-test.py: normal, worktree, empty, long, ESC/BEL/newline names, non-numeric issue. |
-| AC-2 | The TUI under a pty writes the idle title at start and the title stack push, and at exit writes the project-only title then the pop; no bare `uncle` title is ever written. | pty test asserting exact bytes for start and exit (UNCLE_TUI_TEST_MAIN stub or equivalent). |
-| AC-3 | Title during a TUI run includes the issue number when known and the project name when not; run end returns to the project-only title. | Python test driving _begin_title/_end_title with a captured tty and asserting bytes. |
-| AC-4 | stagegate.sh, change-workflow.sh, from-issue.sh and the uncle line menu write the same format via the shared builder, including runs without an issue number, and restore on exit. | Bash functions under a pty: source terminal-title.sh, call uncle_title_begin with and without issue, uncle_title_end; assert bytes. Grep test that the drivers source/call it. |
-| AC-5 | Nothing is written (no title, no stack sequences) when stdout or stderr is not a tty, TERM is empty or dumb, or UNCLE_TERMINAL_TITLE=0. | pty/pipe tests for Python and Bash paths. |
-| AC-6 | A driver started by the TUI (UNCLE_TITLE_OWNER set) writes nothing and does not push the stack. | Bash pty test with UNCLE_TITLE_OWNER set. |
-| AC-7 | The status-bar project name and the title project name come from one helper and are equal for a worktree-named root (e.g. grove-issue-33). | Consistency test with UNCLE_PROJECT_ROOT=/tmp/x/grove-issue-33. |
-| AC-8 | Defect injection: restoring the literal `uncle` reset or removing sanitization makes the new tests fail. | Run new tests against a temporarily mutated copy (disposable, not the checkout) and record failure in the test report. |
-| AC-9 | Existing shell and Python suites do not regress; uncle_cancel/--stop-tree behavior unchanged. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh vs baseline. |
+| AC-1 | With no mode flag or env, `uncle --application\|--issue\|--change-request\|--housekeeping` start unattended and print `Mode: unattended (use --attended to review each gate)`. | New launcher test with a fake driver capturing args/env for all four entry points. |
+| AC-2 | `--attended` is accepted by `uncle`, `stagegate.sh`, `change-workflow.sh`, `from-issue.sh`, `housekeeping-workflow.sh` and forces human gates; the TUI starts attended. | Resolver parity test plus TUI startup test. |
+| AC-3 | `--attended` with no TTY (and without UNCLE_ATTENDED_STDIN=1) refuses with a message and exit nonzero, starts nothing, and never runs unattended. | No-TTY test and a pty test. |
+| AC-4 | `--unattended` still works, behaves as the default, and prints a one-line deprecation notice on stderr; combined with `--attended` the run is refused naming both flags. | Launcher and driver tests for each entry point. |
+| AC-5 | `UNCLE_ATTENDED=1` equals `--attended`; legacy `UNCLE_UNATTENDED`, `WORKFLOW_UNATTENDED`, `UNCLE_HOUSEKEEPING_UNATTENDED` are honored with a notice; attended wins when both are set. | Resolver matrix test over flag/env combinations, run through every driver. |
+| AC-6 | Every driver and the launcher resolve identical modes for identical flags/env, including conflicting combinations, via a single shared resolver `scripts/lib/mode.sh`. | Parity test comparing resolved mode from each entry point. |
+| AC-7 | A default (unattended) run produces the same delegated-gate ledger entries, attestation fields and PR body wording as a run that passed `--unattended` before the change. | Record test comparing against existing fixtures in attestation-test.py, pr-auto-publish-test.sh, unattended-test.sh; defect injection: remove a gate's `record_unattended_gate` and confirm failure. |
+| AC-8 | A resumed run reuses its recorded mode (`.uncle/workflow/mode`) unless a flag/env is passed, and prints the mode on resume. | Resume test starting attended, resuming without flag, then with flag. |
+| AC-9 | Upgrade check never prompts when unattended (prints a one-line notice if newer) and prompts only when attended with a TTY. | scripts/tests/upgrade-test.sh additions. |
+| AC-10 | Housekeeping: default unattended skips the approval prompt only after the policy gate has passed; policy refusals behave identically in both modes; attended keeps the prompt. | housekeeping-workflow-test.sh both modes, including a disallowed command. |
+| AC-11 | `uncle --help`, driver `--help`, TUI help/auto-mode text, README, QUICK_START, GITHUB_INTEGRATION, docs/quickstart.md describe the new default, `--attended`, and the deprecation; examples no longer need `--unattended`; a migration/release-notes document states the behavior change and removal timeline; TUI auto-mode help text states actual PR behavior. | Grep assertions in a docs test plus manual read. |
+| AC-12 | Existing suites pass: tests that meant unattended work under the default; tests that meant attended pass `--attended`; `bash scripts/run-shell-tests.sh` and `bash scripts/run-python-tests.sh` show no new failures versus baseline. | Driver verification commands compared with baseline. |
 

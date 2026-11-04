@@ -98,20 +98,45 @@ PY
 fi
 
 UNCLE_TITLE_ACTIVE=0
+_UNCLE_TITLE_CLI="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/terminal_title.py"
+# True only when UNCLE_TITLE_OWNER is a numeric PID that is this shell or a live ancestor of it.
+_uncle_title_owner_live() {
+    local owner="${UNCLE_TITLE_OWNER:-}" pid="$$" hops=0 parent
+    [[ -n "$owner" && "$owner" != *[!0-9]* ]] || return 1
+    kill -0 "$owner" 2>/dev/null || return 1
+    while [[ -n "$pid" && "$pid" -gt 0 && $hops -lt 64 ]]; do
+        [[ "$pid" == "$owner" ]] && return 0
+        parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" || return 1
+        [[ -n "$parent" && "$parent" != "$pid" && "$parent" != *[!0-9]* ]] || return 1
+        pid="$parent"
+        hops=$((hops + 1))
+    done
+    return 1
+}
+_uncle_title_tty_ok() {
+    [[ -t 1 && -t 2 && -n "${TERM:-}" && "$TERM" != dumb ]]
+}
 uncle_title_begin() {
     local issue="${1:-}"
-    [[ -z "${UNCLE_TITLE_OWNER:-}" && -n "$issue" && "$issue" != *[!0-9]* \
-        && -t 1 && -t 2 && -n "${TERM:-}" && "$TERM" != dumb ]] || return 0
+    [[ "$UNCLE_TITLE_ACTIVE" == 1 ]] && return 0
+    _uncle_title_owner_live && return 0
+    _uncle_title_tty_ok || return 0
     UNCLE_TITLE_ACTIVE=1
     export UNCLE_TITLE_OWNER="$$"
-    printf '\033]2;uncle issue #%s\007' "$issue" 2>/dev/null || true
+    if [[ "$issue" =~ ^[0-9]+$ ]]; then
+        python3 -B "$_UNCLE_TITLE_CLI" begin "$issue" || true
+    else
+        python3 -B "$_UNCLE_TITLE_CLI" begin || true
+    fi
+    return 0
 }
 uncle_title_end() {
     [[ "$UNCLE_TITLE_ACTIVE" == 1 ]] || return 0
     UNCLE_TITLE_ACTIVE=0
     unset UNCLE_TITLE_OWNER
-    [[ -t 1 && -t 2 && -n "${TERM:-}" && "$TERM" != dumb ]] || return 0
-    printf '\033]2;uncle\007' 2>/dev/null || true
+    _uncle_title_tty_ok || return 0
+    python3 -B "$_UNCLE_TITLE_CLI" end || true
+    return 0
 }
 uncle_cancel() {
     trap '' INT TERM

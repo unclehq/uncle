@@ -43,7 +43,45 @@ except ImportError:  # Windows: no suspend character to disable.
 
 ROOT =os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
+import terminal_title
 from completion_preview import CompletionPreview, STAR_URL, launch_spec
+
+# Session-level terminal-title stack state (D-6/D-8): the TUI pushes once at
+# startup and pops once at exit; runs only retitle.
+_TITLE_STATE = {"pushed": False}
+
+
+def _title_session_begin():
+    if _TITLE_STATE["pushed"]:
+        return
+    try:
+        if terminal_title.enabled():
+            sys.stderr.write(terminal_title.PUSH + terminal_title.osc(terminal_title.build_title(
+                terminal_title.project_name(os.environ.get("UNCLE_PROJECT_ROOT")), "")))
+            sys.stderr.flush()
+            _TITLE_STATE["pushed"] = True
+            os.environ["UNCLE_TITLE_OWNER"] = str(os.getpid())
+    except (OSError, ValueError):
+        pass
+
+
+def _title_session_end(*_signal_args):
+    if not _TITLE_STATE["pushed"]:
+        return
+    _TITLE_STATE["pushed"] = False
+    try:
+        if terminal_title.enabled():
+            sys.stderr.write(terminal_title.osc(terminal_title.build_title(
+                terminal_title.project_name(os.environ.get("UNCLE_PROJECT_ROOT")), ""))
+                + terminal_title.POP)
+            sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def _title_signal_exit(signum, _frame):
+    _title_session_end()
+    raise SystemExit(128 + signum)
 from preview_server import DevelopmentPreview, PreviewServer, development_preview
 from chat import Conversation, sanitize
 from generated_input import generated_input_path, generated_input_write_path
@@ -1925,28 +1963,29 @@ class UncleTUI:
         return issue if re.fullmatch(r"[0-9]+", issue) else ""
 
     def _write_title(self, title):
+        # Title sequences go to stderr in the TUI (D-9).
         try:
-            if (sys.stdout.isatty() and sys.stderr.isatty()
-                    and os.environ.get("TERM") not in (None, "", "dumb")):
-                sys.stdout.write("\033]2;" + title + "\007")
-                sys.stdout.flush()
+            if terminal_title.enabled():
+                sys.stderr.write(terminal_title.osc(title))
+                sys.stderr.flush()
                 return True
         except (OSError, ValueError):
             pass
         return False
 
     def _begin_title(self, env):
-        self._end_title()
+        # Run start: retitle only; the session-level push is owned by __main__.
+        if not _TITLE_STATE["pushed"]:
+            return
         issue = self._title_issue(env)
-        if issue and not env.get("UNCLE_TITLE_OWNER"):
-            self.title_active = self._write_title("uncle issue #" + issue)
-            if self.title_active:
-                env["UNCLE_TITLE_OWNER"] = str(os.getpid())
+        self._write_title(terminal_title.build_title(
+            terminal_title.project_name(_project_root()), issue))
 
     def _end_title(self):
-        if getattr(self, "title_active", False):
-            self.title_active = False
-            self._write_title("uncle")
+        # Run end: idle title only, never a pop.
+        if _TITLE_STATE["pushed"]:
+            self._write_title(terminal_title.build_title(
+                terminal_title.project_name(_project_root()), ""))
 
     def _poll_workflow(self):
         if getattr(self, "proc", None) and self.proc.poll() is not None:
@@ -6368,7 +6407,7 @@ class UncleTUI:
         # status bar spells out "Triage" so it reads as an unambiguous mode
         # indicator rather than a vaguer "something happened" note.
         model_status = stage_status + model_label + ('  ·  Triage: running…' if getattr(self, 'triage_request', None) else '  ·  Triage: ready' if getattr(self, 'recovery_active', False) else '  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready')
-        project = os.path.basename(_project_root()) or _project_root()
+        project = terminal_title.project_name(_project_root()) or os.path.basename(_project_root()) or _project_root()
         try:
             with open(os.path.join(_project_root(), '.git', 'HEAD')) as source:
                 head = source.read(256).strip()
@@ -7915,6 +7954,12 @@ if __name__ == "__main__":
     _record_tui_pid()
     os.environ.setdefault('ESCDELAY', '25')  # D-1: fast single Esc, user value wins
     _stub_mode = os.environ.get('UNCLE_TUI_TEST_MAIN')
+    _title_session_begin()
+    for _sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(_sig, _title_signal_exit)
+        except (ValueError, OSError):
+            pass
     try:
         if _stub_mode in ('normal', 'systemexit', 'raise_summary'):
             finished = _test_main(_stub_mode)
@@ -7922,10 +7967,16 @@ if __name__ == "__main__":
             finished = curses.wrapper(main)
     except KeyboardInterrupt:
         # Ctrl-C while the screen is waiting for a key is a normal way out.
+        _title_session_end()
         raise SystemExit(130)
     except SystemExit:
+        _title_session_end()
         _emit_summary_safely([], _EXIT_SUMMARY_LINES)
         raise
+    except BaseException:
+        _title_session_end()
+        raise
+    _title_session_end()
     # Printed after curses teardown so it lands on the real terminal.
     _emit_summary_safely(finished, _EXIT_SUMMARY_LINES)
     if finished:

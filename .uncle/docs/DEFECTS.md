@@ -1,22 +1,99 @@
 # Defects
 
-## None. Setup needed: run the --change-request check in a real interactive terminal (a TTY) against the worktree build, then confirm CHANGE_REQUEST.md is written and the change workflow starts.
+## None. A person must run `uncle` in two project directories in real terminal tabs, for example one named grove-issue-33, and record both tab titles.
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Terminal output: exit=1 for both mixed-option runs with the mutual-exclusion error. The --change-request run printed a curses traceback (cbreak() returned ERR) and 'Error: TUI failed to start with startup action'. The Python traceback paths point to /opt/homebrew/opt/uncle/libexec/uncle_tui.py. The scratch project is under /tmp/scratch*. The background task id is bpc5r2syf.
-- **Expected result:** The mixed options exit 1 with the mutually exclusive error before reading stdin. `--change-request` behaves as before, writing CHANGE_REQUEST.md and starting the change workflow.
-- **Actual result:** Part 1 passed. Both mixed-option runs printed 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive' and exited 1. Part 2 could not be observed. The change-request run reached the curses TUI, which failed with 'cbreak() returned ERR' because this worker has no TTY. It printed 'Error: TUI failed to start with startup action', and the wrapping command then hung and was backgrounded. I did not confirm that CHANGE_REQUEST.md was written or that the change workflow started. My cleanup command was denied by the permission classifier. The scratch-project check also appeared to run the Homebrew-installed libexec/uncle_tui.py (/opt/homebrew/opt/uncle), not the worktree copy.
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** No live observation. The driver green-check covers automated assertions only and is not evidence of what a real terminal tab shows.
+- **Expected result:** Each tab title reads `<dir basename> · uncle`, the two tabs are distinguishable, and the title matches the project name in the TUI status bar.
+- **Actual result:** Not observed. I did not run uncle in a real terminal tab, so I have no tab-title observation.
 
-## None. The check is only partly executed: the end-to-end start was not run, and the help text has no explicit value-wins statement, which a human should judge.
+## None. A person must start an issue-numbered run in the TUI tab from MC-100 and watch the title through the run and after it ends.
 
-- **Status:** NOT RUN
-- **Evidence:** Help lines 4, 22-36 of `./uncle --help`. Helper rc=0 and rc=1 transcripts with the file content still 'exists'. Code in uncle lines 183-199 reads stdin through the helper and then sets the change_request startup action.
-- **Expected result:** Help documents the stdin form, the value-wins rule and --OPT=VALUE. --change-request starts normally and refuses to overwrite an existing CHANGE_REQUEST.md.
-- **Actual result:** Help documents the stdin form: `uncle --change-request [--unattended] < request.md`, with a paragraph on stdin limits. It documents --OPT=TEXT: 'text beginning with -- must use the --OPT=TEXT form'. The value-wins rule is only implied by '(or piped stdin when TEXT is omitted)'. No sentence says an explicit value wins over stdin. With the helper, piped stdin was accepted (rc=0) and a temp dir path was returned. With an existing CHANGE_REQUEST.md the helper exited rc=1 with 'CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten.', and the file was unchanged. The end-to-end `uncle --change-request` start was not observed.
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** No live observation. The tab title cannot be read headlessly.
+- **Expected result:** During the run the title reads `<project> · uncle issue #152`. After the run ends it returns to `<project> · uncle`, never bare `uncle`.
+- **Actual result:** Not observed. No run was started in a real terminal tab, so there is no tab-title observation.
 
-## None. Setup action: run `echo 'request text' | uncle --change-request` in a scratch project from a real interactive terminal (TUI needs a tty) and confirm CHANGE_REQUEST.md is written and the workflow starts.
+## None
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Run 1 output: _curses.error: cbreak() returned ERR from uncle_tui.py; ls showed no CHANGE_REQUEST.md. Run 2 and 3 messages as quoted above. Under `script`, stdin became the pty so the pipe was lost, which gave the run-2 message instead of exercising run 1. A real terminal is needed for run 1.
-- **Expected result:** Run 1 writes CHANGE_REQUEST.md and starts the change workflow. Run 2 is refused immediately with the existing stdin message. Run 3 refuses to overwrite and names CHANGE_REQUEST.md.
-- **Actual result:** Run 2 PASS: printed 'Error: --change-request reads the change request from stdin; pipe or redirect it in'. Run 3 PASS: printed 'CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten.' and the file still contained 'x'. Run 1 NOT confirmed: the stdin validator accepted the text (exit 0, wrote a private temp file), but the TUI that writes CHANGE_REQUEST.md and starts the workflow crashed with curses cbreak() ERR because this worker has no interactive terminal. No CHANGE_REQUEST.md was created and the workflow was not observed to start.
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** No live terminal tab was available. Automated coverage of title restore is in the driver green-check, which this worker did not re-run or cite as a pass for this row.
+- **Expected result:** After quitting, the tab title is restored to MYSHELL on a terminal supporting the xterm title stack (otherwise it stays '<project> · uncle'), and is never bare 'uncle'.
+- **Actual result:** Not observed.
+
+## None
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** No live terminal tab was available. This worker made no tab-title or screen observation.
+- **Expected result:** In all three cases the tab title is never changed by uncle and no stray escape characters appear on screen.
+- **Actual result:** Not observed.
+
+## None. A person must run `uncle` in a terminal tab, start a driver with and without an issue number, exit, repeat with Ctrl-C, and watch the tab title.
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** No live observation was made. The driver green-check and the terminal-title unit, shell and TUI tests cover escape-sequence emission, but they are not a visual tab-title observation.
+- **Expected result:** Title shows `<project> · uncle` (with ` issue #N` when given) once, is not mangled by child drivers, and is restored on exit including after Ctrl-C.
+- **Actual result:** Not performed. The tab title is a property of the host terminal emulator and cannot be read from a non-TTY worker.
+
+## None. A person must run each driver directly from a terminal tab, abort with Ctrl-C, and observe the title during and after.
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** No live observation was made. Automated tests cited by the driver green-check do not substitute for the human-visible tab-title observation.
+- **Expected result:** Each driver sets `<project> · uncle` (plus issue suffix where applicable) while running and restores the prior title on exit/cancel, with no garbage characters printed.
+- **Actual result:** Not performed. The tab title cannot be observed from a headless worker.
+
+## None. A person must watch a real terminal tab's title during a TUI run and a line-menu run, then confirm that only the owner sets the title and that it is restored once on exit.
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** MANUAL_CHECKLIST.json row MC-205. No terminal tab title observation was possible in this environment.
+- **Expected result:** Only the owner (TUI or line menu) changes the title. The driver sets nothing and does not restore early, and the title is restored once on final exit.
+- **Actual result:** Not observed. Automated coverage is the driver green-check's terminal-title tests, which this worker did not run and does not cite as a pass for this row.
+
+## None. A person must run `uncle` in a real terminal tab that has a custom title, run a numbered issue, and observe the title at each step.
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** MANUAL_CHECKLIST.json row MC-301. No terminal tab title observation was possible in this environment.
+- **Expected result:** Title goes `<project> · uncle`, then `<project> · uncle issue #N` during the run, back to `<project> · uncle` at run end, and the previous custom title is restored on exit; bare `uncle` never appears.
+- **Actual result:** Not observed. The worker could not see a terminal tab title.
+
+## None
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Needs a person with a terminal emulator. The driver green-check covers automated assertions only. It does not replace the visual tab-title observation.
+- **Expected result:** Neither tab title changes from its previous value and no stray escape text is printed.
+- **Actual result:** Not performed. This worker has no real terminal tab, so it cannot observe tab titles.
+
+## None
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Needs a person to run the uncle menu in a real tab and report the tab title during the run and after exit.
+- **Expected result:** Title shows `<project> · uncle` during the run, with no nested push, and the prior title is restored on exit.
+- **Actual result:** Not performed. This worker has no real terminal tab, so it cannot observe tab titles.
+
+## None
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** None. The driver green-check covers the automated terminal-title tests only. It does not replace this human observation.
+- **Expected result:** Tab title shows `<project> · uncle` while idle; previous title restored after quit; bare `uncle` never shown.
+- **Actual result:** Not executed. No real terminal tab is available to this worker, and the tab title cannot be observed programmatically.
+
+## None
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** None. The driver green-check covers the automated terminal-title tests only. It does not replace this human observation.
+- **Expected result:** Issue run shows `<project> · uncle issue #N`; no-issue run shows `<project> · uncle`; title returns to `<project> · uncle` at run end without popping the saved title; status bar unchanged.
+- **Actual result:** Not executed. A person must observe the real terminal tab title and status bar during live runs.
+
+## None
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** cat -v output showed only the usage text; `grep -c '\^\[\]'` returned 0. This only covers the piped part, and only for --help rather than the interactive menu.
+- **Expected result:** Tab title is not changed in either case, and no escape sequence garbage appears in the piped output.
+- **Actual result:** Piped output contained no OSC title escape sequences (grep count 0). The tab-title half of the check could not be observed.
+
+## None
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** None. A person must run the three launch paths in a real terminal and note the tab title at start, during and after exit.
+- **Expected result:** Under the TUI the driver does not alter the title or push extra; run directly or from the line menu, the title is `<project> · uncle` (with ` issue #N` when applicable) and is restored on exit, including after Ctrl-C cancel.
+- **Actual result:** No tab title observation was made. Launching real drivers also requires an interactive terminal with a visible tab.

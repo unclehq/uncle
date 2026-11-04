@@ -351,10 +351,15 @@ on_exit() {
         kill "$PREFLIGHT_BG_PID" 2>/dev/null || true
         wait "$PREFLIGHT_BG_PID" 2>/dev/null || true
     fi
+    if declare -f uncle_title_end > /dev/null; then uncle_title_end 2>/dev/null || true; fi
     if [[ "$rc" != 0 ]]; then finished_extras print --kind new --reason not-applicable --stopped; fi
     triage_on_exit "$rc"
 }
 trap on_exit EXIT
+if [[ -f "$ROOT/scripts/lib/terminal-title.sh" ]]; then
+    . "$ROOT/scripts/lib/terminal-title.sh" 2>/dev/null || true
+    if declare -f uncle_title_begin > /dev/null; then uncle_title_begin "" 2>/dev/null || true; fi
+fi
 
 # A repair always comes back through the independent checks and human diff
 # gate. Bound retries across restarts so an unfixable defect cannot spin.

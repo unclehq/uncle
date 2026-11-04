@@ -1,174 +1,152 @@
-# Change Plan
+# Change plan: Issue 152 terminal tab title shows project name
 
-Issue 151
+Seeded from [unclehq/uncle#152](https://github.com/unclehq/uncle/issues/152).
 
-Seeded from [unclehq/uncle#151](https://github.com/unclehq/uncle/issues/151).
+Omitted sections: Schema/persistence (none); Migration (none); Concurrency (none); Feature-flag (runtime opt-out only, see 15)
 
-Omitted sections: Schema/persistence (none); Migration (none); Feature flag (none, additive); Concurrency (none beyond per-invocation temp dir); Observability (none)
+Issue 152
 
 ## 1. Selected technical approach
 
-In `uncle`, add a shared shell function `read_stdin_option OPT` used by `--application` and `--housekeeping`. In the argument loop, after `shift`, a value exists iff `$# -gt 0 && "$1" != --*`; otherwise the option only records a pending stdin option (`UNCLE_PENDING_STDIN_OPT`). After the loop has parsed every argument successfully, `read_stdin_option OPT` runs once: refuse on TTY, require python3, make `UNCLE_CR_DIR`, call `housekeeping_input.py --label OPT PRIVATE_DIR`, set `UNCLE_STARTUP_TEXT_FILE`. Add `--application=*` / `--housekeeping=*` cases taking the value after `=`. `housekeeping_input.py` gains optional `--label OPT` (default `--housekeeping`) for messages and strips exactly one trailing newline. `uncle_tui.py` `create_app` falls back to the text file as `housekeeping` already does.
+New `scripts/lib/terminal_title.py`: pure `sanitize`, `project_name(root)`, `build_title(project, issue)`, `enabled()` guard, and writers `begin(issue)`, `retitle(issue)`, `end()`; CLI `python3 -B terminal_title.py begin|retitle|end [issue]`. `uncle_tui.py` imports it; `terminal-title.sh` calls the CLI. The CLI is invoked from bash with fds 1 and 2 inherited unchanged, so its isatty checks see the same terminal the shell sees. A missing or failing python3 (or CLI error) yields silence and exit 0, never a changed exit code. A non-numeric or empty issue is treated as no issue (title `<project> · uncle`). Decisions: D-1 format `<project> · uncle` / `<project> · uncle issue #N`; D-2 issue kept, no run state, no OSC 1; D-3 `begin()` pushes `CSI 22;2 t` at most once per process and records that it pushed; `end()` writes the project-only title then `CSI 23;2 t` ONLY if begin() pushed in this process, is idempotent, and never acts when nothing was pushed (e.g. guard false); on a run end while the TUI lives, the TUI writes only the idle title `<project> · uncle` and never pops; D-4 `sanitize` first drops every character in Unicode categories Cc (C0/C1/DEL), Cf, Zl and Zp, then trims whitespace; only the project name is then truncated to at most 60 code points; the fixed suffix (` · uncle` or ` · uncle issue #N`, digits never truncated) is appended afterwards so it always survives (the full title may exceed 60 chars); if the sanitized project name is empty the whole title is exactly bare `uncle`; D-5 project = basename of `UNCLE_PROJECT_ROOT` (absolute) else cwd, identical to status bar; D-6 TUI owns the stack for its whole session (begin before `curses.wrapper`, end in `finally` after teardown) and exports `UNCLE_TITLE_OWNER` to children ONLY when its own begin actually pushed (so a TUI that skipped begin, e.g. non-tty or opt-out, leaves it unset); per-run the TUI only retitles on run start and run end (no push, no pop); D-7 shell scripts push only when `UNCLE_TITLE_OWNER` is unset/empty; when it is set, `uncle_title_begin/end` write nothing at all (including on no-issue runs) and only the TUI retitles; the `uncle` line menu likewise exports `UNCLE_TITLE_OWNER` when its begin actually pushed, so child drivers it starts push and retitle nothing; D-8 balance: begin is once-only per process (a second begin is a no-op, tracked by a per-process flag in the TUI and `UNCLE_TITLE_ACTIVE` in bash); end pops only if this process pushed, is idempotent (a second end or an end without begin writes nothing), and runs on every exit path: the TUI `finally`, SIGTERM/SIGHUP handlers that call end then exit, and the shell EXIT trap (including via `uncle_cancel`'s exit); D-9 streams and opt-out: title and stack sequences go to stderr in the TUI and stdout in the shell/CLI path, and are written only when both stdout and stderr are ttys, TERM is set and not dumb, and `UNCLE_TERMINAL_TITLE` is not exactly `0` (only the exact value `0` disables; any other value enables); if any condition fails nothing is written, and end re-checks this full guard at exit.
 
-Ordering (AR-002): in the arg loop, `--application` / `--housekeeping` without a value only record a pending stdin option (`UNCLE_PENDING_STDIN_OPT`); the mutual-exclusion check still runs at option entry. `read_stdin_option` (TTY refusal, python3 check, mktemp, helper call) runs once, after the loop has parsed every argument successfully. An unknown argument (e.g. `--application --bogus < f`) therefore exits 1 with `Unknown argument` before any stdin read or temp-file creation, and a test asserts that stdin stays unread and no temp file exists. AR-015 rule: positional text beginning with `--` is never text. The launcher treats such an argument as an option (so for `--OPT --text` the pending stdin option is kept and `--text` is then an unknown argument, exiting 1 before any stdin read); text starting with `--` must be given as `--OPT=--text`. The unknown-argument error for an argument starting with `--` adds the hint: `to pass text beginning with --, use --application=TEXT or --housekeeping=TEXT`.
+Title, CLI and ownership rules (resolve AR-003, AR-004, AR-015, AR-016; D-8, D-9). (1) Project name: use `UNCLE_PROJECT_ROOT` only if it is a non-empty absolute path, otherwise use cwd; take the basename, strip control characters and trim whitespace; if the result is empty (e.g. root `/`), the whole title is exactly `uncle` (no ` · uncle` suffix, no issue suffix). (2) D-8 issue: used only if it fully matches `^[0-9]+$`; a non-numeric, empty or flag-like value (e.g. `--x`, `12a`) is treated as no issue and yields `<project> · uncle`; digits are never truncated. (3) Length: the full title is at most 60 characters (code points); only the sanitized project name is truncated so the fixed suffix (` · uncle` or ` · uncle issue #N`) is always kept intact. (4) CLI: the issue is the only argument; the project root is read only from `UNCLE_PROJECT_ROOT` (else cwd), never from argv; the CLI `begin|retitle|end` is stateless. (5) end() re-evaluates the full guard (enabled, stdout and stderr ttys, TERM set and not dumb) at exit time and writes nothing, including no stack pop, if it fails; it also writes nothing unless this process performed the matching begin. (6) D-9 ownership: `UNCLE_TITLE_OWNER` is honored only when it is a positive integer naming a live ancestor PID of the current process (checked with kill -0 and the parent chain); an empty, non-numeric, stale or environment-injected value is treated as unset, so the driver then pushes and retitles itself. When honored, `uncle_title_begin` and `uncle_title_end` are no-ops; when not owned, the bash `uncle_title_end` acts only if this shell's own `uncle_title_begin` pushed, tracked by `UNCLE_TITLE_ACTIVE=1` (reset to 0 on end). Unit tests (terminal-title-test.py) cover relative/empty root, root `/`, all-control-char name, long names with and without an issue, non-numeric/empty/flag-like issues, end() guard failure, and stale/invalid owner values.
 
 ## 2. Alternatives considered
-- Extend `change_request_stdin.py` with a destination: touches the out-of-scope `--change-request` path and its CHANGE_REQUEST.md check.
-- New common module imported by both helpers: more churn than needed; parity is instead pinned by a test.
-- Keep `$(cat)`: rejected, skips limits and loads text into env.
+A: Bash builder called from Python (slower, sanitizing in sed is fragile). B: duplicate builder in both languages (violates I-1). C: only fix text, no stack (misses restore requirement).
 
 ## 3. Why preferred
-Smallest surface; reuses an existing validated reader; `--change-request` remains byte-identical in behavior; stdin text avoids env/argv.
+Python has robust Unicode/control-char handling, one source of truth, bash cost is one short `python3` call per run.
 
-## 4. Components to modify
+## 4. Exact components to modify
 See change-impact table.
 
 ## 5. Not to modify
-`scripts/lib/change_request_stdin.py`, `--issue` parsing, driver scripts, existing assertions in existing tests.
+Status-bar rendering beyond swapping the name helper; `--stop-tree`, `uncle_cancel`, `uncle_run` in terminal-title.sh; prompts; other drivers.
 
 ## 6. Data-flow changes
+Project root -> `project_name` -> `build_title` -> guarded write. Status bar uses `project_name` as well.
 
-Stdin -> `housekeeping_input.py` (validate, strip one newline) -> 0600 file in the 0700 `UNCLE_CR_DIR` mktemp dir -> `UNCLE_STARTUP_TEXT_FILE` -> TUI `_read_startup_text_file` -> create_app/housekeeping. Value case: argv -> `UNCLE_STARTUP_TEXT` as today, with `UNCLE_STARTUP_TEXT_FILE` empty. Env contract (AR-003, AR-007): in the stdin case the launcher sets only `UNCLE_STARTUP_TEXT_FILE` and leaves `UNCLE_STARTUP_TEXT` empty; in the value case it sets only `UNCLE_STARTUP_TEXT` and leaves `UNCLE_STARTUP_TEXT_FILE` empty. Precedence: if both are set (e.g. caller-exported env), the TUI reads the file and ignores `UNCLE_STARTUP_TEXT`. Cleanup (AR-012): the text file exists only inside the 0700 dir at mode 0600 and is removed on every exit path. The EXIT trap removes the dir on non-exec exits; because `exec` replaces the shell and the trap never fires, the TUI deletes the text file and its private dir right after reading it.
+## 7. State-transition changes
+TUI: untitled -> idle titled (start) -> run titled -> idle titled -> restored (exit). Drivers: untitled -> titled -> restored.
 
 ## 8. Interface changes
 
-CLI: `--application [TEXT]`, `--application=TEXT`, `--housekeeping=TEXT`. Helper: `housekeeping_input.py [--label OPT] PRIVATE_DIR [--text TEXT]` (label optional; old invocation valid). Usage and docs updated. D-1 decision: TTY error text: `Error: --OPT requires TEXT or piped stdin (empty input): use --OPT "TEXT" or pipe/redirect, e.g. --OPT < file.md`. The D-1 message, including the substring `empty input`, is used for both `--application` and `--housekeeping`, and tests assert that substring for both options.
-
-## 10. Compatibility
-
-Value forms unchanged; housekeeping TTY message retains `empty input`; `UNCLE_STARTUP_TEXT` still set in value case (only `UNCLE_STARTUP_TEXT`, no file). D-2: housekeeping stdin text now arrives via file not env: only `UNCLE_STARTUP_TEXT_FILE` is set and `UNCLE_STARTUP_TEXT` is empty in that case; TUI already supports it. D-6: `UNCLE_STARTUP_TEXT_FILE` takes precedence over `UNCLE_STARTUP_TEXT` in the TUI; a test sets both and asserts the file text is used. No `--application` message retains `requires an argument` (bare `--application` now reads stdin or gives the D-1 TTY message); any existing assertion on that text is recorded in IMPLEMENTATION_NOTES.md as a deviation, not silently edited.
-
-D-6 (exception to the 'value forms unchanged' statement above): a positional value beginning with `--` (e.g. `--application "--foo bar"`, which works today) is no longer taken as text. It is treated as the next option, and the option itself falls back to stdin. This regression is accepted and documented: text beginning with `--` must use the `=` form (`--application="--foo bar"`, `--housekeeping=--text`). It is pinned by a test in launcher-stdin-text-test.sh that asserts the positional form does not deliver the text and the `=` form does. Usage text and docs state the `=` form for such text.
+New module and env `UNCLE_TERMINAL_TITLE`. `uncle_title_begin` now accepts an empty issue. A non-numeric issue (anything not matching ^[0-9]+$) is treated as empty and produces `<project> · uncle`; it is never rejected or echoed into the title.
 
 ## 12. Error and recovery
 
-Helper failure exits 1 before any action; `UNCLE_CR_DIR` cleanup by the existing EXIT trap on non-exec exits. On the exec path the trap does not fire, so the TUI deletes the 0600 text file and its private dir after reading it (AR-012); a test asserts no residue after both a normal exit and an exec'd TUI run. `--application=` empty refused as empty. D-3: if python3 is missing, `Error: --OPT requires python3` (matches `--change-request`).
+All writes wrapped; helper failure never changes exit codes. EXIT traps chain onto existing ones, not replace. `uncle_title_end` is idempotent and is run from the EXIT trap so it fires on every exit path, including `uncle_cancel` (which calls `exit`); a second `uncle_title_begin` in the same process is a no-op, so push/pop stays balanced.
 
 ## 14. Rollback plan
-Revert the commit (launcher, helper, TUI, docs, tests). No state to migrate.
+Revert the commit; runtime opt-out `UNCLE_TERMINAL_TITLE=0`. No persisted state.
+
+## 15. Containment
+`UNCLE_TERMINAL_TITLE=0` disables everything.
 
 ## 16. Automated-test strategy
 
-New `scripts/tests/launcher-stdin-text-test.sh` (fake python3 TUI as in launcher-args-test.sh): S-1..S-9, S-11, S-12 for both options, option orders, boundaries (1048576 pass, +1 fail, NUL, control, tab/LF/CR pass, invalid UTF-8), parity with `change_request_stdin.py`, pty TTY test with timeout, I-4 unread-pipe test, no TMPDIR residue, doc greps. AR-001 case: `--OPT --other` with empty non-TTY stdin (e.g. `< /dev/null`) exits 1 with `Error: --OPT text cannot be empty` for both options, and `--OPT=--text` delivers `--text` as the text. New case in `scripts/tests/startup-action-test.py` for create_app with text file. Defect injection per AC-11 recorded in IMPLEMENTATION_NOTES.md. Authority note: edits to existing test files are additive only; no existing assertion changes expected (R-3). Before step 3, the existing housekeeping stdin cases are run against the new validated reader; any conflict (control chars, CRLF, large text, env-vs-file delivery) is stop-and-ask, never an assertion edit.
+New `scripts/tests/terminal-title-test.py` (hyphenated, collected by run-python-tests.sh). Contains unit tests (AC-1,AC-7) including the cap order: a 100-code-point project name yields a 60-code-point name plus intact suffix, and controls are stripped before the cap; pty tests via `pty`/`os.openpty` for TUI helpers and bash functions (AC-2..AC-6), including that exit writes the project-only title before `CSI 23;2 t` and that run end writes only the idle title with no pop; a grep guard for no stray `]2;` literals outside the helper (I-1), and a defect-injection test (AC-8) that copies terminal_title.py to a temp dir, applies each of two mutants, and runs the title assertions against the mutated copy, requiring failure for each: (a) end() writes the bare title `uncle` instead of the project-only title; (b) sanitize() disabled (returns input unchanged). The test also asserts the unmutated copy passes. Git fixtures, if any, use signing disabled.
 
-AR-018 test: for both options, the empty value forms (`""` and `--OPT=`) are run with non-empty piped stdin; the test asserts exit 1, `text cannot be empty`, that the pipe was not consumed (writer still holds unread bytes), that stdin is never used as a fallback, and that no helper call or temp file occurred.
-
-AR-015 test: `--application --text-like` and `--housekeeping --text-like` are not taken as text (unknown-argument exit 1 with the `=` form hint, or stdin read when the argument is a known option); `--application=--text-like` and `--housekeeping=--text-like` succeed with that exact text.
+Test file ownership (supersedes the single-file layout above; one owner per file): `scripts/tests/terminal-title-unit-test.py` (step 1: builder, sanitizer, issue/root/cap/opt-out matrices, CLI argv hardening, push/pop balance), `scripts/tests/terminal-title-tui-test.py` (step 2: pty TUI stream, run-end vs exit byte order, signals/exceptions, owner export only when begin wrote), `scripts/tests/terminal-title-shell-test.py` (step 5: bash pty tests for owner-set zero bytes, double begin, idempotent end, uncle_cancel EXIT trap, missing python3, UNCLE_TITLE_ACTIVE gating, forged owner PID) and `scripts/tests/terminal-title-mutation-test.py` (step 5: AC-8 mutants (a) end writes bare `uncle`, (b) sanitize disabled; each must fail the title assertions; never cut). All four are protected verification paths.
 
 ## 17. Regression-test strategy
-Existing launcher-args-test.sh, housekeeping-launcher-test.sh, launcher-tui-lock-test.sh and startup-action-test.py must pass unchanged; verification commands are the two runners in the baseline.
+Existing Mock-based tests keep method names `_begin_title`/`_end_title`. `cancel-stop-reason-test.sh` covers terminal-title.sh sourcing. Full suites via baseline commands.
 
 ## 18. Manual verification
-Pipe a multi-paragraph brief into `uncle --application` (and `< file --housekeeping`); confirm the build starts from it. Run `uncle --application` in a real terminal; confirm immediate refusal.
+Open Uncle in two project directories in two tabs, confirm distinct titles; run a worktree issue; exit and confirm previous title restored; try `UNCLE_TERMINAL_TITLE=0` and `uncle | cat`.
 
-## 20. Restrictions
+## 19. Observability
+None.
 
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST Invariants I-2 | I-2 | Never block on TTY stdin | `[[ -t 0 ]]` before any read | feasible; same as uncle:133 | CAP-bash | CODING |
-| R-5 | DESIGN | Adversarial review AR-013 | I-2 | Stdin read has no timeout | No timeout is added. The read is bounded in bytes (cap 1048576 + 1) but not in time. A non-TTY stdin that never reaches EOF (open FIFO, idle CI pipe) blocks until the writer closes it or the caller interrupts. This is the same behavior as `--change-request`. The limitation is stated in the usage text and README, and no test asserts a timeout. | The `[[ -t 0 ]]` guard covers only the interactive case. A timeout would be a new behavior and would diverge from `--change-request`. | CAP-bash | CODING |
-| R-2 | USER | CHANGE_REQUEST Non-goals | S-13 | `--change-request` unchanged | do not edit change_request_stdin.py or its case | inspected uncle:128-146 | CAP-bash | CODING |
-| R-3 | REPOSITORY | CLAUDE.md rule 7 / protected tests | AC-8 | Do not weaken tests | additive tests only; keep `empty input` substring; run existing housekeeping stdin cases before step 3 and treat any conflict as stop-and-ask | existing test greps it | CAP-bash | CODING |
-| R-4 | DESIGN | CHANGE_REQUEST Reuse | I-3 | Reuse reader, no bare `cat` | `housekeeping_input.py --label` | inspected symbol lines 26-50; scope: I-3 identical validation applies to the stdin path only. Value-form text (argv, --OPT=VALUE) is NOT passed through housekeeping_input.py --text and stays unvalidated by the launcher, as today (preserves compatibility). | CAP-python3 | CODING |
+## Restrictions
 
-Runner binding: bash + python3 (installed; launcher already requires python3). Pty test uses python3 `pty` module, as housekeeping-launcher-test.sh does. No live-verification prerequisites; no credentials.
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
+|---|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST I-1 | AC-1 | One builder | terminal_title.py, bash calls CLI | no drift | CAP-PY3 | python3 used by uncle:305, terminal-title.sh:5 | CODING |
+| R-2 | USER | I-3, T-6 | AC-1 | Sanitized | sanitize drops Unicode categories Cc, Cf, Zl, Zp, then trims; truncate the project name only to 60 code points; then append the fixed suffix (suffix and issue digits never truncated); empty name -> title exactly `uncle` | OSC injection | CAP-PY3 | n/a | CODING |
+| R-3 | USER | I-4, T-8 | AC-5 | tty only (both streams) | Only the exact value `UNCLE_TERMINAL_TITLE=0` disables; unset, empty, or any other value enables. Both isatty(stdout) AND isatty(stderr) are required, plus TERM set and not dumb; if either is not a tty nothing is written. Sequences are written to stderr in the TUI and stdout in the shell; end re-checks the guard. | existing guard | CAP-PTY | stdlib pty available | CODING |
+| R-4 | PLATFORM | xterm title stack | AC-2 | Restore | CSI 22;2 t / 23;2 t with project-only fallback | support undetectable | none | design choice, revisable | CODING |
+| R-5 | REPOSITORY | CLAUDE.md signing | AC-9 | No signing in fixtures | none needed; no git fixtures | rule | none | n/a | CODING |
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `uncle` | stdin/`=` handling for both options, usage text | core request | Medium: arg-loop parsing | new + existing launcher tests |
-| `scripts/lib/housekeeping_input.py` | `--label`, strip one trailing newline | shared validated reader | Low | new boundary/parity tests |
-| `uncle_tui.py` | create_app falls back to startup text file | stdin text delivery | Low | startup-action-test.py |
-| `README.md`, `docs/quickstart.md` | document stdin form | S-10 | None | doc greps |
-| `scripts/tests/launcher-stdin-text-test.sh` | new suite | AC coverage | None | itself |
-| `scripts/tests/startup-action-test.py` | add create_app file case | AC-10 | None | itself |
+| `scripts/lib/terminal_title.py` (new) | Builder (strip Cc/Cf/Zl/Zp, trim, truncate project name only to 60 code points, then append suffix; empty -> `uncle`), guards, writers, CLI | I-1,I-3,I-4 | Low | terminal-title-test.py |
+| `uncle_tui.py` | Import helper; `_write_title`/`_begin_title`/`_end_title` use it; idle title and stack in `__main__`; status bar uses `project_name` | BH-1..4,BH-10 | Medium: teardown ordering | terminal-title-test.py, existing TUI suites |
+| `scripts/lib/terminal-title.sh` | `uncle_title_begin/end` call CLI; accept empty issue; keep `--stop-tree`, `uncle_cancel` | BH-5 | Medium: same file as cancel logic | terminal-title-test.py, cancel-stop-reason-test.sh |
+| `scripts/from-issue.sh` | Keep calls; verify trap chain | BH-5 | Low | terminal-title-test.py |
+| `scripts/change-workflow.sh` | Call `uncle_title_begin` also when no issue / no origin | BH-3 | Low | terminal-title-test.py |
+| `scripts/stagegate.sh` | Source helper, begin after setup, chained EXIT end | BH-5 | Medium: existing traps | terminal-title-test.py, shell suites |
+| `uncle` | Source helper, begin/end around line-based menu | BH-5 | Medium: existing traps | terminal-title-test.py |
+| `scripts/tests/terminal-title-unit-test.py`, `terminal-title-tui-test.py`, `terminal-title-shell-test.py`, `terminal-title-mutation-test.py` (new) | Tests above | AC-1..AC-8 | None | self |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1 (including: a next argument beginning with `--` is never text; with empty non-TTY stdin the launcher exits 1 with `Error: --OPT text cannot be empty`, and `--OPT=--text` supplies such text) | S-1, S-2, S-4 | I-1 | uncle | launcher-stdin-text-test.sh | pipe brief |
-| AC-2 | S-6 | I-1, I-3 | uncle | launcher-stdin-text-test.sh | pipe housekeeping |
-| AC-3 | S-5 | I-2 | uncle | pty case (both --application and --housekeeping; asserts the D-1 message including `empty input` for both) | real terminal run |
-| AC-4: stdin text for --application and --housekeeping is validated identically (size cap, UTF-8, no NUL/control, non-empty) via housekeeping_input.py; the size cap of 1048576 applies to raw stdin bytes before CRLF normalization and newline stripping (1048576 bytes pass, 1048577 fail); value-form text (argv, --OPT=VALUE) is explicitly unvalidated and unchanged. | S-7 | I-3 | housekeeping_input.py | boundary + parity (raw-byte cap: 1048576 pass, 1048577 fail, 1048576 bytes ending in newline passes only if total raw bytes <= cap) | n/a |
-| AC-5: Empty value forms (`--OPT ""` and `--OPT=`) are refused with `Error: --OPT text cannot be empty` and exit 1 without reading stdin; `--OPT=` never falls back to stdin. Stdin is left unread (I-4). | S-3, S-8 | I-4 | uncle | launcher-args-test.sh:45, unread-pipe test, empty-value-form test: `--application ""`, `--application=`, `--housekeeping ""`, `--housekeeping=` each with a piped non-empty stdin; assert exit 1, empty-text error, stdin unconsumed, no temp file | n/a |
-| AC-6 | S-11 | I-1 | uncle | launcher-stdin-text-test.sh (incl. AR-015: `--OPT --foo` never text, hint names `=` form; `--OPT=--foo` works) | n/a |
-| AC-7: on the stdin path only, housekeeping_input.py normalizes CRLF/CR to LF, then strips exactly one trailing LF, then applies the emptiness check; the --text path is never stripped. | S-12 | I-3 | housekeeping_input.py | launcher-stdin-text-test.sh: stdin 'x\r\n' and 'x\n\n' yield 'x' and 'x\n'; '\n' alone is refused as empty; --text 'x\n' is not stripped | n/a |
-| AC-8 | S-9, S-13 | I-5 | uncle | existing suites, launcher-stdin-text-test.sh: second mode option with piped stdin exits 1 with mutually-exclusive error, stdin left unread, no temp file | n/a |
-| AC-9 | S-10 | n/a | docs, usage | doc greps | read help |
-| AC-10 | S-1 | I-3 | uncle_tui.py | startup-action-test.py | pipe brief |
-| AC-11 | S-7 | I-3 | tests | defect injection | n/a |
+| AC-1: builder output is `<project> · uncle` or `<project> · uncle issue #N`; sanitization drops categories Cc, Cf, Zl, Zp, then trims, before truncation; only the project name is truncated to 60 code points and the fixed suffix is appended afterwards; an empty sanitized name yields exactly `uncle`; a non-numeric or empty issue yields `<project> · uncle`; never returns empty; the helper inherits fds 1/2 unchanged and a missing or failing python3 is silent with exit 0. | BH-8 | I-1, I-3 | terminal_title.py | unit | n/a |
+| AC-2: TUI sets project title on start; on exit (normal, exception, SIGTERM/SIGHUP) writes the project-only title then pops the stack, only if this process pushed; end is idempotent. | BH-1, BH-4 | I-4 | uncle_tui.py | pty TUI | two tabs |
+| AC-3: during a run the TUI retitles with the issue; on run end it writes the idle title and does not pop the stack. | BH-2, BH-3 | I-2 | uncle_tui.py | TUI title test | run in worktree |
+| AC-4 | BH-5 | I-1 | shell scripts | bash pty | each driver |
+| Only the exact value UNCLE_TERMINAL_TITLE=0 disables titling; any other value (unset, empty, false) enables it. Titling is also off when TERM is unset or dumb. Title writes go to stderr in the TUI and stdout in shell, and only when both stdout and stderr are ttys; if either is not a tty (including only one being a tty) no title or stack bytes are written to either stream. begin pushes at most once per process and end pops only if this process pushed (idempotent, also on signal paths). | BH-6, BH-7 | I-4 | helper, bash | pty/pipe incl. only-stdout-tty and only-stderr-tty cases, double begin/double end/end-without-begin push-pop balance, SIGTERM during TUI session still pops once | uncle \| cat |
+| AC-6: when UNCLE_TITLE_OWNER is set (including by the TUI or the uncle line menu, which export it when they begin), child drivers' shell uncle_title_begin/end push and retitle nothing and write nothing (any issue or none); only the owner writes titles. | BH-9 | I-5 | terminal-title.sh | bash pty | n/a |
+| AC-7 | BH-10 | I-2 | uncle_tui.py | consistency | n/a |
+| AC-8: defect injection. The test runs terminal_title.py from a temp copy with (a) end writing bare `uncle` and (b) sanitize disabled, and requires the suite's title assertions to fail for each mutant; this check is never cut. | all | all | tests | defect injection: mutant (a) end writes bare uncle; mutant (b) sanitize disabled; unmutated copy passes | n/a |
+| AC-9 | BH-10 | E-1..E-3 | all | baseline commands | n/a |
 
 ## Implementation sequence
 
-1. Shared reader: add `--label` and single trailing-newline strip to the helper.
-   Stdin processing order (AR-004): (1) cap check on raw bytes: read CAP+1 bytes and reject if more than 1048576, so exactly 1048576 raw bytes passes while a 1048576-byte body plus a trailing newline fails; (2) UTF-8 decode; (3) normalize CRLF/CR to LF; (4) strip exactly one trailing LF (stdin branch of housekeeping_input.py only; `--text` is never stripped); (5) control-character check; (6) emptiness check. The cap applies before decoding, CRLF normalization and newline stripping. Boundary tests pinned for 1048576 and 1048577 raw bytes.
-   (IDs R-4; D-4: label defaults to old text)
-   Owns: `scripts/lib/housekeeping_input.py`
-2. TUI: create_app reads the text file when no text is given. Owns two rules of the env contract: when UNCLE_STARTUP_TEXT_FILE is set the TUI prefers it over UNCLE_STARTUP_TEXT, and after reading the file the TUI deletes it and its private dir (exec skips the launcher's EXIT trap). Step 3 owns the launcher side (UNCLE_STARTUP_TEXT empty in the stdin case); the two are paired.
-   Independent of step 1
-   Owns: `uncle_tui.py`
-3. **Existing housekeeping stdin conflict check** — Before editing `uncle`, run the existing housekeeping stdin cases (housekeeping-launcher-test.sh, launcher-args-test.sh) and review them for stdin inputs with control characters, CRLF, large text or env-delivered text, against the validated reader from step 1 (`housekeeping_input.py` stdin path). Record the result in IMPLEMENTATION_NOTES.md. If any existing assertion conflicts with the stricter validation or with file-based text delivery, STOP and ask the user; do not edit existing assertions and do not proceed to step 3.
-   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
-   Depends on: 1, 2
-4. Launcher: shared stdin function, `=` forms, usage text.
+1. Helper module and unit tests (S1) — builder, sanitizer, guards (both stdout and stderr ttys; stream selection), once-only push/idempotent end state, CLI, tests for AC-1,AC-5,AC-7,AC-8 helper parts. Includes D-8 cases: non-numeric, empty, flag-like and very long digit issue arguments (non-digit/empty gives `<project> · uncle`; digits never truncated).
+   Owns: `scripts/lib/terminal_title.py`, `scripts/tests/terminal-title-unit-test.py`
+2. TUI integration (S2) — swap `_write_title`/`_begin_title`/`_end_title`, idle title and stack in `__main__`, status-bar name via helper; pty TUI tests appended to the test file written in step 1 (shared file: step 2 builds on step 1's test module).
+   Owns: `uncle_tui.py`, `scripts/tests/terminal-title-tui-test.py`
+   Depends on: 1
+3. Shell integration (S3) — rewrite `uncle_title_begin/end` to call the CLI; keep cancel and stop-tree intact. Begin: no-op when `UNCLE_TITLE_OWNER` names a live ancestor PID (validated, not merely non-empty; a forged or stale value is ignored) or when `UNCLE_TITLE_ACTIVE` is already 1 (second begin); drivers push only when the owner is unset. Issue is passed to the CLI only if it matches `^[0-9]+$` (D-8), otherwise no issue; the root is read only from UNCLE_PROJECT_ROOT/cwd, never argv. End: acts only when `UNCLE_TITLE_ACTIVE`=1 from this shell's own begin, clears it first (idempotent), re-checks the full tty/TERM guard and writes nothing on failure, and is reached from the EXIT trap on every exit path including `uncle_cancel` and SIGTERM/SIGHUP. Tests cover owner-set no-op, end-without-begin, issue `12a`/empty/`--x` yielding the no-issue title, root never read from argv, and a forged owner PID being ignored.
+   Owns: `scripts/lib/terminal-title.sh`
+   Depends on: 1
+4. Driver and launcher wiring (S4) — from-issue.sh, change-workflow.sh, stagegate.sh, uncle; chain traps. The `uncle` line menu exports UNCLE_TITLE_OWNER after its begin so child drivers push and retitle nothing. Cut order if time expires: uncle line-menu wiring, then stagegate.sh wiring.
+   Owns: `scripts/from-issue.sh`, `scripts/change-workflow.sh`, `scripts/stagegate.sh`, `uncle`
+   Depends on: 3
+5. Shell pty tests and defect injection (S5) — AC-4,AC-6 (including owner set => zero bytes written, and end only after a matching push), grep guard, mutation check.
    
-   Parse ordering: the argument loop only records a pending stdin option; `read_stdin_option` is invoked once after the whole argument list parses successfully, so unknown-argument errors exit 1 before any stdin read or temp file/dir is created. The mutually-exclusive check stays at the top of every mode-option case and runs before `read_stdin_option`: a second mode option (`--application --application`, `--application --housekeeping`, `--housekeeping --application`, etc.) exits 1 with the mutually-exclusive error before any stdin is read, before python3 is invoked and before any temp file is made. AC-8 tests include a case proving no stdin read or temp file on a second mode option.
-   
-   Value rule: after `shift`, only a next argument beginning with `--` is an option (stdin mode); any other next argument, including `-h`, `verify`, single-dash words and the empty string, is the value. Empty value forms (`--OPT ""` and `--OPT=`) are refused with `Error: --OPT text cannot be empty` without reading stdin and never fall back to stdin. Add launcher tests for `--application -h`, `--application verify` and `--application ""` treated as values, and for `--OPT=` refused without stdin read (AC-5).
-   
-   Env contract: stdin case sets only `UNCLE_STARTUP_TEXT_FILE` and leaves `UNCLE_STARTUP_TEXT` empty (TUI prefers the file); value case sets only `UNCLE_STARTUP_TEXT`. Tests assert both the stdin and value cases for both options.
-   
-   Temp file: stays in the 0700 `UNCLE_CR_DIR` at 0600; the EXIT trap covers non-exec exits and the TUI removes the file and dir after reading, since exec skips the trap (AR-012).
-   
-   Usage text documents that text beginning with `--` requires the `=` form (D-6); a test pinning this is added in step 5.
-   Owns: `uncle`
-   Depends on: 1, 2, 3
-5. Docs.
-   Owns: `README.md`, `docs/quickstart.md`
-   Depends on: 4
-6. Tests: new launcher suite and startup-action case. The fake TUI records both UNCLE_STARTUP_TEXT and UNCLE_STARTUP_TEXT_FILE, checks the file exists, then deletes it as the real TUI does. Cases: stdin case has empty TEXT and set FILE; value case has TEXT set and FILE empty; both set -> file wins; `--application --bogus` and second-mode-option cases with piped stdin (exit 1, stdin unread, no temp file); helper tests for stdin vs --text newline handling, CRLF order, raw-byte cap with trailing newline and CRLF-expanded input at cap; value-form text unvalidated; no TMPDIR residue after exec and failure paths.
-   Owns: `scripts/tests/launcher-stdin-text-test.sh`, `scripts/tests/startup-action-test.py`
-   Depends on: 4
-7. Defect injection and notes: run new suite with a bare-`cat` defect, revert, record.
-   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
-   Depends on: 6
+   Steps 2 and 3 are independent of each other and may be batched. Protected verification paths: `scripts/tests/terminal-title-test.py`. Verification commands: the two baseline commands.
+   Owns: `scripts/tests/terminal-title-shell-test.py`, `scripts/tests/terminal-title-mutation-test.py`
+   Depends on: 2, 3, 4
 
 ## 21. Scope cuts under time pressure
 
-Cut first: `--opt=VALUE` form (S-11), then startup-action-test.py extra case, then quickstart edits. Never cut: TTY refusal, validation, option-as-text fix, the rule that a `--`-prefixed next argument is never text.
-
-AR-015: the `=`-form hint in the unknown-argument error is cut together with the `--opt=VALUE` form (S-11).
+Cut first: line-menu wiring in `uncle`, then stagegate.sh wiring. Never cut sanitization, tty guards, or the AC-8 defect-injection test (mutants (a) end writes bare `uncle`, (b) sanitize disabled).
 
 ## 22. Risks and unresolved questions
-
-- Inherited non-TTY stdin (cron/CI `/dev/null`) yields `text cannot be empty`: accepted as correct; message names the option.
-- Existing test assumptions about housekeeping env text are unverified beyond lines 1-40; step 5 re-runs suites and records any conflict as a deviation rather than editing assertions.
-- Trailing-newline decision D-5: on the stdin read path only (inside housekeeping_input.py), normalize CRLF/CR to LF, then strip exactly one trailing LF, then apply the emptiness check; `--text` input is never stripped (a test pins both).
+- Existing EXIT traps in stagegate.sh/uncle: read and chain (decision made: chain). No blocking questions.
+- Terminals without title stack keep the project-only title after exit: accepted per request.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | The next-argument-starting-with-`--` case with an empty non-TTY stdin was unspecified; the proposed rule is consistent with the existing option-vs-text design. | s1.1 now states a `--`-prefixed next argument is never text, stdin is read, empty input exits 1; s11.1 adds a test and AC-1 reflects it. |
-| AR-002 | Accepted | Real gap: reading stdin inside the arg loop would consume input and create a temp file before a later unknown argument exits 1. | Added a parse-ordering block to s1 and updated step-3 so stdin is read only after the whole argument list parses. |
-| AR-003 | Accepted | Precedence between UNCLE_STARTUP_TEXT and UNCLE_STARTUP_TEXT_FILE was unspecified; the file must win and the launcher must keep the env var empty in the stdin case. | Edited s6.1 data flow and s8.1 compatibility to state file-wins precedence and empty UNCLE_STARTUP_TEXT in the stdin case. |
-| AR-004 | Accepted | The strip position relative to normalization, emptiness check and --text was undefined; the proposed order is sound and consistent with the existing reader. | Step 1 and AC-7 now fix order: normalize CRLF/CR, strip one trailing LF (stdin only), then emptiness check; --text never stripped. |
-| AR-005 | Accepted | The existing exclusivity check runs on option entry, so the plan must pin that it precedes any stdin read for repeated or mixed mode options. | step-3 text requires the mutual-exclusion check before read_stdin_option; AC-8 tests add a case proving no stdin read or temp file on a second mode option. |
-| AR-006 | Accepted | The TTY message replaces the old `requires an argument` text, so the plan should state explicitly that no --application message keeps it. | s7.1 and s8.1 state no --application message retains `requires an argument`; any existing assertion on it is recorded as a deviation. |
-| AR-007 | Accepted | The plan left the env/file contract for startup text unspecified; defining it removes ambiguity and a precedence hazard. | Edit s6.1 and s8.1: stdin case sets only UNCLE_STARTUP_TEXT_FILE with empty UNCLE_STARTUP_TEXT; value case sets only UNCLE_STARTUP_TEXT; TUI prefers the file. |
-| AR-008 | Accepted | The validated reader is stricter than the old whitespace-only check, so existing housekeeping stdin cases could conflict; checking them before the launcher edit is cheap. | New step before step 3 runs existing housekeeping stdin cases; any conflict is stop-and-ask. Step 3 depends on it. R-3 and s11.1 updated. |
-| AR-009 | Accepted | The `--*` guard does regress `--application "--foo bar"`, which works today; the regression is a deliberate trade for stdin mode and should be stated and pinned. | Added a Compatibility exception (s8) and a step-3 requirement for a test pinning that text beginning with `--` needs the `=` form. |
-| AR-010 | Accepted | Real gap: reading stdin inline in the arg loop could consume stdin and create a temp file before a later unknown argument exits. | Section 1 and step 3: the loop only records a pending stdin option; stdin is read after the whole argument list parses successfully. |
-| AR-011 | Accepted | housekeeping_input.py shares one validation path for --text and stdin, so the strip must be explicitly confined to the stdin read path. | Edit s1.1 and s19.1.i3 to state the strip applies only on the helper's stdin read path, never to --text. |
-| AR-012 | Accepted | exec replaces the shell so the EXIT trap never fires; the stdin text file would otherwise leak. | Edit s6.1, s9.1 and step-3 to state the file lives in a 0700 dir at 0600 and the TUI deletes it after reading. |
-| AR-013 | Accepted | A non-TTY stdin that never closes blocks the read; a timeout would add behavior the request does not ask for, so the plan documents it as accepted. | Adds restriction R-5 in section 20 (s14.1): no stdin read timeout, blocking on a never-closing non-TTY stdin is accepted and documented. |
-| AR-014 | Partially accepted | Validating value-form text would change working argv behavior (compatibility); instead the plan states I-3 covers stdin only and value-form text is unvalidated by the launcher. | R-4 rationale and AC-4 requirement now scope I-3 validation to the stdin path and state value-form text (argv, --OPT=VALUE) is not validated. |
-| AR-015 | Accepted | A next argument starting with `--` is never positional text; users need the `=` form, and the error should point to it. | s1.1 states the rule and error hint; s11.1 and AC-6 add a test for `--OPT --text` and the hint. |
-| AR-016 | Accepted | Ordering of normalization, strip and empty check was unspecified; the proposed order is sound and safe for --text. | Edit step-1, AC-7 and D-5 (s19.1.i3) to fix order: CRLF/CR to LF, strip one trailing LF on stdin path only, then empty check. |
-| AR-017 | Accepted | The helper reads CAP+1 raw bytes and checks length before decoding, so the cap counting raw bytes before normalization and strip is the existing behavior and must be pinned. | Step-1 and AC-4 now state the cap applies to raw stdin bytes before CRLF normalization and newline stripping; boundary tests pinned. |
-| AR-018 | Accepted | The plan did not say whether stdin is read for empty value forms; making it explicit removes ambiguity in the I-4 test. | Edit AC-5, step-3 and s11 to state that empty value forms ("" and --OPT=) are refused without reading stdin and never fall back to stdin, and add tests. |
-| AR-019 | Accepted | The value rule needs an unambiguous definition so -h, verify, single-dash words and empty string are all values, matching the existing --housekeeping check. | Step 3 text states: only arguments beginning with -- are options; any other next argument (including -h, verify, empty string) is the value. |
-| AR-020 | Rejected | Reading stdin at the option contradicts AR-002 and AR-010, which settle that stdin is read only after the whole argument list parses, so parse errors win and no temp file is made. | No edit; parse-versus-read ordering is owned by the AR-002/AR-010 dispositions. |
-| AR-021 | Accepted | The D-1 message already contains `empty input` for both options; making that binding and asserted for both removes the mismatch with AC-3, which only required it for housekeeping. | s7.1 states the D-1 message with `empty input` applies to both options; AC-3 tests assert it for both. |
+| AR-001 | Accepted | Owner semantics conflicted with BH-3/BH-5/BH-9; a single rule resolves it. | s1.1 D-6/D-7 rewritten: when UNCLE_TITLE_OWNER is set, driver begin/end write nothing; only the TUI retitles at run start and end; AC-3/AC-6 updated. |
+| AR-002 | Accepted | Exit path must be defined for never-pushed, signal and repeat cases. | s1.1 D-3 now: end writes project-only title and CSI 23;2 t only if this process pushed; runs in finally and on SIGTERM/SIGHUP; idempotent; AC-2 and step-3 updated. |
+| AR-003 | Accepted | Non-numeric/empty issue and truncation scope were ambiguous; a fixed rule is needed so the suffix always survives. | Section 1 (s1.1) gains title rules: non-numeric/empty issue gives no-issue title; project name truncated so the full title is at most 60 chars, suffix kept. |
+| AR-004 | Accepted | Project-name edge cases (relative/empty root, '/', empty after sanitizing) were undefined and conflicted with project-first format. | Section 1 (s1.1) gains project-name rules: ignore non-absolute UNCLE_PROJECT_ROOT, use cwd; empty name yields exactly `uncle`. |
+| AR-005 | Accepted | Opt-out and stream rules were unspecified; the settled rule is clear and consistent with the existing both-ttys guard. | Edit R-3 mechanism and AC-5 requirement to say only exact 0 disables, writes go to stdout, and stdout and stderr must both be ttys. |
+| AR-006 | Accepted | Child drivers launched from the line menu would push the stack again; exporting the owner variable prevents mismatched pops. | Edit s1.1 D-7 text and AC-6 requirement so the uncle line menu exports UNCLE_TITLE_OWNER and child drivers push and retitle nothing. |
+| AR-007 | Accepted | Plan left driver behavior undefined when the TUI skipped its own begin; ownership must reflect an actual push. | Section 1 D-6/D-7 amended: TUI exports UNCLE_TITLE_OWNER only if it actually began; drivers push only when it is unset. |
+| AR-008 | Accepted | Repeat-call and exit-path behavior was unspecified; idempotent end and no-op second begin are needed for balanced push/pop. | Section 12 and step 3 amended: end idempotent and run from EXIT trap on every exit path incl. uncle_cancel; second begin is a no-op. |
+| AR-009 | Accepted | The old bash guard rejected non-digit issues while the plan accepts empty ones; a single rule is needed. | Section 8 (s8.1) and AC-1 now state a non-numeric issue is treated as empty, giving `<project> · uncle`. |
+| AR-010 | Accepted | Bash now spawns python3 per begin/end, so fd inheritance and missing-python3 behavior must be defined. | Section 1 (s1.1) and R-1 state the helper inherits fds 1/2 unchanged and missing or failing python3 gives silence with exit 0. |
+| AR-011 | Accepted | End must not write or pop when this process never performed the matching begin, to keep push/pop balanced. | Section 1 adds rule D-8: end writes nothing unless this process's begin pushed. |
+| AR-012 | Accepted | Capping only the project name keeps the issue suffix intact; whole-title truncation could cut it off. | Section 1 D-4 revised: cap project name to 60 code points, then append suffix; R-2 mechanism updated to match. |
+| AR-013 | Accepted | Bidi overrides and line/paragraph separators are not C0/C1/DEL but could still corrupt a title; dropping Unicode categories Cc, Cf, Zl, Zp is a cheap, safe strengthening. | Section 1 decision D-4 and restriction R-2 now specify dropping categories Cc, Cf, Zl, Zp before truncation. |
+| AR-014 | Accepted | Order and scope of truncation were ambiguous and could cut off the issue suffix. | Section 1 D-4, R-2, and AC-1 now say: strip, trim, truncate only the project name to 60 code points, append fixed suffix; empty falls back to bare `uncle`. |
+| AR-015 | Accepted | The CLI is a separate process and must itself enforce the digits-only issue and take the root from the environment, since bash callers may pass arbitrary values. | Section 1 now states the CLI accepts an issue only if it matches ^[0-9]+$ (else no issue) and reads the root only from UNCLE_PROJECT_ROOT/cwd, never argv. |
+| AR-016 | Accepted | end must not emit bytes to a non-tty and a forged or stale UNCLE_TITLE_OWNER must not silence the title or pop another process's stack. | Section 1 now states end re-checks the full guard and writes nothing on failure, and UNCLE_TITLE_OWNER is honored only when it names a live ancestor PID; step-3 implements it. |
+| AR-017 | Accepted | Push/pop balance for double begin, end without begin, and signal paths was unspecified; a per-process pushed flag and idempotent end fix it. | Section 1 adds D-8 (push at most once, pop only if pushed, idempotent end, signal paths); R-4-adjacent AC-2 and step-1 updated. |
+| AR-018 | Accepted | Output stream and one-tty-only behavior were unnamed and R-3/AC-5 disagreed. | Section 1 adds D-9 (stderr in TUI, stdout in shell, both must be ttys, else silent); R-3 and AC-5 updated to agree. |
+| AR-019 | Accepted | Run-end versus session-exit behavior must be unambiguous and match BH-4. | Section 1 (s1.1) D-3/D-6 state: exit writes project-only title then CSI 23;2 t; run end writes only the idle title, no pop. |
+| AR-020 | Accepted | The cap's scope, unit and order against sanitizing must be defined so tests have a single oracle. | Section 1 (s1.1) D-4 rewritten: strip, trim, truncate project name only to 60 code points, then append suffix; s16.1 R-2 and AC-1 aligned. |
+| AR-021 | Accepted | The expected title for non-numeric, empty or very long issue input was undefined; a single rule resolves it. | Section 1 gains decision D-8 (non-digit/empty issue = no issue, digits never truncated); step-1 tests cover it. |
+| AR-022 | Accepted | The stateless CLI cannot know whether begin pushed, so the stateful gate must live in the bash wrapper. | Section 1 gains decision D-9 (non-empty UNCLE_TITLE_OWNER makes begin/end no-ops; bash end acts only if UNCLE_TITLE_ACTIVE=1); step-3 text updated. |
+| AR-023 | Accepted | AC-8 mutants were unnamed and defect injection was on the cut list, so the critical test could be dropped. | Named mutants (a) end writes bare uncle and (b) sanitize disabled in s12.1 and AC-8; removed defect injection from s20.1 cut list. |

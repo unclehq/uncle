@@ -494,7 +494,9 @@ trap on_exit EXIT
 trap 'uncle_cancel 130' INT
 trap 'uncle_cancel 143' TERM
 if [[ -n "${STAGEGATE_ORIGIN_REPO:-$(origin_field "$ORIGIN_FILE" 1)}" ]]; then
-    uncle_title_begin "$(current_issue)"
+    uncle_title_begin "$(current_issue 2>/dev/null || true)" || true
+else
+    uncle_title_begin "" || true
 fi
 
 # Warm only destinations with a single, known agent command.  Review panels

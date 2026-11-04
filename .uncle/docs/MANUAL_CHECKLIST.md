@@ -1,124 +1,146 @@
 # Manual checklist
 
+### MC-100
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In a real terminal tab, cd into two different project directories (one named like grove-issue-33) and launch `uncle` in each tab; look at both tab titles while the TUI is idle.
+- Expected result: Each tab title reads `<dir basename> · uncle` (e.g. `grove-issue-33 · uncle`), the two tabs are distinguishable, and the title matches the project name in the TUI status bar.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-101
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In the TUI from MC-100's tab, start a run with an issue number (e.g. #152), watch the tab title during the run, then let the run finish and watch again.
+- Expected result: During the run the title reads `<project> · uncle issue #152`; after the run ends it returns to `<project> · uncle`, never bare `uncle`.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-102
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Set the tab title to a recognizable value (e.g. `printf '\033]2;MYSHELL\007'`), launch `uncle`, quit it normally, and observe the tab title.
+- Expected result: After quitting, the tab title is restored to `MYSHELL` on a terminal supporting the xterm title stack (otherwise it stays `<project> · uncle`), and is never bare `uncle`.
+- Actual result: 
+- Status: NOT RUN
+
 ### MC-103
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a real interactive terminal, run `uncle --application` and `uncle --housekeeping` with no value and no piped stdin, timing each.
-- Expected result: Each exits non-zero immediately without waiting for input, with a message naming the option, both forms (TEXT or piped stdin), and the substring `empty input`.
-- Evidence to capture: Terminal transcript with messages and exit codes.
+- Exact action: Run `UNCLE_TERMINAL_TITLE=0 uncle` in a tab with a known title, then separately run `uncle | cat` and `TERM=dumb uncle`; observe the tab title each time.
+- Expected result: In all three cases the tab title is never changed by uncle and no stray escape characters appear on screen.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-104
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Pipe invalid stdin into `uncle --application`: a NUL byte, invalid UTF-8 bytes, whitespace only, and 1048577 bytes; check the system temp directory for leftovers after each.
-- Expected result: Each is refused with an error naming the reason, exit non-zero, nothing starts, and no temp files remain.
-- Evidence to capture: Error messages, exit codes, and temp directory listing before and after.
+- Exact action: In a tab, launch the `uncle` line-based menu (non-curses fallback), then start a driver (stagegate.sh, change-workflow.sh or from-issue.sh) from it with and without an issue number, and exit; watch the tab title throughout.
+- Expected result: Title shows `<project> · uncle` (with ` issue #N` when an issue is given) once, is not mangled by child drivers, and is restored on exit including after Ctrl-C cancel.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-108
+### MC-105
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --application --housekeeping < brief.md` and `uncle --issue 1 --application < brief.md`, and confirm `uncle --change-request < request.md` in a fresh scratch project still works.
-- Expected result: The mixed options exit 1 with the mutually exclusive error before reading stdin; `--change-request` behaves as before, writing CHANGE_REQUEST.md and starting the change workflow.
-- Evidence to capture: Terminal output and exit codes for each run.
+- Exact action: Run each of `scripts/stagegate.sh`, `scripts/change-workflow.sh` and `scripts/from-issue.sh` directly from a terminal tab (not under the TUI), then abort each with Ctrl-C; observe the tab title during and after.
+- Expected result: Each driver sets `<project> · uncle` (plus issue suffix where applicable) while running and restores the prior title on exit/cancel, with no garbage characters printed.
 - Actual result: 
 - Status: NOT RUN
 
-## Invariants
-
-### MC-200
-- Required for acceptance: YES
+### MC-106
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a real terminal (stdin is a TTY), run `uncle --application` and then `uncle --housekeeping` with no value, under a 10-second timeout.
-- Expected result: Each exits non-zero promptly without waiting for input, with a message naming the option and both forms (text or piped stdin) and containing `empty input`.
-- Evidence to capture: Terminal transcript with exit codes and elapsed time for both commands.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-201
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: In an empty scratch directory, run `printf 'line one\n\nline three\n' | uncle --application --unattended` and `uncle --unattended --application < brief.md`, then repeat both for `--housekeeping`.
-- Expected result: Each starts the matching workflow (application build or housekeeping) using the piped text, with --unattended applied and --unattended never used as the text.
-- Evidence to capture: Screenshot or transcript of the TUI showing the startup text and unattended mode for each of the four runs.
+- Exact action: Create a directory whose name contains an embedded escape or BEL byte and a very long (100+ char) name via `mkdir $'/tmp/x/evil\033]0;PWNED\007name'` and a long-named dir; launch `uncle` in each and view the tab title.
+- Expected result: No injected title or control effect occurs; control characters are absent from the title, the long project name is cut to 60 characters with ` · uncle` suffix intact.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-202
-- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Pipe oversized (1048577 bytes), NUL-containing, invalid UTF-8 and whitespace-only input into `uncle --application` and `uncle --housekeeping`, then check the temp directory for leftover files.
-- Expected result: Every case exits 1 with an `Error: --OPT ...` message naming the cause, nothing starts, and no temp files are left behind.
-- Evidence to capture: Transcript with the error text and exit code for each case, plus a temp-directory listing before and after.
+- Exact action: Launch uncle with `UNCLE_TERMINAL_TITLE=0` in a titled tab, and separately run `uncle | cat`; watch the tab title and capture the raw output with `| od -c` for the piped case.
+- Expected result: Tab title is unchanged and the piped output has no ESC]2 or CSI 22/23 t sequences.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-205
-- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --application=--my-brief < /dev/null` for both options and `uncle --application "-h"`. Pipe `printf 'x\r\n'` and `printf 'x\n\n'` into the launcher with the TUI observing the received text.
-- Expected result: `--OPT=--my-brief` delivers `--my-brief` as the text. `-h` is taken as a value, not as help. CRLF input yields `x`, and double-newline input yields `x` followed by a single newline.
-- Evidence to capture: Transcript or TUI screenshot showing the exact text received in each case.
+- Exact action: Start a driver from inside the uncle TUI (a run) and from the uncle line-based menu, and watch the tab title for double-set or premature restore.
+- Expected result: Only the owner (TUI or line menu) changes the title. The driver sets nothing and does not restore early, and the title is restored once on final exit.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-206
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run `uncle --help`, then run `uncle --change-request < request.md` in a scratch project, and again with an existing CHANGE_REQUEST.md.
-- Expected result: The help text documents the stdin form, the value-wins rule and `--OPT=VALUE`. `--change-request` behaves as before: it starts normally, and it refuses to overwrite an existing CHANGE_REQUEST.md.
-- Evidence to capture: Help output excerpt and transcripts of both change-request runs.
+### MC-301
+- Exclusive resources: browser:system
+- Exact action: In a real terminal tab with a known custom title, start `uncle`, run a numbered issue, let it end, then quit the TUI; observe the title at each step.
+- Expected result: Title goes `<project> · uncle`, then `<project> · uncle issue #N` during the run, back to `<project> · uncle` at run end, and the previous custom title is restored on exit; bare `uncle` never appears.
 - Actual result: 
 - Status: NOT RUN
 
-## resources
+### MC-302
+- Exclusive resources: browser:system
+- Exact action: Launch `UNCLE_TERMINAL_TITLE=0 uncle` in a tab, then run `uncle | cat` in another; watch the tab titles.
+- Expected result: Neither tab title changes from its previous value and no stray escape text is printed.
+- Actual result: 
+- Status: NOT RUN
 
-### MC-304
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run `uncle --application=--my-text < /dev/null`, `uncle --application --bogus < brief.md`, and `uncle --application ""` with piped input.
-- Expected result: `--application=--my-text` starts with text `--my-text`; `--bogus` exits 1 with `Unknown argument` without reading stdin; the empty value is refused with `text cannot be empty` and the pipe is left unread.
-- Evidence to capture: Output and exit codes for each run, plus proof the pipe data remained unread.
+### MC-303
+- Exclusive resources: browser:system
+- Exact action: In a real terminal tab, run the `uncle` line-based menu and start a driver (stagegate.sh or change-workflow.sh) without an issue number; then exit it.
+- Expected result: Title shows `<project> · uncle` during the run, with no nested push, and the prior title is restored on exit.
 - Actual result: 
 - Status: NOT RUN
 
 ## Regressions
 
-### MC-402
+### MC-401
 - Required for acceptance: YES
-- Exclusive resources: file:scratch-project/CHANGE_REQUEST.md
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: Run `echo 'request text' | uncle --change-request` in a scratch project with no CHANGE_REQUEST.md, then repeat on a terminal with no pipe, and again with an existing CHANGE_REQUEST.md.
-- Expected result: The first run writes CHANGE_REQUEST.md and starts the change workflow. The terminal run is refused immediately with the existing stdin message. The third run refuses to overwrite and names CHANGE_REQUEST.md.
-- Evidence to capture: Terminal output and exit codes for the three runs.
+- Exact action: In a real terminal tab, run `uncle` with no arguments (TUI), observe the tab title, then quit the TUI and observe the tab title again.
+- Expected result: Tab title shows `<project> · uncle` while idle, and after quit the previous tab title is restored (or remains project-only if the terminal lacks a title stack); the bare literal `uncle` is never shown.
+- Evidence to capture: Screenshots or notes of tab title before launch, during idle TUI, and after exit.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-403
+### MC-402
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: Run `uncle --housekeeping "tidy branches"` (value form), then `uncle --housekeeping` on a real terminal with no pipe, and observe both.
-- Expected result: The value form proceeds to housekeeping planning with that text. The bare terminal form exits non-zero at once, never waits for input, and the message contains `empty input`.
-- Evidence to capture: Terminal output, exit codes, and a note that the bare run returned promptly.
+- Exact action: In the TUI, start an issue-backed run (with an issue number) and then a run without an issue number, watching the tab title at start and at end of each run.
+- Expected result: Issue run shows `<project> · uncle issue #N`; no-issue run shows `<project> · uncle`; at run end the title returns to `<project> · uncle` without popping the saved title; status bar still shows `<dir> (<branch>)` unchanged.
+- Evidence to capture: Tab title observations at each transition plus a status bar screenshot.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-404
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: Run `uncle --application x --housekeeping y`, `uncle --issue 1 --application x`, and `uncle --change-request --housekeeping` (stdin piped), and observe each.
-- Expected result: Each exits 1 with the mutually-exclusive error, starts nothing, and leaves no temp files.
-- Evidence to capture: Stderr and exit code for each command.
+- Exact action: Run `UNCLE_TERMINAL_TITLE=0 uncle`, then separately `uncle | cat`, and observe the tab title and any stray escape characters in output.
+- Expected result: Tab title is not changed in either case, and no escape sequence garbage appears in the piped output.
+- Evidence to capture: Tab title observations and the piped output captured via `uncle | cat | cat -v`.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-405
+- Required for acceptance: YES
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: From a TUI-launched run, observe the tab title while a driver (stagegate/change-workflow/from-issue) executes, then launch the same driver directly from the shell with `./scripts/stagegate.sh` and again with the line-based menu path of `uncle`.
+- Expected result: Under the TUI the driver does not alter the title or push extra; run directly or from the line menu, the title is `<project> · uncle` (with ` issue #N` when applicable) and is restored on exit, including after Ctrl-C cancel.
+- Evidence to capture: Tab title notes at start, during, and after exit for each launch path, including after cancel.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-406
+- Required for acceptance: YES
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: In a directory whose name contains an escape/control character or exceeds 60 characters (create via `mkdir $'/tmp/x/a\e]2;PWNED\a'` and a 100-char directory), launch `uncle` in each and observe the tab title.
+- Expected result: No injected title text appears; control characters are removed; long names are truncated to 60 characters with ` · uncle` suffix intact.
+- Evidence to capture: Screenshots of tab titles for both directories.
 - Actual result: 
 - Status: NOT RUN

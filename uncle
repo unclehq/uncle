@@ -332,9 +332,17 @@ if [[ -n "$UNCLE_STARTUP_ACTION" && "$UNCLE_STDIN_CLAIMED" != 1 && "$UNCLE_STDIN
 fi
 if [[ -z "$UNCLE_STARTUP_ACTION" && -z "$UNCLE_FLAG_ATTENDED$UNCLE_FLAG_UNATTENDED" \
       && -z "${UNCLE_ATTENDED:-}${UNCLE_UNATTENDED:-}${WORKFLOW_UNATTENDED:-}${UNCLE_HOUSEKEEPING_UNATTENDED:-}" ]]; then
-    # Plain `uncle` opens the interactive TUI/menu: a person is present, so it
-    # starts attended. Unattended is the default only for the entry points.
-    UNATTENDED=0
+    # Plain `uncle` opens the interactive TUI/menu. No flag or environment
+    # variable chose a mode, so the persisted setting decides: auto mode (the
+    # default; anything but an explicit `misc.auto_mode false`) is honored as
+    # unattended, and only `false` starts attended.
+    uncle_auto_value="$(awk '$1 == "misc.auto_mode" { v = $2 } END { print tolower(v) }' "${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}" 2>/dev/null || true)"
+    if [[ "$uncle_auto_value" == false ]]; then
+        UNATTENDED=0
+    else
+        UNATTENDED=1
+    fi
+    UNCLE_MODE_FROM_CONFIG=1
 else
     mode_flags=()
     [[ -z "$UNCLE_FLAG_ATTENDED" ]] || mode_flags+=(--attended)
@@ -360,7 +368,11 @@ export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
 # parsed and then never seen, and --application opened an idle homepage.
 export UNCLE_STARTUP_ACTION UNCLE_STARTUP_TEXT UNCLE_STARTUP_TEXT_FILE
 # The TUI runs the driver itself, so it needs --unattended told to it as well.
-if [[ -n "$UNCLE_UNATTENDED" && "$UNCLE_UNATTENDED" != 0 ]]; then
+# Not for plain `uncle`: its mode came from misc.auto_mode, which the TUI
+# re-reads, so pinning it here would override later changes to the setting.
+if [[ -n "${UNCLE_MODE_FROM_CONFIG:-}" ]]; then
+    :
+elif [[ -n "$UNCLE_UNATTENDED" && "$UNCLE_UNATTENDED" != 0 ]]; then
     export UNCLE_STARTUP_UNATTENDED=1
 else
     export UNCLE_STARTUP_ATTENDED=1

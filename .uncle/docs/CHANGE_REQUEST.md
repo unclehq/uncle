@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 142
+Issue 117
 
-Seeded from [unclehq/uncle#142](https://github.com/unclehq/uncle/issues/142).
+Seeded from [unclehq/uncle#117](https://github.com/unclehq/uncle/issues/117).
 
 ## Change Type
 
@@ -10,34 +10,57 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Ask before starting a new change request when .uncle/docs/CHANGE_REQUEST.md already exists
+Offer sanitized GitHub bug reporting for non-recoverable workflow failures
 
 ## Motivation
 
-## Problem
+## Goal
 
-When a user starts a new change request and \`.uncle/docs/CHANGE_REQUEST.md\` already exists (left over from a previous run), uncle does not tell them. The earlier request may be silently reused or overwritten, or the run may resume from stale state, so the user can end up running a different change than the one they asked for.
+When Uncle encounters a non-recoverable tool or driver failure, let the user file a sanitized bug report directly to `unclehq/uncle` from the recovery UI. The report must identify the exact runner and model involved.
 
-## Requested behavior
+## Current behavior
 
-When a new change request is started and \`.uncle/docs/CHANGE_REQUEST.md\` already exists:
+Triage can create `.uncle/workflow/triage-issue-N.md`, but it is only a local draft. Users must manually find, redact, and file it.
 
-1. Tell the user the file exists, and ask whether they want to proceed with the new change request.
-2. If they answer in the affirmative, proceed with the new request.
-3. If they decline, stop without modifying \`.uncle/docs/CHANGE_REQUEST.md\` or any other run state.
+## Proposed flow
+
+```text
+Failure classified as tool bug / non-recoverable driver failure
+→ Recovery UI offers Report Uncle bug
+→ Uncle generates a redacted issue preview
+→ User explicitly confirms publication
+→ gh issue create --repo unclehq/uncle
+```
+
+If `gh` is unavailable, unauthenticated, or the user declines, preserve the sanitized local draft and show a copyable submission command.
+
+## Required issue metadata
+
+- Uncle version, source revision, and install type
+- OS/runtime basics
+- Application or change workflow
+- Current state, failing stage, attempt, role (agent/reviewer/worker), and exit status
+- Resolved runner, model, and effort for the failing stage
+- Concise error excerpt and canonical JSON/artifact validation error, if applicable
+- A reference to locally retained diagnostics, without publishing their absolute paths
+
+Use stage metrics, envelopes, resolved configuration, and the driver state as sources. Do not infer a runner/model from a global default when the stage record has a resolved value.
+
+## Privacy and safety
+
+- Never automatically publish an issue. Require a final user confirmation.
+- Do not include API keys, tokens, cookies, model credentials, `.uncle/config`, absolute project paths, raw prompts, source files, or full unredacted logs.
+- Offer an optional separate opt-in diagnostic bundle with preview/redaction before upload.
+- Preserve the existing local triage draft regardless of publication outcome.
 
 ## Acceptance criteria
 
-- Interactive run, existing file, user answers yes: the run proceeds with the new request.
-- Interactive run, existing file, user answers no (or gives no answer): the run stops and the existing file is unchanged.
-- No existing file: no prompt, behavior unchanged.
-- Unattended runs (\`UNCLE_UNATTENDED=1\`) must not hang on the prompt. Decide and document the default; proposed: stop with a clear message unless an explicit opt-in is set.
-- A test covers each case above.
-
-## Open questions
-
-- What counts as "yes" (\`y\`/\`yes\`, case-insensitive), and should an empty answer default to no? Proposed: yes.
-- Should the previous request be archived (e.g. to \`.uncle/workflow-history/\`) before it is replaced?
+- The recovery UI offers reporting only for non-recoverable tool/driver failures, not routine test failures or normal recovery proposals.
+- The preview shows the resolved runner, model, and effort of the failed stage.
+- The published issue contains the required metadata and a useful concise failure summary.
+- User cancellation creates no GitHub issue.
+- Missing `gh` authentication produces a saved local draft and an actionable next step.
+- Tests cover redaction, resolved per-stage runner/model attribution, confirmation/cancellation, authenticated publication, and unauthenticated fallback.
 
 ## Observed Current Behavior
 

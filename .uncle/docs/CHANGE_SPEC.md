@@ -1,61 +1,72 @@
-# Change Spec
+# Change Spec — Issue 117
 
-Omitted sections: Performance (none); Security (no new surface beyond input parsing); Migration (none); Prototype isolation (not applicable)
+Omitted sections: Migration (none); Prototype isolation (n/a); Performance (negligible)
 
 ## 1. Change type
-Feature.
+Feature + Security (privacy-sensitive).
 
-## 2. Problem statement
-A new change request silently replaces a leftover `.uncle/docs/CHANGE_REQUEST.md`, so the user may run a different change than intended.
+## 2. Problem
+Triage drafts are local only; users must hand-redact and file them.
 
 ## 3. Current behavior
-See baseline B1.
+See baseline B3, B6.
 
 ## 4. Desired behavior
-When seeding a new change request in change mode and the request file already exists (and is not the same in-flight issue run), tell the user, ask to proceed; yes proceeds, otherwise stop with the file and run state untouched.
+When triage classifies a failure `tool bug` (non-recoverable tool/driver failure), the recovery UI offers `/report`. It builds a redacted preview with required metadata, asks explicit confirmation, then runs `gh issue create --repo unclehq/uncle`. Cancel, missing/unauthenticated `gh`, or failure preserves a sanitized local draft and shows a copyable command.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| S1 | ADD | Interactive, file exists, answer `y`/`yes` (case-insensitive) | Overwrites silently | Message names the file, prompt shown, run proceeds and file is replaced | AC-1 test |
-| S2 | ADD | Interactive, file exists, answer anything else, empty, or EOF | Overwrites | Exit nonzero with message; file bytes and run state unchanged | AC-2 test |
-| S3 | PRESERVE | No existing file | Written, no prompt | Same, no prompt | AC-3 test |
-| S4 | ADD | `UNCLE_UNATTENDED=1`, file exists | Overwrites | No read from stdin; stop nonzero with clear message unless `UNCLE_REPLACE_CHANGE_REQUEST=1`, then proceed | AC-4 test |
-| S5 | PRESERVE | Same-issue in-flight run (seed_is_current) | Resume, file untouched | Same, no prompt | AC-5 test |
-| S6 | PRESERVE | `UNCLE_NEW_WORKFLOW=1` fresh start (old evidence archived first) | Archive then reseed | Same, no prompt | AC-5 test |
+| S1 | ADD | Recovery with classification `tool bug` | No report offer | Recovery shows `Report Uncle bug (/report)` hint | bug-report test: offer predicate |
+| S2 | PRESERVE | Classification code defect / requirement gap / needs owner decision, or routine test failure, or no classification | Normal recovery | No report offer; /report refused with message | test: predicate false for each |
+| S3 | ADD | /report | n/a | Preview shows metadata, resolved runner/model/effort of failed stage, excerpt; nothing published | test: preview content |
+| S4 | ADD | User confirms (explicit `yes`) with authenticated gh | n/a | One `gh issue create --repo unclehq/uncle --title T --body-file F` call; URL shown | test with fake gh on PATH |
+| S5 | ADD | User cancels / any non-yes | n/a | No gh issue create invoked; draft retained | test: fake gh records no create |
+| S6 | ADD | gh missing or `gh auth status` fails | n/a | Sanitized draft saved at `.uncle/workflow/bug-report-N.md`; actionable message and copyable `gh issue create ...` command | test: unauth fallback |
+| S7 | ADD | Report generated | n/a | Per-stage runner/model/effort from the failed stage's attempt record, never global default; `unavailable` if no record | test: two stages with different runners |
+| S8 | PRESERVE | Any outcome | Local triage-issue draft exists | `triage-issue-N.md` untouched | test: hash before/after |
+| S9 | ADD | Report built from tree containing secrets/abs paths/prompts | n/a | Output has none of: keys, tokens, cookies, absolute project/home paths, raw prompts, source files, `.uncle/config` content | redaction test |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| V1 | NEW | An existing CHANGE_REQUEST.md is never replaced without an explicit yes or explicit unattended opt-in | from-issue.sh change mode | confirm function before write | AC-1..4 |
-| V2 | NEW | Declining or unattended refusal leaves CHANGE_REQUEST.md and `.uncle/workflow` state byte-identical | same | guard runs before archive, write_origin, and workflow launch | AC-2, AC-4 |
-| V3 | EXISTING | Seed-only and stdin imports never overwrite | same | noclobber / EXISTS | existing tests |
+| V1 | NEW | No issue is published without explicit confirmation in the same flow | bug_report.publish | confirm param required True | test S4/S5 |
+| V2 | NEW | Report body is built from an allow-list of fields then redacted; never includes absolute paths or secrets | bug_report.build | build + scrub | test S9 |
+| V3 | NEW | Runner/model/effort come from stage attempt record, not defaults | bug_report.build | record lookup | test S7 |
+| V4 | NEW | Local sanitized draft is saved on every non-publish outcome and existing triage drafts are never modified | bug_report | save_draft | tests S5,S6,S8 |
+| V5 | EXISTING | Triage guard/sandbox and human-stop non-triage rules unchanged | TUI | unchanged | existing suites |
 
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-No-file and resume flows unchanged. Callers with closed or empty stdin now stop instead of overwriting.
+No change to driver stages, state files, or record schema. Additive only.
 
-## 8. Error behavior
-Decline/EOF/unattended-without-opt-in: message on stderr naming the file and (unattended) the env opt-in, exit 1.
+## 8. Failure behavior
+gh absent, unauthenticated, timeout, or nonzero create: draft saved, message with exact next step and copyable command; no crash; no retry loop.
+
+## 10. Security
+Allow-list + redaction (chat.sanitize plus home/project path replacement, token patterns, URL credentials). gh invoked with argv list (no shell), GH_PROMPT_DISABLED=1, stdin devnull. Local diagnostics referenced by relative id only (`.uncle/workflow/...` relative), no absolute paths.
 
 ## 12. Rollback
-Revert the from-issue.sh guard and test; no persisted state.
+Revert additive commit; no persisted schema changes. Leftover `bug-report-N.md` drafts are inert.
 
 ## 14. Non-goals
-Archiving the previous request (open question: deferred, not requested as required); changing stdin import behavior; prompting in the new-app flow.
+Auto-publishing; diagnostic bundle upload (opt-in bundle deferred); changing triage classification logic; reporting routine test failures.
 
 ## 15. Assumptions
-Yes = `y`/`yes` case-insensitive after trimming; empty = no. Unattended default is stop, opt-in via `UNCLE_REPLACE_CHANGE_REQUEST=1`. The worktree may already exist when declining; it is not modified beyond that.
+- Eligibility is defined as triage classification `tool bug` (existing signal). Decision recorded in plan.
+- Issue title: `[bug] <stage>: <short failure>` redacted and capped.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | Interactive run, existing request file, answer y/yes (any case): message names the file, run proceeds and the new request is written. | New shell test feeds `y`, `YES` on stdin; asserts exit 0 and new content. |
-| AC-2 | Interactive run, existing file, answer n, other text, empty line, or EOF: run stops nonzero and file bytes and workflow state are unchanged. | Shell test with hash comparison of file and `.uncle/workflow` inventory. |
-| AC-3 | No existing file: no prompt is printed and behavior is unchanged. | Shell test asserts no prompt text and file written; existing issue-document-test.sh still passes. |
-| AC-4 | With UNCLE_UNATTENDED=1 the run never reads stdin: it stops with a clear message naming UNCLE_REPLACE_CHANGE_REQUEST=1 unless that is set, in which case it proceeds. Documented in scripts/README.md. | Shell test with stdin closed/hanging pipe under timeout; both cases; README grep. |
-| AC-5 | In-flight same-issue resume and UNCLE_NEW_WORKFLOW=1 fresh start do not prompt. | Shell test or existing worktree-auto-seed-test.sh plus new case. |
-| AC-6 | Full shell and Python suites show no new failures versus baseline. | Driver runs bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh. |
+| AC-1 | Report offer appears only when the recovery classification is `tool bug`; not for code defect, requirement gap, owner decision, routine test failure, or unclassified recovery. | Unit test of eligibility predicate over all classes and none; TUI test that the hint/command is refused otherwise. |
+| AC-2 | Preview shows resolved runner, model, and effort of the failed stage taken from its attempt record, not the global default. | Test with session-totals records for two stages using different runners/models/effort and a differing global config; assert preview matches the failed stage. |
+| AC-3 | Generated issue contains Uncle version, source revision, install type, OS/runtime, workflow type, state, failing stage, attempt, role, exit status, runner/model/effort, concise error excerpt, artifact validation error if present, and a relative reference to retained diagnostics. | Test asserts each field label present in built body from a fixture state dir. |
+| AC-4 | Body and preview contain no API keys, tokens, cookies, credentials, `.uncle/config` content, absolute project/home paths, raw prompts, source files, or full logs. | Redaction test with planted secrets, absolute paths, and prompt text in logs; assert absence and bounded excerpt length. |
+| AC-5 | Cancelling at confirmation invokes no `gh issue create` and leaves a sanitized local draft. | Fake gh on PATH logs invocations; assert no create call and draft file present. |
+| AC-6 | Explicit confirmation with authenticated gh runs `gh issue create --repo unclehq/uncle` once and reports the issue URL. | Fake gh returning a URL; assert argv and displayed URL. |
+| AC-7 | Missing gh or failed auth saves a sanitized local draft and shows an actionable next step with a copyable submission command. | Tests with gh absent from PATH and with fake gh failing `auth status`. |
+| AC-8 | Existing `triage-issue-N.md` drafts are never modified or removed regardless of outcome, and existing triage and TUI suites still pass. | Hash comparison in test; bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh show no new failures vs baseline. |
 

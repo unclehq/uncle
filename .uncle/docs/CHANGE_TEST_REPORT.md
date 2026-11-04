@@ -4,17 +4,17 @@
 
 | Command | Status | Meaningful output | Requirements |
 |---|---|---|---|
-| bash scripts/tests/change-request-exists-prompt-test.sh | PASS | 104 ok, 0 FAIL, exit 0 | AC-1, AC-2, AC-3, AC-4, AC-5 |
-| bash scripts/tests/issue-document-test.sh | PASS | exit 0, 0 FAIL | AC-3 |
-| bash scripts/tests/worktree-auto-seed-test.sh | PASS | exit 0, 0 FAIL | AC-5 |
-| bash scripts/run-shell-tests.sh; bash scripts/run-python-tests.sh | DRIVER PENDING | Driver owns the full regression block. | AC-6 |
-| bash -n scripts/from-issue.sh | PASS | syntax ok | AC-1 |
-| formatter, lint, frontend build, migration, rollback, performance, security | N/A | No such tooling for shell scripts in this repo. | None stated |
+| python3 scripts/tests/bug-report-test.py | PASS | Ran 21 tests, OK (was 7 failures, 6 errors before fix) | AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8 |
+| bash scripts/run-shell-tests.sh | DRIVER PENDING | Full suite owned by driver | AC-8 |
+| bash scripts/run-python-tests.sh | DRIVER PENDING | Started once; output truncated, result not observed here. Driver authoritative. | AC-8 |
+| formatter / type checker / linter | N/A | None configured for this change | None stated |
+| integration, frontend build, migration, rollback, performance | N/A | Not applicable to this change | None stated |
+| security check: scrub/residual tests in bug-report-test.py | PASS | Included in the 21 passing tests | AC-4 |
 
 ## Coverage gaps
 
-- Live attended run of the prompt outside the pty fixture not performed.
-- Test needed UNCLE_* env scrubbing because driver-run builds export UNCLE_UNATTENDED=1.
+- Real gh and GitHub not exercised
+- No defect-injection run
 
 ## Next action
 

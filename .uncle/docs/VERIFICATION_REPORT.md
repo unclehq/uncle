@@ -2,143 +2,127 @@
 
 ## Findings
 
-### MC-102
+### MC-101
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-102
-- **Actual result:** Cases n, empty Enter, Ctrl-D (\x04), 'y please', 'maybe', 'yy': nonzero exit, 'unchanged' message, request and .uncle/workflow byte-identical.
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. Classifications code defect, requirement gap, owner decision, none, plus non-recovery tool bug; typed /report.
+- **Expected result:** Refusal, no draft/gh, no banner hint
+- **Actual result:** Refusal line printed, nothing armed, no draft, no gh, no chat. No /report hint exists in any banner (uncle_tui.py:4137,5002).
 - **Defects:** None
 
 ### MC-104
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-104
-- **Actual result:** Flag and env, with/without opt-in, never-written fifo: refusal exit 1 naming UNCLE_REPLACE_CHANGE_REQUEST=1, opt-in 1 replaces; no hang (30s harness timeout, not 10s; elapsed not recorded).
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. /report then `no`, empty, `/resume`.
+- **Expected result:** Cancelled, no create, draft kept, not forwarded, triage-issue unchanged
+- **Actual result:** All cancel with one-line message; zero gh create; draft kept; chat not called; hash unchanged.
 - **Defects:** None
 
 ### MC-105
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-105
-- **Actual result:** Piped/devnull stdin with values 0/true/empty refuse exit 1 and file kept; value 1 on a pty proceeds with no prompt. Piped 'y' input not consumed (see MC-204).
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. /report then `YES` (input is stripped by the composer).
+- **Expected result:** One create with --repo/--title/--body-file, URL shown, draft kept
+- **Actual result:** One create, URL issues/999 shown after extra output, draft kept.
 - **Defects:** None
 
 ### MC-106
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-106
-- **Actual result:** No prompt for NEW_WORKFLOW, --seed-only, in-flight same-issue resume on a pty. Resume and seed-only leave file untouched. NEW_WORKFLOW (state COMPLETE, same issue 142): exit 0, .uncle/workflow-history created, request reseeded.
-- **Defects:** None
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. yes with gh absent, auth failing, create exiting 0 with no URL.
+- **Expected result:** Each case: draft kept, copyable gh issue create command; (c) says may already exist
+- **Actual result:** (a),(b) pass. (c) message is 'Saved ... The issue may already exist; check github.com/unclehq/uncle/issues before filing again.' with no copyable command; one create, no retry. Literal text of expected result unmet for (c); the omission may be deliberate (avoids duplicates).
+- **Defects:** D-2
 
-### MC-203
+### MC-201
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-203
-- **Actual result:** Unattended 1 replaces; 0/true/empty refuse exit 1, file kept. Interactive pty value 1: no prompt, replaced, exit 0. Interactive 0/true/empty still prompt (not treated as opt-in).
-- **Defects:** None
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. Same classification sweep as MC-101.
+- **Expected result:** Refusals, and banner offers /report only for tool bug
+- **Actual result:** Refusals pass. The banner never offers /report, even for tool bug (grep of uncle_tui.py finds /report only in the error string at line 4903).
+- **Defects:** D-3
 
 ### MC-204
 
-- **Action:** bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-204
-- **Actual result:** printf 'y\ny\n' piped: exit 1, opt-in message, file hash unchanged, workflow stub not run.
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. yes with gh absent and with auth failing.
+- **Expected result:** No create, draft saved, copyable command, triage-issue identical
+- **Actual result:** All met in both cases.
 - **Defects:** None
 
 ### MC-205
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-205
-- **Actual result:** No-file, zero-byte, NEW_WORKFLOW, resume, seed-only: no prompt phrase in stderr; file states as expected.
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. /report then `YES`; then /report then `y`.
+- **Expected result:** One create and URL; draft kept; y cancels with no gh
+- **Actual result:** All met.
 - **Defects:** None
 
 ### MC-206
 
-- **Action:** bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-206
-- **Actual result:** Whitespace-only prompts (driver). Symlink and directory prompt; decline leaves link, target and dir intact. After 'y' on symlink: CHANGE_REQUEST.md stays a symlink but its target hash CHANGED (write followed the link). Expected target not clobbered. Filed D-1.
-- **Defects:** D-1
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. Armed then /clear; armed then /report; armed then empty input.
+- **Expected result:** No publish; /clear clears; /report re-arms with fresh draft; empty cancels; no chat
+- **Actual result:** All met (/clear stubbed _clear_build, saw normal clear; second draft created). Real Enter-key path covered by tests in bug-report-test.py.
+- **Defects:** None
 
 ### MC-301
 
-- **Action:** none
-- **Expected result:** per checklist MC-301
-- **Actual result:** Depends on MC-300, which is not in the checklist (README: NOT DECLARED). Equivalent action covered by MC-102 PASS but this ID is not asserted.
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. gh absent and gh auth failing, answer yes. Declared dependency MC-300 is not in the checklist, so the driver grouping was NOT DECLARED; run serially.
+- **Expected result:** No issue, draft saved, shell-quoted command, no crash
+- **Actual result:** Same as MC-204: met in both cases.
 - **Defects:** None
 
-### MC-303
+### MC-302
 
-- **Action:** none
-- **Expected result:** per checklist MC-303
-- **Actual result:** Depends on MC-302, absent from the checklist. Equivalent covered by MC-203 PASS but this ID is not asserted.
-- **Defects:** None
-
-### MC-304
-
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-304
-- **Actual result:** Action equivalent executed (no file, zero-byte, pty): no prompt, request written. Dependency IDs MC-300/302 are undefined in the checklist; noted in Open questions.
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. Ineligible and no classification.
+- **Expected result:** No banner hint, fixed refusal, nothing armed, no draft
+- **Actual result:** Refusal, nothing armed, no draft. No hint present.
 - **Defects:** None
 
 ### MC-401
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-401
-- **Actual result:** 'no request: no prompt' and 'no request: written' on a pty.
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. Only the /report refusal for non-tool-bug classification ran.
+- **Expected result:** Recovery chat opens, /do N and /resume work as before, /report refused
+- **Actual result:** /report refusal with no draft observed. Real recovery chat auto-open, /do N and /resume were not executed.
 - **Defects:** None
 
 ### MC-402
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-402
-- **Actual result:** seed_is_current case: no prompt, 'Resuming' printed, request hash unchanged.
+- **Action:** Not executed: needs a live TUI with real human stop, decline and clean exit. Setup action: run the TUI in a sandbox project.
+- **Expected result:** Triage does not auto-open on those stops
+- **Actual result:** Not run.
 - **Defects:** None
 
 ### MC-403
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196) + bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-403
-- **Actual result:** NEW_WORKFLOW: no prompt, archived (.uncle/workflow-history), reseeded. Seed-only: no prompt, file hash unchanged, workflow not started.
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. /report, `no`; /report, `why did this fail?`; ordinary message.
+- **Expected result:** Two cancels, no create, only post-cancel message reaches chat
+- **Actual result:** Two cancel lines, zero creates, exactly one chat call (the final message), two drafts.
 - **Defects:** None
 
 ### MC-404
 
-- **Action:** none
-- **Expected result:** per checklist MC-404
-- **Actual result:** `uncle --change-request` stdin import not executed; not touched by the diff (scripts/from-issue.sh only). Settled by running that command against an existing file.
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. /report, cancel, /report with auth failing, yes; hash triage-issue-1.md before and after.
+- **Expected result:** Hash identical; separate bug-report-N drafts
+- **Actual result:** Hash identical; bug-report-1.md and bug-report-2.md.
 - **Defects:** None
 
 ### MC-405
 
-- **Action:** bash scripts/run-shell-tests.sh (driver, new test: 'passed: 104 failed: 0', output.log:196)
-- **Expected result:** per checklist MC-405
-- **Actual result:** Existing request with no in-flight state: 'n' exits nonzero, file and workflow unchanged; 'y' replaces and proceeds (driver cases). My live run with a different-issue in-flight origin was refused earlier by the existing origin check, so it did not exercise this guard and is not used.
-- **Defects:** None
-
-### MC-406
-
-- **Action:** bash .uncle/workflow/check-scripts/live-extra.sh (scratch repos, fake gh, stub driver; exit nonzero overall due to MC-206 y-case only)
-- **Expected result:** per checklist MC-406
-- **Actual result:** Stdin fifo, /dev/null: exit 1 naming UNCLE_REPLACE_CHANGE_REQUEST=1, file kept; opt-in 1 replaces exit 0; --unattended without opt-in refuses.
+- **Action:** Headless drive of real UncleTUI._triage_command with fake gh on PATH, patched _triage_turn and _project_root, scratch project. Armed, /clear, then `yes`.
+- **Expected result:** Cancel and normal clear; later yes ordinary, publishes nothing
+- **Actual result:** Pending cancelled, clear ran, no gh call, `yes` reached chat as ordinary input.
 - **Defects:** None
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-102 | YES | PASS | see finding |
-| MC-104 | YES | PASS | see finding |
-| MC-105 | YES | PASS | see finding |
-| MC-106 | YES | PASS | see finding |
-| MC-203 | YES | PASS | see finding |
-| MC-204 | YES | PASS | see finding |
-| MC-205 | YES | PASS | see finding |
-| MC-206 | YES | FAIL | D-1 symlink target clobbered |
-| MC-301 | YES | NOT RUN | see finding |
-| MC-303 | YES | NOT RUN | see finding |
-| MC-304 | YES | PASS | see finding |
-| MC-401 | YES | PASS | see finding |
-| MC-402 | YES | PASS | see finding |
-| MC-403 | YES | PASS | see finding |
-| MC-404 | YES | NOT RUN | see finding |
-| MC-405 | YES | PASS | see finding |
-| MC-406 | YES | PASS | see finding |
+| MC-101 | NO | PASS | mc.py run, exit 0 |
+| MC-104 | NO | PASS | mc.py run, exit 0 |
+| MC-105 | NO | PASS | mc.py run, exit 0 |
+| MC-106 | NO | FAIL | Case (c) message lacks copyable command. D-2 |
+| MC-201 | NO | FAIL | No banner offer for tool bug. D-3 |
+| MC-204 | NO | PASS | mc.py run, exit 0 |
+| MC-205 | NO | PASS | mc.py run, exit 0 |
+| MC-206 | NO | PASS | mc.py run, exit 0 |
+| MC-301 | YES | PASS | mc.py run, exit 0 |
+| MC-302 | YES | PASS | mc.py run, exit 0 |
+| MC-401 | YES | NOT | Only /report refusal ran; /do N and /resume not run |
+| MC-402 | YES | BLOCKED-HUMAN | Needs a live TUI session and a person. Waiting on Brian to run it |
+| MC-403 | YES | PASS | mc.py run, exit 0 |
+| MC-404 | YES | PASS | mc.py run, exit 0 |
+| MC-405 | YES | PASS | mc.py run, exit 0 |

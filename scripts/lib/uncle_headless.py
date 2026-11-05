@@ -310,6 +310,17 @@ def main(argv):
         args = _driver_from_env(root, sys.stderr)
         if args is None:
             return 2
+        # Like the TUI: a run gets its own worktree. Issue runs make theirs in
+        # from-issue.sh once the title names the branch, so they are skipped.
+        if _duties is not None and os.environ.get("UNCLE_STARTUP_ACTION") != "github_issue":
+            runtime = os.environ.get("UNCLE_RUNTIME_ROOT") or os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            directory = _duties.prepare_worktree(runtime, root)
+            if directory:
+                root = directory
+                os.environ["UNCLE_PROJECT_ROOT"] = directory
+                os.environ["UNCLE_PROJECT_ROOT_LOCKED"] = "1"
+                sys.stdout.write("Working in %s\n" % directory)
     if attended and "--attended" not in args:
         args.append("--attended")
     _set_title(args)

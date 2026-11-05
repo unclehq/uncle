@@ -417,6 +417,14 @@ fi
 # never importing curses. Existing refusals and mode resolution ran above.
 UNCLE_NOUI_ON=""
 { [[ -n "$UNCLE_FLAG_NOUI" ]] || [[ "${UNCLE_NOUI:-}" == 1 ]]; } && UNCLE_NOUI_ON=1
+# No terminal (a cloud sandbox, CI, output captured to a log) cannot draw the
+# curses screen, so a startup action runs headlessly there, as with --noui.
+# Not when --noinput asked for the screen, or when --attended needs a person.
+if [[ -z "$UNCLE_NOUI_ON" && -n "$UNCLE_STARTUP_ACTION" && -z "$_noinput_seen" \
+      && -z "$UNCLE_FLAG_ATTENDED" && "${UNCLE_ATTENDED:-}" != 1 ]] \
+   && ! [[ -t 0 && -t 1 ]]; then
+    UNCLE_NOUI_ON=1
+fi
 if [[ -n "$UNCLE_NOUI_ON" ]]; then
     if [[ -z "$UNCLE_STARTUP_ACTION" ]]; then
         # No startup action: start the plain-text REPL (no curses), e.g. over ssh.

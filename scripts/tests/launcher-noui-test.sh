@@ -42,7 +42,7 @@ if git -C "$ROOT_DIR" show HEAD:uncle >"$head_launcher" 2>/dev/null; then
     capture() { # launcher envspec...
         local l="$1"; shift
         : >"$tmp/cap"
-        ( cd "$tmp" && env -u UNCLE_NOUI "$@" PATH="$bin:$PATH" UNCLE_CAPTURE="$tmp/cap" "$l" --application x </dev/null >/dev/null 2>&1 )
+        ( cd "$tmp" && env -u UNCLE_NOUI "$@" PATH="$bin:$PATH" UNCLE_CAPTURE="$tmp/cap" "$l" --noinput --application x </dev/null >/dev/null 2>&1 )
         sed -e "s#$head_launcher#LAUNCHER#g" "$tmp/cap"
     }
     for spec in "UNSET=1" "UNCLE_NOUI=0" "UNCLE_NOUI="; do
@@ -77,6 +77,16 @@ for form in "--noui" "UNCLE_NOUI=1"; do
     fi
     check "bare $form exits via REPL stub" 0 $rc
     grep -q 'uncle_repl' "$tmp/cap"; check "bare $form execs uncle_repl" 0 $?
+done
+
+# No terminal (stdin and stdout not ttys) with a startup action runs headless without --noui (#161);
+# --attended keeps its old refusal.
+for act in "--application x" "--issue 1"; do
+    : >"$tmp/cap"
+    # shellcheck disable=SC2086
+    ( cd "$tmp" && rm -f CHANGE_REQUEST.md && echo req | env -u UNCLE_NOUI PATH="$bin:$PATH" UNCLE_CAPTURE="$tmp/cap" "$UNCLE" $act >/dev/null 2>&1 )
+    grep -q 'uncle_headless' "$tmp/cap"; check "no terminal runs headless ($act)" 0 $?
+    grep -q 'uncle_tui' "$tmp/cap"; check "no terminal never starts the screen ($act)" 1 $?
 done
 REPO="$(cd "$HERE/../.." && pwd)"
 # Real REPL through the launcher: EOF exits 0 with the banner; --noinput still refused (AC-1).

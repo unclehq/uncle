@@ -253,7 +253,7 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
                     stdin_open = False
             except (BrokenPipeError, OSError):
                 stdin_open = False
-        if eof and not stdin_open:
+        if eof and (not stdin_open or proc.poll() is not None):
             break
     # reap, still honoring a late signal; ignore repeats
     while proc.poll() is None:
@@ -317,18 +317,24 @@ def main(argv):
 
 
 def _driver_from_env(root, err):
+    """Wrapper kept for its signature; see prepare_driver."""
+    return prepare_driver(root, err)
+
+
+def prepare_driver(root, err, env=None):
     """Build driver argv from UNCLE_STARTUP_*; only allowlisted actions and fixed names.
 
     Mirrors the TUI: --application seeds REQUIREMENTS.md, --change-request seeds
     CHANGE_REQUEST.md and --issue passes the reference to from-issue.sh.
     """
-    action = os.environ.get("UNCLE_STARTUP_ACTION", "")
+    e = os.environ if env is None else env
+    action = e.get("UNCLE_STARTUP_ACTION", "")
     if _duties is None or action not in _duties.STARTUP_ACTIONS:
         err.write("uncle --noui: UNCLE_STARTUP_ACTION must be one of %s\n"
                   % ", ".join(sorted(getattr(_duties, "STARTUP_ACTIONS", ()))))
         return None
-    path = os.environ.get("UNCLE_STARTUP_TEXT_FILE", "")
-    text = os.environ.get("UNCLE_STARTUP_TEXT", "")
+    path = e.get("UNCLE_STARTUP_TEXT_FILE", "")
+    text = e.get("UNCLE_STARTUP_TEXT", "")
     if path:
         try:
             st = os.lstat(path)
@@ -356,9 +362,9 @@ def _driver_from_env(root, err):
             _duties.write_change_request(root, text)
         issue_mode = ""
         if action == "github_issue":
-            issue_mode = os.environ.get("UNCLE_STARTUP_ISSUE_MODE", "")
+            issue_mode = e.get("UNCLE_STARTUP_ISSUE_MODE", "")
         # Driver scripts live in the install/runtime root, never the project.
-        runtime = os.environ.get("UNCLE_RUNTIME_ROOT") or os.path.dirname(
+        runtime = e.get("UNCLE_RUNTIME_ROOT") or os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         argv = _duties.build_driver_command(action, text, False, runtime, issue_mode)
     except (OSError, ValueError, ImportError, KeyError) as exc:

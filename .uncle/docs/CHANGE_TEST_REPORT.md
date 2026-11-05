@@ -4,19 +4,21 @@
 
 | Command | Status | Meaningful output | Requirements |
 |---|---|---|---|
-| python3 scripts/tests/{no-housekeeping,home-agent-session,tui-home-agent,home-actions,supervisor-chat,chat,startup-text-input,run-duties,headless-run}-test.py | PASS | all nine exit 0 (targeted tests) | AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9 |
-| bash scripts/tests/{launcher-removed-flag,launcher-stdin-text,launcher-noui,driver-marker,mode-resolution}-test.sh (UNCLE_* env unset) | PASS | all five exit 0 | AC-1, AC-2 |
-| baseline comparison: same suites in a pristine HEAD worktree | PASS | attestation-statement, audit-findings, auto-boundary, early-branch, github-issues, home-chat, pr-originless, project-plan-speed, startup-action, step-groups, supervisor, triage-chat, updated-plan-edits, updated-plan-ops fail identically at HEAD and in this tree | AC-10 |
-| bash scripts/run-shell-tests.sh && bash scripts/run-python-tests.sh | DRIVER PENDING | Driver owns the full regression run. | AC-10 |
-| formatter / linter / type checker | N/A | No configured formatter, linter or type checker for this repository. | None stated |
-| integration, frontend build, migration, rollback, performance, security checks | N/A | Not applicable; shell and unit suites above are the integration coverage. | None stated |
+| python3 -B scripts/tests/repl-session-test.py | PASS | all rows ok incl. SIGTERM no-child and I-2 validation-removed injection detected; exit 0 | AC-2, AC-3, AC-4, AC-7, AC-9 |
+| python3 -B scripts/tests/repl-pty-test.py | PASS | 12 rows ok: idle Ctrl-C, Ctrl-C in build, attended gate, no cursor/alt-screen bytes; exit 0 | AC-5, AC-6 |
+| python3 -B scripts/tests/headless-equivalence-test.py | PASS | no FAIL lines; REPL, one-shot and TUI artifacts match | AC-8 |
+| bash scripts/tests/launcher-noui-test.sh | PASS | 36 ok, 0 FAIL | AC-1 |
+| python3 -B scripts/tests/headless-run-test.py | PASS | exit 0 (regression for one-shot headless) | AC-10 |
+| python3 -B scripts/tests/no-housekeeping-test.py | FAIL | offender prompts/home-agent.md; file not touched by this change (assumed pre-existing) | AC-10 |
+| bash scripts/run-shell-tests.sh && bash scripts/run-python-tests.sh | DRIVER PENDING | driver owns the full regression run | AC-10 |
+| formatter / linter / type checker / frontend build / migration / rollback / performance / security | N/A | no such tooling configured for this change | None stated |
 
 ## Coverage gaps
 
-- No live claude run of the home agent; tool execution and approval restart are covered with synthetic stream results only.
-- Planned defect-injection runs (swapped precedence, ignored marker, mutated delegate) were not executed here.
-- Pre-existing failing suites listed above were not repaired.
+- No live claude chat run; the real permission_denials fixture was not recorded.
+- Defect injection only for I-2; I-3 (swapped precedence) and I-5 (ignored marker) injections not run.
+- Interactive TUI and live-agent manual checks (MC-*) remain for a person.
 
 ## Next action
 
-Driver runs the verification commands; reviewer should confirm the failing suites match the baseline.
+Driver runs the full regression block and compares against baseline.

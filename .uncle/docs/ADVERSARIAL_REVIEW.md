@@ -1,192 +1,184 @@
-## AR-001: Plan is silent on a pending D-1 approval or in-flight agent turn when a build starts.
+## AR-001: SB-6 says lines typed during a build are held or consumed as the gate answer and never dropped, but D-3 says the REPL do
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1, D-7, s10: home_request guards one turn only; no row covers a build starting mid-turn.
-- Failure: Plan is silent on a pending D-1 approval or in-flight agent turn when a build starts. Add: 'Build start or recovery cancels the in-flight turn, discards pending approvals, posts one note; later approvals are ignored.'
+- References: CHANGE_SPEC SB-6 vs CHANGE_PLAN D-3/D-2. Plan should say: 'During a build the REPL does not read stdin; unread lines stay buffered and run in order after the build returns; unattended drivers never read fd 0; an attended gate consumes exactly one line per gate.'
+- Failure: SB-6 says lines typed during a build are held or consumed as the gate answer and never dropped, but D-3 says the REPL does not read input during a build. Non-gate lines (and all lines in unattended mode) have no stated consumer, and piped lines could be eaten as gate answers.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Busy/idle boundary undefined while the session is closing or re-created.
+## AR-002: Exit-code policy is inconsistent.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s7 idle predicate, D-7; CHANGE_SPEC I-3. AC-7 only tests argv during a running build.
-- Failure: Busy/idle boundary undefined while the session is closing or re-created. Add: 'Idle is evaluated at send time; the session is confirmed dead before a build spawns; messages in that window go to the tool-free supervisor.'
+- References: CHANGE_PLAN D-6, D-8; SB-10. Plan should say: 'Exit code is that of the most recent build or refusal, reset to 0 by a later successful non-build line; a Ctrl-C-stopped build counts as 130; /quit and EOF return that code; SIGTERM exits 143.'
+- Failure: Exit-code policy is inconsistent. SB-10/D-8 say last build result, 2 on refusal, else 0, but never say what a later successful chat or slash line does after a failed build. D-6 treats 130 as 'return to prompt', which is unclear against 'last build result' at quit.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: D-1 approval semantics unspecified: grant scope, decline behavior, persistence across respawn, multiple denials.
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-1, D-6, D-7; CHANGE_SPEC S-11. No reset or decline behavior described.
-- Failure: D-1 approval semantics unspecified: grant scope, decline behavior, persistence across respawn, multiple denials. Add: 'Approval grants the exact denied tool+input for this session only, cleared on build start; decline sends the agent a refusal; denials are shown one at a time.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-004: Replies with duplicate or combined uncle_action/uncle_cwd blocks are unspecified.
+## AR-003: Confirmation prompts (SB-7 quit confirm, D-11 replacement) are unspecified for non-tty input, blank or unrecognized answ
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5 ('one' block) vs D-6 ('a' block); S-3 mismatch refusal; no ordering rule.
-- Failure: Replies with duplicate or combined uncle_action/uncle_cwd blocks are unspecified. Add: 'More than one block of a kind executes none of that kind; uncle_cwd applies before uncle_action; an invalid cwd cancels the action.'
+- References: CHANGE_SPEC SB-7, SB-16; CHANGE_PLAN D-11. Plan should say: 'Only y/yes (case-insensitive) consents; blank, other text, EOF or Ctrl-C declines; quit confirmation is asked only on attended tty and EOF during it quits and stops the build.'
+- Failure: Confirmation prompts (SB-7 quit confirm, D-11 replacement) are unspecified for non-tty input, blank or unrecognized answers, and Ctrl-C. EOF at the quit confirmation is not defined, which could conflict with I-4.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: I-2 enforcement via name-pattern --disallowedTools is bypassable (bash -c, other names, paths), yet AC-6 says builds sta
+## AR-004: Over-long line handling is underspecified: the remainder of the line after 1 MiB may be processed as new commands, and i
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5; CHANGE_SPEC I-2 and AC-6 (argv test only).
-- Failure: I-2 enforcement via name-pattern --disallowedTools is bypassable (bash -c, other names, paths), yet AC-6 says builds start only via the action path. Add: 'Deny patterns are best-effort; I-2 is verified only for listed entry points; residual risk recorded in IMPLEMENTATION_NOTES.'
+- References: CHANGE_SPEC section 8 and AC-4. Plan should say: 'A line over 1 MiB is discarded through its newline, one error is printed, it counts as a refused action, and the session continues.'
+- Failure: Over-long line handling is underspecified: the remainder of the line after 1 MiB may be processed as new commands, and it is unclear whether the rejection counts as a refusal for exit code 2. The two readers may differ.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: AC-3 allows housekeeping mentions only in the migration note and removal tests, but AC-9 needs legacy housekeeping.* con
+## AR-005: Slash commands in odd states are unspecified: unknown commands, /stop or /resume with nothing to act on, /mode with no a
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-3 vs AC-9/S-10; CHANGE_PLAN step 6 names no legacy-config test file.
-- Failure: AC-3 allows housekeeping mentions only in the migration note and removal tests, but AC-9 needs legacy housekeeping.* config fixtures. Add: 'The allowlist is exactly the migration doc, no-housekeeping-test.py, launcher-removed-flag-test.sh and the legacy-config test file.'
+- References: CHANGE_SPEC SB-14, AC-9; CHANGE_PLAN section 6-9. Plan should say: 'Lines starting with / are never sent to chat; unknown commands print an unknown-command message and count as refused; /stop and /resume with nothing to act on print a notice and do not change the exit code; /mode with no argument prints the current mode.'
+- Failure: Slash commands in odd states are unspecified: unknown commands, /stop or /resume with nothing to act on, /mode with no argument, and slash lines vs chat routing.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan says a pending proposal keeps the tool-free supervisor, but a denied-tool approval prompt (D-1) is also a pending s
-
-- Severity: HIGH
-- References: CHANGE_PLAN s7.1 idle predicate lists only build, recovery, pending proposal; D-1 introduces a pending approval.
-- Failure: Plan says a pending proposal keeps the tool-free supervisor, but a denied-tool approval prompt (D-1) is also a pending state. The plan never says whether the idle predicate counts it, or what a new user message does while an approval is pending. Settle with: while a tool approval is pending, any non-approve/decline message is treated as a decline and the denial prompt is cleared before routing.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: D-7 closes the session when a build starts, but the plan does not say what happens to an in-flight agent turn, to a pend
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-7 and s10.1 (only 'one in-flight turn guarded by home_request') versus D-5 trailing uncle_action execution.
-- Failure: D-7 closes the session when a build starts, but the plan does not say what happens to an in-flight agent turn, to a pending approval, or to an uncle_action block parsed from a reply that arrives after the close. Settle with: starting a build cancels any in-flight agent turn and discards its output and pending approval, and trailing blocks from a closed session are never executed.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: A single reply may contain both uncle_cwd and uncle_action blocks (for example clone then build issue 34).
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-5 and D-6 each describe one trailing block; S-3 requires the build to target the clone.
-- Failure: A single reply may contain both uncle_cwd and uncle_action blocks (for example clone then build issue 34). The order of application, and whether the action runs against the old or new root, is unspecified. This is the S-3 regression risk. Settle with: uncle_cwd is validated and applied first, then uncle_action executes against the new root, and an invalid cwd cancels the action.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-010: D-1 restarts the session on approval and re-sends the message, but the plan does not say what happens if the re-sent tur
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-1 'restarts the session (history handoff), then re-sends the message'; no retry bound.
-- Failure: D-1 restarts the session on approval and re-sends the message, but the plan does not say what happens if the re-sent turn side-effects twice. Commands that partly ran before the denial may run again, and a second denial may loop. Settle with: re-send happens at most once per user message, and a second denial shows a new prompt rather than auto-retrying.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-011: D-10 renames the stdin helper, but the golden-transcript step 1 only covers home actions.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN steps 2 and 6; step 6 deletes housekeeping-input-test.py and adds startup-text-input-test.py.
-- Failure: D-10 renames the stdin helper, but the golden-transcript step 1 only covers home actions. The preserved --application stdin path has no baseline-equivalent regression test until step 6. Settle with: the old housekeeping-input-test.py is run against the renamed module, with only the import renamed, before it is deleted.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-012: AC-3 forbids any housekeeping mention outside the migration note and removal tests, but AC-9 legacy-key tests must name
+## AR-006: Ctrl-C handling during chat in flight or at a gate prompt is undefined against the D-7 consecutive counter.
 
 - Severity: LOW
-- References: CHANGE_SPEC AC-3 versus AC-9; CHANGE_PLAN s15 new tests.
-- Failure: AC-3 forbids any housekeeping mention outside the migration note and removal tests, but AC-9 legacy-key tests must name housekeeping.* keys. The allowed-file list is not specified. Settle with: the allowlist is exactly the migration doc, no-housekeeping-test.py, launcher-removed-flag-test.sh and tui-home-agent-test.py.
+- References: CHANGE_PLAN D-7 and section 11. Plan should say: 'Ctrl-C during chat cancels the request and counts as the first idle Ctrl-C; Ctrl-C at a gate prompt is handled by the driver and does not touch the counter.'
+- Failure: Ctrl-C handling during chat in flight or at a gate prompt is undefined against the D-7 consecutive counter.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: D-1 grants an 'exact tool/command' via --allowedTools but never defines exact or the grant's lifetime.
+## AR-007: Plan doesn't say `_driver_from_env` keeps its signature and error behavior once it wraps `prepare_driver`.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1, I-5; CHANGE_SPEC S-11 do not define 'exact', lifetime across respawn, or prompt contents.
-- Failure: D-1 grants an 'exact tool/command' via --allowedTools but never defines exact or the grant's lifetime. Plan should say: 'An approval adds only the verbatim denied command as an exact-match Bash(<cmd>) rule, never a wildcard or bare tool name, for that session only; the prompt shows the full command.'
+- References: CHANGE_PLAN s7.1 and step 1; `prepare_driver(..., err)` interface vs. unspecified wrapper.
+- Failure: Plan doesn't say `_driver_from_env` keeps its signature and error behavior once it wraps `prepare_driver`. Plan should say: the wrapper keeps its exact signature, and a test asserts byte-identical stderr and exit codes for each existing failure path.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: The D-5 prefix deny rules cannot stop an agent with Bash from starting a build (bash -c, absolute path, wrapper script,
+## AR-008: Launcher rows to replace are ambiguous ('rows 13-14' vs 'the two bare-refusal rows'), and other bare --noui combos are u
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-5 calls Bash(uncle:*) etc. an 'I-2 guard'; CHANGE_SPEC I-2 enforcement point.
-- Failure: The D-5 prefix deny rules cannot stop an agent with Bash from starting a build (bash -c, absolute path, wrapper script, python subprocess), bypassing I-2. Plan should say: 'I-2 is enforced by the drivers refusing to start unless launched through the app action path (app-issued marker); argv deny rules are only advisory.'
+- References: CHANGE_PLAN R-4, change-impact row for launcher-noui-test.sh; AC-1 names only bare, UNCLE_NOUI=1 and --noinput.
+- Failure: Launcher rows to replace are ambiguous ('rows 13-14' vs 'the two bare-refusal rows'), and other bare --noui combos are unspecified. Plan should say: bare --noui with any unrecognized argument keeps its current error and exit code, and only rows asserting bare refusal are replaced.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: A trailing uncle_action block is parsed from free-form agent text, so injected repo, issue or web content could forge on
+## AR-009: Moving ISSUE_REQUEST_RE may break code or tests that reference `uncle_tui.ISSUE_REQUEST_RE`.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-4, D-5; the risks table covers a missing block but not a forged or injected one.
-- Failure: A trailing uncle_action block is parsed from free-form agent text, so injected repo, issue or web content could forge one. Plan should say: 'Every agent-emitted uncle_action needs explicit user confirmation, and only the last fenced block of the agent's own final text is parsed, never tool output.'
+- References: CHANGE_PLAN D-9 and s5.1.
+- Failure: Moving ISSUE_REQUEST_RE may break code or tests that reference `uncle_tui.ISSUE_REQUEST_RE`. Plan should say: `uncle_tui.ISSUE_REQUEST_RE` remains a valid name bound to the same compiled object.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: uncle_cwd validation is only isdir on an absolute path; symlinks, '/', $HOME and arbitrary directories are unspecified.
+## AR-010: Session SIGTERM handler and `run()`'s handler interplay is unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-6; CHANGE_SPEC I-6.
-- Failure: uncle_cwd validation is only isdir on an absolute path; symlinks, '/', $HOME and arbitrary directories are unspecified. Plan should say: 'Paths are realpath-resolved, must not be / or $HOME, and a path not created or cloned this session needs user confirmation.'
+- References: CHANGE_PLAN s8.1, D-6, R-3.
+- Failure: Session SIGTERM handler and `run()`'s handler interplay is unspecified. Plan should say: the session handler is saved before each `run()` and restored after, and `run()` leaves no changed handler or process-group state behind.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: The plan does not say what environment the agent's Bash inherits, yet the deny list that protected secrets is removed.
+## AR-011: D-8 exit code rules collide when a refusal follows a failed build or the reverse.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 10 says only 'existing STRIP_ENV treatment'; CHANGE_PLAN D-4 relies on permissions alone.
-- Failure: The plan does not say what environment the agent's Bash inherits, yet the deny list that protected secrets is removed. Plan should say: 'The agent subprocess gets an allowlisted environment with STRIP_ENV secrets removed; gh uses only its own stored auth.'
+- References: CHANGE_PLAN D-8 vs AC-4/SB-10.
+- Failure: D-8 exit code rules collide when a refusal follows a failed build or the reverse. Plan should say: the exit code comes solely from the last executed action (refused=2, build=its code, else 0), and chat or slash lines don't reset it.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: The interaction between a pending approval, a new user message, a build start, and a session restart is unspecified.
+## AR-012: Plan never constrains model-supplied action fields (issue number, paths, stage names).
+
+- Severity: HIGH
+- References: CHANGE_SPEC section 10 says only 'rules as in TUI'; PLAN D-10 and the repl_actions step list no field-level constraints.
+- Failure: Plan never constrains model-supplied action fields (issue number, paths, stage names). Settle with: 'repl_actions.execute accepts only allowlisted action types, re-validates fields via parse_reply (integer issue N, fixed stage set, paths inside project root), and refuses anything else with exit 2 and no driver started.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-013: Unspecified whether model output or piped stdin lines can answer a gate or replacement prompt.
+
+- Severity: HIGH
+- References: PLAN D-3 (driver reads fd 0 during a build), D-11 (EOF/no declines); I-5 says only 'recorded human'. Piped scripts can pre-supply 'yes' lines.
+- Failure: Unspecified whether model output or piped stdin lines can answer a gate or replacement prompt. Settle with: 'Gate and replacement confirmations are read only from user input, never model output; EOF at a gate means decline/stop, never approve.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-014: Escape filtering is stated for build output only, not chat replies or errors.
+
+- Severity: MEDIUM
+- References: PLAN section 6-9 applies 'filtered output' to run(); SPEC section 10 and I-1 name EscapeFilter but repl_chat has no filter.
+- Failure: Escape filtering is stated for build output only, not chat replies or errors. Settle with: 'All REPL stdout/stderr text, including chat replies, runner errors, issue titles and exception messages, passes through EscapeFilter, which strips control bytes except newline and tab, and CSI/OSC sequences.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-015: The 1 MiB line bound has no defined overflow behavior on the os.read reader.
+
+- Severity: MEDIUM
+- References: SPEC section 8 says 'bounded (1 MiB) and rejected'; PLAN D-2 describes the reader but not overflow.
+- Failure: The 1 MiB line bound has no defined overflow behavior on the os.read reader. Settle with: 'A line over 1 MiB is discarded through the next newline or EOF, one error is printed, and the remainder is never run as a command or gate answer.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: SIGTERM handling covers only the build process group, not the chat runner subprocess.
+
+- Severity: MEDIUM
+- References: PLAN section 11 and R-3 reference only run() killpg; AC-7 and I-4 require no child left.
+- Failure: SIGTERM handling covers only the build process group, not the chat runner subprocess. Settle with: 'The SIGTERM handler terminates the chat runner subprocess group and the build group, then exits 143; the process inventory test covers both.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: Precedence and default for startup mode env vars are undefined.
 
 - Severity: LOW
-- References: CHANGE_PLAN D-1 (restart and re-send) and D-7 (close on build start) do not define their interaction.
-- Failure: The interaction between a pending approval, a new user message, a build start, and a session restart is unspecified. Plan should say: 'A pending approval is discarded with a note on a new message, build start, or restart; approval never re-sends a message from a prior session state.'
+- References: PLAN D-4 names the --attended flag and both env vars without precedence or default.
+- Failure: Precedence and default for startup mode env vars are undefined. Settle with: 'If both UNCLE_STARTUP_ATTENDED and UNCLE_STARTUP_UNATTENDED are set, attended wins; if neither is set, the default is attended.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: D-1 approval flow leaves decline, repeat denial, and typing while a prompt is pending unspecified.
+## AR-018: Lines typed during a build (SB-6) are unspecified when the gate is unattended or stdin is piped; D-3 says no input is re
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1 and S-11 describe only the approve path.
-- Failure: D-1 approval flow leaves decline, repeat denial, and typing while a prompt is pending unspecified. Say: 'Decline discards the tool and posts a note without re-send; messages typed during a pending approval are queued; a repeat denial after approval ends the turn with an error note.'
+- References: CHANGE_PLAN D-3 vs CHANGE_SPEC SB-6, SB-10.
+- Failure: Lines typed during a build (SB-6) are unspecified when the gate is unattended or stdin is piped; D-3 says no input is read, SB-6 says held, never dropped. Settle: 'During a build the REPL reads no input; unread lines are processed as normal prompts after run() returns; attended gates consume exactly one line each.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: The denial-format fixture is an assumption, so the session test could pass against an invented format.
+## AR-019: D-8 exit-code rule is ambiguous when refusals, builds, and chat lines interleave, and for 130/143.
 
 - Severity: HIGH
-- References: CHANGE_PLAN Risks row 1; Automated-test strategy uses a fake runner only.
-- Failure: The denial-format fixture is an assumption, so the session test could pass against an invented format. Say: 'The permission_denials fixture is copied from a recorded real claude -p stream-json result, and the session test parses that file.'
+- References: CHANGE_PLAN D-6, D-8; CHANGE_SPEC SB-10, AC-4.
+- Failure: D-8 exit-code rule is ambiguous when refusals, builds, and chat lines interleave, and for 130/143. Settle: 'Exit code is that of the most recent build-or-refusal event; chat and slash lines don't change it; a Ctrl-C-stopped build exits 130 at EOF.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: D-1 adds approved commands to --allowedTools while D-5 disallows driver entry points; precedence and wildcard grants are
+## AR-020: Slash command behavior in odd states or args is unspecified (/stop with no build, bad /mode value, non-numeric /issue, e
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1 vs D-5; I-5 test only rejects bypass flags.
-- Failure: D-1 adds approved commands to --allowedTools while D-5 disallows driver entry points; precedence and wildcard grants are unstated. Say: 'Approval grants only the exact denied command string, never a wildcard, and --disallowedTools always wins; a test asserts it.'
+- References: CHANGE_SPEC SB-14 'invalid usage prints usage'; CHANGE_PLAN D-10, D-12.
+- Failure: Slash command behavior in odd states or args is unspecified (/stop with no build, bad /mode value, non-numeric /issue, extra args, unknown command). Settle: 'Invalid or unknown commands print one usage line with no state change; /stop with no build prints "no build running".'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: Trailing-block parsing is unspecified for multiple blocks, both block types in one reply, malformed JSON, and relative o
+## AR-021: Over-long line and EOF edge cases are undefined: the 1 MiB boundary, whether the rest of the line is discarded, untermin
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5, D-6 and Error section cover only a single block.
-- Failure: Trailing-block parsing is unspecified for multiple blocks, both block types in one reply, malformed JSON, and relative or symlink paths. Say: 'Only the last block of each type at the end of the reply is honored; cwd applies before the action; malformed or duplicate blocks are ignored with a note; the path is realpath-resolved before isdir.'
+- References: CHANGE_SPEC section 8; CHANGE_PLAN D-2, D-11.
+- Failure: Over-long line and EOF edge cases are undefined: the 1 MiB boundary, whether the rest of the line is discarded, unterminated final line, EOF mid-gate. Settle: 'Lines over 1048576 bytes are discarded through the newline with "line too long"; an unterminated final line is processed; EOF at a gate or confirmation declines.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-023: Lifecycle races are unspecified: a build starting during an in-flight agent turn, or a turn finishing after the session
+## AR-022: Ctrl-C is undefined during an in-flight chat reply, an attended gate prompt, and the replacement confirmation.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s7 idle predicate, D-7, and s10 guard only via home_request.
-- Failure: Lifecycle races are unspecified: a build starting during an in-flight agent turn, or a turn finishing after the session closed. Say: 'Build start cancels any in-flight agent turn and closes the session before spawning; late results are discarded; the idle predicate is evaluated once at send time.'
+- References: CHANGE_PLAN D-7, D-11, section 11; SB-8, SB-9.
+- Failure: Ctrl-C is undefined during an in-flight chat reply, an attended gate prompt, and the replacement confirmation. Settle: 'Ctrl-C during chat cancels the request and counts as one idle press; at a gate it goes to run() semantics; at a confirmation it declines.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-024: The AC-3 allowlist of files that may mention housekeeping is unstated, and D-9 conflicts with AC-9.
+## AR-023: Banner and stream routing in piped runs is unspecified, so exact-stdout tests are underdetermined (D-1 vs SB-1/SB-13/AC-
 
-- Severity: LOW
-- References: CHANGE_SPEC AC-3, AC-9; CHANGE_PLAN step 6 and D-9.
-- Failure: The AC-3 allowlist of files that may mention housekeeping is unstated, and D-9 conflicts with AC-9. Say: 'no-housekeeping-test.py allowlists exactly the migration doc, itself, launcher-removed-flag-test.sh and tui-home-agent-test.py.'
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-1 vs CHANGE_SPEC SB-1, SB-13, AC-4.
+- Failure: Banner and stream routing in piped runs is unspecified, so exact-stdout tests are underdetermined (D-1 vs SB-1/SB-13/AC-4). Settle: 'The banner always prints to stdout, including piped runs; the prompt follows D-1; replies and progress go to stdout, errors to stderr.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

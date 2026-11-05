@@ -1,75 +1,82 @@
-# Change Spec (Issue 164)
+# Change spec: issue 165 bare `--noui` interactive session
 
-Omitted sections: Performance (none beyond existing turn timeouts); Migration beyond ignored legacy config; Prototype isolation (not a prototype)
+Omitted sections: Performance (none stated); Migration (no persisted format change); Prototype isolation (not a prototype)
 
 ## 1. Change type
-Refactor plus Feature (remove a mode, upgrade the idle supervisor).
+Feature (modifies #160 behavior row N-6).
 
-## 2. Problem
-Two home-chat modes with different powers; neither is a general assistant. See CHANGE_REQUEST.md.
+## 2. Problem statement
+No way to converse with Uncle and start builds without curses. Bare `--noui` is refused.
+
+## 3. Current behavior
+B-2 in the baseline: exit 2 with an error.
 
 ## 4. Desired behavior
-One home-chat agent. With no build running it is a persistent Claude session with tools under Claude's normal permission system; it can start builds only by emitting a validated action the app executes. While a build runs, the existing tool-free supervisor applies.
+Bare `--noui` (or `UNCLE_NOUI=1`) starts a line-based REPL: banner (project, build mode, how to quit), prompt `uncle> `, plain-text replies, validated home actions that start builds with `--noui`-style progress, slash commands, clean quit paths.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| S-1 | MODIFY | 'fork unclehq/uncle', no build | Housekeeping deny-list agent | Tool agent runs the command, reports real result; failure shown with output | TUI test, fake runner scripted tool result |
-| S-2 | ADD | 'make directory demo and move into it' | Not possible | Directory created, app project root becomes it, status bar and title show it; on failure root unchanged | TUI test: `_project_root()` before/after |
-| S-3 | ADD | clone, then 'build issue 34' | Not possible | Issue build targets the clone; mismatch refused with reason | TUI test: launched command cwd and root |
-| S-4 | PRESERVE | 'build issue 34' | github_issue action | Same validated action | golden transcript test |
-| S-5 | PRESERVE | hello-world C request | brief plus create_app | Same | golden transcript test |
-| S-6 | PRESERVE | Any message while build runs | Tool-free supervisor | Tool-free session; command requests declined noting a build is running | TUI test: session argv has no tools; defect injection |
-| S-7 | REMOVE | `uncle --housekeeping ...` | Runs driver | Unknown option, usage, exit non-zero, nothing started, no suggestion naming it | launcher shell test |
-| S-8 | REMOVE | `/housekeeping`, `/mode housekeeping`, `/mode` | Recognized | Unknown command like any other | TUI test |
-| S-9 | REMOVE | Configure > Miscellaneous | Housekeeping entry | No entry | TUI test and launcher menu test |
-| S-10 | ADD | `.uncle/config` with `housekeeping.*` keys | read by housekeeping_config | Ignored, no error, nothing enabled | config test |
-| S-11 | ADD | Command needing approval | deny list refusals | Claude permission flow: tool denied by Claude is surfaced in the TUI as a pending approval; user approves or declines; nothing bypasses silently | session test with fake runner emitting a denial |
-| S-12 | ADD | `--unattended` or `--noui` run | housekeeping available | No home chat agent exists (no chat in those modes) | existing headless tests unchanged |
-| S-13 | PRESERVE | create_change, run_app, run_change, stop_build, clear_build, resume_build | work | work | home-actions-test.py |
+| SB-1 | MODIFY | `uncle --noui` bare / `UNCLE_NOUI=1 uncle` | Refused, exit 2 | Banner + `uncle> ` prompt; EOF with no input exits 0 | launcher + pipe tests |
+| SB-2 | ADD | Free-form line | n/a | Reply printed as plain text; prompt returns | pipe test, fake runner |
+| SB-3 | ADD | Runner unavailable/error | n/a | One-line error; session survives | pipe test |
+| SB-4 | ADD | `build issue N` (ISSUE_REQUEST_RE) | TUI only | Validated `github_issue` start; progress prints; prompt returns; failure reason printed | session + equivalence test |
+| SB-5 | ADD | NL create-app request | TUI only | Brief drafted via validated `create_app`, build starts | session test with fake runner |
+| SB-6 | ADD | Line typed while build runs | n/a | Held until prompt returns or consumed as the gate answer; never dropped | session + gate test |
+| SB-7 | ADD | `/quit`, `/exit`, EOF | n/a | Running build stopped first (confirm if attended tty); no child left | pty + process test |
+| SB-8 | ADD | Ctrl-C at idle prompt | n/a | Cancels line; second consecutive Ctrl-C quits | pty test |
+| SB-9 | ADD | Ctrl-C during build | n/a | Build stopped, resumable state, prompt returns; not marked complete | pty test |
+| SB-10 | ADD | Piped stdin | n/a | Lines run in order; exit code = last build result, refusal -> 2, else 0 | pipe test |
+| SB-11 | PRESERVE | `--noui --noinput` | exit 2 | Unchanged | launcher test |
+| SB-12 | PRESERVE | One-shot `--application/--issue/--change-request` | One run, exit | Unchanged | existing tests |
+| SB-13 | ADD | Output not a tty | n/a | Plain lines, no escapes, no prompt decoration | pipe test |
+| SB-14 | ADD | Slash commands `/help /quit /exit /stop /resume /clear /issue N /run /runstage /triage /do /mode`, `/settings` | TUI only | Plain-text equivalents; invalid usage prints usage; `/settings` prints values read-only | session tests |
+| SB-15 | ADD | Banner / `/mode` / `--attended` | n/a | Banner shows mode started builds use; `/mode attended|unattended` changes it for later builds | session test |
+| SB-16 | ADD | Existing brief + create request | TUI proposes replacement | Replacement asked on the same input; yes archives previous file; EOF/no declines | session test |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| I-1 | NEW | No code, flag, setting, test or doc mentions housekeeping, except a migration note and this issue's removal tests | repo | static test | `no-housekeeping-test.py` |
-| I-2 | EXISTING | Builds start only through the validated action path | home chat | `parse_home_action` + `_home_action`; driver entry points denied to the agent | action test, agent-argv test |
-| I-3 | STRENGTHENED | While a build runs the supervisor has no tools | home chat | session creation chooses tool-free argv when build running | TUI test plus defect injection |
-| I-4 | EXISTING | Agent completion claims rest on real results | prompt plus app messages | agent prompt; app reports action outcome itself | prompt test, action test |
-| I-5 | EXISTING | Claude permission system; no bypass flags | agent argv | argv builder | argv test rejects `--dangerously-skip-permissions` and `bypassPermissions` |
-| I-6 | NEW | Project root changes only to an existing absolute directory the app validated | cwd tracking | app-side validation | TUI test |
+| I-1 | NEW | Session never imports/starts curses; no cursor-control/alt-screen bytes | REPL | module imports; EscapeFilter on output | import test + pty byte scan |
+| I-2 | NEW | Every action goes through `home_actions.parse_reply` validation and the shared executor; model never starts a driver | REPL | single executor function | unit test + defect injection |
+| I-3 | NEW | Same artifacts/state/attestation as TUI/one-shot for the same fixture | builds from REPL | shared `prepare_driver` + `uncle_headless.run` | equivalence test |
+| I-4 | NEW | No child left running at session exit or SIGTERM | REPL | `run()` killpg + session signal handler | process test |
+| I-5 | NEW | Gate answered in session recorded human; delegated stays delegated | gates | `UNCLE_ATTENDED_STDIN` path unchanged | gate test |
+| I-6 | NEW | One conversation history; not replayed into driver prompts | REPL | history lives in chat adapter only | unit test |
+| EI-1..EI-5 | EXISTING | Per baseline section 5 | unchanged paths | unchanged | existing suites |
 
-No RELAXED or REMOVED invariants. The housekeeping deny-list safety boundary is removed by design (it is a mechanism, not an invariant in the baseline).
+No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Old `UNCLE_HOUSEKEEPING_*` env vars and `housekeeping.*` config keys are ignored silently. Other flags and stdin rules unchanged.
+One-shot exit codes, flags, env, and TUI behavior unchanged. Launcher test rows asserting bare-noui refusal are replaced (authorized by the request, #160 N-6).
 
-## 8. Errors
-Runner not claude or claude missing: idle chat falls back to the tool-free supervisor with one note. Agent crash: restarted next message. Invalid cwd report: ignored, root unchanged, noted.
+## 8. Error and failure behavior
+Runner failure, refused action, issue not found: print reason, keep session. Attended with non-tty stdin: build refused with the existing message, session continues, final exit 2. Over-long lines are bounded (1 MiB) and rejected with a message. Blank lines ignored.
 
 ## 10. Security
-Untrusted text (repos, issues, web) is data, never instruction; stated in the agent prompt; the permission prompt is the control. No env secrets passed beyond the existing STRIP_ENV treatment. Per-turn deadline retained.
+Model output only reaches execution through the validated allowlist; text printed is escape-filtered; attachments and project root rules as in TUI; no new permission-bypass flags.
 
 ## 12. Rollback
-Revert the commit; no persisted format changes.
+Revert the launcher branch to re-enable the refusal; new modules are inert otherwise.
 
 ## 14. Non-goals
-Build/gate/PR changes; new permission model; keeping any deny list as a safety boundary; tools during a build; codex/kimi tool agents.
+TUI replacement, panes/mouse, #164 capabilities, JSON protocol, `/set` editing, `--housekeeping`.
 
 ## 15. Assumptions
-Resolved here: unattended/noui have no home chat; Claude only; one persistent session per idle period, closed when a build starts and re-created (cwd = current root) when it ends; cost bounded by existing per-call settings plus turn deadline. Issues #148, #151, #155, #160 are updated manually by the user (out of code scope).
+`/date` omitted (does not exist). `/settings` prints values read-only.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | `uncle --housekeeping` and `--housekeeping=x` exit non-zero as unknown options, start nothing, and usage/did-you-mean text never mention housekeeping; remaining exclusivity and stdin rules hold. | New launcher shell test plus updated launcher-stdin-text and launcher-noui tests. |
-| AC-2 | `/housekeeping`, `/mode`, the Configure housekeeping entry (launcher menu and TUI) and the `housekeeping` startup action no longer exist. | TUI Python test. |
-| AC-3 | No file in the repository mentions housekeeping (case-insensitive) except the migration note and the removal tests, excluding .git, .uncle and FINAL_AUDIT.md. | no-housekeeping-test.py. |
-| AC-4 | With no build running and a claude runner, a home message goes to a tool-enabled persistent session; a scripted fake-runner tool result is shown to the user and completion is reported only from that result. | TUI and session tests with fake runner. |
-| AC-5 | When the agent reports a new directory, the app validates it, sets the project root, status bar and title show it, and a following build request targets it; invalid paths leave the root unchanged. | TUI test. |
-| AC-6 | 'build issue 34' and the hello-world request map to the same validated actions as before; builds start only via the app's action path and the agent argv denies the driver entry points. | Golden transcript tests in home-actions-test.py; argv test. |
-| AC-7 | While a build runs the supervisor session argv has no tools; giving it tools makes the test fail. | TUI test and recorded defect injection. |
-| AC-8 | The agent argv uses Claude's permission mode default with no bypass flags; a denied tool is surfaced for user approval; headless runs offer no chat agent. | Session test; existing headless tests. |
-| AC-9 | Legacy `housekeeping.*` config keys and old env vars are ignored without error. | Test loading a config containing them via the TUI/launcher paths. |
-| AC-10 | Both verification commands pass with no regression versus baseline. | Driver re-run of verification_commands. |
+| AC-1 | Bare `uncle --noui` and `UNCLE_NOUI=1 uncle` start the REPL (banner, `uncle> `), exit 0 on EOF; `--noui --noinput` still exits 2; one-shot forms unchanged. | Updated launcher-noui-test.sh plus new launcher REPL rows; existing headless tests pass. |
+| AC-2 | A free-form line yields a plain-text reply and the prompt returns; runner failure prints one line and the session survives. | Pipe session test with fake runner. |
+| AC-3 | `build issue N` and NL create-app requests start builds only through the validated action executor; a defect-injected REPL that runs a driver directly fails the I-2 test. | Session test and defect-injection run recorded in test report. |
+| AC-4 | Piped scripts run lines in order, handle blank lines, EOF and very long lines, and exit with the last build result (refusal 2, else 0); output has no escape sequences. | Pipe tests with exact stdout and exit codes. |
+| AC-5 | On a pty: Ctrl-C at idle cancels the line and a second quits; Ctrl-C during a build stops it (interrupted state) and returns to the prompt; no cursor-control/alt-screen bytes appear. | pty test. |
+| AC-6 | An attended gate during a session build is answered from the same input and recorded as human; chat input is held until the gate resolves. | pty gate test with fake driver. |
+| AC-7 | After `/quit`, EOF, and SIGTERM no child process remains; /quit during a build stops it first. | Process-inventory test. |
+| AC-8 | The same fixture build from TUI, REPL, and one-shot yields the same artifacts and attestation fields; the REPL never imports curses. | Extended headless-equivalence test and import test. |
+| AC-9 | Slash commands /help /quit /exit /stop /resume /clear /issue /run /runstage /triage /do /mode /settings behave as plain text with usage on invalid input; banner shows the build mode and /mode changes it. | Session tests. |
+| AC-10 | Existing shell and Python suites show no new regressions versus the baseline. | bash scripts/run-shell-tests.sh; bash scripts/run-python-tests.sh. |
 

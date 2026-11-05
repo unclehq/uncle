@@ -4,6 +4,15 @@ from pathlib import Path
 import re
 from chat import Conversation
 
+# A complete, directly-sendable "build <issue>" message. Shared between the
+# TUI's send_home_chat and the chat composer's Enter handling.
+ISSUE_REQUEST_RE = re.compile(
+    r'(?:please\s+)?(?:build|bulid|implement|start|run|work on)\s+'
+    r'(?:(?P<change>change\s+request)\s+)?'
+    r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+(?:issue\s+)?)?'
+    r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
+    re.IGNORECASE)
+
 ACTIONS = {'create_app', 'create_change', 'run_app', 'run_change', 'github_issue', 'stop_build', 'clear_build', 'resume_build'}
 
 def prompt(history, root):

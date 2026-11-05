@@ -1,68 +1,71 @@
-# Baseline Report (Issue 164)
+# Baseline report: issue 165 (bare `uncle --noui` REPL)
 
-Omitted sections: Reproduction (feature, not a bug); Baseline test results (driver supplies them, see section 9)
+Omitted sections: Reproduction (feature, not a bug); Baseline test results as run output (the driver supplies them)
 
 ## 1. Change-request summary
-See `.uncle/docs/CHANGE_REQUEST.md`: delete housekeeping entirely; make the idle home-chat supervisor a tool-enabled agent; keep validated build actions; tool-free supervisor while a build runs.
+See .uncle/docs/CHANGE_REQUEST.md. Bare `--noui` (no startup action) currently refused with exit 2; it must start a plain-text interactive chat that can start builds via the validated home actions. One-shot forms unchanged.
 
 ## 2. Repository architecture
-Bash launcher `uncle` parses flags and starts `uncle_tui.py` (8165 lines, one `UncleTUI` class). Domain-ish libs in `scripts/lib/` (Python and bash). Tests in `scripts/tests/` (`*-test.py`, `*-test.sh`). Housekeeping = `scripts/housekeeping-workflow.sh` + `scripts/lib/housekeeping_{config,input,policy,session}.py` + `prompts/housekeeping-plan.md`.
+- `uncle` (bash launcher, 1001 lines): parses flags, resolves attended/unattended, execs TUI (`uncle_tui.py`, 8367 lines, curses) or headless runner.
+- `scripts/lib/uncle_headless.py` (378 lines): `run()` streams a driver with an escape filter, signal forwarding, attended gate pass-through on stdin; `main()`/`_driver_from_env()` build driver argv from `UNCLE_STARTUP_*`.
+- `scripts/lib/run_duties.py`: shared TUI/headless duties (`build_driver_command`, banners, `startup_brief_document`, `write_change_request`).
+- `scripts/lib/home_actions.py` (`prompt`, `parse_reply`, action schema), `home_chat.py`, `home_agent_session.py` (persistent home agent), `supervisor_chat.py`, `supervisor_runner.py`.
+- Home-action *execution* (`_home_action`, `_stop_build`, `_resume_build`, `_clear_build`, `run_named_stage`) lives inside `uncle_tui.py` class methods, not in a shared module.
 
 ## 3. Relevant code paths
-- `uncle`: usage lines 70-125; mutual exclusion 172/224/255/283; `parse_text_option` 162-210 (uses `housekeeping_input.py`); `--housekeeping` case 273; did-you-mean list 337; `UNCLE_HOUSEKEEPING_UNATTENDED` 361; noui message 414; Configure menu item 4 and `housekeeping_disallow_menu` 830-870.
-- `uncle_tui.py`: imports 99-101; config section UI 1132, 1354-1414; `_start_housekeeping` 1586; startup action 4230; `_housekeeping_idle/_session/_warm/_close/_turn` 3307-3371; `send_home_chat` 3374; `_apply_housekeeping_reply` 3695; slash commands 6111-6163, 6286, 6297; config screen 7041, 7607-7616, 7687; shutdown 7865-7885. Supervisor: `_supervisor_turn` 3467, `_supervisor_session` 3572, `_apply_home_reply` 3710, `_apply_home_action` 4034, `_home_action` 4090. Project dir: `_project_root()` 180 (env `UNCLE_PROJECT_ROOT`), `_follow_project_root` 2097, title 2003.
-- `scripts/lib/housekeeping_session.py`: `build_command` 58 (uses `--allowedTools` and `--disallowedTools` deny list), `HousekeepingSession` 412.
-- `scripts/lib/run_duties.py` 134-158 (STARTUP_ACTIONS, driver map); `uncle_headless.py` 314-328; `mode.sh` 93.
-- `scripts/lib/home_chat.py` (97 lines), `home_actions.py` (140 lines): action schema and `parse_reply`.
+- `uncle:232-233` --noui + --noinput refusal; `uncle:208-212` refusal exit code 2 under --noui; `uncle:385-413` mode resolution; `uncle:415-425` bare-noui refusal (`exit 2`) and exec of headless.
+- `uncle_headless.py:137-175` `run()` (refuses attended without tty; SIGINT/SIGTERM -> 128+n); `:293-316` `main`; `:319-367` `_driver_from_env`.
+- `uncle_tui.py:153` `ISSUE_REQUEST_RE`; `:3603` `send_home_chat`; `:3412` `_agent_turn`; `:4304` `_apply_home_action`; `:4360` `_home_action`; `:5148` `run_named_stage`; `:5201/5220/5352` stop/resume/clear; `:6377-6521` slash command handling.
+- `home_actions.py:73` `parse_reply` (ACTIONS allowlist, strict schema).
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Idle home chat, mode housekeeping (default) | Message goes to persistent tool agent with deny list | uncle_tui.py:3307-3380 | No (replaced) |
-| B-2 | `/mode supervisor`, or build running | Tool-free supervisor, validated actions | uncle_tui.py:3467, 3710 | Yes |
-| B-3 | 'build issue 34' | `github_issue` action started by the app | home_actions.py, uncle_tui.py:4090 | Yes |
-| B-4 | hello-world request | brief drafted, `create_app` action | home_actions.py | Yes |
-| B-5 | `uncle --housekeeping` | runs housekeeping driver | uncle:273 | No (remove) |
-| B-6 | `/housekeeping`, `/mode` | commands exist | uncle_tui.py:6111-6163 | No (remove) |
-| B-7 | Configure item 4 | disallow list editor | uncle:830, uncle_tui.py:7041 | No (remove) |
-| B-8 | Unknown option | usage plus did-you-mean | uncle:337 | Yes |
-| B-9 | Driver moves root | `_follow_project_root` updates UNCLE_PROJECT_ROOT, status and title | uncle_tui.py:2097 | Yes |
+| B-1 | `uncle --noui --application T` / `--issue` / `--change-request` | One headless run, plain output, exit 0/1/2/3/128+n | uncle_headless.py:1-8; headless-run-test.py | Yes |
+| B-2 | `uncle --noui` bare, or `UNCLE_NOUI=1 uncle` | stderr error + usage, exit 2 | uncle:419-424; launcher-noui-test.sh:13-14 | No (MODIFY) |
+| B-3 | `--noui --noinput` | Error, exit 2 | uncle:232; launcher-noui-test.sh:15 | Yes |
+| B-4 | `--noui --attended` with non-tty stdin | exit 2 | uncle_headless.py:142; launcher-noui-test.sh | Yes |
+| B-5 | TUI home chat | Curses chat; NL requests -> validated actions; slash commands | uncle_tui.py:3603-4360, 6377+ | Yes |
+| B-6 | Multiple startup actions | exit 1 | launcher-noui-test.sh:19 | Yes |
+| B-7 | Headless vs TUI equivalence | Same artifacts/attestation fields | headless-equivalence-test.py | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| V-1 | Builds start only via validated action | home_actions.parse_reply, `_home_action` | home-actions-test.py | High |
-| V-2 | Supervisor chat is tool-free | supervisor_command flags | supervisor-chat-test.py | Medium |
-| V-3 | No permission-bypass flags | convention (CLAUDE.md) | none found | Low |
-| V-4 | Unknown flags exit non-zero | uncle did-you-mean | launcher tests | High |
+| EI-1 | --noui never imports curses | headless module imports no curses | headless-run-test.py | Medium |
+| EI-2 | Model cannot start a driver; only validated actions | `parse_reply` allowlist; TUI `_apply_home_action` requires home intent | home-actions-test.py, tui-home-agent-test.py | High |
+| EI-3 | Child driver not left behind on exit/signal | `run()` killpg with grace | headless-run-test.py | Medium |
+| EI-4 | Output has only printable text, TAB, LF | `EscapeFilter` | headless-run-test.py | High |
+| EI-5 | Gate answers via stdin recorded as human | UNCLE_ATTENDED_STDIN path in `_stream` | headless-run-test.py | Medium |
 
 ## 6. Interface contracts
-CLI flags `--application --issue --change-request --housekeeping`; env `UNCLE_STARTUP_ACTION`; env `UNCLE_HOUSEKEEPING_SESSION`, `HOUSEKEEPING_CHAT_TIMEOUT`, `UNCLE_HOUSEKEEPING_UNATTENDED` (deprecated no-op); config `.uncle/config` key `housekeeping.disallow`; home action JSON `uncle_action`.
+Launcher env: `UNCLE_NOUI`, `UNCLE_STARTUP_ACTION/TEXT/TEXT_FILE`, `UNCLE_STARTUP_ATTENDED/UNATTENDED`, `UNCLE_PROJECT_ROOT`, `UNCLE_RUNTIME_ROOT`. Headless exit codes: 0 completed, 1 failure, 2 refusal, 3 stopped at gate, 128+n signal. Action schema: `home_actions.ACTIONS` with `uncle_action`, `message`, `document`, `start`, `issue`.
 
 ## 7. Existing automated-test coverage
-Housekeeping-only: `housekeeping-input-test.py`, `housekeeping-launcher-test.sh`, `housekeeping-policy-test.py`, `housekeeping-session-test.py`, `housekeeping-workflow-test.sh`, `tui-housekeeping-test.py`. Mentions in: `run-duties-test.py`, `mode-resolution-test.sh`, `launcher-stdin-text-test.sh` (8), `supervisor-chat-test.py`, `headless-run-test.py`, `home-actions-test.py`, `home-chat-test.py`, `launcher-noui-test.sh`, `chat-test.py`. Shell and Python runners are independent (separate temp dirs, no shared ports), so they run as one parallel group.
+`scripts/tests/`: `launcher-noui-test.sh`, `headless-run-test.py`, `headless-equivalence-test.py`, `home-actions-test.py`, `home-chat-test.py`, `home-agent-session-test.py`, `tui-home-agent-test.py`. The shell and Python runners use separate temp dirs and bind no shared ports, so they form one parallel group (per runner docs: run-python-tests.sh does not overlap run-shell-tests.sh).
 
 ## 9. Baseline test results
-Not run here by design. Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (repo convention in CLAUDE.md task text). Documented pre-existing failures: none found; the driver baseline in `.uncle/workflow/green-check.baseline.tsv` is authoritative.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (repository runners, CLAUDE.md-mandated). Not run here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Known: some Python suites already fail on a clean checkout (per runner guidance).
 
-## 10. Existing failures/flaky
-None documented in the repository.
+## 10. Existing failures/flakiness
+None documented in-repo beyond the note above. UNRESOLVED until driver baseline lands.
 
 ## 12. Likely change surface
-See sections 3 and 7 files; plus `README.md` (9 mentions), `docs/quickstart.md:63`, `docs/UNATTENDED_DEFAULT_MIGRATION.md`, `prompts/housekeeping-plan.md`. `FINAL_AUDIT.md` (root) mentions housekeeping; it is a reviewer-owned artifact and is not edited.
+`uncle` (bare-noui branch, usage text); new `scripts/lib/uncle_repl.py` (loop + I/O), new REPL action/chat modules; `uncle_headless.py` (extract `prepare_driver`); `home_actions.py` + one import line in `uncle_tui.py` (shared `ISSUE_REQUEST_RE`); `launcher-noui-test.sh` rows B-2 (request explicitly changes #160 N-6); new tests.
 
 ## 13. Regression-sensitive components
-`send_home_chat` routing; `_apply_home_reply` action parsing; launcher exclusivity and stdin rules (`parse_text_option`, shared with `--application`); `run_duties.py` startup action table; `_follow_project_root`.
+`uncle` launcher arg parsing and mode resolution; `uncle_headless.run` signal handling; TUI home chat issue-regex handling.
 
 ## 14. Outside the change
-Build drivers, gates, verification, PR flow, tool-free supervisor internals during a build, other runners' supervision.
+Curses TUI behavior, driver scripts, gates, verification, PRs, supervisor tool capabilities (#164), machine protocol, `/set` editing.
 
-## 15. Unknowns
-- Whether Claude `-p` surfaces permission denials in the stream-json result (assumed `permission_denials` in the result event; the plan verifies by fake-runner fixture, live check in manual).
-- Whether `housekeeping_input.py` is reused by `--application` (uncle:210 passes a label); it must be renamed, not deleted, if so.
+## 15. Unknowns and assumptions
+- A1: `/date` and `/mode` do not exist in the TUI (grep: no `/mode` handler); REPL defines `/mode`; `/date` is omitted.
+- A2: HomeAgentSession/SupervisorRequest threading APIs are driven synchronously by the REPL; exact binding confirmed at implementation.
+- A3: TUI-only `/triage` and `/do` depend on TUI triage state; REPL maps them to the same stage rerun/resume driver paths or prints that they need the TUI.
 
 ## 16. Initial risk
-High: 8k-line TUI edit with 77 housekeeping mentions; arbitrary-command agent safety; cwd tracking. Medium: shared stdin helper.
+Medium-high: action execution is TUI-embedded, so extraction must not alter TUI behavior; stdin sharing between REPL and attended gates; Ctrl-C semantics across child process groups.
 
 ## Exact build and test commands executed
 

@@ -2,215 +2,55 @@
 
 ## Findings
 
-### MC-101
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-102
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-103
-
-- **Action:** Ran worktree `uncle --application demo --attended </dev/null` and `UNCLE_ATTENDED=1 uncle --application demo </dev/null` in empty /tmp/mc dirs, with inherited UNCLE_* runtime vars unset, 20s timeout.
-- **Expected result:** Both exit 1 with the no-TTY refusal; nothing created.
-- **Actual result:** Both exit=1, stderr was the exact refusal text, stdout empty, scratch dirs empty (ls -A).
-- **Defects:** None
-
-### MC-104
-
-- **Action:** Only the first half ran: `--attended --unattended` gave exit 1 and the contradiction message, nothing created. The second half (`--unattended` alone) starts a live run and was not executed.
-- **Expected result:** Both halves.
-- **Actual result:** Half observed; check not complete.
-- **Defects:** None
-
 ### MC-105
 
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-106
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-108
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-200
-
-- **Action:** First half: `UNCLE_ATTENDED=1 uncle ... </dev/null` refused correctly. The `--change-request demo` invocation failed with `Error: --change-request text cannot be empty`, so the intended refusal was not observed.
-- **Expected result:** Both refuse with the no-TTY message.
-- **Actual result:** Second half not observed (invocation form wrong, not a verdict on the app).
-- **Defects:** None
-
-### MC-201
-
-- **Action:** `uncle` and stagegate.sh printed the contradiction message. change-workflow.sh printed `Plan executability: another workflow holds this checkout` and not the contradiction message.
-- **Expected result:** All three entry points refuse.
-- **Actual result:** change-workflow.sh not observed refusing; possibly blocked by this workflow's lock.
+- **Action:** Not performed live: requires an interactive TUI session plus a real long-running housekeeping agent run. Only the script's lock refusal was exercised (see MC-202).
+- **Expected result:** TUI posts 'Housekeeping already running' (not FAILED); first terminal run unaffected.
+- **Actual result:** TUI half not observed. Script half: with housekeeping.lock held by another process, housekeeping-workflow.sh exited 1 with 'housekeeping: another housekeeping run is active'. uncle_tui.py:1589 contains a ValueError('Housekeeping already running') path (code inspection only).
 - **Defects:** None
 
 ### MC-202
 
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
+- **Action:** Held housekeeping.lock with a separate python flock process (stand-in for the first run, not a real housekeeping run), then ran scripts/housekeeping-workflow.sh --unattended chore2.
+- **Expected result:** Second invocation exits 1 with a lock-held message; first run continues and completes normally.
+- **Actual result:** Second invocation exited 1 with 'housekeeping: another housekeeping run is active'. A real first housekeeping run was not started, so its continuation/completion was not observed.
 - **Defects:** None
 
 ### MC-203
 
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
+- **Action:** Not performed in a TUI; only the script half (lock held elsewhere, script run) was exercised.
+- **Expected result:** Script exits 1 and TUI posts 'Housekeeping already running', no FAILED notice.
+- **Actual result:** Script exited 1 with the lock message. TUI chat notice and .uncle/workflow/housekeeping/tui.out were not observed; needs an interactive TUI session.
 - **Defects:** None
 
-### MC-204
+### MC-205
 
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-206
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-301
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-302
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
+- **Action:** Did not drive a live TUI. Ran only the narrow prepared test module scripts/tests/tui-housekeeping-test.py (mocked Popen/hk_proc) to see what it asserts for DONE, FAILED, signal and quit behavior.
+- **Expected result:** A successful run posts exactly one DONE notice with code 0. A failed or killed run posts exactly one FAILED notice with its exit code or signal. Quitting the TUI terminates the live run and posts no completion notice.
+- **Actual result:** The live scenario was not performed: no real background housekeeping run was started, and no real quit or process listing was captured. The mocked tests all passed (16 tests OK), including test_exit_zero_posts_single_done_notice, test_nonzero_exit_posts_failed_notice_with_code, test_signal_killed_run_reported_failed and test_quit_with_live_hk_proc_stops_tree_and_posts_no_notice. They cover the logic only, not real processes, so they do not satisfy the required process-listing evidence.
 - **Defects:** None
 
 ### MC-303
 
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-304
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-305
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
+- **Action:** Not performed: requires issuing /housekeeping twice in a live TUI with a real background run. Only the second-terminal script lock refusal was exercised.
+- **Expected result:** TUI shows 'Housekeeping already running' and starts no second process; second-terminal script exits 1 with lock message; first run unaffected.
+- **Actual result:** Second-terminal script exited 1 with 'housekeeping: another housekeeping run is active'. TUI behavior and a live first run were not observed.
 - **Defects:** None
 
 ### MC-401
 
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-402
-
-- **Action:** Ran no-TTY `--attended` and `--attended --unattended` (same method as MC-103/MC-104a).
-- **Expected result:** Refusals, exit nonzero, no .uncle/workflow/mode.
-- **Actual result:** exit=1 each; stderr matched both refusal texts; scratch dirs empty.
-- **Defects:** None
-
-### MC-403
-
-- **Action:** None performed; a run of `--unattended` starts a live agent run.
-- **Expected result:** One deprecation notice on stderr, stdout unchanged.
-- **Actual result:** Not observed.
-- **Defects:** None
-
-### MC-404
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-405
-
-- **Action:** None performed.
-- **Expected result:** See checklist.
-- **Actual result:** Needs a live unattended issue or change run to completion with PR/report; not performed.
-- **Defects:** None
-
-### MC-406
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-407
-
-- **Action:** None performed.
-- **Expected result:** See MANUAL_CHECKLIST.md.
-- **Actual result:** Needs a real interactive terminal (TTY/TUI) and a live agent run; none available to this headless worker.
-- **Defects:** None
-
-### MC-408
-
-- **Action:** None performed.
-- **Expected result:** See checklist.
-- **Actual result:** Needs a newer published version available plus a terminal. Action: stage a newer version fixture and run in a TTY.
+- **Action:** Inspected whether the live TUI flow (`/housekeeping list merged branches` with attended preference, observing the confirmation prompt and foreground completion) can be driven from this non-interactive worker. It cannot: it needs an interactive terminal session and a live reviewer/agent run with a human answering the attended confirmation prompt. I did not launch the TUI. I only located the automated test scripts/tests/tui-housekeeping-test.py::test_foreground_path_when_build_idle_or_exited, which covers the foreground-versus-background routing at unit level. It does not cover the confirmation prompt or the real completion.
+- **Expected result:** Foreground path runs as before, including the attended confirmation prompt, and finishes with its normal result; no background-start notice appears.
+- **Actual result:** Not observed live. The terminal capture of the confirmation prompt and foreground completion was not produced.
 - **Defects:** None
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-101 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-102 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-103 | YES | PASS | terminal output /tmp/mc |
-| MC-104 | YES | NOT RUN | not executed or only partly executed |
-| MC-105 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-106 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-108 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-200 | YES | NOT RUN | not executed or only partly executed |
-| MC-201 | YES | NOT RUN | not executed or only partly executed |
-| MC-202 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-203 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-204 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-206 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-301 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-302 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-303 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-304 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-305 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-401 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-402 | YES | PASS | terminal output /tmp/mc |
-| MC-403 | YES | NOT RUN | not executed or only partly executed |
-| MC-404 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-405 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-406 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-407 | YES | BLOCKED-HUMAN | requires real TTY/person |
-| MC-408 | YES | BLOCKED-SETUP | newer version fixture needed |
+| MC-105 | YES | BLOCKED-SETUP | Script output/exit=1 from narrow lock probe; grep of uncle_tui.py. No TUI interaction performed. |
+| MC-202 | YES | BLOCKED-SETUP | exit=1; stderr message 'housekeeping: another housekeeping run is active'. |
+| MC-203 | YES | BLOCKED-SETUP | Script exit=1 from lock probe. No TUI evidence. |
+| MC-205 | YES | NOT RUN | Unit test run output: 'Ran 16 tests ... OK'. The driver green-check lists bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh as PREEXISTING; it has no live-TUI evidence. No chat transcript or ps listing exists for this check. |
+| MC-303 | YES | BLOCKED-SETUP | Script exit=1 from lock probe. No TUI evidence. |
+| MC-401 | YES | BLOCKED-HUMAN | No terminal capture. The only related evidence is the driver green-check test for foreground routing, which I did not re-run. It is not a substitute for the human-visible prompt observation. |

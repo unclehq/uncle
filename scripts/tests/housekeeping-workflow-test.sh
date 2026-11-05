@@ -62,4 +62,55 @@ printf 'supervision.runner codex\n' > "$R/.uncle/config"
 OUT="$(cd "$R" && env UNCLE_PROJECT_ROOT="$R" UNCLE_CONFIG="$R/.uncle/config" "$DRV" --unattended x 2>&1 < /dev/null)"; RC=$?
 [[ $RC == 1 && "$OUT" == *"needs claude"* ]] && ok "non-claude supervisor runner refused" || fail "codex rc=$RC $OUT"
 
+# invoke DRV in a prepared repo $R (no auto setup); sets OUT, RC
+hkrun() {
+    OUT="$(cd "$R" && env UNCLE_PROJECT_ROOT="$R" UNCLE_CONFIG="$R/.uncle/config" \
+        WORKFLOW_AGENT_CMD_HOUSEKEEPING="$TMP/agent" STUB_ARGS="$R/args" STUB_PROMPT="$R/prompt" \
+        "$DRV" --unattended "$@" 2>&1 < /dev/null)"
+    RC=$?
+}
+prep() { N=$((N + 1)); R="$TMP/r$N"; mkdir -p "$R/.uncle/workflow"; }
+hold_lock() { # hold_lock FILE : flock FILE in background until killed; sets HOLD_PID
+    local ready="$TMP/ready$N"; rm -f "$ready"
+    python3 -I -c 'import fcntl,sys,time
+f=open(sys.argv[1],"a"); fcntl.flock(f, fcntl.LOCK_EX)
+open(sys.argv[2],"w").close(); time.sleep(60)' "$1" "$ready" &
+    HOLD_PID=$!
+    for _ in $(seq 1 50); do [[ -e "$ready" ]] && break; sleep 0.1; done
+}
+
+# AC-2: housekeeping.lock is independent of driver.lock
+prep; hold_lock "$R/.uncle/workflow/driver.lock"
+hkrun "tidy"; kill "$HOLD_PID" 2>/dev/null; wait "$HOLD_PID" 2>/dev/null
+[[ $RC == 0 ]] && ok "driver.lock held does not block housekeeping" || fail "driver.lock blocked hk rc=$RC $OUT"
+
+prep; hold_lock "$R/.uncle/workflow/housekeeping.lock"
+python3 -I -c 'import fcntl,sys
+f=open(sys.argv[1],"a")
+try: fcntl.flock(f, fcntl.LOCK_EX|fcntl.LOCK_NB)
+except OSError: sys.exit(1)' "$R/.uncle/workflow/driver.lock"
+[[ $? == 0 ]] && ok "driver.lock acquirable while housekeeping.lock held" || fail "driver.lock blocked"
+hkrun "tidy"
+[[ $RC == 1 && ! -e "$R/args" ]] && ok "second run with lock held exits 1, no agent" || fail "second run rc=$RC"
+kill "$HOLD_PID" 2>/dev/null; wait "$HOLD_PID" 2>/dev/null
+grep -q 'housekeeping.lock' "$ROOT/scripts/workflow.sh" "$ROOT/scripts/change-workflow.sh" 2>/dev/null \
+    && fail "build driver references housekeeping.lock" || ok "build drivers never reference housekeeping.lock"
+
+# AC-3: mode file untouched (absent and present)
+prep; hkrun "tidy"
+[[ $RC == 0 && ! -e "$R/.uncle/workflow/mode" ]] && ok "mode file stays absent" || fail "mode created rc=$RC"
+prep; printf 'attended\n' > "$R/.uncle/workflow/mode"; before="$(cksum < "$R/.uncle/workflow/mode")"
+hkrun "tidy"
+[[ $RC == 0 && "$(cksum < "$R/.uncle/workflow/mode")" == "$before" ]] && ok "mode file unchanged when present" || fail "mode changed rc=$RC"
+
+# AC-6: prompt rule wording (prompt as delivered to the agent)
+for s in 'working tree' 'checkout' 'reset' 'clean' 'current branch'; do
+    grep -qi -- "$s" "$R/prompt" && ok "prompt names '$s'" || fail "prompt missing '$s'"
+done
+
+# symlinked housekeeping.lock refused
+prep; : > "$TMP/victim"; ln -s "$TMP/victim" "$R/.uncle/workflow/housekeeping.lock"
+hkrun "tidy"
+[[ $RC == 1 && ! -e "$R/args" && ! -s "$TMP/victim" ]] && ok "symlinked housekeeping.lock refused" || fail "symlink rc=$RC"
+
 ((FAILS == 0)) && echo "all passed" || { echo "$FAILS failed"; exit 1; }

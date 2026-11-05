@@ -475,6 +475,13 @@ never remove the built-in ones. Denials match by command prefix, so they are a
 guard rail rather than a sandbox. Records are written to
 `.uncle/workflow/housekeeping/` (untracked), with the report in `REPORT.md`.
 
+Housekeeping always runs unattended and can run concurrently with a main
+workflow: it uses its own lock and mode file, so it does not block or get
+blocked by a running stage. From the TUI it starts in the background with no
+confirmation prompt, and a one-time notice reports DONE (exit code 0) or FAILED
+(with the exit code or signal) when it finishes. Quitting the TUI stops a
+running housekeeping run without a notice.
+
 The text can also come from stdin: `uncle --housekeeping < chores.md` or
 `cat spec.md | uncle --application`. A bare `--application` or `--housekeeping`
 with no text reads piped stdin; on an interactive terminal with nothing piped it

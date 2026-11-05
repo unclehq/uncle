@@ -1,8 +1,37 @@
 # Implementation notes
 
-### Deviations
+## Step 1
 
-- `scripts/tests/chat-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
-- `scripts/tests/mode-pty-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
-- `scripts/tests/self-hosted-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
-- `scripts/tests/tui-complete-dialog-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+### Files changed
+
+- `scripts/housekeeping-workflow.sh` — Written by isolated step 1; 1
+
+## Step 2
+
+### Files changed
+
+- `prompts/housekeeping-plan.md` — Written by isolated step 2; 2
+
+## Step 3
+
+### Files changed
+
+- `uncle_tui.py` — Written by isolated step 3; 3
+
+## Step 4
+
+### Files changed
+
+- `scripts/tests/housekeeping-workflow-test.sh` — Written by isolated step 4; 4
+
+## Step 5
+
+### Files changed
+
+- `scripts/tests/tui-housekeeping-test.py` — Written by isolated step 5; 5
+
+## Step 6
+
+### Files changed
+
+- `README.md` — Written by isolated step 6; 6

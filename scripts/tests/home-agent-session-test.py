@@ -130,6 +130,19 @@ class Grants(unittest.TestCase):
                          'Write(/a/b.txt)')
 
 
+class BuildsGoThroughUncle(unittest.TestCase):
+    def test_prompt_routes_builds_to_the_workflow(self):
+        text = ' '.join(has.system_prompt(ROOT).split())
+        self.assertIn('must NOT write the code', text)
+        self.assertIn('working a GitHub issue', text)
+        for action in ('create_app', 'create_change', 'run_app', 'run_change', 'github_issue'):
+            self.assertIn('`%s`' % action, text)
+        from chat import Conversation
+        for kind in Conversation.fields.values():
+            for section in kind:
+                self.assertIn(section, text)
+
+
 class Denials(unittest.TestCase):
     def test_denials_surfaced_verbatim(self):
         denial = {'tool_name': 'Bash', 'tool_input': {'command': 'git clone https://x/y.git', 'description': 'd'}}

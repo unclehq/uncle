@@ -90,7 +90,7 @@ uncle_resolve_mode() {
     source=inherited
   else
     [ "$u_flag" = 1 ] && legacy+=("--unattended")
-    for name in UNCLE_UNATTENDED WORKFLOW_UNATTENDED UNCLE_HOUSEKEEPING_UNATTENDED; do
+    for name in UNCLE_UNATTENDED WORKFLOW_UNATTENDED; do
       [ "${!name:-}" = 1 ] && legacy+=("$name")
     done
     dir=${UNCLE_MODE_DIR:-}

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Tests for scripts/lib/housekeeping_input.py (H-1 input limits)."""
+"""Tests for scripts/lib/startup_text_input.py (--application stdin input limits)."""
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 
-LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'lib', 'housekeeping_input.py')
+LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'lib', 'startup_text_input.py')
 CAP = 1048576
 
 
@@ -17,7 +17,7 @@ def run(private, stdin=b'', text=None):
     return subprocess.run(cmd, input=stdin, capture_output=True)
 
 
-class HousekeepingInput(unittest.TestCase):
+class StartupTextInput(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = self.tmp.name
@@ -36,18 +36,14 @@ class HousekeepingInput(unittest.TestCase):
         path = r.stdout.decode().strip()
         self.assertEqual(os.path.dirname(path), self.dir)
         with open(path, 'rb') as f:
-            self.assertEqual(f.read(), b'a\nb\nc')  # AC-7: one trailing newline stripped
+            self.assertEqual(f.read(), b'a\nb\nc')
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
     def test_argument_text_accepted(self):
-        r = run(self.dir, text='close stale branches')
+        r = run(self.dir, text='build a todo app')
         self.assertEqual(r.returncode, 0)
         with open(r.stdout.decode().strip(), 'rb') as f:
-            self.assertEqual(f.read(), b'close stale branches')
-
-    def test_no_change_request_check(self):
-        open(os.path.join(self.dir, 'CHANGE_REQUEST.md'), 'w').close()
-        self.assertEqual(run(self.dir, b'tidy up').returncode, 0)
+            self.assertEqual(f.read(), b'build a todo app')
 
     def test_empty_rejected(self):
         self.assertRejected(run(self.dir, b''), 'cannot be empty')

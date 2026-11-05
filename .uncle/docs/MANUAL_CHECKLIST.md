@@ -6,9 +6,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui --housekeeping`, `uncle --noui --issue <N>` and `echo 'change text' | uncle --noui --change-request` in separate scratch projects.
-- Expected result: Each starts its matching workflow headlessly with plain text output. The change-request text is taken from stdin, and CHANGE_REQUEST.md is written, as in the TUI path.
-- Evidence to capture: Output of each run, exit codes, and the created worktree and CHANGE_REQUEST.md.
+- Exact action: Run `uncle --housekeeping` and `uncle --housekeeping=x` from a scratch directory, then run `uncle --help`, and note exit codes and output.
+- Expected result: Both flag invocations exit non-zero as unknown options, start nothing, and neither the usage nor did-you-mean text mentions housekeeping.
+- Evidence to capture: Terminal transcript with exit codes and the printed usage text.
 - Actual result: 
 - Status: NOT RUN
 
@@ -16,81 +16,71 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run these refusal cases: `uncle --noui` alone, `uncle --noui --noinput --application x`, `uncle --noui --attended --application x < /dev/null`, `echo t | uncle --noui --attended --change-request`, and `uncle --noui --application ''`.
-- Expected result: Each prints a reason on stderr and exits 2. No driver starts, no worktree is created, and the run never falls back to unattended mode or the menu.
-- Evidence to capture: stderr text and exit code for each case, plus `git worktree list` before and after.
+- Exact action: Launch the TUI, type `/housekeeping`, `/mode` and `/mode supervisor` in the home chat, and open the Configure menus (launcher Configure menu and the TUI config screen, Miscellaneous section).
+- Expected result: The slash commands are treated as unknown commands, and no housekeeping entry or disallow-list editor exists in either Configure menu.
+- Evidence to capture: Screenshots or transcript of each command response and each menu listing.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-103
+### MC-104
 - Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: In a real terminal, run `uncle --noui --attended --application "<tiny brief>"` until a human gate prompt appears. Type an approval line once, then repeat the run and press Enter on a blank line (or Ctrl-D) at the gate.
-- Expected result: The gate prompt prints and one line is read from the terminal. The typed approval is recorded as a human approval, while a blank line or EOF counts as not approved and the run exits 3.
-- Evidence to capture: Terminal transcript, exit codes, and the gate attestation record in the run state.
+- Exclusive resources: dir:manual-home-agent-scratch
+- Depends on: MC-103
+- Exact action: In the same session, ask the agent to clone a repo and then say 'build issue 34'. Separately, ask it to move into a nonexistent path and into `/`.
+- Expected result: The build action is shown for user confirmation and starts only after confirming, and it targets the clone. Invalid or rejected paths leave the project root unchanged with a note.
+- Evidence to capture: Screenshots of the confirmation prompt, the status bar root, and the rejection notes.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-105
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: dir:manual-home-agent-scratch
 - Depends on: none
-- Exact action: Start a long `uncle --noui` run in a terminal and press Ctrl+C once. Then repeat with `kill -TERM <pid>`, and again where the driver ignores the first signal (send a second Ctrl+C during the grace period).
-- Expected result: The runner exits 130 for SIGINT and 143 for SIGTERM. The driver process group is stopped, with an immediate kill on a second signal, and no orphan processes remain. The run state is resumable.
-- Evidence to capture: Exit codes, `ps` listing showing no leftover children, and a resume attempt succeeding.
+- Exact action: Decline a tool approval prompt in the home chat, then trigger another prompt and type an unrelated message while it is pending.
+- Expected result: Decline posts a note, grants nothing and re-sends nothing. An unrelated message clears the prompt as a decline and is then handled normally.
+- Evidence to capture: Screenshots of the chat log showing the notes and the follow-up reply.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-106
+### MC-107
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `UNCLE_NOUI=1 uncle --application x`, then `UNCLE_NOUI=0`, `UNCLE_NOUI=` and `UNCLE_NOUI=true` variants, each in a scratch project. Also run `uncle --help`.
-- Expected result: Only `UNCLE_NOUI=1` runs headless. The other values start the normal TUI path silently. `--help` documents `--noui`, `UNCLE_NOUI`, the exit codes, the attended requirement, and how `--noui` differs from `--noinput`.
-- Evidence to capture: Observed UI mode per variant and the help text.
+- Exact action: Run `uncle --noui` and `uncle --unattended` on a trivial request, and also run the TUI with a `.uncle/config` containing legacy `housekeeping.*` keys and `UNCLE_HOUSEKEEPING_UNATTENDED=1` set.
+- Expected result: No home chat agent exists in noui or unattended runs. Legacy config keys and env vars are ignored without error or warning, and the TUI starts normally.
+- Evidence to capture: Terminal transcript showing startup output and exit status.
 - Actual result: 
 - Status: NOT RUN
 
 ## Invariants
 
-### MC-201
+### MC-200
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui --application "tiny app"` unattended with stdin closed (`</dev/null`) and no tty, against a project whose first human gate is reached; note the exit status.
-- Expected result: The run never reads stdin, records nothing as human-approved, names the gate on stderr and exits 3.
-- Evidence to capture: Stderr text, `echo $?` output, and the gate state/attestation file showing no human approval.
+- Exact action: In a scratch directory, run `uncle --housekeeping` and `uncle --housekeeping=x`, and also `uncle --bogus-flag`; capture exit codes and full stdout/stderr.
+- Expected result: Each exits non-zero as an unknown option, starts no workflow, and usage/did-you-mean text never mentions housekeeping.
+- Evidence to capture: Terminal transcript with exit codes and output.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-201
+- Required for acceptance: YES
+- Exclusive resources: tui:home-chat
+- Depends on: none
+- Exact action: Launch the interactive app (uncle) in an empty directory with a logged-in claude runner and open Configure menus in the launcher and TUI; type `/housekeeping` and `/mode` in home chat.
+- Expected result: No housekeeping entry exists in either Configure menu; both slash commands are treated as unknown commands like any other.
+- Evidence to capture: Screenshots or terminal capture of the menus and the slash-command responses.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-202
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: tui:home-chat
 - Depends on: none
-- Exact action: In a real terminal run `uncle --noui --attended --application "tiny app"`, answer the first gate prompt by typing an approval line, and later rerun and press Ctrl+D (EOF) or Enter on a blank line at a gate.
-- Expected result: The typed approval is recorded as a human approval; EOF or blank answer is treated as not approved and the run stops with exit 3.
-- Evidence to capture: Terminal transcript, exit statuses, and the recorded gate attestation entries.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-203
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run refusal cases and note stderr, exit status and that no files or worktree were created: `uncle --noui` (no action), `uncle --noui --noinput --issue 1`, `uncle --noui --attended --issue 1 </dev/null`, `uncle --attended --housekeeping` (no --noui), and `echo text | uncle --noui --attended --change-request`.
-- Expected result: Each prints a reason on stderr, exits 2, starts no driver and writes no state.
-- Evidence to capture: Each command's stderr, exit status, and `git status`/worktree listing before and after.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-204
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Start a long `uncle --noui --housekeeping` run in its own process group, send SIGTERM once, then repeat with SIGINT, and repeat with a driver that ignores SIGTERM sending a second signal during the grace period; list processes afterward with `ps`.
-- Expected result: Exit codes are 143 for SIGTERM and 130 for SIGINT; no driver child processes remain; a second signal kills the group immediately; the run can be resumed.
-- Evidence to capture: Exit statuses, `ps` output before and after, and timing of the second-signal kill.
+- Exact action: In idle home chat ask the agent to run a command that default permission mode denies (e.g. create a directory and a file outside the project), observe the approval prompt, decline once, then repeat the request and approve.
+- Expected result: A pending approval shows the full verbatim command; decline produces a note with no re-send and no grant; approval runs only that exact command once, and no bypass of permissions occurs silently.
+- Evidence to capture: Transcript of prompts, notes and resulting filesystem state.
 - Actual result: 
 - Status: NOT RUN
 
@@ -98,31 +88,51 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `UNCLE_NOUI=1 uncle --housekeeping` and then `UNCLE_NOUI=0`, `UNCLE_NOUI=` and `UNCLE_NOUI=true` with the same action on a tty, observing whether the curses UI or plain text appears; also run `--noui` with a symlinked startup text file if reproducible.
-- Expected result: Only exactly `1` gives plain headless output; other values silently start the normal TUI; an untrusted symlinked text file is refused with exit 2 and no driver starts.
-- Evidence to capture: Screen observations or transcripts for each value and the refusal's stderr and exit status.
+- Exact action: Start uncle with `--noui` and with `--unattended` on a trivial request, and attempt to find a home chat agent.
+- Expected result: No home chat agent exists in those modes and the runs behave as before.
+- Evidence to capture: Terminal transcripts of both runs.
 - Actual result: 
 - Status: NOT RUN
 
 ## resources
 
-### MC-303
+### MC-301
 - Required for acceptance: YES
-- Exclusive resources: dir:noui-scratch-attended
+- Exclusive resources: file:tui-demo-dir
 - Depends on: none
-- Exact action: In a real terminal run `uncle --noui --attended --application "hello"` and answer the first gate prompt by typing a line; then on a second run press Enter on a blank line (or Ctrl+D) at a gate.
-- Expected result: The gate prompt is printed and the typed answer is read from the terminal and recorded as a human approval; a blank or EOF answer is treated as not approved and the run stops with exit code 3.
-- Evidence to capture: Transcript of both runs, exit codes, and the recorded gate state showing human approval in the first run only.
+- Exact action: In a fresh empty directory with a logged-in claude runner and no build running, launch uncle and send a home-chat message asking to create a directory 'demo' and move into it; observe the status bar and window title.
+- Expected result: A tool-enabled agent creates the directory, the app validates the path, and the status bar and title show the new project root; the completion message reflects the real command result.
+- Evidence to capture: Screenshot or terminal capture of the chat transcript, status bar and title before and after.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-304
+### MC-302
+- Required for acceptance: YES
+- Exclusive resources: file:tui-demo-dir
+- Depends on: MC-301
+- Exact action: In the same home chat, ask the agent to run a command that Claude's default permission mode denies (for example a git clone or a write outside the project); observe the prompt, then approve it once; repeat with another command and decline.
+- Expected result: A pending-approval prompt shows the full verbatim command; approval runs only that exact command and the turn is re-sent once; decline posts a note with no re-send and no grant.
+- Evidence to capture: Capture of both prompts, the approve and decline outcomes, and the resulting transcript notes.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-303
+- Required for acceptance: YES
+- Exclusive resources: file:tui-demo-dir
+- Depends on: MC-301
+- Exact action: From the home chat, ask 'build issue 34' and then a hello-world C program request; observe the confirmation step for each agent-emitted action, and confirm each.
+- Expected result: Each request shows the action to the user for explicit confirmation and starts the build only after confirmation, targeting the current project root; declining discards the action.
+- Evidence to capture: Capture of the confirmation prompts and the launched build's start message with its working directory.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-305
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui --attended --application "x" < /dev/null`, `uncle --noui` with no action, `uncle --noui --noinput --application x`, and `uncle --noui --attended --change-request` with piped text; check each exit code and that no worktree or files were created.
-- Expected result: Each prints a reason on stderr, exits 2, and starts no driver or state.
-- Evidence to capture: stderr messages, exit codes, and directory listing before and after.
+- Exact action: Run `uncle --housekeeping`, then open the TUI and type `/housekeeping` and `/mode`, then open the Configure menu in both the launcher and the TUI.
+- Expected result: The flag exits non-zero as an unknown option with usage text not mentioning housekeeping; the slash commands are treated as unknown; no housekeeping entry appears in either Configure menu.
+- Evidence to capture: Terminal output with exit status and screenshots of the TUI responses and menus.
 - Actual result: 
 - Status: NOT RUN
 
@@ -132,9 +142,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a real terminal (tty), run `uncle --application "tiny demo"` without `--noui` and observe the startup, then quit at the first opportunity.
-- Expected result: The curses TUI starts as before, runs unattended by default, and no headless/plain-text runner output appears.
-- Evidence to capture: Terminal screenshot or transcript showing the curses UI launching.
+- Exact action: Run `./uncle --housekeeping` and `./uncle --housekeeping=x` from the project root, then `./uncle --help` and a misspelled flag such as `./uncle --aplication`, noting each exit status.
+- Expected result: The housekeeping flags exit non-zero as unknown options and start nothing. Usage and did-you-mean text never mention housekeeping. The misspelled flag still gives usage plus a suggestion and a non-zero exit.
+- Evidence to capture: Terminal output and exit codes of each invocation.
 - Actual result: 
 - Status: NOT RUN
 
@@ -142,28 +152,28 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noinput --application "tiny demo"` with stdin from /dev/null and stdout piped to a file, and then run `uncle --noui --noinput --application x`.
-- Expected result: The first command still runs the TUI path in no-keyboard mode, unchanged. The second is refused with a message on stderr and exit code 2, and nothing is started.
-- Evidence to capture: Exit codes, stderr text, and confirmation that no driver or worktree was created for the refused run.
+- Exact action: Launch the TUI interactively. Type `/housekeeping`, `/mode` and `/mode supervisor`, then open the Configure screen and the Miscellaneous section. Also open the launcher Configure menu.
+- Expected result: The slash commands are treated as unknown commands like any other. No housekeeping entry or disallow-list editor appears in either Configure UI. The remaining menu items still work.
+- Evidence to capture: Screen captures or transcript of each command response and both menus.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-403
+### MC-406
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle` with no startup action and stdin/stdout piped (no tty), feeding `q` or EOF on stdin. Then repeat with `UNCLE_NOUI=0`, `UNCLE_NOUI=` (empty) and `UNCLE_NOUI=true` set.
-- Expected result: The line-based menu appears as before in every case. UNCLE_NOUI values other than exactly 1 are silently ignored, with no headless run and no error.
-- Evidence to capture: Captured stdout of each invocation showing the line menu and exit codes.
+- Exact action: Run `./uncle --noui` and an `--unattended` run on a small task, and also `./uncle --application` with text piped on stdin.
+- Expected result: The noui and unattended runs proceed without any home chat agent. The piped `--application` stdin path behaves as it did before, with mutual-exclusion rules intact.
+- Evidence to capture: Terminal output and exit codes of the three runs.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-404
-- Required for acceptance: YES
+### MC-407
+- Required for acceptance: NO
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a real terminal, run `uncle --change-request` against a project that already contains CHANGE_REQUEST.md, both with and without `--noui`.
-- Expected result: Both refuse the existing CHANGE_REQUEST.md (CHANGE_REQUEST_EXISTS behavior) without overwriting it. The non-`--noui` run keeps its prior TUI behavior and the `--noui` run exits non-zero without starting a driver.
-- Evidence to capture: Messages, exit codes, and unchanged CHANGE_REQUEST.md content.
+- Exact action: Create a `.uncle/config` containing legacy `housekeeping.disallow` keys and set `UNCLE_HOUSEKEEPING_SESSION` in the environment, then launch the TUI and send a chat message.
+- Expected result: The legacy key and variable are ignored with no error or warning, and nothing housekeeping-related is enabled.
+- Evidence to capture: Launch output and chat transcript.
 - Actual result: 
 - Status: NOT RUN

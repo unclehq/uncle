@@ -96,9 +96,8 @@ from github_issues import IssuePicker, references as issue_references, issue_con
 from self_hosted import settings as home_settings
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
 import supervisor as supervision_lib
-import housekeeping_config as hk_config
 import supervisor_runner
-import housekeeping_session
+import home_agent_session
 from supervisor_runner import SupervisorRequest, build_command as supervisor_command
 import supervisor_chat
 from supervisor_chat import ChatRequest
@@ -226,6 +225,26 @@ _APPROVE_WORDS = frozenset(('approve', 'approved', 'approval', 'accept', 'accept
                             'go', 'proceed', 'do', 'it'))
 _DECLINE_WORDS = frozenset(('decline', 'declined', 'deny', 'reject', 'rejected',
                             'no', 'n', 'cancel', 'keep', 'stop', 'abort'))
+
+
+_AGENT_APPROVE = re.compile(r'(?:y|yes|ok|okay|approve|approved|allow|confirm|confirmed)[.!]?', re.I)
+_TRAILING_BLOCK = re.compile(
+    r'(?:\A|\n)```(uncle_action|uncle_cwd)[ \t]*\n((?:(?!```).)*?)\n?```[ \t]*\Z', re.S)
+
+
+def split_trailing_blocks(text):
+    """(prose, [(kind, body)]): only fenced uncle_action/uncle_cwd blocks at the very end of the text.
+
+    Fences earlier in the text, and anything the agent merely quoted, are prose."""
+    blocks = []
+    rest = text.rstrip()
+    while True:
+        match = _TRAILING_BLOCK.search(rest)
+        if match is None:
+            break
+        blocks.insert(0, (match.group(1), match.group(2)))
+        rest = rest[:match.start()].rstrip()
+    return rest, blocks
 
 
 def _replacement_decision(text):
@@ -1129,8 +1148,6 @@ class UncleTUI:
             return "@connection"
         if section == "misc":
             return "!misc"
-        if section == "housekeeping":
-            return "!hk"
         if section == "supervision":
             return "!supervision"
         if section == "recovery":
@@ -1351,14 +1368,10 @@ class UncleTUI:
             return ["Recovery model — diagnose failures and propose repairs"]
         if section == "opencode":
             return ["Connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
-        if section == "housekeeping":
-            return ["%d. %s" % (i, p) for i, p in enumerate(hk_config.load(CONFIG_PATH), 1)] + [
-                "+ Add a pattern…", "Reset to defaults"]
         if section == "misc":
             return ["Auto mode: " + ("off" if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "false" else "on"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
-                    "Markdown viewer: " + (getattr(self, "misc", {}).get("markdown_viewer") or "auto (first installed)"),
-                    "Housekeeping disallow patterns (key housekeeping.disallow)"]
+                    "Markdown viewer: " + (getattr(self, "misc", {}).get("markdown_viewer") or "auto (first installed)")]
         """One row per stage: the stage, its runner, and what that runner uses."""
         width = max(len(s) for s in BUILD_CONFIG_STAGES)
         rows = []
@@ -1410,8 +1423,6 @@ class UncleTUI:
             return desc
         if getattr(self, "config_section", "") == "misc":
             return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. It asks nothing: blocking final-audit findings are skipped and ledgered as accepted without human review, no completion or star dialog opens, nothing is committed, pushed or opened as a PR, and the finished-build line is printed on exit. The approval name identifies your manual approvals."
-        if getattr(self, "config_section", "") == "housekeeping":
-            return "Patterns that make the housekeeping planner's commands refused, in addition to a locked built-in floor that cannot be edited here. Entries can only add refusals."
         if getattr(self, "config_section", "") == "supervision":
             return self._supervision_desc()
         if not getattr(self, "config_section", ""):
@@ -1576,24 +1587,8 @@ class UncleTUI:
                 raise ValueError('Enter a GitHub issue number or https://github.com/owner/repo/issues/123')
             return run_duties.build_driver_command(
                 'github_issue', self.issue, attended, ROOT, self.issue_mode)
-        housekeeping = getattr(self, '_housekeeping_text', None)
-        if housekeeping:
-            return run_duties.build_driver_command(
-                'housekeeping', housekeeping, attended, ROOT, None)
         action = 'create_app' if self.workflow_idx == 0 else 'change_request'
         return run_duties.build_driver_command(action, '', attended, ROOT, None)
-
-    def _start_housekeeping(self, text):
-        """Launch the housekeeping driver with the request text as its argument."""
-        text = (text or '').strip()
-        if not text:
-            raise ValueError('Usage: /housekeeping TEXT')
-        self._housekeeping_text = text
-        self.workflow_idx = 2
-        try:
-            self._run()
-        finally:
-            self._housekeeping_text = None
 
     # ---- config ----
     #
@@ -2012,7 +2007,7 @@ class UncleTUI:
         if getattr(self, "proc", None) and self.proc.poll() is not None:
             if not getattr(self, 'workflow_exit_reported', False):
                 # Once per exit. This poll runs every UI tick, and a run with
-                # no completion banner (housekeeping) stays on this screen, so
+                # no completion banner (headless run) stays on this screen, so
                 # an unguarded title write floods the tty until write() blocks.
                 self._end_title()
                 self.workflow_exit_reported = True
@@ -2048,9 +2043,6 @@ class UncleTUI:
                     host.controller.cancel('interrupted')
                     host.controller.driver_exited(self.workflow_exit_code)
                 self._maybe_auto_triage()
-                if getattr(self, '_quit_when_housekeeping_exits', False):
-                    self._quit_when_housekeeping_exits = False
-                    self.state = 'quit'
 
     def _rerun_pending(self):
         """True when a stage rerun is waiting to be consumed in this project."""
@@ -3304,53 +3296,122 @@ class UncleTUI:
         if host is not None:
             host.controller.steering_queued(stage, id, payload)
 
-    def _housekeeping_idle(self):
-        """True when the homepage chat should talk straight to the housekeeping runner."""
+    # ---- home agent (issue 164): idle homepage chat talks to a tool-enabled Claude ----
+    def _agent_state(self):
+        if hasattr(self, 'agent_generation'):
+            return
+        self.agent_session = None
+        self.agent_session_cwd = None
+        self.agent_started = 0.0
+        self.agent_generation = 0
+        self.agent_closing = False
+        self.agent_grants = []
+        self.agent_pending = None
+        self.agent_denials = []
+        self.agent_resent = set()
+        self.agent_origin = ''
+        self.agent_origin_message = ''
+        self.agent_handoff = ''
+        self.agent_unavailable_noted = False
+
+    def _home_agent_idle(self):
+        """Idle is evaluated once, at send time (D-7)."""
+        self._agent_state()
         proc = getattr(self, 'proc', None)
-        return (getattr(self, 'home_mode', 'housekeeping') == 'housekeeping'
-                and self.state != 'running' and not (proc and proc.poll() is None)
+        return (self.state != 'running' and not (proc and proc.poll() is None)
                 and not getattr(self, 'recovery_active', False)
-                and getattr(self, 'home_replace_proposal', None) is None)
+                and getattr(self, 'home_replace_proposal', None) is None
+                and self.agent_pending is None and not self.agent_closing)
 
-    def _housekeeping_session(self):
-        """The persistent housekeeping runner, started once and kept; None when unavailable.
+    def _agent_note_unavailable(self, text):
+        if not self.agent_unavailable_noted:
+            self.agent_unavailable_noted = True
+            self.home_history.append(('system', text))
 
-        Same runner, model and effort as housekeeping-workflow.sh (the supervisor's
-        settings; housekeeping needs claude because the deny list is enforced
-        through its tool rules)."""
-        if os.environ.get('UNCLE_HOUSEKEEPING_SESSION') == '0':
+    def _agent_handoff_text(self):
+        turns = [(who, text) for who, text in self.home_history if who in ('user', 'supervisor')][-8:]
+        if not turns:
+            return ''
+        lines = ['%s: %s' % ('Operator' if who == 'user' else 'You', text[:600]) for who, text in turns]
+        return ('[Session restarted. Recent conversation, for context only; earlier commands may have '
+                'partly run, so check the current state before repeating any side effect.]\n' + '\n'.join(lines))
+
+    def _home_agent_session(self):
+        """The persistent home agent for the current project root; None when unavailable (D-3, D-7)."""
+        self._agent_state()
+        if os.environ.get('UNCLE_HOME_AGENT') == '0':
             return None
-        session = getattr(self, 'housekeeping_session', None)
+        root = _project_root()
+        session = self.agent_session
         if session is not None and session.alive():
-            return session
+            if self.agent_session_cwd == root:
+                return session
+            self._close_home_agent(handoff=True)
         try:
             config = supervision_lib.load_config(CONFIG_PATH)
-            if config.runner not in housekeeping_session.PERSISTENT_RUNNERS:
+            if config.runner != 'claude':
+                self._agent_note_unavailable(
+                    'The home agent needs the claude runner (supervision.runner is %s); using the supervisor chat.' % config.runner)
                 return None
-            session, command = housekeeping_session.persistent_session(
-                config.runner, ROOT, CONFIG_PATH, config.model, config.effort, _project_root())
+            session, command = home_agent_session.persistent_session(
+                ROOT, config.model, config.effort, root, tuple(self.agent_grants))
             session.base_command, session.config = command, config
-        except (OSError, ValueError):
-            self.housekeeping_session = None
+        except (OSError, ValueError) as exc:
+            self._agent_note_unavailable('The home agent is unavailable (%s); using the supervisor chat.' % sanitize(str(exc))[:200])
             return None
-        self.housekeeping_session = session if session.alive() else None
-        return self.housekeeping_session
+        if not session.alive():
+            return None
+        self.agent_generation += 1
+        session.generation = self.agent_generation
+        self.agent_session, self.agent_session_cwd, self.agent_started = session, root, time.time()
+        return session
 
-    def _warm_housekeeping(self):
-        """Startup thread: stand the runner up and spend its first-turn cost."""
-        session = self._housekeeping_session()
-        if session is not None:
-            session.prime()
+    def _close_home_agent(self, handoff=False):
+        """Cancel any agent turn, close the session and confirm it is dead. True when no process remains."""
+        self._agent_state()
+        self.agent_closing = True
+        dead = True
+        try:
+            request = getattr(self, 'home_request', None)
+            if request is not None and getattr(request, 'home_agent', False) is True:
+                request.cancel()
+                self.home_request = None
+                self.chat_partial = ''
+                self._chat_partial_raw = ''
+            session, self.agent_session = self.agent_session, None
+            if handoff:
+                self.agent_handoff = self._agent_handoff_text()
+            self.agent_generation += 1
+            if session is not None:
+                session.close()
+                dead = not session.alive()
+        finally:
+            self.agent_closing = False
+        return dead
 
-    def _close_housekeeping_session(self):
-        session = getattr(self, 'housekeeping_session', None)
-        if session is not None:
-            session.close()
-            self.housekeeping_session = None
+    def _agent_quiesce(self):
+        """Build or recovery start: cancel the turn, drop approvals and grants, confirm the agent is dead (D-7)."""
+        self._agent_state()
+        request = getattr(self, 'home_request', None)
+        busy = (self.agent_pending is not None or bool(self.agent_denials)
+                or (request is not None and getattr(request, 'home_agent', False) is True))
+        if not self._close_home_agent():
+            raise ValueError('The home agent process is still running; the build was not started.')
+        self.agent_grants = []
+        self.agent_pending = None
+        self.agent_denials = []
+        if busy:
+            self.home_history.append(('system', 'Home agent turn and pending approvals discarded because a build is starting.'))
 
-    def _housekeeping_turn(self, message):
-        """Send one homepage message straight to the persistent runner. False if it is unavailable."""
-        session = self._housekeeping_session()
+    def _discard_agent_pending(self, note):
+        self.agent_pending = None
+        self.agent_denials = []
+        if note:
+            self.home_history.append(('system', note))
+
+    def _agent_turn(self, message, resend=False):
+        """Send one homepage message to the home agent. False if it is unavailable."""
+        session = self._home_agent_session()
         if session is None:
             return False
         self._ensure_chat()
@@ -3359,28 +3420,154 @@ class UncleTUI:
         if not message.strip():
             return True
         text = self.chat.refs.expand(sanitize(message))
+        if self.agent_handoff:
+            text = self.agent_handoff + '\n\n' + text
+            self.agent_handoff = ''
         self.chat_calls += 1
-        root = _project_root()
-        log = os.path.join(root, '.uncle', 'workflow', 'logs', 'housekeeping-chat-%d.jsonl' % self.chat_calls)
-        meta = {'call_id': uuid.uuid4().hex, 'number': self.chat_calls, 'trigger': 'housekeeping',
-                'deadline': int(os.environ.get('HOUSEKEEPING_CHAT_TIMEOUT', '900')),
+        log = os.path.join(_project_root(), '.uncle', 'workflow', 'logs', 'home-agent-chat-%d.jsonl' % self.chat_calls)
+        meta = {'call_id': uuid.uuid4().hex, 'number': self.chat_calls, 'trigger': 'home-agent',
+                'deadline': int(os.environ.get('UNCLE_HOME_AGENT_TIMEOUT', '900')),
                 'workflow_state': self._workflow_state(), 'stage': ''}
-        self.home_history.append(('user', sanitize(message)))
+        if not resend:
+            self.agent_origin, self.agent_origin_message = uuid.uuid4().hex, message
+            self.home_history.append(('user', sanitize(message)))
         request = SupervisorRequest(session.base_command, text, session.env, session.home, log, meta, session=session)
-        request.housekeeping = True
+        request.home_agent = True
+        request.generation = session.generation
+        request.origin = self.agent_origin
         request.config = session.config
         self.home_request = request
         return True
 
-    def send_home_chat(self, message):
-        if self._housekeeping_idle() and not message.lstrip().startswith(('/', '\\')):
-            if self._housekeeping_turn(message):
+    def _agent_next_denial(self):
+        """Show the next queued tool denial as a pending approval (D-1, one at a time, FIFO)."""
+        while self.agent_denials and self.agent_pending is None:
+            denial = self.agent_denials.pop(0)
+            tool = str(denial.get('tool_name') or denial.get('tool') or '')
+            tool_input = denial.get('tool_input') if isinstance(denial.get('tool_input'), dict) else {}
+            if tool == 'Bash' and isinstance(tool_input.get('command'), str):
+                verbatim = tool_input['command']
+            else:
+                verbatim = json.dumps(tool_input, sort_keys=True)
+            try:
+                rule = home_agent_session.grant_rule(tool, tool_input)
+            except ValueError as exc:
+                self.home_history.append(('system', 'Denied %s cannot be granted: %s' % (tool, sanitize(str(exc))[:200])))
+                continue
+            self.agent_pending = {'kind': 'tool', 'tool': tool, 'rule': rule, 'verbatim': verbatim,
+                                  'generation': self.agent_generation, 'origin': self.agent_origin,
+                                  'message': self.agent_origin_message}
+            self.home_history.append(('system', 'The agent was denied permission to use %s:\n%s\n'
+                                                'Reply "yes" to allow exactly this for this session; anything else declines.'
+                                      % (tool, sanitize(verbatim))))
+
+    def _agent_confirm_action(self, action):
+        self.agent_pending = {'kind': 'action', 'action': action, 'generation': self.agent_generation}
+        self.home_history.append(('system', 'The agent proposes this action:\n%s\n'
+                                            'Reply "yes" to run it; anything else cancels.'
+                                  % sanitize(json.dumps(action, sort_keys=True))[:600]))
+
+    def _validate_agent_cwd(self, path):
+        if not (isinstance(path, str) and os.path.isabs(path)):
+            raise ValueError('path is not absolute')
+        resolved = os.path.realpath(path)
+        if not os.path.isdir(resolved):
+            raise ValueError('not a directory')
+        if resolved == os.path.realpath(os.sep) or resolved == os.path.realpath(os.path.expanduser('~')):
+            raise ValueError('/ and the home directory are not allowed')
+        return resolved
+
+    def _agent_created_here(self, resolved):
+        try:
+            info = os.stat(resolved)
+        except OSError:
+            return False
+        return getattr(info, 'st_birthtime', info.st_ctime) >= self.agent_started - 1
+
+    def _agent_apply_cwd(self, resolved, action):
+        self._follow_project_root(resolved)
+        self._close_home_agent(handoff=True)
+        if action is not None:
+            self._agent_confirm_action(action)
+
+    def _agent_cwd(self, path, action):
+        """Validate and apply an agent `uncle_cwd`; an invalid one cancels the same reply's action (D-6)."""
+        try:
+            resolved = self._validate_agent_cwd(path)
+        except ValueError as exc:
+            self.home_history.append(('system', 'Ignored uncle_cwd (%s).%s' % (
+                sanitize(str(exc)), ' The action in the same reply was cancelled.' if action else '')))
+            return
+        if resolved == os.path.realpath(_project_root()):
+            if action is not None:
+                self._agent_confirm_action(action)
+        elif self._agent_created_here(resolved):
+            self._agent_apply_cwd(resolved, action)
+        else:
+            self.agent_pending = {'kind': 'cwd', 'path': resolved, 'action': action, 'generation': self.agent_generation}
+            self.home_history.append(('system', 'The agent wants to work in %s, which it did not create this session.\n'
+                                                'Reply "yes" to switch; anything else declines.%s' % (
+                sanitize(resolved), ' The action in the same reply is cancelled if you decline.' if action else '')))
+
+    def _resolve_agent_pending(self, approved, message):
+        pending, self.agent_pending = self.agent_pending, None
+        if pending is None:
+            return
+        self.home_history.append(('user', sanitize(message)))
+        if pending['generation'] != self.agent_generation:
+            self.home_history.append(('system', 'That approval belonged to a closed session and was ignored.'))
+            return
+        kind = pending['kind']
+        if kind == 'tool':
+            self.agent_grants.append(pending['rule'])
+            self._close_home_agent(handoff=True)
+            if self._home_agent_session() is None:
+                self.agent_grants.remove(pending['rule'])
+                self.home_history.append(('system', 'The grant was refused or the agent could not restart; nothing was allowed.'))
                 return
-            if (os.environ.get('UNCLE_HOUSEKEEPING_SESSION') != '0'
-                    and not getattr(self, '_housekeeping_unavailable_noted', False)):
-                self._housekeeping_unavailable_noted = True
-                self.home_history.append(('system', 'Housekeeping has no persistent worker for the supervisor runner (claude, codex and kimi have one); '
-                                                    'using the supervisor chat.'))
+            self.home_history.append(('system', 'Allowed for this session: ' + sanitize(pending['verbatim'])[:300]))
+            if pending['origin'] == self.agent_origin and pending['origin'] not in self.agent_resent:
+                self.agent_resent.add(pending['origin'])
+                self.agent_denials = []
+                try:
+                    self._agent_turn(pending['message'], resend=True)
+                except ValueError as exc:
+                    self.chat_error = sanitize(str(exc))
+            else:
+                self.home_history.append(('system', 'The request was already retried once; send it again to continue.'))
+                self._agent_next_denial()
+        elif kind == 'cwd':
+            self._agent_apply_cwd(pending['path'], pending['action'])
+        elif kind == 'action':
+            try:
+                self._home_action(pending['action'], replace_approved=True)
+            except (OSError, ValueError) as exc:
+                self.chat_error = sanitize(str(exc))
+                self.home_history.append(('system', self.chat_error))
+
+    def _decline_agent_pending(self):
+        pending, self.agent_pending = self.agent_pending, None
+        self.agent_denials = []
+        if pending is None:
+            return
+        if pending['kind'] == 'tool':
+            self.agent_handoff += ('\n' if self.agent_handoff else '') + (
+                'The operator declined permission for %s: %s. Do not retry it.' % (pending['tool'], pending['verbatim'][:300]))
+            self.home_history.append(('system', 'Declined: nothing was granted and nothing was re-sent.'))
+        else:
+            self.home_history.append(('system', 'Declined: the agent proposal was discarded.'))
+
+    def send_home_chat(self, message):
+        self._agent_state()
+        slash = message.lstrip().startswith(('/', '\\'))
+        if self.agent_pending is not None and not slash:
+            if _AGENT_APPROVE.fullmatch(message.strip()):
+                self._resolve_agent_pending(True, message)
+                return
+            self._decline_agent_pending()
+        if self._home_agent_idle() and not slash and not ISSUE_REQUEST_RE.fullmatch(message.strip()):
+            if self._agent_turn(message):
+                return
         fix = re.match(r'^(?:please\s+)?fix(?:\s|$)', message.strip(), re.I)
         markdown_request = re.match(r'^(?:please\s+)?(?:edit|update|correct|repair|rewrite)\b', message.strip(), re.I) and re.search(r'\.md\b|markdown|\.uncle(?:/|\b)', message, re.I)
         if fix or markdown_request:
@@ -3663,7 +3850,7 @@ class UncleTUI:
         if not got:
             return False
         self._chat_partial_raw = raw
-        text = raw if (getattr(request, 'housekeeping', False) is True) else supervisor_chat.partial_reply(raw)
+        text = raw if (getattr(request, 'home_agent', False) is True) else supervisor_chat.partial_reply(raw)
         if text == getattr(self, 'chat_partial', ''):
             return False
         self.chat_partial = text
@@ -3678,8 +3865,8 @@ class UncleTUI:
         except queue.Empty:
             return False
         self.home_request = None
-        if (getattr(request, 'housekeeping', False) is True):
-            return self._apply_housekeeping_reply(request, item)
+        if (getattr(request, 'home_agent', False) is True):
+            return self._apply_home_agent_reply(request, item)
         changed = self._apply_home_reply(request, item)
         text = getattr(request, 'startup_text', None)
         if isinstance(text, str) and self.state != 'running':
@@ -3692,19 +3879,59 @@ class UncleTUI:
                 self.home_history.append(('system', self.chat_error))
         return changed
 
-    def _apply_housekeeping_reply(self, request, outcome):
-        """A housekeeping reply is plain prose: show it as written, never parse an envelope."""
+    def _apply_home_agent_reply(self, request, outcome):
+        """Show the agent's prose; act only on validated trailing blocks of its own final text (D-5, D-6, D-7)."""
+        self._agent_state()
         self.chat_partial = ''
         self._chat_partial_raw = ''
+        if getattr(request, 'generation', None) != self.agent_generation:
+            return True  # closed, cancelled or superseded session: nothing it says may act
         self._record_chat_call(request, outcome)
-        if outcome.get('status') == 'reply':
-            self.home_history.append(('supervisor', sanitize(outcome.get('reply', ''))[:8000]))
-            self.chat_error = ''
-        else:
+        if outcome.get('status') != 'reply':
             detail = sanitize(str(outcome.get('detail', '')))[:400]
-            self.chat_error = 'Housekeeping call %s%s. Retry; the runner restarts on the next message.' % (
+            self.chat_error = 'Home agent call %s%s. Retry; the agent restarts on the next message.' % (
                 outcome.get('status', 'failed'), ': ' + detail if detail else '')
             self.home_history.append(('system', self.chat_error))
+            return True
+        self.chat_error = ''
+        prose, blocks = split_trailing_blocks(str(outcome.get('reply', '')))
+        if prose.strip():
+            self.home_history.append(('supervisor', sanitize(prose)[:8000]))
+        found = {}
+        for kind, body in blocks:
+            found.setdefault(kind, []).append(body)
+        cwd_path = action = None
+        for kind, bodies in found.items():
+            if len(bodies) > 1:
+                self.home_history.append(('system', 'The reply had more than one %s block; none was executed.' % kind))
+                continue
+            try:
+                data = json.loads(bodies[0])
+            except ValueError:
+                self.home_history.append(('system', 'Ignored a malformed %s block.' % kind))
+                continue
+            if kind == 'uncle_cwd':
+                if isinstance(data, dict) and isinstance(data.get('path'), str):
+                    cwd_path = data['path']
+                else:
+                    self.home_history.append(('system', 'Ignored a malformed uncle_cwd block.'))
+            else:
+                try:
+                    action = parse_home_action(bodies[0])
+                except ValueError as exc:
+                    action = None
+                    self.home_history.append(('system', 'Ignored an invalid uncle_action block: %s' % sanitize(str(exc))[:200]))
+                else:
+                    if action is None:
+                        self.home_history.append(('system', 'Ignored an invalid uncle_action block.'))
+        denials = outcome.get('permission_denials')
+        if isinstance(denials, list):
+            self.agent_denials = [d for d in denials if isinstance(d, dict)]
+        if cwd_path is not None:
+            self._agent_cwd(cwd_path, action)
+        elif action is not None:
+            self._agent_confirm_action(action)
+        self._agent_next_denial()
         return True
 
     def _apply_home_reply(self, request, item):
@@ -4227,11 +4454,6 @@ class UncleTUI:
                     'message': 'Starting GitHub issue build'
                 }
                 self._home_action(action, replace_approved=True)
-            elif self._startup_action == 'housekeeping':
-                # A one-shot launch with no terminal on stdin (piped text) has
-                # nobody to press q once the run finishes: quit when it exits.
-                self._quit_when_housekeeping_exits = not sys.stdin.isatty()
-                self._start_housekeeping(self._resolve_startup_text())
             elif self._startup_action == 'change_request':
                 text = self._read_startup_text_file(self._startup_text_file)
                 if any(os.path.lexists(os.path.join(_project_root(), *part, 'CHANGE_REQUEST.md'))
@@ -4510,6 +4732,7 @@ class UncleTUI:
 
     def _triage_turn(self, mode, proposal=None, followup=''):
         self._triage_init()
+        self._agent_quiesce()
         if self.triage_request is not None:
             raise ValueError('A triage turn is still running. Wait for it or use /clear to cancel.')
         if self.triage_tainted:
@@ -6108,7 +6331,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/runstage', '/delegate', '/app-input', '/housekeeping', '/mode']
+        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/runstage', '/delegate', '/app-input']
         text = self.chat_composer.lower()
         if self._composer_cursor() != len(text):
             return []
@@ -6138,30 +6361,12 @@ class UncleTUI:
                         '/configure': self.menu_items().index('Configure'),
                         '/settings': self.menu_items().index('Configure'),
                         '/quit': self.menu_items().index('Quit')}
-            if command in ('/new', '/requirements', '/change', '/issue', '/housekeeping') and (
+            if command in ('/new', '/requirements', '/change', '/issue') and (
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command not in ('/issue', '/housekeeping', '/do', '/run', '/runstage', '/delegate', '/app-input', '/clear', '/resume', '/mode'):
+            if argument and command not in ('/issue', '/do', '/run', '/runstage', '/delegate', '/app-input', '/clear', '/resume'):
                 self.chat_error = command + ' does not take arguments'
-                return True
-            if command == '/housekeeping':
-                try:
-                    self._start_housekeeping(argument)
-                    self.chat_composer = ''
-                    self.chat_choices = []
-                    self.chat_error = ''
-                except (OSError, ValueError) as exc:
-                    self.chat_error = sanitize(str(exc))
-                return True
-            if command == '/mode':
-                if argument in ('housekeeping', 'supervisor'):
-                    self.home_mode = argument
-                    self.home_history.append(('system', 'Homepage chat mode: ' + argument + '.'))
-                    self.chat_error = ''
-                else:
-                    self.chat_error = 'Homepage chat mode is %s. Usage: /mode housekeeping|supervisor' % getattr(self, 'home_mode', 'housekeeping')
-                self.chat_composer = ''
                 return True
             if command in ('/run', '/runstage'):
                 try:
@@ -6283,8 +6488,9 @@ class UncleTUI:
                 if self.home_request:
                     self.home_request.cancel()
                     self.home_request = None
-                self._close_housekeeping_session()
-                threading.Thread(target=self._warm_housekeeping, daemon=True).start()
+                self._close_home_agent()
+                self._discard_agent_pending('')
+                self.agent_grants = []
                 self.chat_picker = False
                 self.home_history.clear()
                 self.home_history.append(('system', cleared))
@@ -6294,7 +6500,7 @@ class UncleTUI:
                 self.chat_error = ''
                 self.chat_choices = []
             else:
-                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /stop /triage /do N /resume [#N] /delegate on|off|status /app-input TEXT /mode housekeeping|supervisor'
+                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /stop /triage /do N /resume [#N] /delegate on|off|status /app-input TEXT'
             return True
         return False
 
@@ -7038,9 +7244,7 @@ class UncleTUI:
             "menu": "The man from uncle",
             "issue_mode": "Seed as",
             "issue": "Issue number or URL",
-            "config": ("Housekeeping disallow list — Enter: edit/add, d: remove, q back"
-                       if getattr(self, "config_section", "") == "housekeeping"
-                       else "Configure — Enter opens a section or setting, q back"),
+            "config": "Configure — Enter opens a section or setting, q back",
             "notice": "Enter to continue to " + (
                 "menu" if getattr(self, "notice_destination", "config") == "menu"
                 else "Configure"),
@@ -7603,19 +7807,11 @@ class UncleTUI:
                         self._open_picker("approval_name", "!misc")
                     elif self.config_sel == 2:
                         self._open_picker("markdown_viewer", "!misc")
-                    else:
-                        self.config_section = "housekeeping"
-                        self.config_sel = self.config_scroll = 0
-                        self.notice = ""
-                elif section == "housekeeping":
-                    self._hk_enter()
+
                 elif section == "opencode" and self.config_sel == 1:
                     self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
                 else:
                     self._open_stage(self._config_row())
-            elif (getattr(self, "config_section", "") == "housekeeping"
-                  and k in (ord("d"), ord("D"), ord("x"), ord("X"), curses.KEY_DC)):
-                self._hk_remove()
             elif k in (ord("q"), ord("Q")):
                 self._go_back()
             return
@@ -7683,45 +7879,6 @@ class UncleTUI:
                 self.input_buf += chr(k)
             return
 
-    def _hk_enter(self):
-        """Enter on a housekeeping row: edit an entry, add one, or reset."""
-        patterns = hk_config.load(CONFIG_PATH)
-        self.notice = ""
-        if self.config_sel < len(patterns):
-            self.hk_index = self.config_sel + 1
-            self.input_buf = patterns[self.config_sel]
-        elif self.config_sel == len(patterns):
-            self.hk_index = 0
-            self.input_buf = ""
-        else:
-            hk_config.reset(CONFIG_PATH)
-            self.config_sel = 0
-            self.notice = "Disallow list reset to defaults."
-            return
-        self.picker_target, self.picker_kind = "!hk", "pattern"
-        self.state = "config_edit"
-
-    def _hk_remove(self):
-        patterns = hk_config.load(CONFIG_PATH)
-        if self.config_sel >= len(patterns):
-            return
-        hk_config.remove(CONFIG_PATH, self.config_sel + 1)
-        self.config_sel = max(0, min(self.config_sel, len(patterns) - 2))
-        self.notice = "Removed. The built-in floor is locked and unaffected."
-
-    def _hk_confirm(self):
-        try:
-            if self.hk_index:
-                hk_config.edit(CONFIG_PATH, self.hk_index, self.input_buf)
-            else:
-                hk_config.add(CONFIG_PATH, self.input_buf)
-        except hk_config.ConfigError as exc:
-            self.notice = "rejected: %s" % exc
-            return
-        self.notice = ""
-        self.input_buf = ""
-        self.state = "config"
-
     def _go_back(self):
         if self.state == "issue":
             self.state = "menu"
@@ -7736,7 +7893,7 @@ class UncleTUI:
         elif self.state == "stage":
             self.state = "config"
         elif self.state == "config_edit":
-            self.state = "config" if self.picker_target in ("@new", "!misc", "!supervision", "!hk") else "stage"
+            self.state = "config" if self.picker_target in ("@new", "!misc", "!supervision") else "stage"
         elif self.state == "picker":
             self.state = "config" if self.picker_target == "!misc" else "stage"
         self.sel = 0
@@ -7795,8 +7952,6 @@ class UncleTUI:
             self.input_buf = ""
             self.state = "issue_mode"
             self.sel = 0
-        elif self.state == "config_edit" and self.picker_target == "!hk":
-            self._hk_confirm()
         elif self.state == "config_edit":
             val = self.input_buf if self.picker_kind == "markdown_viewer" else self.input_buf.strip()
             runner = self.stage_runner(self.picker_target)
@@ -7821,8 +7976,13 @@ class UncleTUI:
         if getattr(self, 'triage_request', None) is not None:
             self.chat_error = 'Wait for recovery to finish or use /clear to cancel before starting a workflow.'
             return
-        if self.home_request is not None:
+        if self.home_request is not None and getattr(self.home_request, 'home_agent', False) is not True:
             self.chat_error = 'Wait for the current chat request or cancel it with /clear before starting a workflow.'
+            return
+        try:
+            self._agent_quiesce()
+        except ValueError as exc:
+            self.chat_error = sanitize(str(exc))
             return
         if self.workflow_idx == 1 and not self._valid_issue(self.issue):
             self.state = 'issue'
@@ -7862,7 +8022,7 @@ class UncleTUI:
             self.completion_preview.close()
         self._close_early_preview()
         self._close_supervisor_session()
-        self._close_housekeeping_session()
+        self._close_home_agent()
         self.state = "quit"
 
     # ---- main loop ----
@@ -7876,13 +8036,12 @@ class UncleTUI:
         # while the homepage is being read instead of in front of the first
         # answer. A failure here is not an error -- the per-call path remains.
         threading.Thread(target=self._warm_supervisor, daemon=True).start()
-        threading.Thread(target=self._warm_housekeeping, daemon=True).start()
         self._start_model_refresh()
         try:
             self._run_loop()
         finally:
             self._close_supervisor_session()
-            self._close_housekeeping_session()
+            self._close_home_agent()
             try:
                 if getattr(self, "home_request", None):
                     self.home_request.cancel()

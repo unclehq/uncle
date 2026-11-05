@@ -311,11 +311,7 @@ def main(argv):
         if args is None:
             return 2
     if attended and "--attended" not in args:
-        # housekeeping-workflow.sh only honours mode flags before its text.
-        if os.path.basename(args[0]) == "housekeeping-workflow.sh":
-            args.insert(1, "--attended")
-        else:
-            args.append("--attended")
+        args.append("--attended")
     _set_title(args)
     return run(args, root, attended=attended)
 
@@ -324,8 +320,7 @@ def _driver_from_env(root, err):
     """Build driver argv from UNCLE_STARTUP_*; only allowlisted actions and fixed names.
 
     Mirrors the TUI: --application seeds REQUIREMENTS.md, --change-request seeds
-    CHANGE_REQUEST.md, --issue passes the reference to from-issue.sh and
-    --housekeeping passes the text to housekeeping-workflow.sh.
+    CHANGE_REQUEST.md and --issue passes the reference to from-issue.sh.
     """
     action = os.environ.get("UNCLE_STARTUP_ACTION", "")
     if _duties is None or action not in _duties.STARTUP_ACTIONS:

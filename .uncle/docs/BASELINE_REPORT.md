@@ -1,86 +1,68 @@
-# Baseline report - Issue 160 (`--noui`)
+# Baseline Report (Issue 164)
 
-Omitted sections: Reproduction result (feature, not a bug); Flaky behavior (none documented)
+Omitted sections: Reproduction (feature, not a bug); Baseline test results (driver supplies them, see section 9)
 
 ## 1. Change-request summary
-See CHANGE_REQUEST.md (Issue 160). Add `uncle --noui` / `UNCLE_NOUI=1`: run a startup action (`--application|--issue|--change-request|--housekeeping`) with no curses, plain text on stdout/stderr, documented exit codes, same results as the TUI path.
-
-**Tree state (important):** HEAD is a127f35, but the working tree already holds an UNCOMMITTED earlier attempt at this issue: modified `uncle`, `uncle_tui.py`, `README.md`; untracked `scripts/lib/run_duties.py`, `scripts/lib/uncle_headless.py`, `scripts/tests/{run-duties-test.py,headless-run-test.py,headless-equivalence-test.py,launcher-noui-test.sh,pty_helper.py}`. `.uncle/docs/IMPLEMENTATION_NOTES.md` records steps 1-5 of that attempt. It is treated as a starting point to audit and complete, not as passing evidence. The driver baseline measures the tree as it is now.
+See `.uncle/docs/CHANGE_REQUEST.md`: delete housekeeping entirely; make the idle home-chat supervisor a tool-enabled agent; keep validated build actions; tool-free supervisor while a build runs.
 
 ## 2. Repository architecture
-- `uncle` (bash launcher, 1017 lines): parses flags, resolves startup action/text (private 0600 file for stdin text), exports `UNCLE_STARTUP_*`, then runs `uncle_tui.py` (with `--noinput` when no tty) or a line menu.
-- `uncle_tui.py` (8164 lines, curses): owns worktree entry, driver command, driver process, dialogs, title, finish summary, desktop preview/launch.
-- Drivers: `scripts/stagegate.sh` (app), `from-issue.sh`, `change-workflow.sh`, `housekeeping-workflow.sh`.
-- Shared pure libs in `scripts/lib/` (`desktop_launch.py`, `terminal_title.py`, `worktrees.sh`, `worktree_runs.py`, ...).
+Bash launcher `uncle` parses flags and starts `uncle_tui.py` (8165 lines, one `UncleTUI` class). Domain-ish libs in `scripts/lib/` (Python and bash). Tests in `scripts/tests/` (`*-test.py`, `*-test.sh`). Housekeeping = `scripts/housekeeping-workflow.sh` + `scripts/lib/housekeeping_{config,input,policy,session}.py` + `prompts/housekeeping-plan.md`.
 
 ## 3. Relevant code paths
-| Duty | Location |
-|---|---|
-| Launcher flag parse / startup action / text file | `uncle:140-340` |
-| Mode resolution (`UNCLE_STARTUP_ATTENDED/UNATTENDED`) | `uncle:382-391` |
-| Prior-attempt `--noui` branch (`exec python3 .../uncle_headless.py` with NO args) | `uncle:394-411` |
-| TUI launch (`--noinput` forced for startup action without tty) | `uncle:464-475` |
-| Startup-action dispatch | `uncle_tui.py:4197-4246` (`_handle_startup_action`) |
-| Change-request O_EXCL write then workflow idx 2 | `uncle_tui.py:4255-4275`; private-file read `:4277-4311` |
-| Brief creation (create_app) | `uncle_tui.py:4330-4336`; shared piece `run_duties.startup_brief_document` |
-| Driver argv (`cmd_for`, `--attended` only when attended) | `uncle_tui.py:1568-1583`; WORKFLOWS `:143-145` |
-| Run entry, `_enter_run_worktree` via `worktrees.sh worktree_auto` (not for issue runs) | `uncle_tui.py:7818-7855`, `:2061-2092` |
-| Follow driver-created issue worktree | `uncle_tui.py:2095-2115` |
-| Banner/finish parse | `uncle_tui.py:2790+` (`_read_banner`) -> `run_duties.read_banner`/`BannerCollector` (prior attempt) |
-| `finish_decision` | moved to `scripts/lib/run_duties.py:65`, re-exported by TUI |
-| Terminal title push/pop | `uncle_tui.py:55-80`, `:1988-2008` |
-| Desktop preview/launch | `uncle_tui.py:2380-2510`, `scripts/lib/desktop_launch.py` (`run_duties.desktop_decision`) |
-| Exit/summary printing | `uncle_tui.py:8118-8164` |
-| Prior headless runner (run/stream/signals/escape filter) | `scripts/lib/uncle_headless.py:37-310` |
+- `uncle`: usage lines 70-125; mutual exclusion 172/224/255/283; `parse_text_option` 162-210 (uses `housekeeping_input.py`); `--housekeeping` case 273; did-you-mean list 337; `UNCLE_HOUSEKEEPING_UNATTENDED` 361; noui message 414; Configure menu item 4 and `housekeeping_disallow_menu` 830-870.
+- `uncle_tui.py`: imports 99-101; config section UI 1132, 1354-1414; `_start_housekeeping` 1586; startup action 4230; `_housekeeping_idle/_session/_warm/_close/_turn` 3307-3371; `send_home_chat` 3374; `_apply_housekeeping_reply` 3695; slash commands 6111-6163, 6286, 6297; config screen 7041, 7607-7616, 7687; shutdown 7865-7885. Supervisor: `_supervisor_turn` 3467, `_supervisor_session` 3572, `_apply_home_reply` 3710, `_apply_home_action` 4034, `_home_action` 4090. Project dir: `_project_root()` 180 (env `UNCLE_PROJECT_ROOT`), `_follow_project_root` 2097, title 2003.
+- `scripts/lib/housekeeping_session.py`: `build_command` 58 (uses `--allowedTools` and `--disallowedTools` deny list), `HousekeepingSession` 412.
+- `scripts/lib/run_duties.py` 134-158 (STARTUP_ACTIONS, driver map); `uncle_headless.py` 314-328; `mode.sh` 93.
+- `scripts/lib/home_chat.py` (97 lines), `home_actions.py` (140 lines): action schema and `parse_reply`.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `uncle --application/--issue/--change-request/--housekeeping` on a tty | Curses TUI starts driver, unattended by default, `--attended` passes through | `uncle:382-391`, `uncle_tui.py:1568` | Yes |
-| B-2 | Same, no tty | TUI forced with `uncle_tui.py --noinput` | `uncle:471-475` | Yes |
-| B-3 | No startup action, no tty | Line-based menu | `uncle:464+` | Yes |
-| B-4 | Unattended finish | TUI leaves curses, prints Finished-build line + token summary | `uncle_tui.py:8118-8164` | Yes |
-| B-5 | Non-issue run start | TUI creates worktree via `worktree_auto`, sets `UNCLE_PROJECT_ROOT[_LOCKED]` | `uncle_tui.py:2061` | Yes |
-| B-6 | `--change-request` with existing CHANGE_REQUEST.md | Refused (`CHANGE_REQUEST_EXISTS`) | `uncle_tui.py:4255` | Yes |
-| B-7 | Existing mutual-exclusion/usage errors | exit 1 | `uncle:165-221` | Yes |
-| B-8 | `--noui` at HEAD | Unknown flag | `git show HEAD:uncle` | n/a (changing) |
+| B-1 | Idle home chat, mode housekeeping (default) | Message goes to persistent tool agent with deny list | uncle_tui.py:3307-3380 | No (replaced) |
+| B-2 | `/mode supervisor`, or build running | Tool-free supervisor, validated actions | uncle_tui.py:3467, 3710 | Yes |
+| B-3 | 'build issue 34' | `github_issue` action started by the app | home_actions.py, uncle_tui.py:4090 | Yes |
+| B-4 | hello-world request | brief drafted, `create_app` action | home_actions.py | Yes |
+| B-5 | `uncle --housekeeping` | runs housekeeping driver | uncle:273 | No (remove) |
+| B-6 | `/housekeeping`, `/mode` | commands exist | uncle_tui.py:6111-6163 | No (remove) |
+| B-7 | Configure item 4 | disallow list editor | uncle:830, uncle_tui.py:7041 | No (remove) |
+| B-8 | Unknown option | usage plus did-you-mean | uncle:337 | Yes |
+| B-9 | Driver moves root | `_follow_project_root` updates UNCLE_PROJECT_ROOT, status and title | uncle_tui.py:2097 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| V-1 | Startup text file is trusted only if regular, user-owned, in 0700 dir; deleted after read | `uncle_tui.py:4277` | launcher/TUI startup tests in `scripts/tests` | Medium |
-| V-2 | Exactly one startup action | `uncle:165-221` | launcher shell tests | High |
-| V-3 | Unattended run exits TUI only when completed and exit 0 | `run_duties.finish_decision` | `finish_decision` tests (Issue 107) | High |
-| V-4 | One worktree per run, locked via `UNCLE_PROJECT_ROOT_LOCKED` | `uncle_tui.py:2061`, drivers | worktree shell tests | Medium |
-| V-5 | Gates recorded human vs delegated by drivers | drivers/attestation libs | attestation tests | Medium |
+| V-1 | Builds start only via validated action | home_actions.parse_reply, `_home_action` | home-actions-test.py | High |
+| V-2 | Supervisor chat is tool-free | supervisor_command flags | supervisor-chat-test.py | Medium |
+| V-3 | No permission-bypass flags | convention (CLAUDE.md) | none found | Low |
+| V-4 | Unknown flags exit non-zero | uncle did-you-mean | launcher tests | High |
 
 ## 6. Interface contracts
-Launcher CLI and env (`UNCLE_STARTUP_ACTION` in `app|create_app, github_issue, change_request, housekeeping`; `UNCLE_STARTUP_TEXT[_FILE]`; `UNCLE_STARTUP_ATTENDED/UNATTENDED`). Driver env contract (`UNCLE_PROJECT_ROOT`, `UNCLE_STEERING`, `UNCLE_SIGNING_JSON`, `UNCLE_ATTENDED_STDIN`). Driver argv per `cmd_for`. `uncle_tui.py` exports `finish_decision` (monkeypatched by tests).
+CLI flags `--application --issue --change-request --housekeeping`; env `UNCLE_STARTUP_ACTION`; env `UNCLE_HOUSEKEEPING_SESSION`, `HOUSEKEEPING_CHAT_TIMEOUT`, `UNCLE_HOUSEKEEPING_UNATTENDED` (deprecated no-op); config `.uncle/config` key `housekeeping.disallow`; home action JSON `uncle_action`.
 
 ## 7. Existing automated-test coverage
-`scripts/run-shell-tests.sh` (parallel shell suites incl. launcher tests) and `scripts/run-python-tests.sh` (`scripts/tests/*-test.py`). They use separate temp dirs and bind no shared ports, so they form one parallel group. Prior-attempt suites (untracked) are collected by the same runners: `run-duties-test.py`, `headless-run-test.py`, `headless-equivalence-test.py`, `launcher-noui-test.sh`.
+Housekeeping-only: `housekeeping-input-test.py`, `housekeeping-launcher-test.sh`, `housekeeping-policy-test.py`, `housekeeping-session-test.py`, `housekeeping-workflow-test.sh`, `tui-housekeeping-test.py`. Mentions in: `run-duties-test.py`, `mode-resolution-test.sh`, `launcher-stdin-text-test.sh` (8), `supervisor-chat-test.py`, `headless-run-test.py`, `home-actions-test.py`, `home-chat-test.py`, `launcher-noui-test.sh`, `chat-test.py`. Shell and Python runners are independent (separate temp dirs, no shared ports), so they run as one parallel group.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (documented runners per stage instructions). Not executed here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is the authority. Some Python suites are documented as failing on a clean checkout; none run by me.
+Not run here by design. Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (repo convention in CLAUDE.md task text). Documented pre-existing failures: none found; the driver baseline in `.uncle/workflow/green-check.baseline.tsv` is authoritative.
 
-## 10. Existing failures, warnings
-None established by me. UNRESOLVED: which prior-attempt suites pass today; the driver baseline will say.
+## 10. Existing failures/flaky
+None documented in the repository.
 
 ## 12. Likely change surface
-`uncle` (headless branch must pass driver selection), `scripts/lib/run_duties.py`, `scripts/lib/uncle_headless.py`, `uncle_tui.py` (delegate duties only), `README.md`, new tests under `scripts/tests/`.
+See sections 3 and 7 files; plus `README.md` (9 mentions), `docs/quickstart.md:63`, `docs/UNATTENDED_DEFAULT_MIGRATION.md`, `prompts/housekeeping-plan.md`. `FINAL_AUDIT.md` (root) mentions housekeeping; it is a reviewer-owned artifact and is not edited.
 
 ## 13. Regression-sensitive components
-TUI startup path and `finish_decision` import (tests patch `uncle_tui.finish_decision`); `_read_banner`; `cmd_for`; launcher argument/mode resolution order; terminal title.
+`send_home_chat` routing; `_apply_home_reply` action parsing; launcher exclusivity and stdin rules (`parse_text_option`, shared with `--application`); `run_duties.py` startup action table; `_follow_project_root`.
 
 ## 14. Outside the change
-Drivers and every stage/gate/check; TUI dialogs, config editing; `--noinput` behavior; line menu; JSON event streams.
+Build drivers, gates, verification, PR flow, tool-free supervisor internals during a build, other runners' supervision.
 
-## 15. Unknowns and assumptions
-- Prior-attempt gap found by inspection: `uncle:410` execs `uncle_headless.py` with no `-- DRIVER` argv, and `main()` returns 2 without one; the launcher therefore never reaches a driver. Also no worktree creation (B-5), no CHANGE_REQUEST write (B-6), no brief write, and the desktop decision is only recorded as skipped (`uncle_headless.py:280`). UNRESOLVED: full contents of `_stream` (lines 183-279) not read.
-- The CR says the supervisor drafts REQUIREMENTS.md for `--application`; the code actually uses the direct path (`uncle_tui.py:4205-4210`, `_startup_brief_turn` is not called from startup). Assumption: direct path is the parity target.
+## 15. Unknowns
+- Whether Claude `-p` surfaces permission denials in the stream-json result (assumed `permission_denials` in the result event; the plan verifies by fake-runner fixture, live check in manual).
+- Whether `housekeeping_input.py` is reused by `--application` (uncle:210 passes a label); it must be renamed, not deleted, if so.
 
 ## 16. Initial risk
-Medium-high: duties are inline in a 8k-line TUI; the equivalence claim (N-9) depends on replicating worktree/brief/env setup exactly.
+High: 8k-line TUI edit with 77 housekeeping mentions; arbitrary-command agent safety; cwd tracking. Medium: shared stdin helper.
 
 ## Exact build and test commands executed
 

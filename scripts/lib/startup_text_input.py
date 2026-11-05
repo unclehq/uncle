@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Validate housekeeping request text for `uncle --housekeeping`.
+"""Validate startup text for `uncle --application`.
 
-Usage: housekeeping_input.py [--label OPT] PRIVATE_DIR [--text TEXT]
+Usage: startup_text_input.py [--label OPT] PRIVATE_DIR [--text TEXT]
 
 Text comes from --text when given, otherwise from raw stdin bytes.  Limits
 mirror change_request_stdin.py (size cap, UTF-8, CRLF/CR normalised to LF, no
@@ -24,9 +24,9 @@ def fail(message):
 
 
 def main(argv):
-    usage = 'Error: usage: housekeeping_input.py [--label OPT] PRIVATE_DIR [--text TEXT]'
+    usage = 'Error: usage: startup_text_input.py [--label OPT] PRIVATE_DIR [--text TEXT]'
     args = argv[1:]
-    label = '--housekeeping'
+    label = '--application'
     if args[:1] == ['--label']:
         if len(args) < 2:
             fail(usage)
@@ -55,7 +55,7 @@ def main(argv):
         fail('Error: %s input contains NUL or control characters' % label)
     if not text.strip():
         fail('Error: %s text cannot be empty' % label)
-    fd, path = tempfile.mkstemp(prefix='housekeeping-', dir=private)
+    fd, path = tempfile.mkstemp(prefix='uncle-startup-', dir=private)
     with os.fdopen(fd, 'wb') as stream:
         stream.write(text.encode('utf-8'))
     print(path)

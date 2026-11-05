@@ -15,7 +15,7 @@ from chat import Conversation, References, Seed, sanitize
 from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import os
-os.environ.setdefault('UNCLE_HOUSEKEEPING_SESSION', '0')  # these tests exercise the supervisor chat, not the housekeeping default
+os.environ.setdefault('UNCLE_HOME_AGENT', '0')  # these tests exercise the supervisor chat, not the home agent
 import uncle_tui as tui
 
 

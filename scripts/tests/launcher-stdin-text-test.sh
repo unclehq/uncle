@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `uncle --application` / `--housekeeping` take their text from piped stdin when
+# `uncle --application` takes their text from piped stdin when
 # no value is given, or from `--OPT=VALUE`.  A fake python3 stands in for the TUI
 # and records the env contract (UNCLE_STARTUP_TEXT vs UNCLE_STARTUP_TEXT_FILE),
 # then deletes the file and its private dir the way the real TUI does.
@@ -10,7 +10,7 @@ trap 'rm -rf "$TMP"' EXIT
 fails=0
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 REAL_PYTHON3="$(command -v python3)"
-HELPER="$ROOT/scripts/lib/housekeeping_input.py"
+HELPER="$ROOT/scripts/lib/startup_text_input.py"
 
 mkdir -p "$TMP/bin" "$TMP/work"
 cat > "$TMP/bin/python3" <<FAKE
@@ -77,7 +77,7 @@ printf 'x\n\n' > "$TMP/in-two-nl"
 printf '\n' > "$TMP/in-nl"
 : > "$TMP/in-empty"
 
-for pair in application:create_app housekeeping:housekeeping; do
+for pair in application:create_app; do
     OPT="${pair%%:*}"; ACTION="${pair##*:}"
 
     # stdin case: file set, text empty
@@ -162,7 +162,7 @@ for pair in application:create_app housekeeping:housekeeping; do
     check "$OPT unknown after value: nothing read" test "$(cut -d' ' -f3 <<<"$UNREAD")" = "residue=0"
 
     # second mode option: mutually exclusive, before any stdin read
-    for other in application housekeeping; do
+    for other in application; do
         unread_case "--$OPT" "--$other"
         check "$OPT then --$other: exit 1, stdin unread, no residue" test "$UNREAD" = "rc=1 unread=11 residue=0"
         check "$OPT then --$other: mutually exclusive" grep -q 'mutually exclusive' "$TMP/err"
@@ -173,7 +173,7 @@ done
 unread_case --application --bogus
 check "--application --bogus: exit 1, unread, no residue" test "$UNREAD" = "rc=1 unread=11 residue=0"
 
-# ---- helper: housekeeping_input.py --label, newline handling, cap ----
+# ---- helper: startup_text_input.py --label, newline handling, cap ----
 helper() { # stdin from file $1, extra args after; sets HOUT HRC
     local in="$1"; shift
     rm -rf "$TMP/priv"; mkdir -p "$TMP/priv"; chmod 700 "$TMP/priv"
@@ -197,7 +197,7 @@ check "helper newline alone refused" test "$HRC" -eq 1
 helper /dev/null --label --application "$TMP/priv"
 check "helper label in message" grep -qF -- "--application text cannot be empty" "$TMP/herr"
 helper /dev/null "$TMP/priv"
-check "helper default label is --housekeeping" grep -qF -- "--housekeeping text cannot be empty" "$TMP/herr"
+check "helper default label is --application" grep -qF -- "--application text cannot be empty" "$TMP/herr"
 helper /dev/null --label --application "$TMP/priv" --text $'x\n'
 check "helper --text not stripped" test "$(helper_content)" = "b'x\\n'"
 check "helper --text success with label" test "$HRC" -eq 0
@@ -237,7 +237,7 @@ helper "$TMP/in-nul" "$TMP/priv"
 check "helper rejection writes nothing" test -z "$(find "$TMP/priv" -mindepth 1)"
 
 # launcher: over-cap and invalid input via stdin refused for both options
-for OPT in application housekeeping; do
+for OPT in application; do
     run_uncle "$TMP/cap-over" "--$OPT"
     check "$OPT over-cap stdin exits 1" test "$RC" -eq 1
     check "$OPT over-cap stdin: no residue" residue
@@ -250,7 +250,7 @@ for OPT in application housekeeping; do
 done
 
 # ---- TTY: bare option on a terminal is refused with the D-1 message ----
-for OPT in application housekeeping; do
+for OPT in application; do
     out="$("$REAL_PYTHON3" -I -c 'import os,pty,sys,subprocess
 m,sl=pty.openpty()
 env=dict(os.environ, UNCLE_SKIP_UPGRADE="1", NO_COLOR="1")

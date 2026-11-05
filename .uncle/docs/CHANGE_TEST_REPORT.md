@@ -4,14 +4,19 @@
 
 | Command | Status | Meaningful output | Requirements |
 |---|---|---|---|
-| bash scripts/run-shell-tests.sh | FAIL | Run by the driver, exit 1. ctions-driver-test.sh 76.2s gates-review-cache 74.8s scripts/tests/worktree-run-test.sh 66.8s scripts/tests/close-flow-test.sh#3of4 66.3s scripts/tests/close-flow-test.sh#4of4 66.2s scripts/tests/model-jobs-driver-test.sh 66.0s scripts/tests/stage-runner-test.sh 65.0s scripts/tests/early-checklist-flow-test.sh 62.5s scripts/tests/updated-plan-edits-driver-test.sh 61.6s scripts/tests/wave-prompts-test.sh 59.4s scripts/tests/updated-change-plan-ops-driver-test.sh 54.6s gates-verification-integrity | None stated |
-| bash scripts/run-python-tests.sh | FAIL | Run by the driver, exit 1. cripts/tests/defer-regressions-test.py#3of6 41.3s scripts/tests/attestation-statement-test.py 39.9s scripts/tests/updated-plan-schema-order-test.py#2of3 35.1s scripts/tests/fast4-regressions-test.py#1of2 33.9s scripts/tests/fast3-regressions-test.py 33.6s scripts/tests/fast4-regressions-test.py#2of2 32.5s scripts/tests/defer-regressions-test.py#1of6 29.4s scripts/tests/defer-regressions-test.py#2of6 27.7s scripts/tests/defer-regressions-test.py#4of6 27.0s scripts/tests/adversarial-slices-test.py | None stated |
+| python3 scripts/tests/{no-housekeeping,home-agent-session,tui-home-agent,home-actions,supervisor-chat,chat,startup-text-input,run-duties,headless-run}-test.py | PASS | all nine exit 0 (targeted tests) | AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9 |
+| bash scripts/tests/{launcher-removed-flag,launcher-stdin-text,launcher-noui,driver-marker,mode-resolution}-test.sh (UNCLE_* env unset) | PASS | all five exit 0 | AC-1, AC-2 |
+| baseline comparison: same suites in a pristine HEAD worktree | PASS | attestation-statement, audit-findings, auto-boundary, early-branch, github-issues, home-chat, pr-originless, project-plan-speed, startup-action, step-groups, supervisor, triage-chat, updated-plan-edits, updated-plan-ops fail identically at HEAD and in this tree | AC-10 |
+| bash scripts/run-shell-tests.sh && bash scripts/run-python-tests.sh | DRIVER PENDING | Driver owns the full regression run. | AC-10 |
+| formatter / linter / type checker | N/A | No configured formatter, linter or type checker for this repository. | None stated |
+| integration, frontend build, migration, rollback, performance, security checks | N/A | Not applicable; shell and unit suites above are the integration coverage. | None stated |
 
 ## Coverage gaps
 
-- `bash scripts/run-shell-tests.sh` failed (exit 1); the driver verification is not green.
-- `bash scripts/run-python-tests.sh` failed (exit 1); the driver verification is not green.
+- No live claude run of the home agent; tool execution and approval restart are covered with synthetic stream results only.
+- Planned defect-injection runs (swapped precedence, ignored marker, mutated delegate) were not executed here.
+- Pre-existing failing suites listed above were not repaired.
 
 ## Next action
 
-Repair the failing command(s) and rerun the driver verification.
+Driver runs the verification commands; reviewer should confirm the failing suites match the baseline.

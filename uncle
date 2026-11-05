@@ -67,7 +67,6 @@ Usage: uncle [-h|--help|--performance|--runs] [--attended] [--noui]
        uncle --application [TEXT] [--attended]
        uncle --issue [ISSUE] [--attended]
        uncle --change-request [--attended] < request.md
-       uncle --housekeeping [TEXT] [--attended]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -83,13 +82,13 @@ and per-stage overrides from `.uncle/config` (menu option 4).
   q) Quit
 
 Runs with no arguments. -h / --help print this message and exit 0.
-Mode: --application, --issue, --change-request and --housekeeping run unattended
+Mode: --application, --issue and --change-request run unattended
 by default (approval gates are delegated to the agent and recorded as unreviewed).
 --attended (or UNCLE_ATTENDED=1) makes every gate wait for you and needs a
 terminal on stdin. --unattended is deprecated and behaves as the default.
 --application [TEXT] starts a new application build immediately with the given
 description (or piped stdin when TEXT is omitted), skipping interactive input.
-For --application and --housekeeping, text beginning with -- must use the
+For --application, text beginning with -- must use the
 --OPT=TEXT form (e.g. --application=--flag); an empty value is refused. The homepage supervisor drafts
 REQUIREMENTS.md from TEXT, as if it had been typed there, and starts the
 build; without a supervisor the build starts from TEXT as written. Composes
@@ -100,8 +99,7 @@ interactive input. Stdin is read only when ISSUE is omitted (reference piped
 in). Composes with --attended; attended gates then need a terminal, since the
 reference consumed stdin.
 
-Only one startup option may be given (--application, --issue, --change-request,
---housekeeping), and at most one consumer takes stdin: a bare --application,
+Only one startup option may be given (--application, --issue, --change-request), and at most one consumer takes stdin: a bare --application,
 a bare --issue, or --change-request. With none of those, attended runs read
 gate answers from stdin automatically; no environment variable is needed.
 --change-request reads the whole change request from stdin (UTF-8, at most
@@ -110,10 +108,6 @@ starts the change workflow. stdin must be piped or redirected; it refuses to
 overwrite an existing CHANGE_REQUEST.md. The text is untrusted input to
 tool-using agents, especially with --unattended. --application, --issue and
 --change-request are mutually exclusive.
---housekeeping [TEXT] runs one free-form agent (the supervisor's runner and
-model) to carry out the chore described by TEXT (or piped stdin), under the
-housekeeping deny list; bare use on a terminal is refused as empty input. Exit 0
-when declined or the agent succeeds. Mutually exclusive with the three flags above.
 --performance reports recorded runtime and token usage for the current project.
 --runs lists the runs across this project's git worktrees (see
 `from-issue.sh --worktree`): one line per worktree holding a run, as
@@ -122,7 +116,7 @@ when declined or the agent succeeds. Mutually exclusive with the three flags abo
 without a person, records what nobody reviewed, and reports that at the end.
 --noui (or UNCLE_NOUI=1) runs a startup action headlessly: no curses, plain
 text progress on stdout. It requires one of --application, --issue,
---change-request or --housekeeping (otherwise exit 2; the menu is never shown)
+or --change-request (otherwise exit 2; the menu is never shown)
 and cannot be combined with --noinput. Unlike --noinput (the TUI's
 no-keyboard mode, which still draws the curses UI), --noui never starts the UI.
 Attended needs a tty on stdin.
@@ -153,13 +147,13 @@ UNCLE_FLAG_ATTENDED=""
 UNCLE_FLAG_UNATTENDED=""
 UNCLE_CR_DIR=""
 UNCLE_PENDING_STDIN=""
-# 1 once a startup option (bare --application/--housekeeping, bare --issue,
+# 1 once a startup option (bare --application, bare --issue,
 # --change-request) takes stdin for its own input. A claimed stdin cannot also
 # answer attended gates.
 UNCLE_STDIN_CLAIMED=0
 UNCLE_SHIFT=1
 
-# Handles --application / --housekeeping. $1 option, $2 action, rest = the
+# Handles --application. $1 option, $2 action, rest = the
 # remaining arguments starting at the option itself. Sets UNCLE_SHIFT. Only a
 # next argument beginning with -- is an option (stdin mode); anything else,
 # including "", -h and verify, is the value. Stdin is read later, once, by
@@ -169,7 +163,7 @@ parse_text_option() {
     shift 2
     arg="$1"
     if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-        printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
+        printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
         exit 1
     fi
     UNCLE_STARTUP_ACTION="$action"
@@ -207,7 +201,7 @@ read_stdin_option() {
         exit "$UNCLE_REFUSE_CODE"
     fi
     UNCLE_CR_DIR="$(mktemp -d)" || exit "$UNCLE_REFUSE_CODE"
-    UNCLE_STARTUP_TEXT_FILE="$(python3 "$ROOT/scripts/lib/housekeeping_input.py" --label "$opt" "$UNCLE_CR_DIR")" || exit "$UNCLE_REFUSE_CODE"
+    UNCLE_STARTUP_TEXT_FILE="$(python3 "$ROOT/scripts/lib/startup_text_input.py" --label "$opt" "$UNCLE_CR_DIR")" || exit "$UNCLE_REFUSE_CODE"
     [[ -n "$UNCLE_STARTUP_TEXT_FILE" ]] || exit "$UNCLE_REFUSE_CODE"
 }
 trap '[[ -n "$UNCLE_CR_DIR" ]] && rm -rf "$UNCLE_CR_DIR"' EXIT
@@ -221,11 +215,11 @@ done
 _exclusive=0
 for _a in "$@"; do
     case "$_a" in
-        --application|--application=*|--issue|--change-request|--housekeeping|--housekeeping=*) _exclusive=$((_exclusive + 1)) ;;
+        --application|--application=*|--issue|--change-request) _exclusive=$((_exclusive + 1)) ;;
     esac
 done
 if [[ "$_exclusive" -gt 1 ]]; then
-    printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
+    printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
     exit 1
 fi
 UNCLE_FLAG_NOUI=""
@@ -252,7 +246,7 @@ while [[ $# -gt 0 ]]; do
         --noui)        UNCLE_FLAG_NOUI=1; shift ;;
         --change-request)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-                printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
+                printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
                 exit 1
             fi
             if [[ -t 0 ]]; then
@@ -270,17 +264,13 @@ while [[ $# -gt 0 ]]; do
             UNCLE_STDIN_CLAIMED=1
             shift
             ;;
-        --housekeeping|--housekeeping=*)
-            parse_text_option --housekeeping housekeeping "$@"
-            shift "$UNCLE_SHIFT"
-            ;;
         --application|--application=*)
             parse_text_option --application create_app "$@"
             shift "$UNCLE_SHIFT"
             ;;
         --issue)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-                printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
+                printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
                 exit 1
             fi
             shift
@@ -334,7 +324,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request --housekeeping verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else
@@ -351,6 +341,23 @@ done
 # stdin (captured above) unless stdin is free to carry the gate answers, i.e.
 # no startup option claimed it. That is decided here, never by the caller's
 # environment: UNCLE_ATTENDED_STDIN is set for the drivers only when needed.
+# I-2: a build may start only through the app action path. The home agent's
+# subprocess tree carries UNCLE_HOME_AGENT=1 but never the per-app-process
+# marker (UNCLE_APP_MARKER, matched against the 0600 file UNCLE_APP_MARKER_FILE);
+# a human at the CLI has neither variable. Advisory-grade residual risk: a
+# process that unsets UNCLE_HOME_AGENT is indistinguishable from a human.
+if [[ "${UNCLE_HOME_AGENT:-}" == 1 && -n "$UNCLE_STARTUP_ACTION" ]]; then
+    _marker_ok=""
+    if [[ -n "${UNCLE_APP_MARKER:-}" && -n "${UNCLE_APP_MARKER_FILE:-}" && -f "$UNCLE_APP_MARKER_FILE" ]]; then
+        [[ "$(cat "$UNCLE_APP_MARKER_FILE" 2>/dev/null)" == "$UNCLE_APP_MARKER" ]] && _marker_ok=1
+    fi
+    if [[ -z "$_marker_ok" ]]; then
+        printf 'Error: builds start only through the app action path (app-issued marker missing or invalid)\n' >&2
+        exit "$UNCLE_REFUSE_CODE"
+    fi
+fi
+unset UNCLE_APP_MARKER UNCLE_APP_MARKER_FILE
+
 . "$ROOT/scripts/lib/mode.sh"
 unset UNCLE_ATTENDED_STDIN
 if [[ -n "$UNCLE_STARTUP_ACTION" && "$UNCLE_STDIN_CLAIMED" != 1 && "$UNCLE_STDIN_TTY" != 1 \
@@ -358,7 +365,7 @@ if [[ -n "$UNCLE_STARTUP_ACTION" && "$UNCLE_STDIN_CLAIMED" != 1 && "$UNCLE_STDIN
     export UNCLE_ATTENDED_STDIN=1
 fi
 if [[ -z "$UNCLE_STARTUP_ACTION" && -z "$UNCLE_FLAG_ATTENDED$UNCLE_FLAG_UNATTENDED" \
-      && -z "${UNCLE_ATTENDED:-}${UNCLE_UNATTENDED:-}${WORKFLOW_UNATTENDED:-}${UNCLE_HOUSEKEEPING_UNATTENDED:-}" ]]; then
+      && -z "${UNCLE_ATTENDED:-}${UNCLE_UNATTENDED:-}${WORKFLOW_UNATTENDED:-}" ]]; then
     # Plain `uncle` opens the interactive TUI/menu. No flag or environment
     # variable chose a mode, so the persisted setting decides: auto mode (the
     # default; anything but an explicit `misc.auto_mode false`) is honored as
@@ -411,7 +418,7 @@ UNCLE_NOUI_ON=""
 { [[ -n "$UNCLE_FLAG_NOUI" ]] || [[ "${UNCLE_NOUI:-}" == 1 ]]; } && UNCLE_NOUI_ON=1
 if [[ -n "$UNCLE_NOUI_ON" ]]; then
     if [[ -z "$UNCLE_STARTUP_ACTION" ]]; then
-        printf 'Error: --noui needs a startup action (--application, --issue, --change-request or --housekeeping); the menu is never shown\n' >&2
+        printf 'Error: --noui needs a startup action (--application, --issue or --change-request); the menu is never shown\n' >&2
         usage >&2
         exit 2
     fi
@@ -827,7 +834,7 @@ PYKEYS
 configure_menu() {
     local choice value
     while true; do
-        printf '\nConfigure\n  1) Configure stages\n  2) Configure self hosting\n  3) Miscellaneous\n  4) Housekeeping disallow list\n  q) Back\nChoice: '
+        printf '\nConfigure\n  1) Configure stages\n  2) Configure self hosting\n  3) Miscellaneous\n  q) Back\nChoice: '
         read -r choice || return 0
         case "$choice" in
             1) configure_stages_menu ;;
@@ -841,39 +848,7 @@ configure_menu() {
                 read -r value || return 0
                 [[ -z "$value" ]] || config_set misc.approval_name "$value"
                 ;;
-            4) housekeeping_disallow_menu || true ;;
             q|Q|"") return 0 ;;
-        esac
-    done
-}
-
-# Line-menu editor for housekeeping.disallow; all writes go through the config
-# module's CLI, which touches only that key.
-housekeeping_disallow_menu() {
-    local hk="$ROOT/scripts/lib/housekeeping_config.py" sel pat idx
-    while true; do
-        printf '\nHousekeeping disallow list (built-in floor is locked)\n'
-        python3 "$hk" list "$UNCLE_CONFIG" || true
-        printf '[a]dd, [e]dit, [r]emove, [d]efaults, [q]back: '
-        read -r sel || return 0
-        sel="$(printf '%s' "$sel" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-        case "$sel" in
-            a)
-                printf 'Pattern: '; read -r pat || return 0
-                python3 "$hk" add "$UNCLE_CONFIG" "$pat" || true
-                ;;
-            e)
-                printf 'Entry number: '; read -r idx || return 0
-                printf 'New pattern: '; read -r pat || return 0
-                python3 "$hk" edit "$UNCLE_CONFIG" "$idx" "$pat" || true
-                ;;
-            r)
-                printf 'Entry number: '; read -r idx || return 0
-                python3 "$hk" remove "$UNCLE_CONFIG" "$idx" || true
-                ;;
-            d) python3 "$hk" reset "$UNCLE_CONFIG" || true ;;
-            q|"") return 0 ;;
-            *) printf 'Unrecognized choice: %s\n' "$sel" ;;
         esac
     done
 }

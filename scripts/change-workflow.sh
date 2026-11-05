@@ -120,7 +120,6 @@ python3 "$ROOT/scripts/lib/workflow_family.py" change
 uncle_py_host_start
 unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/project-git.sh"
-uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 
 # Absolute, not "$PROJECT_ROOT"-relative: this value is embedded verbatim
@@ -3825,6 +3824,9 @@ sys.exit(0 if all(isinstance(f, dict) and f.get("driver_fallback") is True for f
     echo "Continuing with recorded implementation waivers; rejected rows remain on record."
     return 0
 }
+
+# The change has now started: only here is a project directory made a Git repository.
+uncle_ensure_project_git || exit 1
 
 # Claim the PR head branch as a local ref before any stage runs (Issue 60).
 # Only a ref is created, never a commit or push; the engine skips unborn or

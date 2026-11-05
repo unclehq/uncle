@@ -173,7 +173,6 @@ fi
 . "$ROOT/scripts/lib/background-verify.sh"
 . "$ROOT/scripts/lib/checklist-lanes.sh"
 . "$ROOT/scripts/lib/checklist-stage.sh"
-uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 . "$ROOT/scripts/lib/plan-scope.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
@@ -5314,6 +5313,9 @@ uncle_validate_config_runners || exit 1
 # A stop reason belongs to the run that recorded it. Left in place, a
 # previous "human" stop would silence the triage bundle on this run's failure.
 rm -f "$STATE_DIR/stop-reason" "$STATE_DIR/updated-plan-writers-exhausted" "$STATE_DIR/preflight-readonly-violation"
+
+# The build has now started: only here is a project directory made a Git repository, never for --help or a run that stopped earlier.
+uncle_ensure_project_git || exit 1
 
 # A fresh run (no state file yet) drops any stale start stamp; a resume keeps it.
 [[ -e "$STATE_FILE" ]] || finished_extras reset

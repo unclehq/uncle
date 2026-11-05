@@ -3457,6 +3457,12 @@ class UncleTUI:
             self.agent_pending = {'kind': 'tool', 'tool': tool, 'rule': rule, 'verbatim': verbatim,
                                   'generation': self.agent_generation, 'origin': self.agent_origin,
                                   'message': self.agent_origin_message}
+            if self._next_run_unattended():
+                pending, self.agent_pending = self.agent_pending, None
+                self.home_history.append(('system', 'Auto mode: allowing %s for this session without asking:\n%s'
+                                          % (tool, sanitize(verbatim))))
+                self._grant_agent_tool(pending)
+                continue
             self.home_history.append(('system', 'The agent was denied permission to use %s:\n%s\n'
                                                 'Reply "yes" to allow exactly this for this session; anything else declines.'
                                       % (tool, sanitize(verbatim))))
@@ -3535,13 +3541,32 @@ class UncleTUI:
         if resolved == os.path.realpath(_project_root()):
             if action is not None:
                 self._agent_confirm_action(action)
-        elif self._agent_created_here(resolved):
+        elif self._agent_created_here(resolved) or self._next_run_unattended():
             self._agent_apply_cwd(resolved, action)
         else:
             self.agent_pending = {'kind': 'cwd', 'path': resolved, 'action': action, 'generation': self.agent_generation}
             self.home_history.append(('system', 'The agent wants to work in %s, which it did not create this session.\n'
                                                 'Reply "yes" to switch; anything else declines.%s' % (
                 sanitize(resolved), ' The action in the same reply is cancelled if you decline.' if action else '')))
+
+    def _grant_agent_tool(self, pending):
+        self.agent_grants.append(pending['rule'])
+        self._close_home_agent(handoff=True)
+        if self._home_agent_session() is None:
+            self.agent_grants.remove(pending['rule'])
+            self.home_history.append(('system', 'The grant was refused or the agent could not restart; nothing was allowed.'))
+            return
+        self.home_history.append(('system', 'Allowed for this session: ' + sanitize(pending['verbatim'])[:300]))
+        if pending['origin'] == self.agent_origin and pending['origin'] not in self.agent_resent:
+            self.agent_resent.add(pending['origin'])
+            self.agent_denials = []
+            try:
+                self._agent_turn(pending['message'], resend=True)
+            except ValueError as exc:
+                self.chat_error = sanitize(str(exc))
+        else:
+            self.home_history.append(('system', 'The request was already retried once; send it again to continue.'))
+            self._agent_next_denial()
 
     def _resolve_agent_pending(self, approved, message):
         pending, self.agent_pending = self.agent_pending, None
@@ -3553,23 +3578,7 @@ class UncleTUI:
             return
         kind = pending['kind']
         if kind == 'tool':
-            self.agent_grants.append(pending['rule'])
-            self._close_home_agent(handoff=True)
-            if self._home_agent_session() is None:
-                self.agent_grants.remove(pending['rule'])
-                self.home_history.append(('system', 'The grant was refused or the agent could not restart; nothing was allowed.'))
-                return
-            self.home_history.append(('system', 'Allowed for this session: ' + sanitize(pending['verbatim'])[:300]))
-            if pending['origin'] == self.agent_origin and pending['origin'] not in self.agent_resent:
-                self.agent_resent.add(pending['origin'])
-                self.agent_denials = []
-                try:
-                    self._agent_turn(pending['message'], resend=True)
-                except ValueError as exc:
-                    self.chat_error = sanitize(str(exc))
-            else:
-                self.home_history.append(('system', 'The request was already retried once; send it again to continue.'))
-                self._agent_next_denial()
+            self._grant_agent_tool(pending)
         elif kind == 'cwd':
             self._agent_apply_cwd(pending['path'], pending['action'])
         elif kind == 'action':

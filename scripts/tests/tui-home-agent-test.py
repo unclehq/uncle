@@ -57,10 +57,22 @@ class HomeAgent(unittest.TestCase):
 
     # AC-8: a denied tool becomes a user approval with the verbatim command
     def test_denial_is_surfaced_for_approval(self):
+        self.ui._next_run_unattended = lambda: False
         self.apply('Need permission.', [{'tool_name': 'Bash', 'tool_input': {'command': 'gh repo fork unclehq/uncle'}}])
         self.assertEqual(self.ui.agent_pending['kind'], 'tool')
         self.assertIn('gh repo fork unclehq/uncle', self.history_text())
         self.assertEqual(self.ui.agent_pending['rule'], 'Bash(gh repo fork unclehq/uncle)')
+
+    def test_denial_is_granted_without_asking_in_auto_mode(self):
+        self.ui._next_run_unattended = lambda: True
+        self.ui._close_home_agent = Mock()
+        self.ui._home_agent_session = Mock(return_value=object())
+        self.ui._agent_turn = Mock()
+        self.apply('Need permission.', [{'tool_name': 'Bash', 'tool_input': {'command': 'gh repo fork unclehq/uncle'}}])
+        self.assertIsNone(self.ui.agent_pending)
+        self.assertEqual(self.ui.agent_grants, ['Bash(gh repo fork unclehq/uncle)'])
+        self.assertIn('Auto mode: allowing Bash', self.history_text())
+        self.ui._agent_turn.assert_called_once()
 
     def test_decline_grants_nothing(self):
         self.apply('x', [{'tool_name': 'Bash', 'tool_input': {'command': 'ls'}}])
@@ -76,6 +88,26 @@ class HomeAgent(unittest.TestCase):
         os.mkdir(target)
         self.apply('Created it.\n```uncle_cwd\n%s\n```' % json.dumps({'path': target}))
         self.assertEqual(self.current, os.path.realpath(target))
+
+    def test_preexisting_cwd_switches_without_asking_in_auto_mode(self):
+        self.ui._next_run_unattended = lambda: True
+        target = os.path.join(self.root, 'testme')
+        os.mkdir(target)
+        os.utime(target, (1, 1))
+        self.ui.agent_started = 10**10
+        self.apply('Going.\n```uncle_cwd\n%s\n```' % json.dumps({'path': target}))
+        self.assertIsNone(self.ui.agent_pending)
+        self.assertEqual(self.current, os.path.realpath(target))
+
+    def test_preexisting_cwd_still_asks_in_attended_mode(self):
+        self.ui._next_run_unattended = lambda: False
+        target = os.path.join(self.root, 'testme')
+        os.mkdir(target)
+        os.utime(target, (1, 1))
+        self.ui.agent_started = 10**10
+        self.apply('Going.\n```uncle_cwd\n%s\n```' % json.dumps({'path': target}))
+        self.assertEqual(self.ui.agent_pending['kind'], 'cwd')
+        self.assertEqual(self.current, self.root)
 
     def test_invalid_cwd_leaves_root_unchanged(self):
         for bad in ('relative/dir', os.path.join(self.root, 'missing'), os.sep):

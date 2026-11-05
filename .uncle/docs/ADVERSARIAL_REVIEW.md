@@ -1,184 +1,128 @@
-## AR-001: Resuming a run recorded as attended, with no flag and no TTY, is unspecified.
+## AR-001: Exit code precedence is unspecified when several conditions hold at once (driver failure plus gate stop, a signal after
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1.1 precedence (recorded mode) vs TTY rule; CHANGE_SPEC AC-3, AC-8, I-2.
-- Failure: Resuming a run recorded as attended, with no flag and no TTY, is unspecified. Settle with: 'A resume whose recorded mode is attended, with no TTY and no UNCLE_ATTENDED_STDIN=1, refuses with exit 1 and never runs unattended.'
+- References: CHANGE_SPEC AC-4, N-8; CHANGE_PLAN section 12 lists codes with no ordering.
+- Failure: Exit code precedence is unspecified when several conditions hold at once (driver failure plus gate stop, a signal after a nonzero exit). Say: 'Precedence: signal (130/143), then gate/signing stop (3), then driver nonzero or failed check (1); 0 only if the driver exited 0 with no gate or check failure.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Env and flag conflict rules collide.
+## AR-002: How the runner tells a gate stop (3) from a plain driver failure (1) is undefined, though both are nonzero driver exits.
 
 - Severity: HIGH
-- References: CHANGE_SPEC s4 Environment row; CHANGE_PLAN s1.1 precedence; AC-4, AC-5, AC-8.
-- Failure: Env and flag conflict rules collide. Two CLI flags are refused, but UNCLE_ATTENDED=1 with --unattended resolves to attended, and a legacy env against a recorded attended mode is undefined. Settle with: 'Any explicit attended source wins over any unattended source, except --attended with --unattended on the CLI, which refuses; explicit flag or env overrides the recorded mode.'
+- References: CHANGE_PLAN section 12 and I-5 'classify_exit' with no input contract.
+- Failure: How the runner tells a gate stop (3) from a plain driver failure (1) is undefined, though both are nonzero driver exits. Say: 'Exit 3 is chosen when classify_exit matches the gate/signing-handoff marker; every other nonzero exit is 1.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: An absent, empty or corrupt mode file is not specified.
+## AR-003: Unattended behavior when the driver reaches a human gate is unspecified: stop, auto-delegate, or hang.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s8 Compatibility, s7 Persistence; CHANGE_SPEC I-2, I-5.
-- Failure: An absent, empty or corrupt mode file is not specified. The plan resumes mode-file-less runs as unattended, which silently flips a previously attended run, against I-2. Settle with: 'An unparseable mode file refuses with exit 1; a missing one on a run with existing state resumes unattended and prints a notice saying so.'
+- References: CHANGE_SPEC N-4, N-8 versus I-2 ('delegated = delegated'); AC-4.
+- Failure: Unattended behavior when the driver reaches a human gate is unspecified: stop, auto-delegate, or hang. Say: 'Unattended --noui never reads stdin; a run reaching a human gate stops and exits 3 naming the gate on stderr.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: The UNCLE_MODE_RESOLVED guard leaves open a child driver that inherits UNCLE_MODE_RESOLVED=1 and also gets an explicit -
+## AR-004: Input combinations are unspecified: empty text, multiple startup actions, --attended without --noui, --attended with --c
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1.1, risk row 3, R-2; AC-6.
-- Failure: The UNCLE_MODE_RESOLVED guard leaves open a child driver that inherits UNCLE_MODE_RESOLVED=1 and also gets an explicit --attended or --unattended. Settle with: 'When UNCLE_MODE_RESOLVED=1 is inherited, the inherited UNCLE_UNATTENDED is authoritative; a contradicting --attended refuses, and --unattended is ignored silently.'
+- References: CHANGE_SPEC AC-2, N-5, N-6; CHANGE_PLAN D-6 says CR consumes stdin and attended needs tty.
+- Failure: Input combinations are unspecified: empty text, multiple startup actions, --attended without --noui, --attended with --change-request (stdin used for CR text yet D-6 needs a tty), and EOF or blank at a gate. Say: 'Multiple actions, empty text, or --change-request with --attended refuse exit 2; EOF or blank at an attended gate means not approved, exit 3.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: The effect of UNCLE_ATTENDED_STDIN=1 alone, or when the resolved mode is unattended, is not described.
+## AR-005: Output rules conflict or are unclear: D-5 prefixes every line with elapsed time while AC-3 only requires progress lines
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 TTY rule, D-5; CHANGE_SPEC AC-3.
-- Failure: The effect of UNCLE_ATTENDED_STDIN=1 alone, or when the resolved mode is unattended, is not described. Settle with: 'UNCLE_ATTENDED_STDIN=1 never changes the selected mode; it only waives the TTY check when the resolved mode is attended.'
+- References: CHANGE_PLAN D-5 versus CHANGE_SPEC AC-3; CHANGE_SPEC section 10 redaction has no AC.
+- Failure: Output rules conflict or are unclear: D-5 prefixes every line with elapsed time while AC-3 only requires progress lines to; stderr merging is unspecified; secret redaction from the spec has no plan mechanism or test. Say: 'Every line is prefixed with elapsed time, driver stderr is merged into stdout, env secrets are redacted and tested.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Only the unattended banner is exact (AC-1).
+## AR-006: UNCLE_NOUI with empty or 0 value, and a second signal during the grace period, are unspecified.
 
 - Severity: LOW
-- References: CHANGE_PLAN s14 Observability; CHANGE_SPEC AC-1, AC-4, AC-8.
-- Failure: Only the unattended banner is exact (AC-1). The attended, resume, TUI and deprecation notice strings are given as 'Mode: <mode> ...', so tests, docs and the checklist will each invent different text. Settle by listing the exact string for each.
+- References: CHANGE_SPEC AC-9, N-11; CHANGE_PLAN section 12 'group kill after grace' gives no length or second-signal rule.
+- Failure: UNCLE_NOUI with empty or 0 value, and a second signal during the grace period, are unspecified. Say: 'UNCLE_NOUI other than exactly 1 is ignored silently; a second signal during grace kills the process group immediately.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Resume precedence is unspecified for existing runs without a mode file that were started attended (the old direct-driver
+## AR-007: TUI delegation (cmd_for, _enter_run_worktree, _read_banner) is rated Medium-high risk but is covered only by existing su
 
 - Severity: HIGH
-- References: CHANGE_PLAN s8 Compatibility: 'Existing runs without a mode file resume as default (unattended) unless flagged'; conflicts with I-2 intent and AC-8.
-- Failure: Resume precedence is unspecified for existing runs without a mode file that were started attended (the old direct-driver default). The plan says they resume unattended, silently dropping human gates. Plan should say: a run with state but no mode file resumes attended (or refuses without an explicit flag), never silently unattended.
+- References: CHANGE_PLAN s16.1.r4 coverage 'existing TUI suites'; AC-10 only compares runner results to baseline.
+- Failure: TUI delegation (cmd_for, _enter_run_worktree, _read_banner) is rated Medium-high risk but is covered only by existing suites. Plan should say: before step 3, capture golden outputs of the old functions for all four actions and issue/non-issue modes, and assert delegated versions match exactly.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Recorded-mode reuse versus the TTY rule is unspecified.
+## AR-008: No rule for launcher behavior when --noui is absent.
+
+- Severity: MEDIUM
+- References: s16.1.r3 'Medium (argument order)'; AC-9 matrix covers only the enabling side.
+- Failure: No rule for launcher behavior when --noui is absent. Plan should say: with no --noui and UNCLE_NOUI unset or not exactly '1' (including 0 and empty), the launcher produces the identical exec argv and exported env as before.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: Compatibility keeps only the finish_decision re-export, but existing tests may patch other uncle_tui names that move to
+
+- Severity: MEDIUM
+- References: s8.1 names only finish_decision; s20.1.r1 says 'Keep re-exports' without a list.
+- Failure: Compatibility keeps only the finish_decision re-export, but existing tests may patch other uncle_tui names that move to run_duties. Plan should say: every uncle_tui attribute referenced by existing tests stays on uncle_tui and delegation goes through it so patches still take effect.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-010: Uncommitted prior-attempt edits to uncle and uncle_tui.py already exist, and the plan sets no baseline for them.
+
+- Severity: MEDIUM
+- References: git status shows M uncle and M uncle_tui.py; D-8 completes in place; AC-10 compares only to BASELINE_REPORT.
+- Failure: Uncommitted prior-attempt edits to uncle and uncle_tui.py already exist, and the plan sets no baseline for them. Plan should say: the regression baseline is committed HEAD, and the step 1 audit must confirm the uncle_tui.py diff has no non-delegation behavior change.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-011: Unattended --noui behavior at human gates is ambiguous (stop vs auto-approve).
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 precedence puts the recorded mode before the default; the TTY rule is stated only for 'attended', and AC-3/I-2 do not cover resume.
-- Failure: Recorded-mode reuse versus the TTY rule is unspecified. A run recorded attended but resumed with no TTY and no UNCLE_ATTENDED_STDIN is not stated to refuse. Plan should say: a resumed attended run without a TTY refuses with exit 1 and never falls back to unattended.
+- References: CHANGE_SPEC N-4/N-8, I-2: only implied by exit 3; no sentence forbids auto-approval.
+- Failure: Unattended --noui behavior at human gates is ambiguous (stop vs auto-approve). Plan should say: 'Unattended --noui never answers a gate; it stops, records nothing as human, and exits 3.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: The UNCLE_MODE_RESOLVED=1 guard can inherit a stale UNCLE_UNATTENDED across entry points.
+## AR-012: Secret redaction is claimed but has no enforcement point or test.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 and risk row 3; AC-6 parity covers only identical flags/env.
-- Failure: The UNCLE_MODE_RESOLVED=1 guard can inherit a stale UNCLE_UNATTENDED across entry points. The plan never says whether --attended or UNCLE_ATTENDED=1 in a child still overrides the inherited value. Plan should say: inherited UNCLE_UNATTENDED is authoritative, and child flags that conflict with it are refused.
+- References: CHANGE_SPEC section 10; CHANGE_PLAN impact table and ACs contain no redaction component or test.
+- Failure: Secret redaction is claimed but has no enforcement point or test. Plan should say: 'Headless redacts values of env vars matching *KEY*/*TOKEN*/*SECRET*/*PASSWORD* from all streamed output, with a byte-level test.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: The plan does not say what happens for UNCLE_ATTENDED=0 or empty, or for --unattended combined with UNCLE_ATTENDED=1.
+## AR-013: Text-file trust (V-1) is said to apply identically, but the runner re-reads env and the plan does not say where validati
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-4/AC-5 and CHANGE_PLAN s1 precedence list; no empty, 0 or invalid env value is described.
-- Failure: The plan does not say what happens for UNCLE_ATTENDED=0 or empty, or for --unattended combined with UNCLE_ATTENDED=1. Plan should say: only the value 1 counts; other values are ignored; --unattended with UNCLE_ATTENDED=1 resolves attended and prints the deprecation notice.
+- References: CHANGE_PLAN s1 'reads that same environment'; s10 trust failure -> exit 2, check location unstated.
+- Failure: Text-file trust (V-1) is said to apply identically, but the runner re-reads env and the plan does not say where validation occurs (symlink, ownership, TOCTOU). Plan should say: 'Runner re-validates the text file with the shared trust check right before reading, exits 2 on failure.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: Mode file write timing is ambiguous.
+## AR-014: UNCLE_STARTUP_ACTION from env is a new trust boundary and the runner is directly invocable.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s9 Persistence vs s12 Error and recovery; housekeeping and from-issue rows do not name a state dir.
-- Failure: Mode file write timing is ambiguous. Section 12 says refusals happen before any state is created, but section 9 says drivers write the file at start. A refused resume could overwrite the recorded mode. Plan should say: the mode file is written only after successful resolution, never on refusal, and only by the driver that owns the run directory.
+- References: CHANGE_PLAN s7 derives driver from UNCLE_STARTUP_ACTION; D-9 build_driver_command.
+- Failure: UNCLE_STARTUP_ACTION from env is a new trust boundary and the runner is directly invocable. Plan should say: 'UNCLE_STARTUP_ACTION must be one of four allowlisted actions, otherwise exit 2; driver argv is never built from env-supplied paths.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: The unattended-enabled ledger text changes to 'enabled by default (or --unattended)', but AC-7/A-8 require byte-identica
+## AR-015: Signal grace period and repeated-signal behavior are unspecified, risking orphans holding worktree locks.
 
 - Severity: LOW
-- References: CHANGE_PLAN s8 Interface changes vs CHANGE_SPEC AC-7 and A-8 'byte-identical wording and fields'.
-- Failure: The unattended-enabled ledger text changes to 'enabled by default (or --unattended)', but AC-7/A-8 require byte-identical ledger entries. These two statements cannot both hold. Plan should say which wording is authoritative, and that the record test compares against the new text only.
+- References: CHANGE_PLAN s10 'group kill after grace'; AC-8.
+- Failure: Signal grace period and repeated-signal behavior are unspecified, risking orphans holding worktree locks. Plan should say: 'Grace is 10s then SIGKILL to the group; a second signal triggers immediate SIGKILL.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: The plan never says whether an explicit --attended overrides an inherited UNCLE_MODE_RESOLVED=1 plus UNCLE_UNATTENDED=1.
+## AR-016: Exit-code precedence is unspecified when several conditions hold (driver exit 0 but a check failed, gate stop plus signa
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1: an inherited UNCLE_MODE_RESOLVED=1 stops UNCLE_UNATTENDED being read as legacy input. I-2 says attended never degrades.
-- Failure: The plan never says whether an explicit --attended overrides an inherited UNCLE_MODE_RESOLVED=1 plus UNCLE_UNATTENDED=1. Add: an explicit --attended or UNCLE_ATTENDED=1 always re-resolves, including the TTY check, and wins over inherited derived state.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-014: With UNCLE_ATTENDED_STDIN=1 the TTY check is skipped, but nothing says what a gate does on EOF or an invalid answer.
-
-- Severity: HIGH
-- References: CHANGE_SPEC s4 'No TTY' row and CHANGE_PLAN R-5 define UNCLE_ATTENDED_STDIN with no EOF behavior.
-- Failure: With UNCLE_ATTENDED_STDIN=1 the TTY check is skipped, but nothing says what a gate does on EOF or an invalid answer. Add: in attended mode, EOF or an unreadable answer at a gate counts as a decline and stops the run. It is never delegated.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: Resume behavior is undefined for a mode file with invalid content, and for a recorded attended mode resumed without a TT
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s7/s8 and I-5 define the file as authoritative on resume with no validation.
-- Failure: Resume behavior is undefined for a mode file with invalid content, and for a recorded attended mode resumed without a TTY. Add: an invalid mode file is an error and is never read as unattended. A recorded attended mode still requires a TTY (or UNCLE_ATTENDED_STDIN=1) on resume.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: The legacy UNCLE_UNATTENDED=0, WORKFLOW_UNATTENDED=0 and UNCLE_HOUSEKEEPING_UNATTENDED=0 values were the old way to forc
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1 lists only '=1' legacy values; risk row 3 mentions only the inherited UNCLE_UNATTENDED=0 guard.
-- Failure: The legacy UNCLE_UNATTENDED=0, WORKFLOW_UNATTENDED=0 and UNCLE_HOUSEKEEPING_UNATTENDED=0 values were the old way to force attended. After the default flip they could silently mean unattended. Add: those legacy envs set to 0 resolve to attended with a notice, and only the exact value 1 selects unattended.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: The plan does not say whether a stale or tampered .uncle/workflow/mode file can escalate a run to unattended on resume.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s7 and I-5 give the file authority on resume with no integrity requirement.
-- Failure: The plan does not say whether a stale or tampered .uncle/workflow/mode file can escalate a run to unattended on resume. Add: the file is read only when valid run state exists in the same directory, and a non-regular file or a symlink is rejected.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: Resume precedence is ambiguous: does an explicit flag or env override the recorded mode, and does the TTY rule apply to
-
-- Severity: HIGH
-- References: CHANGE_PLAN s1.1 precedence list; CHANGE_SPEC AC-8, I-5.
-- Failure: Resume precedence is ambiguous: does an explicit flag or env override the recorded mode, and does the TTY rule apply to a recorded attended run? Settle with: 'On resume an explicit flag/env overrides the recorded mode; recorded attended with no TTY and no UNCLE_ATTENDED_STDIN refuses with exit 1.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-019: Mode file write timing and bad content are unspecified, and 'written at start' conflicts with 'no state before refusal'.
-
-- Severity: HIGH
-- References: CHANGE_PLAN s7.1 vs s9.1 ('before any state is created').
-- Failure: Mode file write timing and bad content are unspecified, and 'written at start' conflicts with 'no state before refusal'. Settle with: 'Written atomically only after resolution succeeds; content other than attended/unattended is ignored with a stderr notice and the default applies.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: Interaction of an inherited UNCLE_MODE_RESOLVED=1 with an explicit CLI flag or UNCLE_ATTENDED is unspecified.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1.1; risk row 3.
-- Failure: Interaction of an inherited UNCLE_MODE_RESOLVED=1 with an explicit CLI flag or UNCLE_ATTENDED is unspecified. Settle with: 'When UNCLE_MODE_RESOLVED=1, the inherited UNCLE_UNATTENDED is authoritative; contradicting flags are refused; the launcher clears any user-set UNCLE_MODE_RESOLVED.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-021: Exact stderr text for the deprecation notice, refusal messages, and attended/resume banners is unspecified; only the una
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-1, AC-4; CHANGE_PLAN s14.1 'Mode: <mode> ...'.
-- Failure: Exact stderr text for the deprecation notice, refusal messages, and attended/resume banners is unspecified; only the unattended banner is fixed. Tests and checklist will assert different strings. Settle by fixing each string verbatim in the plan.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-022: Which stream counts for the TTY check is unspecified, notably when `--application`/`--housekeeping` read text from stdin
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 TTY rule; commit 4948181 (read text from standard input).
-- Failure: Which stream counts for the TTY check is unspecified, notably when `--application`/`--housekeeping` read text from stdin, which makes stdin a non-TTY. Settle with: 'Attended requires isatty(0) only; stdin-supplied text therefore requires UNCLE_ATTENDED_STDIN=1.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-023: Legacy env set to a value other than 1 (e.g.
-
-- Severity: LOW
-- References: CHANGE_PLAN s1.1 lists only =1; risk row 3 mentions UNCLE_UNATTENDED=0.
-- Failure: Legacy env set to a value other than 1 (e.g. UNCLE_UNATTENDED=0) is unspecified. Settle with: 'Legacy env not equal to 1 is ignored silently and does not select attended.'
+- References: CHANGE_SPEC AC-4/N-8 and CHANGE_PLAN s10.1 list codes but no ordering, and say 'driver failure' without defining how a failed check is detected from driver output.
+- Failure: Exit-code precedence is unspecified when several conditions hold (driver exit 0 but a check failed, gate stop plus signal, driver nonzero plus signing handoff, signal during refusal/setup). Tests can't know the expected code. Plan should say: 'Precedence: signal (130/143) > gate/signing stop (3) > driver nonzero or failed check (1) > finished (0); refusal 2 occurs only before start.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

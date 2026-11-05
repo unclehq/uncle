@@ -1,184 +1,174 @@
-# Change plan: issue 155, unattended by default
+# Change plan - Issue 160 `--noui`
 
-Omitted sections: Schema (one additive state file, see section 9); Concurrency (none); Migration (none); Feature flag (none, deprecation window serves as containment)
+Issue 160
 
-Issue 155
+Seeded from [unclehq/uncle#160](https://github.com/unclehq/uncle/issues/160).
 
-Seeded from [unclehq/uncle#155](https://github.com/unclehq/uncle/issues/155).
+Omitted sections: Schema/persistence (none); Migration (none); Feature flag (the flag itself is the containment); Observability beyond stdout/stderr lines (none)
 
 ## 1. Selected technical approach
 
-Add `scripts/lib/mode.sh` with `uncle_resolve_mode "$@"`, the single place that turns flags, env, recorded run mode and default into `UNATTENDED` (0/1) plus notices. Precedence: (1) `--attended` together with `--unattended` on the CLI -> refuse (exit 1). (2) Any explicit attended source (`--attended`, `UNCLE_ATTENDED=1`) wins over any explicit unattended source (`--unattended`, `UNCLE_UNATTENDED=1`, `WORKFLOW_UNATTENDED=1`, `UNCLE_HOUSEKEEPING_UNATTENDED=1`); the legacy source still gets its deprecation notice. (3) An explicit flag or env, attended or unattended, overrides the recorded `.uncle/workflow/mode` on resume. (4) Otherwise the recorded mode when resuming, else unattended. Legacy env vars count only when set to exactly `1`; any other value (`0`, empty, invalid) is ignored silently, never selects attended, and emits no notice. Legacy unattended sources (`--unattended` and legacy envs set to `1`) emit a stderr deprecation notice. TTY rule: it applies to the RESOLVED mode whatever its source (flag, env or recorded mode). Whenever the resolved mode is attended, `isatty(0)` (standard input only; stdout and stderr are not consulted) must be true unless `UNCLE_ATTENDED_STDIN=1`. A resume whose recorded mode is attended, with no TTY and no `UNCLE_ATTENDED_STDIN=1`, refuses with a stderr message and exit 1 before any state is touched, and never falls back to unattended; only an explicit unattended flag/env can change a recorded attended run to unattended. Because `--application`/`--housekeeping` can read their text from standard input (commit 4948181), which makes stdin a non-TTY, an attended run supplied that way requires `UNCLE_ATTENDED_STDIN=1` and otherwise refuses with exit 1. `UNCLE_ATTENDED_STDIN=1` never changes the selected mode: it only waives the TTY check when the resolved mode is attended, and is ignored (no notice, no effect) when the resolved mode is unattended or when it is set alone. Drivers call the resolver, export `UNCLE_UNATTENDED` and `UNCLE_MODE_RESOLVED=1` (derived, internal), write the mode file, and print the banner. Inherited derived state: when `UNCLE_MODE_RESOLVED=1` is inherited, the inherited `UNCLE_UNATTENDED` is authoritative; it is not treated as legacy input and not re-noticed. A contradicting `--attended` (or `UNCLE_ATTENDED=1`) when the inherited mode is unattended refuses with exit 1 and a stderr message (before any state is created) and is never silently overridden or downgraded; a non-contradicting `--attended` is accepted; `--unattended` or legacy envs are ignored silently. The launcher clears any user-set `UNCLE_MODE_RESOLVED` before resolving, so only a driver-set value is ever inherited. The launcher resolves for refusal/banner/TUI and passes `--attended` only when attended, nothing otherwise.
+Headless runner is Python (`scripts/lib/uncle_headless.py`) launched by `uncle` instead of `uncle_tui.py`; curses is never imported. The launcher already resolves startup action, text file, and mode and exports them; the headless runner reads that same environment, performs the TUI's non-UI run setup, and runs the driver with the existing streaming/escape filter. Shared pure logic lives in `scripts/lib/run_duties.py` and is called by both TUI and headless.
 
-Env value rule: for `UNCLE_ATTENDED`, `UNCLE_ATTENDED_STDIN`, `UNCLE_UNATTENDED`, `WORKFLOW_UNATTENDED`, `UNCLE_HOUSEKEEPING_UNATTENDED` and `UNCLE_MODE_RESOLVED`, only the exact value `1` counts as set. Empty, `0` or any other value is ignored silently (treated as unset) and never selects attended or unattended. When no resolution is inherited, `UNCLE_ATTENDED=1` combined with `--unattended` (or a legacy env =1) resolves attended and prints the deprecation notice for the legacy input; only `--attended` together with `--unattended` on the command line refuses.
+Decisions:
 
-Inherited-resolution rule: `UNCLE_MODE_RESOLVED` is derived and internal. The launcher (`uncle`) unsets any user-supplied `UNCLE_MODE_RESOLVED` before resolving, so only a launcher or driver that actually resolved can set it. When a driver inherits `UNCLE_MODE_RESOLVED=1`, the inherited `UNCLE_UNATTENDED` is authoritative and the env-combination rule above does not apply: a contradicting `--attended` or `UNCLE_ATTENDED=1` (against inherited unattended) refuses with exit 1 and a stderr message before any state is written; a contradicting `--unattended` or legacy env (against inherited attended) is ignored silently; a non-contradicting flag is accepted without a new notice. The inherited value is never re-read as legacy input.
+| ID | Decision | Reason |
+|---|---|---|
+| D-1 | Entry point: launcher execs the headless Python module directly; no TUI `--noui` mode | avoids loading curses (I-3, N-1) |
+| D-2 | Keep `--noinput`; refuse `--noui --noinput`; document the difference | avoid confusion, no behavior change (P-2) |
+| D-3 | Keep the line menu as the non-tty fallback | P-3; out of scope to retire |
+| D-4 | Text output only; JSON events deferred | CR non-goal |
+| D-5 | Output rule: driver stderr is merged into stdout; every output line (including stage banners, which pass through unchanged otherwise) is prefixed with elapsed time; values of env vars whose names match *KEY*/*TOKEN*/*SECRET*/*PASSWORD* are redacted from all streamed output | N-7, CR section 10; resolves D-5 vs AC-3 conflict, one uniform rule |
+| D-6 | Attended requires a tty on stdin; otherwise refuse exit 2. Also refuse exit 2, before any write: multiple startup actions, empty startup text, `--attended` without `--noui`, and `--change-request` combined with `--attended` (stdin carries the CR text, so no tty is available for gates). EOF or a blank answer at an attended gate means not approved: the run stops and exits 3. | piped stdin cannot safely answer gates; `--change-request` consumes stdin; ambiguous input combinations must be refused deterministically (AR-004) |
+| D-7 | Parity target for `--application` is the direct brief path (no supervisor draft) | matches `uncle_tui.py:4205` |
+| D-8 | Existing uncommitted prior attempt is audited, then completed in place; nothing is discarded unread. The regression baseline is committed HEAD (not the working tree): behavior of `uncle` and `uncle_tui.py` is compared against HEAD. | it already matches the file layout; uncommitted edits to `uncle` and `uncle_tui.py` must not become the accepted baseline by default |
+| D-9 | Shared `run_duties.build_driver_command(action, text, attended, root_dir, issue_mode)` mirrors `cmd_for`; TUI `cmd_for` delegates to it. `action` must be one of the four allowlisted startup actions; any other value raises and the runner exits 2. Driver argv is built only from fixed driver names under `root_dir` plus the resolved text, never from env-supplied paths. | I-3 |
+| D-10 | Worktree creation for non-issue runs via the same `worktrees.sh worktree_auto` call, extracted to a shared helper in `run_duties` and used by TUI `_enter_run_worktree` | N-9, B-5 |
 
-## 2. Alternatives
-(a) Per-driver parsing kept, defaults flipped in each: rejected, violates I-3. (b) Rename internal `UNATTENDED` everywhere: rejected, ~60 sites, no benefit. (c) Remove `--unattended` now: rejected, request says deprecate.
+## 2. Alternatives considered
+(a) `uncle_tui.py --headless` mode: loads curses module and the 8k-line TUI; rejected. (b) Run drivers directly from bash: duplicates startup text/worktree/finish logic in bash; rejected.
 
 ## 3. Why preferred
-One resolver is testable in isolation and gives the parity guarantee; internal variables stay so libs are untouched.
+Smallest surface, honors I-3 by extracting rather than duplicating, no curses import.
 
-## 4/5. Components to modify / not modify
+## 4. Components to modify
+See change-impact table.
 
-See Change-impact table. Not modified: all `scripts/lib/*-gates-*.sh`, `acceptance-gate.sh`, `waivers.sh`, `change-pr.sh`, `repair-limit.sh`, `checklist-capability.sh`, housekeeping policy code. Existing attended gate prompts already treat EOF or an unreadable answer as a decline and stop the run; this stays unchanged and is covered by a test in `mode-resolution-test.sh` that pipes empty stdin with `--attended` and `UNCLE_ATTENDED_STDIN=1` and expects the run to stop at the first gate without delegation.
+## 5. Not to modify
+All drivers (`scripts/*.sh` workflows), stage libs, TUI dialogs, config editing, line menu, `desktop_launch.py` and `terminal_title.py` (called, not changed).
 
-## 6/7. Data-flow and state changes
-Flag/env -> resolver -> `UNATTENDED`, `UNCLE_UNATTENDED`, `.uncle/workflow/mode` -> libs. `UNCLE_STARTUP_UNATTENDED` kept for TUI; add `UNCLE_STARTUP_ATTENDED=1` (launcher sets when attended). TUI `cmd_for` passes `--attended` when the session is attended, nothing otherwise (replaces appending `--unattended`).
+## 6. Data-flow changes
+launcher env -> `uncle_headless.main` -> `run_duties` (text resolve, brief/CR write, worktree, argv) -> driver subprocess -> filtered stream -> `BannerCollector` -> finish summary, desktop decision -> exit code.
 
 ## 8. Interface changes
 
-New: `--attended`, `UNCLE_ATTENDED`, `UNCLE_ATTENDED_STDIN`, `UNCLE_STARTUP_ATTENDED`. Deprecated: `--unattended` and the legacy envs. Ledger line `unattended-enabled` text becomes `enabled by default (or --unattended); UNCLE_UNATTENDED=1` and records only on unattended runs, as today. This new wording is the single authoritative ledger text. The 'byte-identical' requirement (AC-7/A-8) applies to the attestation, PR-body and waiver wording and to field names and structure, and to this ledger line only from the new text onward. The old ledger text is not preserved, and the record test compares against the new text only.
-
-## 9. Persistence
-
-Additive `.uncle/workflow/mode` containing exactly `attended` or `unattended` (one line). Writing: only the driver that owns the run directory (`stagegate.sh`, `change-workflow.sh`, `housekeeping-workflow.sh` for their own state directories) writes it, atomically (temp file in the same directory, then rename), and only after mode resolution has fully succeeded, including the TTY check. It is never written, modified or overwritten on a refusal. The launcher and `from-issue.sh` never write it; they pass the resolved mode to the driver. Reading on resume: the file is read only when valid run state exists in the same `.uncle/workflow` directory (a stray or stale mode file with no run state is ignored) and only when it is a regular file, not a symlink. A symlink, a non-regular file, or any content other than exactly `attended` or `unattended` (empty, corrupt, unknown value) is an error: stderr message naming the file, exit 1; it is never read as unattended and never overwritten. A missing mode file on a run with existing state resumes unattended and prints a stderr notice saying so. A recorded `attended` mode still requires a TTY on stdin (or `UNCLE_ATTENDED_STDIN=1`) on resume; without either it refuses with exit 1 and never falls back to unattended.
+New flag `--noui` and env `UNCLE_NOUI=1` (exactly `1`). Exit codes per AC-4. `uncle_headless.py` internal CLI: `[--attended] [--root DIR] -- DRIVER...` remains for tests; with no `--`, it derives the driver from `UNCLE_STARTUP_ACTION` (new). `UNCLE_STARTUP_ACTION` is a trust boundary: it must be exactly one of the four allowlisted actions, otherwise the runner exits 2 before any write; the driver argv is never built from env-supplied paths (only fixed driver names under the root plus the trust-checked text file).
 
 ## 10. Compatibility
 
-Old flags/envs work. Resuming an existing run follows the recorded mode file once it validates (see Persistence). An unparseable mode file refuses with exit 1. A recorded attended mode without a TTY or `UNCLE_ATTENDED_STDIN=1` refuses with exit 1. A run directory that has existing run state but no `.uncle/workflow/mode` file predates this change and was started under the old attended default: it resumes attended (the TTY rule applies; no TTY and no UNCLE_ATTENDED_STDIN=1 refuses with exit 1) and prints a stderr notice saying the mode file is missing and the run resumes attended. It never resumes silently unattended; it becomes unattended only through an explicit `--unattended`/legacy env or UNCLE_UNATTENDED=1. A fresh directory with no run state and no mode file defaults to unattended. Documented in release notes.
+No behavior change without the flag; `uncle_tui.finish_decision` re-export retained; `_read_banner` delegates with identical results. Headless output format: single merged stdout/stderr stream, each line prefixed with elapsed time, escapes stripped, secret env values redacted. Every `uncle_tui` attribute referenced by existing tests (including `cmd_for`, `_enter_run_worktree`, `_read_banner`, `finish_decision`, and any other name found by grepping `scripts/tests` and TUI suites for `uncle_tui.` references and patches) stays defined on `uncle_tui`. Delegation to `run_duties` goes through the `uncle_tui` name (thin wrapper that looks up and calls the shared function at call time), so `mock.patch('uncle_tui.<name>')` still takes effect. Step 1 audit produces this attribute list in IMPLEMENTATION_NOTES.md, and step 3 must not remove or rebind any listed name.
+
+Secret redaction (AR-012): `run_duties.redact_secrets(line, env)` is a pure function applied by `uncle_headless._stream` to every driver output line (stdout with stderr merged), after `EscapeFilter` and before the elapsed-time prefix and write. It replaces every occurrence of the value of any environment variable whose name case-insensitively contains KEY, TOKEN, SECRET or PASSWORD with `[REDACTED]`; values shorter than 8 characters are not redacted, to avoid corrupting ordinary output. Tests: `run-duties-test.py` unit-tests the function (match and non-match names, short values, multiple occurrences, defect injection that disables it), and `headless-run-test.py` runs a fixture driver that echoes a secret env value and asserts, at byte level on captured stdout and stderr, that the value is absent and `[REDACTED]` is present. This adds no behavior without `--noui`; the TUI path is unchanged.
+
+## 11. Concurrency
+Driver in its own session/process group; signal handler forwards to the group; stdout streamed by a single reader; worktree locking stays in the drivers.
 
 ## 12. Error and recovery
 
-Contradiction or attended without TTY: message to stderr, exit 1, before any state is created and without creating, rewriting or deleting `.uncle/workflow/mode`. A refused resume leaves the recorded mode file byte-for-byte unchanged, so it cannot overwrite the recorded mode. The mode file is written atomically only after resolution succeeds, and only by the run-directory owner. Notices never go to stdout.
+Exit codes and precedence. Refusals exit 2 before any write; exit 2 occurs only before the driver starts (a signal during refusal/setup still yields 130/143, with no driver started). Text-file trust: the runner re-validates the text file (symlink, ownership, permissions) with the shared `run_duties` trust check immediately before reading it, never relying on the launcher's earlier validation, and exits 2 on failure with no driver started. Once the driver has started, precedence is: signal (130 for SIGINT, 143 for SIGTERM) > gate/signing stop (3) > driver nonzero or failed check (1) > finished cleanly (0). Classification is `run_duties.classify_exit(returncode, output_lines)`, which takes the driver's exit status and its streamed output lines: exit 3 is chosen when the driver exits nonzero AND the output contains the gate/signing-handoff marker (the driver's human-gate stop or signing-handoff line); every other nonzero driver exit is 1; a driver exit 0 is classified 1 if `classify_exit` finds the failed-check marker in the output (detected from the driver's own record, not scraped prose); 0 only if the driver exited 0 with no gate/signing stop, no failed check, and no signal. Signals -> 130/143: the runner forwards the signal to the driver's process group and waits a 10 s grace period, then sends SIGKILL to the group; a second signal received during the grace period kills the process group immediately with SIGKILL. `UNCLE_NOUI` with any value other than exactly `1` (empty, `0`, `true`, etc.) is ignored silently and the launcher behaves as without the flag. State untouched so `/resume` works.
 
-## 14. Rollback
-Revert the change; mode file is ignored by old code.
+## 14. Rollback plan
+Revert the `--noui` block in `uncle` and the `run_duties` delegations in `uncle_tui.py`; delete `uncle_headless.py` and new tests. No persisted data or schema is affected. Verify by running both runners and comparing with baseline.
 
 ## 16. Automated-test strategy
 
-New `scripts/tests/mode-resolution-test.sh` (resolver matrix, parity across entry points, no-TTY refusal, resume, deprecation notices, banner) and `scripts/tests/mode-launcher-test.sh` (fake driver per entry point, TUI startup env); pty test in `scripts/tests/mode-pty-test.py` (named with hyphen). Record test for A-8 reuses existing attestation/PR fixtures; it asserts the `unattended-enabled` ledger line against the new text `enabled by default (or --unattended); UNCLE_UNATTENDED=1` only, never the old wording.
+Per AC: `run-duties-test.py` (pure functions, defect injection), `headless-run-test.py` (pipes, escapes, exit codes, signals, attended refusal, pty via `pty_helper.py`), `headless-equivalence-test.py` (TUI-path vs headless, fixture driver), `launcher-noui-test.sh` (flags, env, refusal, four actions, no curses). Tests must disable git signing in fixtures (`git -c commit.gpgsign=false`, `--no-gpg-sign`). Verification commands are the baseline's two runners. Required cases: (1) table-driven `run_duties.classify_exit` and headless tests for signal+gate, gate+nonzero, nonzero without marker, zero-with-failed-check-marker, asserting the stated precedence, each with defect injection (precedence swapped, marker ignored). (2) Fixture driver emitting the gate marker vs a plain nonzero exit asserts 3 vs 1. (3) Unattended gate: fixture driver reaches a gate with stdin that fails on read; assert exit 3, gate named on stderr, no stdin consumption, no approval record, with defect injection simulating auto-approval. (4) Refusal matrix (launcher and headless tables): multiple actions, empty text, `--attended` without `--noui`, `--attended` with `--change-request` each exit 2 before any write; EOF or blank at an attended gate exits 3. (5) Output: fixture driver writing to stdout and stderr; every line carries the elapsed prefix and both streams appear on stdout; byte-level redaction of *KEY*/*TOKEN*/*SECRET*/*PASSWORD* env values. (6) Launcher: UNCLE_NOUI=0, empty and 2 take the TUI path with no headless exec. (7) Golden test (tui-delegation-golden-test.py) includes a defect-injection case proving a mutated delegate fails it. (8) Patchability check enumerates `uncle_tui` names referenced by existing tests, asserts they exist, and asserts delegated calls resolve through `uncle_tui` so patches intercept them. (9) Text-file trust: symlinked, wrong-owner and swapped-after-launcher text files exit 2 with no driver launch. (10) Invalid UNCLE_STARTUP_ACTION (unknown, empty, path-like) exits 2 with no subprocess spawned. (11) Signals: SIGTERM-ignoring child is SIGKILLed after grace and a second signal kills immediately, with the grace configurable via an internal test-only override for speed (default 10 s); no orphans remain.
 
-## 17. Regression strategy
-Run both suites; any test failing because it assumed attended gets `--attended` (and `UNCLE_ATTENDED_STDIN=1` if piping answers); tests passing `--unattended` and asserting empty stderr are updated to drop the flag. Defect injection: temporarily skip `record_unattended_gate` in one gate and confirm the record test fails, then restore.
+## 17. Regression-test strategy
+Both full runners vs the driver baseline; targeted check that existing `finish_decision`, banner, `cmd_for` and startup tests still pass.
 
-## 18. Manual verification
-Run `uncle --application TEXT` unflagged (finishes alone) and with `--attended` (waits at first gate); `uncle --attended` with `</dev/null` refuses.
-
-## 19. Observability
-
-All notices go to stderr, never stdout. The strings below are authoritative: tests, docs and the manual checklist assert them verbatim (<NAME> is the legacy env var name, <mode> is attended or unattended; nothing else varies). The banner prints in the launcher, in each driver, and on resume. Deprecation notices print once per process. Refusals exit 1.
-- Banner, unattended: `Mode: unattended (default). Approval gates are delegated to the agent; use --attended to approve each gate yourself.`
-- Banner, attended: `Mode: attended. Each approval gate waits for your decision.`
-- Banner, resumed run: `Mode: <mode> (resumed from .uncle/workflow/mode).`
-- TUI header: `Mode: <mode>`.
-- Deprecation notice, flag: `uncle: --unattended is deprecated; unattended is now the default. Use --attended to approve gates yourself.`
-- Deprecation notice, env: `uncle: <NAME>=1 is deprecated; unattended is now the default. Use UNCLE_ATTENDED=1 to approve gates yourself.`
-- Refusal, contradictory flags: `uncle: --attended and --unattended contradict each other; choose one.`
-- Refusal, no TTY: `uncle: attended mode needs an interactive terminal on stdin; set UNCLE_ATTENDED_STDIN=1 to answer gates from stdin.`
-
-## Change-impact table
-
-| Component | Planned change | Reason | Regression risk | Test coverage |
-|---|---|---|---|---|
-| `scripts/lib/mode.sh` (new) | resolver, notices, TTY rule, mode file | I-2, I-3, I-5 | low | mode-resolution-test.sh |
-| `scripts/stagegate.sh` | source resolver; `--attended`; default flip; usage; ledger text | A-1, A-6 | high (default flips) | unattended-test.sh, mode tests |
-| `scripts/change-workflow.sh` | same | A-1, A-6 | high | same |
-| `scripts/from-issue.sh` | parse `--attended`/legacy flag via resolver; forward to driver | A-6 | medium | issue tests |
-| `scripts/housekeeping-workflow.sh` | resolver; accept flags; legacy env | A-6, I-6 | medium | housekeeping-workflow-test.sh |
-| `uncle` | parse `--attended`; refuse conflicts; banner; usage; TUI env; restart-loop condition now keyed on resolved mode; interactive launch path | A-1..A-5 | high | mode-launcher-test.sh, launcher-args-test.sh |
-| `scripts/lib/upgrade-check.sh` | notice-only when unattended | A-9 | low | upgrade-test.sh |
-| `uncle_tui.py` | startup attended env, `cmd_for`, mode display, help text | A-5, A-11 | medium | tui/startup tests |
-| `scripts/tests/*` | update 22+ tests; add new tests | AC-12 | n/a | suites |
-| README.md, QUICK_START.md, GITHUB_INTEGRATION.md, docs/quickstart.md, docs/UNATTENDED_DEFAULT_MIGRATION.md (new) | docs and release-notes text | AC-11 | none | docs grep test |
-
-## Traceability
-
-| Requirement | Behavior | Invariant | Component | Automated test | Manual check |
-|---|---|---|---|---|---|
-| AC-1 | A-1 | I-3 | uncle, drivers | mode-launcher-test.sh | unflagged run |
-| AC-2, AC-3 | A-2 | I-2 | mode.sh | mode-pty-test.py, mode-resolution-test.sh: UNCLE_ATTENDED_STDIN=1 alone resolves unattended; with unattended resolved it has no effect; with attended and no TTY it waives the check, mode-resolution-test.sh: recorded attended + no TTY + no UNCLE_ATTENDED_STDIN refuses exit 1, never unattended, mode-resolution-test.sh: inherited UNCLE_MODE_RESOLVED=1 + UNCLE_UNATTENDED=1 with --attended or UNCLE_ATTENDED=1 resolves attended, and refuses with exit 1 without a TTY | --attended </dev/null, resume a recorded-attended run with </dev/null |
-| AC-4, AC-5 (conflict rule: attended source wins; CLI --attended with --unattended refuses; flag/env overrides recorded mode; only exact UNCLE_ATTENDED=1 counts as env value) | A-3, A-4, A-7 | I-3 | mode.sh | mode-resolution-test.sh (incl. env value matrix: UNCLE_ATTENDED=0/empty/other ignored; UNCLE_ATTENDED=1 with --unattended -> attended plus deprecation notice; --attended with --unattended -> exit 1; legacy env vs recorded attended -> explicit source wins) | none |
-| AC-6; parity across entry points, including a child driver inheriting `UNCLE_MODE_RESOLVED=1`: inherited `UNCLE_UNATTENDED` is authoritative, a contradicting `--attended`/`UNCLE_ATTENDED=1` is refused, and an agreeing `--unattended` is ignored silently | A-6 | I-3 | all drivers | parity test, mode-resolution-test.sh: inherited UNCLE_MODE_RESOLVED=1 with UNCLE_UNATTENDED=1 and contradicting --attended/UNCLE_ATTENDED=1 refuses; agreeing --unattended ignored silently; launcher clears user-set UNCLE_MODE_RESOLVED | none |
-| AC-7 | A-8 | I-1, I-4 | gate libs (unchanged) | attestation/PR/record tests (ledger line compared against the new authoritative text only) + defect injection | read PR body |
-| AC-8: a resumed run uses the recorded mode unless an explicit flag or env overrides it; any explicit attended source wins over any explicit unattended source, except `--attended` with `--unattended` on the CLI, which refuses. A recorded attended run resumed with no TTY and no UNCLE_ATTENDED_STDIN=1 refuses with exit 1 and never runs unattended. A run with existing state but no mode file (AR-007) resumes attended with a notice, never silently unattended, unless an explicit unattended flag/env is given; the TTY rule still applies. | A-10 | I-5 | mode.sh | resume test: recorded mode is honoured on resume; explicit flag/env overrides the recorded mode, resume test: invalid, empty or symlinked mode file refuses with exit 1 and is not read as unattended, resume test: recorded attended + no TTY + no UNCLE_ATTENDED_STDIN refuses with exit 1 and never runs unattended, resume test: state present, no mode file, no flag -> attended + notice; no TTY -> refuses exit 1; explicit --unattended -> unattended | resume run, resume a recorded-attended run with </dev/null: refuses |
-| AC-9 | A-9 | none | upgrade-check.sh | upgrade-test.sh | none |
-| AC-10 | A-6 | I-6 | housekeeping | housekeeping-workflow-test.sh | none |
-| AC-11 | A-11 | none | docs, TUI | docs grep test | read help |
-| AC-12 | all | all | tests | both suites | none |
+## 18. Manual-verification strategy
+Real small build via `ssh host -T` (no pty) and `docker run` without `-t`; attended run in a real terminal. LIVE_VERIFICATION phase only; not a coding prerequisite.
 
 ## Restrictions
 
 | ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
 |---|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST I-2 | AC-3 | attended never becomes unattended, including on resume of a recorded attended run without a TTY | resolver refuses (exit 1) when the resolved mode is attended and there is no TTY/UNCLE_ATTENDED_STDIN, including recorded attended mode on resume; no fallback branch; a run with state but no mode file resolves attended (never unattended) unless an explicit unattended flag/env is given; explicit --attended/UNCLE_ATTENDED=1 bypasses the inherited UNCLE_MODE_RESOLVED shortcut and re-resolves including the TTY check | direct | CAP-SHELL | stagegate.sh:62-74 parse site inspected | CODING |
-| R-2 | USER | CHANGE_REQUEST I-3 | AC-6 | one decision per launch | shared `mode.sh`, `UNCLE_MODE_RESOLVED`; inherited `UNCLE_UNATTENDED` authoritative when `UNCLE_MODE_RESOLVED=1`, contradicting `--attended`/`UNCLE_ATTENDED=1` refused, `--unattended` ignored silently; launcher clears user-set `UNCLE_MODE_RESOLVED` | parity | CAP-SHELL | libs read `UNATTENDED`/`UNCLE_UNATTENDED` (grep) | CODING |
-| R-3 | USER | CHANGE_REQUEST Non-goals | AC-7 | waiver wording/ledger unchanged | gate libs not modified | I-4 | CAP-SHELL | acceptance-gate.sh:54-64 | CODING |
-| R-4 | REPOSITORY | housekeeping-workflow.sh:266 | AC-10 | policy gate precedes approval | mode logic touches only line ~272 block | I-6 | CAP-SHELL | inspected lines 266-282 | CODING |
-| R-5 | DESIGN | plan decision | AC-3 | scripted attended runs possible; UNCLE_ATTENDED_STDIN=1 never changes the selected mode and only waives the TTY check when the resolved mode is attended; EOF or an unreadable answer at an attended gate is a decline | `UNCLE_ATTENDED_STDIN=1` read by the resolver only inside the attended branch; it waives only the TTY check. In attended mode, EOF or an unreadable/invalid answer at a gate counts as a decline and stops the run, never delegated or auto-approved | tests pipe answers; I-2 forbids attended degrading to unattended | CAP-SHELL | revisable | CODING |
-| R-6 | REPOSITORY | CLAUDE.md test naming | AC-3 | Python test collected | name `mode-pty-test.py` | runner pattern `*-test.py` | CAP-PY | run-python-tests.sh | CODING |
+| R-1 | USER | CR I-4, N-7 | AC-3 | No cursor/screen escapes; env secrets never printed | `EscapeFilter` on driver output (headless writes none); a redaction pass replaces values of env vars matching *KEY*/*TOKEN*/*SECRET*/*PASSWORD* with a fixed mask before the elapsed-time prefix is added; stderr is merged into the same stream | Driver may emit escapes | CAP-PY | `uncle_headless.py:37` inspected | CODING |
+| R-2 | USER | CR I-3 | AC-5, AC-7 | No duplicated duties | Shared `run_duties` | One implementation | CAP-PY | `run_duties.py:65-140` | CODING |
+| R-3 | REPOSITORY | CLAUDE.md signing rules | AC-10 | Tests never sign | Fixture git flags | Avoid pinentry | CAP-GIT | CLAUDE.md | CODING |
+| R-4 | DESIGN | D-6 | AC-2, AC-6 | Attended needs tty; refused input combinations exit 2 | `os.isatty(0)` check; combination check (multiple actions, empty text, `--attended` without `--noui`, `--change-request` with `--attended`) before any write; EOF/blank at gate -> not approved, exit 3 | Safe gates | CAP-PTY | `uncle_headless.py:142` | CODING (pty test); real-terminal check LIVE_VERIFICATION |
+| R-5 | REPOSITORY | `scripts/run-python-tests.sh` | AC-10 | New Python tests named `<name>-test.py` | Hyphenated names | Runner pattern | CAP-PY | runner header | CODING |
 
-Runner binding: bash via `scripts/run-shell-tests.sh`; python3 via `scripts/run-python-tests.sh`. Live verification (real agents) is not required; no credentials needed for CODING. LIVE_VERIFICATION checks: manual items in section 18 only.
+## Change-impact table
 
-## Decisions
+| Component | Planned change | Reason | Regression risk | Test coverage |
+|---|---|---|---|---|
+| `scripts/lib/run_duties.py` | Add `build_driver_command`, `prepare_worktree`, startup-text/CR/brief helpers, exit classification; keep existing pure helpers | I-3, N-9 | Low (new) | `run-duties-test.py` |
+| `scripts/lib/uncle_headless.py` | Derive driver from `UNCLE_STARTUP_*` when no `--`; resolve text file; refuse CR existing; worktree; real desktop decision; finish summary; title; exit codes | N-1..N-11 | Medium | `headless-run-test.py`, equivalence test |
+| `uncle` | Pass through to headless runner when `--noui` or `UNCLE_NOUI=1` (exactly `1`); keep refusals and help. With no `--noui` and `UNCLE_NOUI` unset or not exactly `1` (including `0` and empty), the launcher produces the identical exec argv and exported environment as before the change. | launcher | Medium (argument order) | `launcher-noui-test.sh` (enabled and disabled matrices: argv/env capture compared against committed HEAD launcher output), shell suites |
+| `uncle_tui.py` | `cmd_for`, `_enter_run_worktree`, `_read_banner` delegate to `run_duties`; keep `finish_decision` re-export | I-3 | Medium-high | existing TUI suites plus `tui-delegation-golden-test.py` (exact golden match of `cmd_for` for four actions x issue/non-issue, `_enter_run_worktree` calls, `_read_banner` results) |
+| `README.md` | Document flag, env, exit codes, attended, `--noinput` | AC-11 | None | launcher doc grep |
+| `scripts/tests/run-duties-test.py`, `headless-run-test.py`, `headless-equivalence-test.py`, `launcher-noui-test.sh`, `pty_helper.py` | Extend to cover gaps above, defect injection | AC-1..AC-9 | Low | self |
 
-D-1 internal vars retained. D-2 deprecation window two releases. D-3 upgrade notice-only when unattended. D-4 `.uncle/workflow/mode` file for resume. D-5 `UNCLE_ATTENDED_STDIN` escape: it never changes the selected mode; it only waives the TTY check when the resolved mode is attended (no effect alone or when unattended). D-6 TUI default unchanged (already unattended); it gains `--attended` start. D-7 PR behavior unchanged, help text corrected.
+## Traceability
+
+Testable rule for AC-4/AC-6: unattended `--noui` never reads stdin and never records a human approval; reaching a human gate exits 3 and names the gate on stderr. Refusals (non-tty `--attended`, `--change-request` with `--attended`) exit 2. EOF or blank input at an attended gate is not approval and exits 3.
+
+Gate rule (AR-011, applies to AC-4 and AC-6): unattended `--noui` never answers a gate. It stops at the gate, records nothing as human-approved, names the gate on stderr, and exits 3. Test: `headless-run-test.py` runs a fixture driver that blocks on a gate and asserts exit 3, the stderr gate name, no bytes written to the driver's stdin, and no approval record created.
+
+| Requirement | Behavior | Invariant | Component | Automated test | Manual check |
+|---|---|---|---|---|---|
+| AC-1 | N-1, N-2 | I-1 | uncle, headless | launcher-noui-test.sh | ssh/docker build |
+| AC-2: Attended `--noui` requires a tty on stdin. Multiple startup actions, empty startup text, `--attended` without `--noui`, or `--change-request` with `--attended` refuse with exit 2 before any write. EOF or a blank answer at an attended gate means not approved, exit 3. | N-5, N-6 | I-5 | uncle, headless | launcher + headless tests | - |
+| AC-3 | N-7 | I-4 | headless | headless-run-test.py (escape stripping, elapsed-time prefix on every line, stderr merged, byte-level secret redaction) | review output |
+| AC-4: exit codes. 0 finished; 1 driver nonzero without a gate/signing-handoff marker, or a failed check; 2 refusal before the driver starts; 3 gate or signing stop (classify_exit matches the gate/signing-handoff marker in a nonzero driver run); 130/143 signal. Precedence: signal (130/143) > gate/signing stop (3) > driver nonzero or failed check (1) > 0; 2 occurs only before start. Unattended --noui never reads stdin and never answers a gate; a run reaching a human gate stops, records nothing as human-approved, names the gate on stderr, and exits 3. | N-8 | I-5 | headless, run_duties | headless-run-test.py: one case per code plus combinations (driver nonzero + gate marker -> 3; driver nonzero without marker -> 1; driver exit 0 + failed-check marker -> 1; driver exit 0 -> 0; gate marker + signal -> 130/143; signal during setup -> 130/143; refusal before start -> 2), run-duties-test.py classify_exit unit cases | - |
+| AC-5: shared duties. Unattended --noui must not auto-delegate or auto-approve any human gate (I-2: delegated = delegated only when a human delegates). | N-4 | I-3 | run_duties | run-duties-test.py, injection | - |
+| AC-6: Unattended `--noui` never reads stdin and never answers a human gate; when the driver reaches a human gate it stops, records nothing as human-approved, names the gate on stderr, and exits 3. Only `--attended` with a tty on stdin may relay a person's answer from the terminal; in that mode EOF or blank input at a gate is treated as not approved and exits 3. Non-tty `--attended`, and `--change-request` combined with `--attended`, are refused with exit 2. | N-5 | I-2 | headless | pty test | attended run |
+| AC-7 | N-9 | I-1, I-3 | run_duties, TUI | equivalence test | - |
+| AC-8 | N-10 | I-5 | headless | signal test: first signal forwarded to group, SIGKILL after 10s grace, second signal during grace kills the group immediately, no orphan processes remain | Ctrl+C |
+| AC-9: `UNCLE_NOUI=1` (exactly) behaves like `--noui`; any other value (unset, empty, `0`, `true`, etc.) is ignored silently, and with `--noui` absent the launcher produces the identical exec argv and exported env as before. A second signal during the 10 s grace period kills the driver process group immediately. | N-11 | - | uncle | launcher test (enabled matrix: UNCLE_NOUI=1 enables), launcher test (disabled matrix: unset, 0, empty, true, other values ignored silently; exec argv and env identical to HEAD launcher), signal test (second signal during grace kills group immediately) | - |
+| AC-10 | P-1..P-3, M-1 | V-1..V-5 | TUI, uncle | both runners, tui-delegation-golden-test.py | - |
+| AC-11 | - | - | README, help | launcher grep | read |
+
+Unattended gate rule (AR-003): without --attended, headless never reads stdin. When the driver reaches a human gate, the runner stops the run, nothing is recorded as human approval or delegation, the gate is named on stderr, and the exit code is 3. Tested in headless-run-test.py with a fixture driver that reaches a gate (stdin closed or unread, assert exit 3, stderr names the gate, no approval record written).
 
 ## Implementation sequence
 
-1. Resolver and its tests: write `scripts/lib/mode.sh` and `scripts/tests/mode-resolution-test.sh`. Step 1 fully owns every resolution rule (inherited UNCLE_MODE_RESOLVED, explicit --attended/UNCLE_ATTENDED=1 override, resume, mode-file validation, env value rules, TTY rule), an `isatty(0)` capture helper that the launcher and from-issue both call (so the TTY decision is made once, before stdin text is consumed), and every banner, notice and refusal string as functions in mode.sh; steps 2-6 only call these and define no mode text of their own. The test is table-driven and exact-match asserts stderr, empty stdout and exit status for: flag/env/recorded-mode conflict matrix, inherited UNCLE_MODE_RESOLVED combinations, legacy env values, UNCLE_ATTENDED_STDIN rows, resume rows (recorded attended/unattended x no flag/--attended/--unattended/legacy env x TTY/no TTY), missing/empty/garbage/multi-line/symlink/directory/stale mode file, mode file written only after successful resolution (unchanged hash after refusal), and EOF/garbage stdin at an attended gate stopping the run. Reqs AC-4..AC-6, AC-8. Decisions D-1,D-4,D-5.
-   Owns: `scripts/lib/mode.sh`, `scripts/tests/mode-resolution-test.sh`
-2. Stagegate wiring (builds on step 1). `stagegate.sh` owns the run directory: it calls the resolver and mode.sh message functions, writes `.uncle/workflow/mode` only after resolution succeeds, and emits the `unattended-enabled` ledger line with the new authoritative text. Add a per-driver test case in mode-resolution-test.sh-style fixtures asserting the file appears only in the owning run directory and never on refusal.
-   Owns: `scripts/stagegate.sh`
+1. Audit prior attempt: read `uncle_headless._stream` and `run_duties` against the plan; diff `uncle` and `uncle_tui.py` against committed HEAD (the regression baseline) and confirm the `uncle_tui.py` diff contains only delegation to shared functions with no non-delegation behavior change (any other change is reverted or recorded as a deviation); list gaps in IMPLEMENTATION_NOTES.md.
+   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
+2. Shared duties: extend `run_duties.py` with driver argv, worktree prep, startup-text and CR/brief helpers, exit classification (D-9, D-10); `build_driver_command` validates the action against a four-action allowlist and never takes paths from env; tests first, including rejection of unknown/empty/path-like actions.
+   Owns: `scripts/lib/run_duties.py`, `scripts/tests/run-duties-test.py`
    Depends on: 1
-3. Change-workflow wiring (independent of step 2; separate file). `change-workflow.sh` owns its run directory: it calls the resolver and mode.sh message functions, writes `.uncle/workflow/mode` only after resolution succeeds, never on refusal, and emits the `unattended-enabled` ledger line with the new authoritative text.
-   Owns: `scripts/change-workflow.sh`
-   Depends on: 1
-4. from-issue and housekeeping wiring (separate files). `from-issue.sh` only parses and forwards the resolved mode and never writes the mode file. `housekeeping-workflow.sh` owns its own state directory and writes the mode file only there, after successful resolution, never on refusal. Add launcher/driver tests that pipe text on stdin to --application and --housekeeping with --attended, with and without UNCLE_ATTENDED_STDIN=1 (refuses without it, exit 1).
-   Owns: `scripts/from-issue.sh`, `scripts/housekeeping-workflow.sh`
-   Depends on: 1
-5. Launcher and upgrade check: `uncle`, `scripts/lib/upgrade-check.sh`, plus `scripts/tests/mode-launcher-test.sh`. The launcher calls the step 1 isatty helper and resolver, and unsets any user-supplied UNCLE_MODE_RESOLVED before resolving. Tests: export UNCLE_MODE_RESOLVED=1 with UNCLE_UNATTENDED=1 and assert it is cleared; piped stdin text with --attended with and without UNCLE_ATTENDED_STDIN=1; parity of inherited-resolved plus conflicting child flag across every driver entry point.
-   Owns: `uncle`, `scripts/lib/upgrade-check.sh`, `scripts/tests/mode-launcher-test.sh`
-   Depends on: 1
-6. TUI: startup env, `cmd_for`, mode display, help text, plus `scripts/tests/mode-pty-test.py`.
-   Owns: `uncle_tui.py`, `scripts/tests/mode-pty-test.py`
-   Depends on: 1
-7. Docs and migration note.
-   Owns: `README.md`, `QUICK_START.md`, `GITHUB_INTEGRATION.md`, `docs/quickstart.md`, `docs/UNATTENDED_DEFAULT_MIGRATION.md`
-8. Update existing tests that pass `--unattended` or rely on the old attended default (the files found by grep for `unattended` under `scripts/tests`, plus any failing in the driver run; list them in IMPLEMENTATION_NOTES.md).
-   Owns: `scripts/tests/*`, `scripts/uncle-verify.py`
-   Depends on: 2, 3, 4, 5, 6
-9. Reconcile: defect-injection run, notes in IMPLEMENTATION_NOTES.md, and launch metadata `.uncle/launch.json` as `{"kind":"none"}` unchanged if already present. No source or test edits in this step.
-   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`, `.uncle/launch.json`
-   Depends on: 8
+3. TUI delegation to shared functions, no behavior change.
+   Owns: `uncle_tui.py`
+   Depends on: 2
+4. Headless runner completion: environment-driven driver selection, setup, desktop decision, finish summary, title, exit codes, signals.
+   Owns: `scripts/lib/uncle_headless.py`, `scripts/tests/headless-run-test.py`, `scripts/tests/pty_helper.py`
+   Depends on: 2
+5. Launcher wiring and refusals. Add a launcher-noui-test.sh case capturing exec argv and exported env with `--noui` absent and UNCLE_NOUI unset, 0 and empty, asserting identity with committed HEAD launcher output. Step 5 also owns reverting any unrelated `uncle` change found in the step 1 audit.
+   Owns: `uncle`, `scripts/tests/launcher-noui-test.sh`
+   Depends on: 4
+6. Equivalence test and docs.
+   
+   Steps 3 and 4 touch disjoint files and may run in parallel.
+   Owns: `scripts/tests/headless-equivalence-test.py`, `README.md`
+   Depends on: 3, 4, 5
+
+Audit reconciliation (AR-010): the step 1 audit runs against committed HEAD and its diff-audit result is recorded in IMPLEMENTATION_NOTES.md. Step 3 owns reverting any non-delegation change in `uncle_tui.py` found by the audit (or recording it as a deviation); step 5 owns reverting any unrelated change in `uncle`. The golden-output test is generated from committed HEAD functions and must pass against them before step 3 begins.
 
 ## 21. Scope cuts under time pressure
-Cut first: docs/quickstart.md and QUICK_START wording polish, TUI mode-header display, then the pty test (keep the no-TTY test). Never cut: resolver, parity, record test, flag conflict refusal.
+Cut first: documentation polish; the signal-orphan test depth; desktop-decision parity beyond recording; the equivalence test breadth (keep one fixture build). Never cut: AC-1..AC-4, I-4, TUI no-regression.
 
 ## 22. Risks and unresolved questions
+
 | Risk | Mitigation |
 |---|---|
-| Many tests assumed attended | step 8; use `--attended` + `UNCLE_ATTENDED_STDIN=1` |
-| Surprise for habitual users | banner at every entry point; release notes |
-| `UNCLE_UNATTENDED=0` inherited from older parents | `UNCLE_MODE_RESOLVED` guard |
-| Restart loop in `uncle:471-476` keyed on flag in args | key on resolved mode instead |
-No blocking planning decisions remain. Test edits are authorized by CHANGE_REQUEST.md Verification section.
+| TUI delegation breaks existing tests patching `uncle_tui.*` | Keep re-exports; run both runners |
+| Env-driven driver selection drifts from `cmd_for` | Single shared `build_driver_command` (D-9) |
+| Prior attempt contains unreviewed code | Step 1 audit |
+
+Resolved (AR-004): N-5 wording (stdin line-by-line) vs tty-only is settled by D-6. Attended needs a tty; `--change-request` with `--attended`, multiple startup actions, empty text, and `--attended` without `--noui` refuse exit 2; EOF or blank at an attended gate means not approved, exit 3.
+
+No blocking planning decisions remain.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | Resume of a recorded-attended run without a TTY was unspecified; refusing preserves I-2 (attended never degrades to unattended). | Section 1.1 gains a resume/TTY rule; AC-8 and the resume test row, R-1 and the pty test mapping updated to cover refusal. |
-| AR-002 | Accepted | Real gap: flag/env/recorded-mode conflicts were undefined; a single rule that any explicit attended source wins (except CLI --attended with --unattended) settles it and preserves I-2. | Rewrote precedence in s1.1 and updated AC-8 and s16.1.r3 requirement/tests to match. |
-| AR-003 | Accepted | Absent/corrupt mode file handling was unspecified and silently flipping an attended run conflicts with I-2. | Edited s7.1 and s8.1 to define unparseable (refuse, exit 1) and missing (resume unattended with notice) mode file behavior. |
-| AR-004 | Accepted | Child drivers inheriting UNCLE_MODE_RESOLVED=1 plus an explicit flag were unspecified; the inherited decision must be authoritative so attended never degrades. | s1.1 and R-2 state inherited UNCLE_UNATTENDED is authoritative; contradicting --attended refuses, --unattended ignored silently; AC-6 test coverage added. |
-| AR-005 | Accepted | The effect of UNCLE_ATTENDED_STDIN=1 alone or with an unattended resolved mode was unspecified; the proposed rule is clear and consistent with I-2. | s1.1 TTY rule, R-5 and D-5 (s18.1) state it never changes mode and only waives the TTY check when attended; AC-2/AC-3 row (s16.1.r2) tests it. |
-| AR-006 | Accepted | Tests, docs and checklist need one verbatim string per message, so the plan now fixes each one. | Section 19 Observability (s14.1) now lists the exact banner, resume, TUI, deprecation and refusal strings; tests assert these verbatim. |
-| AR-007 | Accepted | Silently resuming a pre-existing run with state but no mode file as unattended would drop human gates the run started with. | Section 10 Compatibility: a run with state but no mode file resumes attended (TTY rule applies) unless explicit unattended flag/env; AC-8 and R-1 aligned. |
-| AR-008 | Accepted | Real gap: the TTY rule was not stated to apply to a mode reused from the recorded file on resume. | Section 1.1 precedence now applies the TTY rule to recorded attended mode (exit 1, never unattended); traceability row s16.1.r2 and R-5 updated. |
-| AR-009 | Accepted | Real gap: plan did not say whether child flags override an inherited resolved mode; authoritative inheritance with refusal of contradictions keeps parity (I-3) and never degrades attended (I-2). | Section 1.1 states inherited UNCLE_UNATTENDED is authoritative under UNCLE_MODE_RESOLVED=1 and a contradicting --attended/UNCLE_ATTENDED=1 is refused; R-2 and AC-6 updated to match. |
-| AR-010 | Accepted | Value handling for empty, 0 and invalid env values, and --unattended combined with UNCLE_ATTENDED=1, was unspecified and is a real gap. | Section 1.1 gains an env-value rule (only exact 1 counts; --unattended with UNCLE_ATTENDED=1 resolves attended plus notice); traceability row s16.1.r3 tests it. |
-| AR-011 | Accepted | Writing the mode file at start conflicts with refusing before any state is created, and a refused resume could overwrite the recorded mode. | Section 9 now says the mode file is written atomically only after successful resolution, never on refusal, and only by the run-directory owner. Section 12 now says refusals leave the file untouched. |
-| AR-012 | Accepted | The reworded ledger line conflicts with byte-identical ledger requirements, so the plan must name one authoritative wording and compare against it only. | Edited s6.1 to make the new text authoritative, and edited s11.1 and AC-7 so the record test compares against the new text only. |
-| AR-013 | Accepted | Real gap: plan did not say whether an explicit attended request overrides inherited UNCLE_MODE_RESOLVED=1 plus UNCLE_UNATTENDED=1; I-2 requires attended never degrades. | Section 1.1 now states explicit --attended/UNCLE_ATTENDED=1 always re-resolves incl. TTY check and wins over inherited state; R-1 mechanism and test row updated. |
-| AR-014 | Accepted | UNCLE_ATTENDED_STDIN=1 skips the TTY check, so EOF or an unreadable answer at an attended gate must be defined as a decline, never a delegation. | R-5 mechanism/property and s4.1 now state that in attended mode EOF or an unreadable/invalid answer at a gate counts as a decline and stops the run. |
-| AR-015 | Accepted | Resume with an invalid mode file or a recorded attended mode and no TTY was undefined; both must refuse rather than degrade to unattended. | Edited s7.1 (mode file validation) and s8.1 (resume rules), and AC-8 tests and behaviors to cover invalid file and attended-without-TTY resume. |
-| AR-016 | Accepted | Legacy env =0 used to force attended; after the default flip, ignoring it would silently run unattended, violating I-2. | Section 1.1 precedence: legacy envs set to 0 resolve attended with a notice; only exact value 1 selects unattended. |
-| AR-017 | Accepted | A stale, symlinked or non-regular mode file must never escalate a run to unattended on resume, so integrity rules are needed. | Section 9 (s7.1) now states the mode file is read only with valid run state in the same directory and rejects symlinks and non-regular files. |
-| AR-018 | Accepted | Resume precedence and TTY applicability were genuinely unstated; the proposed rule is consistent with I-2 (attended never degrades). | Section 1.1 precedence now states explicit flag/env overrides recorded mode and recorded attended still needs TTY or UNCLE_ATTENDED_STDIN=1, else exit 1; AC-8 updated. |
-| AR-019 | Accepted | Write timing conflicted with the no-state-before-refusal rule; writing only after successful resolution removes the conflict. | Section 9 Persistence: atomic write only after resolution succeeds, bad content handling; section 12 clarified that refusals write nothing. |
-| AR-020 | Accepted | Interaction of inherited UNCLE_MODE_RESOLVED=1 with explicit flags or UNCLE_ATTENDED was unspecified; the finding's settlement is sound and keeps one decision per launch. | Section 1 gains a block: inherited UNCLE_UNATTENDED is authoritative under UNCLE_MODE_RESOLVED=1, contradicting flags/env refuse, launcher clears user-set UNCLE_MODE_RESOLVED. |
-| AR-021 | Accepted | Tests, docs and checklist need one verbatim string per message; fixing them in the plan prevents divergent assertions. | Replace s14.1 with exact banner/notice/refusal strings and add a block listing them as the authoritative text. |
-| AR-022 | Accepted | The TTY check must name one stream; with --application/--housekeeping reading text from stdin, stdin is not a TTY, so the rule needs to be explicit. | Section 1 (s1.1) states the attended TTY check is isatty(0) only, so stdin-supplied text requires UNCLE_ATTENDED_STDIN=1. |
-| AR-023 | Accepted | Legacy env values other than exactly 1 are unspecified; ignoring them silently is safe and keeps attended selection explicit. | Section 1 precedence text: legacy envs count only when exactly 1; other values are ignored silently and never select attended. |
+| AR-001 | Accepted | Exit code precedence was unspecified; tests need one deterministic code when several conditions hold. | Section 12 (s10.1) and AC-4 now state precedence: signal > gate/signing stop (3) > driver nonzero or failed check (1) > 0; 2 only before start. |
+| AR-002 | Accepted | Gate stop versus plain driver failure needs a defined classification input so tests and users get a deterministic code. | Section 12 (s10.1) defines classify_exit's marker-based contract; AC-4 requirement and tests updated to match. |
+| AR-003 | Accepted | Unattended gate behavior was unspecified; stopping with exit 3 without reading stdin is the only safe option. | Edit AC-4 and AC-5 traceability rows and add a gate-behavior note after s17.1. |
+| AR-004 | Accepted | Input combinations were genuinely unspecified; D-6 conflicts with --change-request consuming stdin. | Edited D-6, AC-2, AC-6, R-4; replaced risk row s20.1.r4 with a prose note defining refusals (exit 2) and EOF/blank at gate (exit 3). |
+| AR-005 | Accepted | Output rules were ambiguous: prefixing, stderr merging and redaction lacked a rule, mechanism and test. | D-5 restated; R-1 adds redaction mechanism; AC-3 row gets redaction test; s8.1 states output format. |
+| AR-006 | Accepted | Real gap: UNCLE_NOUI values other than 1 and repeated-signal behavior were unspecified; the suggested rules are simple and safe. | Section 12 (s10.1) states the UNCLE_NOUI rule and second-signal immediate group kill; AC-9 requirement and tests updated to match. |
+| AR-007 | Partially accepted | Delegation of cmd_for, _enter_run_worktree and _read_banner is the riskiest edit and existing suites alone may not pin exact outputs. (1 edit(s) could not be placed in the plan and were left out.) (1 edit(s) could not be placed in the plan and were left out.) | Added golden-capture step before TUI delegation, a golden-equivalence test, and updated s16.1.r4 coverage and AC-10 and step-3 text. |
+| AR-008 | Accepted | Real gap: the plan only tests the enabling side of the launcher; the no-flag path must be byte-identical to preserve P-1..P-3. | Edit s16.1.r3 to state the identical-argv/env rule when --noui absent or UNCLE_NOUI is not exactly 1, and extend AC-9 with a disabled-side test. |
+| AR-009 | Accepted | Existing tests may patch uncle_tui names that move to run_duties, so the plan must keep those names on uncle_tui and route delegation through them. | Section 10 (Compatibility) now requires every uncle_tui attribute referenced by existing tests to stay on uncle_tui, with delegation through it so patches still take effect. |
+| AR-010 | Accepted | Uncommitted prior-attempt edits to uncle and uncle_tui.py exist, so the regression baseline must be committed HEAD and the audit must prove the TUI diff is delegation-only. | Edit D-8 and step-1 to set committed HEAD as the baseline and require the audit to confirm no non-delegation change in uncle_tui.py. |
+| AR-011 | Accepted | The plan only implied via exit 3 that unattended runs never auto-approve a gate; an explicit rule is needed to prevent AI approval of human gates. | Traceability section: AC-6 requirement states the unattended rule, and a new prose block under s17 makes it a testable rule for AC-4/AC-6. |
+| AR-012 | Accepted | Spec section 10 promises redaction but the plan had no enforcement point or test. | Added a redaction rule (pure `run_duties` function applied in the headless stream, byte-level test) to the Compatibility section. |
+| AR-013 | Accepted | Real gap: the plan did not say where the text-file trust check runs in the headless runner. | Section 12 (s10.1) now states the runner re-validates the text file with the shared trust check immediately before reading and exits 2 on failure. |
+| AR-014 | Accepted | Env-derived startup action is a new trust boundary and the runner is directly invocable, so it must be allowlisted. | Edited D-9, s7.1 (interface) and step-2 to require a four-action allowlist, exit 2 otherwise, and no env-supplied paths in argv. |
+| AR-015 | Accepted | Grace period and repeated-signal behavior were unspecified and orphans could hold worktree locks. | Section 12 (s10.1) states a 10s grace then SIGKILL to the group, and an immediate SIGKILL on a second signal; AC-8 test requirement updated. |
+| AR-016 | Accepted | Exit-code precedence and failed-check detection were unspecified, so tests could not know the expected code. | Section 12 (s10.1) now states precedence and failed-check detection; AC-4 row requirement and tests agree. |

@@ -1,5 +1,6 @@
 """Line-based interactive session for bare `uncle --noui` (no curses)."""
 import os
+import time
 import re
 import signal
 import sys
@@ -124,6 +125,7 @@ class Session:
         self.chat = None
         self.running = False
         self.last_action = None
+        self.started = time.time()
 
     # -- output helpers
     def say(self, text):
@@ -284,9 +286,63 @@ class Session:
         if reply:
             self.history.append(("assistant", reply))
             self.say(reply)
-        if action:
+        for note in getattr(self.chat, "notes", []) or []:
+            self.say(note)
+        cwd = getattr(self.chat, "last_cwd", None)
+        if cwd is not None:
+            if not self.apply_cwd(cwd, action):
+                return None
+        elif action:
             self.execute(action, text)
         return None
+
+    # -- uncle_cwd: the TUI's _validate_agent_cwd / _agent_cwd, for the REPL
+    def validate_cwd(self, path):
+        if not (isinstance(path, str) and os.path.isabs(path)):
+            raise ValueError("path is not absolute")
+        resolved = os.path.realpath(path)
+        if not os.path.isdir(resolved):
+            raise ValueError("not a directory")
+        if resolved in (os.path.realpath(os.sep), os.path.realpath(os.path.expanduser("~"))):
+            raise ValueError("/ and the home directory are not allowed")
+        return resolved
+
+    def created_here(self, resolved):
+        try:
+            info = os.stat(resolved)
+        except OSError:
+            return False
+        return getattr(info, "st_birthtime", info.st_ctime) >= self.started - 1
+
+    def apply_cwd(self, path, action):
+        """Switch the session root; True when the same reply's action may still run."""
+        try:
+            resolved = self.validate_cwd(path)
+        except ValueError as exc:
+            self.say("Ignored uncle_cwd (%s).%s" % (exc, " The action in the same reply was cancelled." if action else ""))
+            return False
+        if resolved != os.path.realpath(self.root):
+            if not (self.created_here(resolved) or not self.attended):
+                if not self.confirm("The agent wants to work in %s, which it did not create this session. Switch?" % resolved):
+                    if action:
+                        self.say("The action in the same reply is cancelled.")
+                    return False
+            self.switch_root(resolved)
+        if action:
+            self.execute(action, "")
+        return True
+
+    def switch_root(self, path):
+        self._terminate_chat()
+        self.root = path
+        self.env["UNCLE_PROJECT_ROOT"] = path
+        self.env["UNCLE_CONFIG"] = os.path.join(path, ".uncle", "config")
+        os.environ["UNCLE_PROJECT_ROOT"] = path
+        os.environ["UNCLE_CONFIG"] = self.env["UNCLE_CONFIG"]
+        if not (self.env.get("UNCLE_RUNTIME_ROOT") or self.env.get("UNCLE_RUNTIME")):
+            self.runtime = path
+        self.chat = None
+        self.say("Working in " + path)
 
     def on_sigterm(self, signum, frame):
         self._terminate_chat()

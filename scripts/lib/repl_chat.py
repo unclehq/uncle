@@ -104,6 +104,8 @@ class ChatSession:
         self.root, self.env = root, dict(env)
         self.attended, self.confirm, self.say = attended, confirm, say
         self.grants = []
+        self.last_cwd = None
+        self.notes = []
 
     def _agent_command(self):
         model, effort = 'sonnet', 'low'
@@ -179,18 +181,43 @@ class ChatSession:
             return reply, None
         return data.get('message') or '', data
 
-    @staticmethod
-    def _split_agent_reply(reply):
+    def _split_agent_reply(self, reply):
+        """Split trailing uncle_action / uncle_cwd blocks off a reply (same rules as the TUI)."""
+        import json
         import re
+        self.last_cwd = None
+        self.notes = []
+        pat = re.compile(r'(?:\A|\n)```(uncle_action|uncle_cwd)[ \t]*\n((?:(?!```).)*?)\n?```[ \t]*\Z', re.S)
+        rest, blocks = reply.rstrip(), []
+        while True:
+            m = pat.search(rest)
+            if m is None:
+                break
+            blocks.insert(0, (m.group(1), m.group(2)))
+            rest = rest[:m.start()].rstrip()
+        text = rest if blocks else reply
         action = None
-        m = re.search(r'```uncle_action\s*\n(.*?)\n```\s*$', reply.rstrip(), re.S)
-        text = reply
-        if m:
-            text = reply[:m.start()].rstrip()
-            try:
-                action = home_actions.parse_reply(m.group(1))
-            except ValueError as exc:
-                raise ChatError(str(exc))
+        seen = {}
+        for kind, body in blocks:
+            seen.setdefault(kind, []).append(body)
+        for kind, bodies in seen.items():
+            if len(bodies) > 1:
+                self.notes.append('The reply had more than one %s block; none was executed.' % kind)
+                continue
+            if kind == 'uncle_cwd':
+                try:
+                    data = json.loads(bodies[0])
+                except ValueError:
+                    data = None
+                if isinstance(data, dict) and isinstance(data.get('path'), str):
+                    self.last_cwd = data['path']
+                else:
+                    self.notes.append('Ignored a malformed uncle_cwd block.')
+            else:
+                try:
+                    action = home_actions.parse_reply(bodies[0])
+                except ValueError as exc:
+                    raise ChatError(str(exc))
         return text, action
 
     def cancel(self):

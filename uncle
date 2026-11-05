@@ -110,10 +110,10 @@ starts the change workflow. stdin must be piped or redirected; it refuses to
 overwrite an existing CHANGE_REQUEST.md. The text is untrusted input to
 tool-using agents, especially with --unattended. --application, --issue and
 --change-request are mutually exclusive.
---housekeeping [TEXT] plans, policy-checks, and (after approval) runs repository
-housekeeping operations described by TEXT (or piped stdin); bare use on a
-terminal is refused as empty input. Exit 0 only for DECLINED or fully verified
-runs. Mutually exclusive with the three flags above.
+--housekeeping [TEXT] runs one free-form agent (the supervisor's runner and
+model) to carry out the chore described by TEXT (or piped stdin), under the
+housekeeping deny list; bare use on a terminal is refused as empty input. Exit 0
+when declined or the agent succeeds. Mutually exclusive with the three flags above.
 --performance reports recorded runtime and token usage for the current project.
 --runs lists the runs across this project's git worktrees (see
 `from-issue.sh --worktree`): one line per worktree holding a run, as

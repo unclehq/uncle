@@ -94,6 +94,7 @@ from github_issues import IssuePicker, references as issue_references, issue_con
 from self_hosted import settings as home_settings
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
 import supervisor as supervision_lib
+import housekeeping_config as hk_config
 import supervisor_runner
 from supervisor_runner import SupervisorRequest, build_command as supervisor_command
 import supervisor_chat
@@ -1125,6 +1126,8 @@ class UncleTUI:
             return "@connection"
         if section == "misc":
             return "!misc"
+        if section == "housekeeping":
+            return "!hk"
         if section == "supervision":
             return "!supervision"
         if section == "recovery":
@@ -1345,6 +1348,9 @@ class UncleTUI:
             return ["Recovery model — diagnose failures and propose repairs"]
         if section == "opencode":
             return ["Connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
+        if section == "housekeeping":
+            return ["%d. %s" % (i, p) for i, p in enumerate(hk_config.load(CONFIG_PATH), 1)] + [
+                "+ Add a pattern…", "Reset to defaults"]
         if section == "misc":
             return ["Auto mode: " + ("off" if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "false" else "on"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
@@ -1401,6 +1407,8 @@ class UncleTUI:
             return desc
         if getattr(self, "config_section", "") == "misc":
             return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. It asks nothing: blocking final-audit findings are skipped and ledgered as accepted without human review, no completion or star dialog opens, nothing is committed, pushed or opened as a PR, and the finished-build line is printed on exit. The approval name identifies your manual approvals."
+        if getattr(self, "config_section", "") == "housekeeping":
+            return "Patterns that make the housekeeping planner's commands refused, in addition to a locked built-in floor that cannot be edited here. Entries can only add refusals."
         if getattr(self, "config_section", "") == "supervision":
             return self._supervision_desc()
         if not getattr(self, "config_section", ""):
@@ -1998,8 +2006,11 @@ class UncleTUI:
 
     def _poll_workflow(self):
         if getattr(self, "proc", None) and self.proc.poll() is not None:
-            self._end_title()
             if not getattr(self, 'workflow_exit_reported', False):
+                # Once per exit. This poll runs every UI tick, and a run with
+                # no completion banner (housekeeping) stays on this screen, so
+                # an unguarded title write floods the tty until write() blocks.
+                self._end_title()
                 self.workflow_exit_reported = True
                 self.workflow_exit_code = self.proc.returncode
                 self.steering_channels = {}
@@ -6917,7 +6928,9 @@ class UncleTUI:
             "menu": "The man from uncle",
             "issue_mode": "Seed as",
             "issue": "Issue number or URL",
-            "config": "Configure — Enter opens a section or setting, q back",
+            "config": ("Housekeeping disallow list — Enter: edit/add, d: remove, q back"
+                       if getattr(self, "config_section", "") == "housekeeping"
+                       else "Configure — Enter opens a section or setting, q back"),
             "notice": "Enter to continue to " + (
                 "menu" if getattr(self, "notice_destination", "config") == "menu"
                 else "Configure"),
@@ -7481,11 +7494,18 @@ class UncleTUI:
                     elif self.config_sel == 2:
                         self._open_picker("markdown_viewer", "!misc")
                     else:
-                        self.notice = "Edit the housekeeping disallow list from the uncle line menu: Configure > Housekeeping."
+                        self.config_section = "housekeeping"
+                        self.config_sel = self.config_scroll = 0
+                        self.notice = ""
+                elif section == "housekeeping":
+                    self._hk_enter()
                 elif section == "opencode" and self.config_sel == 1:
                     self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
                 else:
                     self._open_stage(self._config_row())
+            elif (getattr(self, "config_section", "") == "housekeeping"
+                  and k in (ord("d"), ord("D"), ord("x"), ord("X"), curses.KEY_DC)):
+                self._hk_remove()
             elif k in (ord("q"), ord("Q")):
                 self._go_back()
             return
@@ -7553,6 +7573,45 @@ class UncleTUI:
                 self.input_buf += chr(k)
             return
 
+    def _hk_enter(self):
+        """Enter on a housekeeping row: edit an entry, add one, or reset."""
+        patterns = hk_config.load(CONFIG_PATH)
+        self.notice = ""
+        if self.config_sel < len(patterns):
+            self.hk_index = self.config_sel + 1
+            self.input_buf = patterns[self.config_sel]
+        elif self.config_sel == len(patterns):
+            self.hk_index = 0
+            self.input_buf = ""
+        else:
+            hk_config.reset(CONFIG_PATH)
+            self.config_sel = 0
+            self.notice = "Disallow list reset to defaults."
+            return
+        self.picker_target, self.picker_kind = "!hk", "pattern"
+        self.state = "config_edit"
+
+    def _hk_remove(self):
+        patterns = hk_config.load(CONFIG_PATH)
+        if self.config_sel >= len(patterns):
+            return
+        hk_config.remove(CONFIG_PATH, self.config_sel + 1)
+        self.config_sel = max(0, min(self.config_sel, len(patterns) - 2))
+        self.notice = "Removed. The built-in floor is locked and unaffected."
+
+    def _hk_confirm(self):
+        try:
+            if self.hk_index:
+                hk_config.edit(CONFIG_PATH, self.hk_index, self.input_buf)
+            else:
+                hk_config.add(CONFIG_PATH, self.input_buf)
+        except hk_config.ConfigError as exc:
+            self.notice = "rejected: %s" % exc
+            return
+        self.notice = ""
+        self.input_buf = ""
+        self.state = "config"
+
     def _go_back(self):
         if self.state == "issue":
             self.state = "menu"
@@ -7567,7 +7626,7 @@ class UncleTUI:
         elif self.state == "stage":
             self.state = "config"
         elif self.state == "config_edit":
-            self.state = "config" if self.picker_target in ("@new", "!misc", "!supervision") else "stage"
+            self.state = "config" if self.picker_target in ("@new", "!misc", "!supervision", "!hk") else "stage"
         elif self.state == "picker":
             self.state = "config" if self.picker_target == "!misc" else "stage"
         self.sel = 0
@@ -7626,6 +7685,8 @@ class UncleTUI:
             self.input_buf = ""
             self.state = "issue_mode"
             self.sel = 0
+        elif self.state == "config_edit" and self.picker_target == "!hk":
+            self._hk_confirm()
         elif self.state == "config_edit":
             val = self.input_buf if self.picker_kind == "markdown_viewer" else self.input_buf.strip()
             runner = self.stage_runner(self.picker_target)

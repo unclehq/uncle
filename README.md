@@ -458,17 +458,22 @@ These systems operate within Uncle's authority boundaries. Protected approvals, 
 
 ### Housekeeping
 
-`uncle --housekeeping "rename scratch repo X to Y"` (or `/housekeeping TEXT` in
-the TUI) plans a small set of allowlisted repository chores, such as renaming a
-repository, removing worktrees or branches, and triaging issues or labels. You
-approve the plan before anything runs. Each operation is verified
-deterministically afterwards, and the run exits 0 only when every operation was
-verified (or the plan was declined); refusals, failures and unverified
-operations exit 1. Destructive operations such as `rm -rf /` or `~`, and force
-pushes to `main`/`master`, are always refused; you can add further refusals in
-`.uncle/config` under `housekeeping.disallow` (a JSON array), but never remove
-the built-in ones. Records are written to `.uncle/workflow/housekeeping/`
-(untracked), with the report in `REPORT.md`.
+`uncle --housekeeping "delete merged branches"` (or `/housekeeping TEXT` in
+the TUI) hands the request to one free-form agent run, as if Claude did the
+chore itself: it inspects the repository and makes the changes with its normal
+tools. It uses the supervisor's runner, model and effort
+(`supervision.runner`, `.model`, `.effort`) and needs the `claude` runner,
+because the deny list is enforced through Claude's tool rules. Unattended is the
+default; `--attended` asks once before the agent starts. The run exits 0 when
+declined or when the agent finishes, and 1 on refusal or agent failure.
+
+Commands starting with the built-in refusals (`gh repo delete`, `gh repo
+archive`, `sudo`, force pushes, `rm -rf /` and `~`) are always denied. You can
+add more in `.uncle/config` under `housekeeping.disallow` (a JSON array), or
+edit them in Configure > Miscellaneous > Housekeeping disallow patterns, but
+never remove the built-in ones. Denials match by command prefix, so they are a
+guard rail rather than a sandbox. Records are written to
+`.uncle/workflow/housekeeping/` (untracked), with the report in `REPORT.md`.
 
 The text can also come from stdin: `uncle --housekeeping < chores.md` or
 `cat spec.md | uncle --application`. A bare `--application` or `--housekeeping`

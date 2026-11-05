@@ -63,6 +63,21 @@ class HousekeepingTui(unittest.TestCase):
         self.assertEqual(self.cmds[0][1], 'close stale issues')
         self.assertTrue(self.cmds[0][0].endswith('housekeeping-workflow.sh'))
 
+    def test_exit_writes_title_once_not_every_poll(self):
+        # Regression: a finished run with no completion banner stays on the
+        # build page; re-writing the title each tick blocked the tty.
+        proc = Mock()
+        proc.poll.return_value = 0
+        proc.returncode = 0
+        self.ui.proc = proc
+        self.ui.output = []
+        self.ui.home_history = []
+        self.ui._maybe_auto_triage = Mock()
+        with patch.object(self.ui, '_end_title') as end_title:
+            for _ in range(5):
+                self.ui._poll_workflow()
+        self.assertEqual(end_title.call_count, 1)
+
     def test_slash_listed(self):
         self.ui.chat_composer = '/house'
         self.assertIn('/housekeeping', self.ui._slash_choices())
@@ -77,6 +92,40 @@ class HousekeepingTui(unittest.TestCase):
         self.assertIn('Housekeeping disallow', items[3])
         self.ui.config_section = ''
         self.assertEqual(self.ui._config_items()[:3], ["1. Configure stages", "2. Configure self hosting", "3. Miscellaneous"])
+
+    def test_disallow_list_editable_from_tui(self):
+        cfg = os.path.join(self.tmp.name, 'config')
+        with patch.object(tui, 'CONFIG_PATH', cfg):
+            ui = self.ui
+            ui.config_section, ui.config_sel, ui.state = 'misc', 3, 'config'
+            ui.picker_kind = ui.picker_target = ''
+            ui.state = 'config'
+            ui.misc = {}
+            ui.config_section = 'housekeeping'
+            n = len(tui.hk_config.load(cfg))
+            ui.config_sel = n                      # "+ Add a pattern…"
+            ui._hk_enter()
+            self.assertEqual(ui.state, 'config_edit')
+            ui.input_buf = 'git stash drop'
+            ui._confirm_text()
+            self.assertEqual(ui.state, 'config')
+            self.assertIn('git stash drop', tui.hk_config.load(cfg))
+            ui.config_sel = n                      # edit it
+            ui._hk_enter()
+            ui.input_buf = 'git stash clear'
+            ui._confirm_text()
+            self.assertEqual(tui.hk_config.load(cfg)[n], 'git stash clear')
+            ui.input_buf = ''
+            ui.config_sel = n
+            ui._hk_enter()
+            ui.input_buf = 'a | b'                 # rejected, stays in editor
+            ui._confirm_text()
+            self.assertEqual(ui.state, 'config_edit')
+            self.assertIn('rejected', ui.notice)
+            ui.state = 'config'
+            ui.config_sel = n
+            ui._hk_remove()
+            self.assertEqual(len(tui.hk_config.load(cfg)), n)
 
 
 if __name__ == '__main__':

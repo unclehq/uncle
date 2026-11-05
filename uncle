@@ -63,7 +63,7 @@ fi
 
 usage() {
     cat <<'EOF'
-Usage: uncle [-h|--help|--performance|--runs] [--attended]
+Usage: uncle [-h|--help|--performance|--runs] [--attended] [--noui]
        uncle --application [TEXT] [--attended]
        uncle --issue [ISSUE] [--attended]
        uncle --change-request [--attended] < request.md
@@ -120,6 +120,14 @@ when declined or the agent succeeds. Mutually exclusive with the three flags abo
 `#<issue> <state> <locked|idle> <path>`; `no runs` or `no worktrees` otherwise.
 --unattended is passed to the driver you pick: it runs every human gate
 without a person, records what nobody reviewed, and reports that at the end.
+--noui (or UNCLE_NOUI=1) runs a startup action headlessly: no curses, plain
+text progress on stdout. It requires one of --application, --issue,
+--change-request or --housekeeping (otherwise exit 2; the menu is never shown)
+and cannot be combined with --noinput. Unlike --noinput (the TUI's
+no-keyboard mode, which still draws the curses UI), --noui never starts the UI.
+Attended needs a tty on stdin.
+Exit codes: 0 completed; 1 driver failed; 2 refused before start; 3 stopped at
+a gate or needs a signed commit; 130/143 interrupted by SIGINT/SIGTERM.
 UNCLE_SKIP_UPGRADE=1 skips the interactive startup upgrade check.
 verify runs the standalone attestation verifier (scripts/uncle-verify.py) in
 the directory you invoked uncle from; exit 0 only for VERIFIED.
@@ -170,12 +178,12 @@ parse_text_option() {
         UNCLE_SHIFT=1
         if [[ -z "$UNCLE_STARTUP_TEXT" ]]; then
             printf 'Error: %s text cannot be empty\n' "$opt" >&2
-            exit 1
+            exit "$UNCLE_REFUSE_CODE"
         fi
     elif [[ $# -gt 1 && "$2" != --* ]]; then
         if [[ -z "$2" ]]; then
             printf 'Error: %s text cannot be empty\n' "$opt" >&2
-            exit 1
+            exit "$UNCLE_REFUSE_CODE"
         fi
         UNCLE_STARTUP_TEXT="$2"
         UNCLE_SHIFT=2
@@ -192,17 +200,23 @@ read_stdin_option() {
     local opt="$UNCLE_PENDING_STDIN"
     if [[ -t 0 ]]; then
         printf 'Error: %s requires TEXT or piped stdin (empty input)\n' "$opt" >&2
-        exit 1
+        exit "$UNCLE_REFUSE_CODE"
     fi
     if ! command -v python3 >/dev/null 2>&1; then
         printf 'Error: %s requires python3\n' "$opt" >&2
-        exit 1
+        exit "$UNCLE_REFUSE_CODE"
     fi
-    UNCLE_CR_DIR="$(mktemp -d)" || exit 1
-    UNCLE_STARTUP_TEXT_FILE="$(python3 "$ROOT/scripts/lib/housekeeping_input.py" --label "$opt" "$UNCLE_CR_DIR")" || exit 1
-    [[ -n "$UNCLE_STARTUP_TEXT_FILE" ]] || exit 1
+    UNCLE_CR_DIR="$(mktemp -d)" || exit "$UNCLE_REFUSE_CODE"
+    UNCLE_STARTUP_TEXT_FILE="$(python3 "$ROOT/scripts/lib/housekeeping_input.py" --label "$opt" "$UNCLE_CR_DIR")" || exit "$UNCLE_REFUSE_CODE"
+    [[ -n "$UNCLE_STARTUP_TEXT_FILE" ]] || exit "$UNCLE_REFUSE_CODE"
 }
 trap '[[ -n "$UNCLE_CR_DIR" ]] && rm -rf "$UNCLE_CR_DIR"' EXIT
+# A refusal is exit 2 under --noui (its documented contract), exit 1 otherwise.
+UNCLE_REFUSE_CODE=1
+[[ "${UNCLE_NOUI:-}" != 1 ]] || UNCLE_REFUSE_CODE=2
+for _a in "$@"; do
+    [[ "$_a" != --noui ]] || UNCLE_REFUSE_CODE=2
+done
 # Refuse combined startup options up front, before any of them reads stdin.
 _exclusive=0
 for _a in "$@"; do
@@ -214,6 +228,18 @@ if [[ "$_exclusive" -gt 1 ]]; then
     printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
     exit 1
 fi
+UNCLE_FLAG_NOUI=""
+_noinput_seen=""
+_noui_seen=""
+for _a in "$@"; do
+    [[ "$_a" != --noinput ]] || _noinput_seen=1
+    [[ "$_a" != --noui ]] || _noui_seen=1
+done
+if [[ -n "$_noinput_seen" ]] && { [[ -n "$_noui_seen" ]] || [[ "${UNCLE_NOUI:-}" == 1 ]]; }; then
+    printf 'Error: --noui cannot be combined with --noinput\n' >&2
+    usage >&2
+    exit 2
+fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)     usage; exit 0 ;;
@@ -223,6 +249,7 @@ while [[ $# -gt 0 ]]; do
         --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
         --unattended)  UNCLE_FLAG_UNATTENDED=1; shift ;;
         --attended)    UNCLE_FLAG_ATTENDED=1; shift ;;
+        --noui)        UNCLE_FLAG_NOUI=1; shift ;;
         --change-request)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
                 printf 'Error: --application, --issue, --change-request and --housekeeping are mutually exclusive\n' >&2
@@ -230,15 +257,15 @@ while [[ $# -gt 0 ]]; do
             fi
             if [[ -t 0 ]]; then
                 printf 'Error: --change-request reads the change request from stdin; pipe or redirect it in\n' >&2
-                exit 1
+                exit "$UNCLE_REFUSE_CODE"
             fi
             if ! command -v python3 >/dev/null 2>&1; then
                 printf 'Error: --change-request requires python3\n' >&2
-                exit 1
+                exit "$UNCLE_REFUSE_CODE"
             fi
-            UNCLE_CR_DIR="$(mktemp -d)" || exit 1
-            UNCLE_STARTUP_TEXT_FILE="$(python3 "$ROOT/scripts/lib/change_request_stdin.py" "$PROJECT_ROOT" "$UNCLE_CR_DIR")" || exit 1
-            [[ -n "$UNCLE_STARTUP_TEXT_FILE" ]] || exit 1
+            UNCLE_CR_DIR="$(mktemp -d)" || exit "$UNCLE_REFUSE_CODE"
+            UNCLE_STARTUP_TEXT_FILE="$(python3 "$ROOT/scripts/lib/change_request_stdin.py" "$PROJECT_ROOT" "$UNCLE_CR_DIR")" || exit "$UNCLE_REFUSE_CODE"
+            [[ -n "$UNCLE_STARTUP_TEXT_FILE" ]] || exit "$UNCLE_REFUSE_CODE"
             UNCLE_STARTUP_ACTION="change_request"
             UNCLE_STDIN_CLAIMED=1
             shift
@@ -263,20 +290,20 @@ while [[ $# -gt 0 ]]; do
             if [[ $# -eq 0 || "$1" == --* ]]; then
                 if [[ -t 0 ]]; then
                     printf 'Error: --issue requires an argument or a reference piped on stdin\n' >&2
-                    exit 1
+                    exit "$UNCLE_REFUSE_CODE"
                 fi
                 issue_ref="$(head -c 4096)"
                 issue_ref="${issue_ref//[[:space:]]/}"
                 if [[ -z "$issue_ref" ]]; then
                     printf 'Error: --issue reference cannot be empty\n' >&2
-                    exit 1
+                    exit "$UNCLE_REFUSE_CODE"
                 fi
                 issue_shift=0
                 UNCLE_STDIN_CLAIMED=1
             else
                 if [[ -z "$1" ]]; then
                     printf 'Error: --issue reference cannot be empty\n' >&2
-                    exit 1
+                    exit "$UNCLE_REFUSE_CODE"
                 fi
                 issue_ref="$1"
                 issue_shift=1
@@ -285,13 +312,13 @@ while [[ $# -gt 0 ]]; do
             if [[ "$issue_ref" =~ ^[0-9]+$ ]]; then
                 if [[ "$issue_ref" == "0" ]]; then
                     printf 'Error: issue must be a positive integer\n' >&2
-                    exit 1
+                    exit "$UNCLE_REFUSE_CODE"
                 fi
             elif [[ "$issue_ref" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+/?$ ]]; then
                 :
             else
                 printf 'Error: issue must be a positive integer, #number, or full GitHub URL\n' >&2
-                exit 1
+                exit "$UNCLE_REFUSE_CODE"
             fi
             UNCLE_STARTUP_ACTION="github_issue"
             UNCLE_STARTUP_TEXT="$issue_ref"
@@ -313,7 +340,7 @@ print(close[0] if close else "")' "$1" --help --performance --runs --attended --
             else
                 usage >&2
             fi
-            exit 1
+            exit "$UNCLE_REFUSE_CODE"
             ;;
     esac
 done
@@ -347,7 +374,7 @@ else
     mode_flags=()
     [[ -z "$UNCLE_FLAG_ATTENDED" ]] || mode_flags+=(--attended)
     [[ -z "$UNCLE_FLAG_UNATTENDED" ]] || mode_flags+=(--unattended)
-    uncle_resolve_mode ${mode_flags[@]+"${mode_flags[@]}"} || exit 1
+    uncle_resolve_mode ${mode_flags[@]+"${mode_flags[@]}"} || exit "$UNCLE_REFUSE_CODE"
     uncle_mode_banner
 fi
 UNCLE_UNATTENDED=""
@@ -376,6 +403,20 @@ elif [[ -n "$UNCLE_UNATTENDED" && "$UNCLE_UNATTENDED" != 0 ]]; then
     export UNCLE_STARTUP_UNATTENDED=1
 else
     export UNCLE_STARTUP_ATTENDED=1
+fi
+
+# --noui / UNCLE_NOUI=1 (exactly 1): run the chosen startup action headlessly,
+# never importing curses. Existing refusals and mode resolution ran above.
+UNCLE_NOUI_ON=""
+{ [[ -n "$UNCLE_FLAG_NOUI" ]] || [[ "${UNCLE_NOUI:-}" == 1 ]]; } && UNCLE_NOUI_ON=1
+if [[ -n "$UNCLE_NOUI_ON" ]]; then
+    if [[ -z "$UNCLE_STARTUP_ACTION" ]]; then
+        printf 'Error: --noui needs a startup action (--application, --issue, --change-request or --housekeeping); the menu is never shown\n' >&2
+        usage >&2
+        exit 2
+    fi
+    export UNCLE_NOUI=1
+    exec python3 "$ROOT/scripts/lib/uncle_headless.py"
 fi
 CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation repair test-review manual-checklist execute-checklist final-audit"
 

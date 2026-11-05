@@ -6,9 +6,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a scratch project with a TTY, run `uncle --application "demo app"` with no mode flag or env set, and watch the start of the run.
-- Expected result: stderr shows `Mode: unattended (default). Approval gates are delegated to the agent; use --attended to approve each gate yourself.` and the run proceeds through gates without waiting for a person.
-- Evidence to capture: Terminal transcript of the banner and the first gates passing unprompted.
+- Exact action: Run `uncle --noui --housekeeping`, `uncle --noui --issue <N>` and `echo 'change text' | uncle --noui --change-request` in separate scratch projects.
+- Expected result: Each starts its matching workflow headlessly with plain text output. The change-request text is taken from stdin, and CHANGE_REQUEST.md is written, as in the TUI path.
+- Evidence to capture: Output of each run, exit codes, and the created worktree and CHANGE_REQUEST.md.
 - Actual result: 
 - Status: NOT RUN
 
@@ -16,9 +16,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a scratch project with a TTY, run `uncle --application "demo app" --attended` and observe the first approval gate.
-- Expected result: Banner `Mode: attended. Each approval gate waits for your decision.` appears and the run stops at the first gate waiting for a typed decision.
-- Evidence to capture: Terminal transcript showing the banner and the pending gate prompt.
+- Exact action: Run these refusal cases: `uncle --noui` alone, `uncle --noui --noinput --application x`, `uncle --noui --attended --application x < /dev/null`, `echo t | uncle --noui --attended --change-request`, and `uncle --noui --application ''`.
+- Expected result: Each prints a reason on stderr and exits 2. No driver starts, no worktree is created, and the run never falls back to unattended mode or the menu.
+- Evidence to capture: stderr text and exit code for each case, plus `git worktree list` before and after.
 - Actual result: 
 - Status: NOT RUN
 
@@ -26,19 +26,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --application "demo" --attended </dev/null`, then repeat with `UNCLE_ATTENDED=1 uncle --application "demo" </dev/null`, and check for created state afterward.
-- Expected result: Both exit nonzero with stderr `uncle: attended mode needs an interactive terminal on stdin; set UNCLE_ATTENDED_STDIN=1 to answer gates from stdin.`, start nothing, and never run unattended.
-- Evidence to capture: Exit codes, stderr text, and a listing showing no .uncle/workflow state or mode file was created.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-104
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run `uncle --application "demo" --attended --unattended`, then `uncle --application "demo" --unattended`, each in a scratch project with a TTY.
-- Expected result: The first refuses with exit 1 and `uncle: --attended and --unattended contradict each other; choose one.`, starting nothing. The second runs unattended and prints `uncle: --unattended is deprecated; unattended is now the default. Use --attended to approve gates yourself.` on stderr only.
-- Evidence to capture: Exit codes, stderr and stdout captured separately.
+- Exact action: In a real terminal, run `uncle --noui --attended --application "<tiny brief>"` until a human gate prompt appears. Type an approval line once, then repeat the run and press Enter on a blank line (or Ctrl-D) at the gate.
+- Expected result: The gate prompt prints and one line is read from the terminal. The typed approval is recorded as a human approval, while a blank line or EOF counts as not approved and the run exits 3.
+- Evidence to capture: Terminal transcript, exit codes, and the gate attestation record in the run state.
 - Actual result: 
 - Status: NOT RUN
 
@@ -46,9 +36,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Start an attended run in a scratch project and stop it at the first gate. Resume with no flag in a TTY, then resume with `</dev/null`, then resume with `--unattended`.
-- Expected result: TTY resume prints `Mode: attended (resumed from .uncle/workflow/mode).` and waits. The no-TTY resume refuses with exit 1 and never runs unattended. `--unattended` overrides the recorded mode and runs unattended with the deprecation notice. The refused resume leaves the mode file unchanged.
-- Evidence to capture: Transcripts, exit codes, and a before/after hash of .uncle/workflow/mode.
+- Exact action: Start a long `uncle --noui` run in a terminal and press Ctrl+C once. Then repeat with `kill -TERM <pid>`, and again where the driver ignores the first signal (send a second Ctrl+C during the grace period).
+- Expected result: The runner exits 130 for SIGINT and 143 for SIGTERM. The driver process group is stopped, with an immediate kill on a second signal, and no orphan processes remain. The run state is resumable.
+- Evidence to capture: Exit codes, `ps` listing showing no leftover children, and a resume attempt succeeding.
 - Actual result: 
 - Status: NOT RUN
 
@@ -56,41 +46,21 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run the interactive TUI with `uncle` (default), check the header, press Shift-Tab, then start another session with `uncle --attended`.
-- Expected result: The header reads `Mode: unattended` by default, Shift-Tab switches the session to attended, and `--attended` starts the TUI as `Mode: attended`. The auto-mode help text states that issue runs publish a PR and other runs do not commit or push.
-- Evidence to capture: Screenshots or a terminal capture of the TUI header in each state and the help text.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-108
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run housekeeping with a disallowed command in default mode, then with an allowed command in default mode, then with an allowed command under `--attended` in a TTY.
-- Expected result: The disallowed command is refused by the policy gate identically in both modes. The allowed command runs with no `Run these commands? [y/N]` prompt by default, and the prompt appears under `--attended`.
-- Evidence to capture: Terminal transcripts of the three runs.
+- Exact action: Run `UNCLE_NOUI=1 uncle --application x`, then `UNCLE_NOUI=0`, `UNCLE_NOUI=` and `UNCLE_NOUI=true` variants, each in a scratch project. Also run `uncle --help`.
+- Expected result: Only `UNCLE_NOUI=1` runs headless. The other values start the normal TUI path silently. `--help` documents `--noui`, `UNCLE_NOUI`, the exit codes, the attended requirement, and how `--noui` differs from `--noinput`.
+- Evidence to capture: Observed UI mode per variant and the help text.
 - Actual result: 
 - Status: NOT RUN
 
 ## Invariants
 
-### MC-200
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: In a scratch directory, run `uncle --attended --application 'demo' </dev/null` with UNCLE_ATTENDED_STDIN unset, then run `UNCLE_ATTENDED=1 uncle --change-request demo </dev/null`.
-- Expected result: Both refuse with exit 1 and stderr `uncle: attended mode needs an interactive terminal on stdin; set UNCLE_ATTENDED_STDIN=1 to answer gates from stdin.`; nothing starts, no .uncle/workflow state is created, and the run never proceeds unattended.
-- Evidence to capture: Exit codes, stderr text, and a directory listing showing no workflow state.
-- Actual result: 
-- Status: NOT RUN
-
 ### MC-201
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --attended --unattended --application 'demo'` in a scratch directory, then repeat it with the direct drivers stagegate.sh and change-workflow.sh.
-- Expected result: Each entry point exits 1 with stderr `uncle: --attended and --unattended contradict each other; choose one.` and starts nothing.
-- Evidence to capture: Exit code and stderr for each entry point.
+- Exact action: Run `uncle --noui --application "tiny app"` unattended with stdin closed (`</dev/null`) and no tty, against a project whose first human gate is reached; note the exit status.
+- Expected result: The run never reads stdin, records nothing as human-approved, names the gate on stderr and exits 3.
+- Evidence to capture: Stderr text, `echo $?` output, and the gate state/attestation file showing no human approval.
 - Actual result: 
 - Status: NOT RUN
 
@@ -98,9 +68,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --application 'demo'` with no mode flag or env in a real terminal and observe startup. Then run it again with `--unattended`.
-- Expected result: The first run prints the banner `Mode: unattended (default). Approval gates are delegated to the agent; use --attended to approve each gate yourself.` on stderr and delegates gates without prompting. The second run behaves the same and also prints the `--unattended is deprecated` notice once.
-- Evidence to capture: Terminal transcript showing banner, deprecation notice, and no gate prompts.
+- Exact action: In a real terminal run `uncle --noui --attended --application "tiny app"`, answer the first gate prompt by typing an approval line, and later rerun and press Ctrl+D (EOF) or Enter on a blank line at a gate.
+- Expected result: The typed approval is recorded as a human approval; EOF or blank answer is treated as not approved and the run stops with exit 3.
+- Evidence to capture: Terminal transcript, exit statuses, and the recorded gate attestation entries.
 - Actual result: 
 - Status: NOT RUN
 
@@ -108,19 +78,19 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a real terminal, run `uncle --attended --application 'demo'` and observe the first approval gate. At the gate, close stdin with Ctrl-D, or enter garbage text.
-- Expected result: The banner `Mode: attended. Each approval gate waits for your decision.` prints. The run waits at the first gate. EOF or an invalid answer counts as a decline and stops the run, and the gate is never delegated or auto-approved.
-- Evidence to capture: Transcript showing the attended banner, the gate prompt, and the stop. The unattended-gates ledger has no entry for that gate.
+- Exact action: Run refusal cases and note stderr, exit status and that no files or worktree were created: `uncle --noui` (no action), `uncle --noui --noinput --issue 1`, `uncle --noui --attended --issue 1 </dev/null`, `uncle --attended --housekeeping` (no --noui), and `echo text | uncle --noui --attended --change-request`.
+- Expected result: Each prints a reason on stderr, exits 2, starts no driver and writes no state.
+- Evidence to capture: Each command's stderr, exit status, and `git status`/worktree listing before and after.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-204
 - Required for acceptance: YES
-- Exclusive resources: file:.uncle/workflow/mode
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Start an attended run in a real terminal and stop it at the first gate. Record the hash of .uncle/workflow/mode. Resume with `</dev/null` and no flag, then with `UNCLE_ATTENDED_STDIN=1`, then with `--unattended`, then in a terminal with no flag.
-- Expected result: With no TTY and no escape the resume refuses with exit 1, the mode file hash is unchanged, and it never runs unattended. With the escape it resumes attended. With `--unattended` it overrides and runs unattended. In a terminal it resumes attended and prints `Mode: attended (resumed from .uncle/workflow/mode).`
-- Evidence to capture: Exit codes, stderr and banners for each resume, and the mode file hash before and after the refusal.
+- Exact action: Start a long `uncle --noui --housekeeping` run in its own process group, send SIGTERM once, then repeat with SIGINT, and repeat with a driver that ignores SIGTERM sending a second signal during the grace period; list processes afterward with `ps`.
+- Expected result: Exit codes are 143 for SIGTERM and 130 for SIGINT; no driver child processes remain; a second signal kills the group immediately; the run can be resumed.
+- Evidence to capture: Exit statuses, `ps` output before and after, and timing of the second-signal kill.
 - Actual result: 
 - Status: NOT RUN
 
@@ -128,61 +98,31 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `UNCLE_UNATTENDED=0 uncle --application demo`, `UNCLE_ATTENDED=0 uncle --application demo`, `UNCLE_ATTENDED=1 uncle --unattended --application demo`, and `UNCLE_UNATTENDED=1 uncle --application demo`, in a terminal.
-- Expected result: The first two ignore the env value silently and run unattended with no notice. The third resolves attended and prints the `--unattended is deprecated` notice. The fourth runs unattended and prints the `UNCLE_UNATTENDED=1 is deprecated` notice.
-- Evidence to capture: Banner and notice lines for each run.
+- Exact action: Run `UNCLE_NOUI=1 uncle --housekeeping` and then `UNCLE_NOUI=0`, `UNCLE_NOUI=` and `UNCLE_NOUI=true` with the same action on a tty, observing whether the curses UI or plain text appears; also run `--noui` with a symlinked startup text file if reproducible.
+- Expected result: Only exactly `1` gives plain headless output; other values silently start the normal TUI; an untrusted symlinked text file is refused with exit 2 and no driver starts.
+- Evidence to capture: Screen observations or transcripts for each value and the refusal's stderr and exit status.
 - Actual result: 
 - Status: NOT RUN
 
 ## resources
 
-### MC-301
-- Required for acceptance: YES
-- Exclusive resources: dir:scratch-mode-run
-- Depends on: none
-- Exact action: In a scratch directory with no prior run state, run `uncle --application "hello"` with no mode flag or env, then run `uncle --application "hello" --attended </dev/null`; capture stderr and exit codes of each.
-- Expected result: First run prints `Mode: unattended (default). Approval gates are delegated to the agent; use --attended to approve each gate yourself.` on stderr and proceeds without pausing at gates. Second run prints `uncle: attended mode needs an interactive terminal on stdin; set UNCLE_ATTENDED_STDIN=1 to answer gates from stdin.`, exits 1, and starts nothing.
-- Evidence to capture: Terminal transcript with stderr banner/refusal text, exit codes, and a listing showing no run state or mode file created by the refused run.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-302
-- Required for acceptance: YES
-- Exclusive resources: dir:scratch-mode-attended
-- Depends on: none
-- Exact action: In an interactive terminal in a fresh scratch directory, run `uncle --application "hello" --attended` and observe the first approval gate; then answer it by hand. Then run `uncle --application "hello" --attended --unattended`.
-- Expected result: Attended banner `Mode: attended. Each approval gate waits for your decision.` appears and the run waits for a person at the first gate. The contradictory invocation prints `uncle: --attended and --unattended contradict each other; choose one.`, exits 1, and starts nothing.
-- Evidence to capture: Terminal transcript or screen capture showing the banner, the waiting gate prompt, the refusal text and exit code.
-- Actual result: 
-- Status: NOT RUN
-
 ### MC-303
 - Required for acceptance: YES
-- Exclusive resources: dir:scratch-mode-attended
-- Depends on: MC-302
-- Exact action: Run `uncle --application "hello" --unattended` in a fresh scratch directory and capture stderr; then in an attended run directory (started via MC-302 and stopped at a gate) resume with `uncle --application "hello" </dev/null` and no flag.
-- Expected result: The `--unattended` run works as the default and prints `uncle: --unattended is deprecated; unattended is now the default. Use --attended to approve gates yourself.` once on stderr. The resume without TTY prints `Mode: attended (resumed from .uncle/workflow/mode).` or refuses with the no-TTY message, exits 1, and never proceeds unattended.
-- Evidence to capture: Stderr transcripts for both commands, exit codes, and the mode file content before and after the refused resume (unchanged).
+- Exclusive resources: dir:noui-scratch-attended
+- Depends on: none
+- Exact action: In a real terminal run `uncle --noui --attended --application "hello"` and answer the first gate prompt by typing a line; then on a second run press Enter on a blank line (or Ctrl+D) at a gate.
+- Expected result: The gate prompt is printed and the typed answer is read from the terminal and recorded as a human approval; a blank or EOF answer is treated as not approved and the run stops with exit code 3.
+- Evidence to capture: Transcript of both runs, exit codes, and the recorded gate state showing human approval in the first run only.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-304
 - Required for acceptance: YES
-- Exclusive resources: browser:system
+- Exclusive resources: none
 - Depends on: none
-- Exact action: In a git-less scratch directory run the TUI with `uncle` (no flags) and observe the header, then press Shift-Tab; quit and rerun with `uncle --attended` and observe the header.
-- Expected result: Default TUI header shows `Mode: unattended` and Shift-Tab toggles it to attended for the session; with `--attended` the TUI starts showing `Mode: attended`. Auto-mode help text accurately states that issue runs publish a PR and other runs do not commit or push.
-- Evidence to capture: Screen captures of the TUI header in each state and the auto-mode help text.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-305
-- Required for acceptance: YES
-- Exclusive resources: dir:scratch-housekeeping
-- Depends on: none
-- Exact action: Run `uncle --housekeeping "<an allowed command request>"` unflagged, then with `--attended` in an interactive terminal, then with a request for a disallowed command in both modes.
-- Expected result: Unflagged run skips the `Run these commands? [y/N]` prompt only after the policy gate passes; attended run shows the prompt; the disallowed command is refused identically in both modes before any approval or prompt.
-- Evidence to capture: Terminal transcripts of all four runs showing prompt presence/absence and refusal text.
+- Exact action: Run `uncle --noui --attended --application "x" < /dev/null`, `uncle --noui` with no action, `uncle --noui --noinput --application x`, and `uncle --noui --attended --change-request` with piped text; check each exit code and that no worktree or files were created.
+- Expected result: Each prints a reason on stderr, exits 2, and starts no driver or state.
+- Evidence to capture: stderr messages, exit codes, and directory listing before and after.
 - Actual result: 
 - Status: NOT RUN
 
@@ -192,9 +132,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a scratch project, run `uncle --application "tiny demo"` with a real terminal and no mode flag or env, and let it run. Then run `uncle --application "tiny demo" --attended` in a terminal.
-- Expected result: The unflagged run prints the unattended banner on stderr and finishes without waiting at a gate. The attended run prints the attended banner and pauses at the first approval gate until you answer.
-- Evidence to capture: Terminal transcripts of both runs showing the banner lines and the first gate pause.
+- Exact action: In a real terminal (tty), run `uncle --application "tiny demo"` without `--noui` and observe the startup, then quit at the first opportunity.
+- Expected result: The curses TUI starts as before, runs unattended by default, and no headless/plain-text runner output appears.
+- Evidence to capture: Terminal screenshot or transcript showing the curses UI launching.
 - Actual result: 
 - Status: NOT RUN
 
@@ -202,9 +142,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --attended --application "x" </dev/null`. Then run `uncle --attended --unattended --application "x"`. Check the scratch project's .uncle/workflow directory afterward.
-- Expected result: Both runs exit nonzero and start nothing. The first prints the no-TTY refusal and the second prints the contradictory-flags refusal, each on stderr. No .uncle/workflow/mode file is created.
-- Evidence to capture: Exit codes, stderr text, and a directory listing of .uncle/workflow.
+- Exact action: Run `uncle --noinput --application "tiny demo"` with stdin from /dev/null and stdout piped to a file, and then run `uncle --noui --noinput --application x`.
+- Expected result: The first command still runs the TUI path in no-keyboard mode, unchanged. The second is refused with a message on stderr and exit code 2, and nothing is started.
+- Evidence to capture: Exit codes, stderr text, and confirmation that no driver or worktree was created for the refused run.
 - Actual result: 
 - Status: NOT RUN
 
@@ -212,58 +152,18 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --unattended --application "x"` and capture stdout and stderr separately.
-- Expected result: The run behaves as the default unattended run. Stderr carries one deprecation notice for --unattended and nothing is added to stdout.
-- Evidence to capture: Separately captured stdout and stderr showing the single deprecation line.
+- Exact action: Run `uncle` with no startup action and stdin/stdout piped (no tty), feeding `q` or EOF on stdin. Then repeat with `UNCLE_NOUI=0`, `UNCLE_NOUI=` (empty) and `UNCLE_NOUI=true` set.
+- Expected result: The line-based menu appears as before in every case. UNCLE_NOUI values other than exactly 1 are silently ignored, with no headless run and no error.
+- Evidence to capture: Captured stdout of each invocation showing the line menu and exit codes.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-404
 - Required for acceptance: YES
-- Exclusive resources: file:scratch-project-run-dir
-- Depends on: none
-- Exact action: Start a run with `--attended` in a terminal and stop it at the first gate. Resume it in a terminal with no flag. Then resume it with `</dev/null`. Finally resume it with `--unattended`.
-- Expected result: The terminal resume prints the resumed banner with the attended mode and waits at the gate. The `</dev/null` resume refuses with exit 1 and never runs unattended. The `--unattended` resume overrides the recorded mode.
-- Evidence to capture: Banner lines, the refusal message, exit codes, and the content of .uncle/workflow/mode after each step.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-405
-- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run an unattended issue or change run to completion in a scratch project. Open the resulting PR body or final report, the attestation, and the unattended-gates ledger.
-- Expected result: Gates are recorded as delegated and the PR body or final report states no human reviewed. The attestation fields and the human-check waiver wording are unchanged from before the change. A failing test still stops the run.
-- Evidence to capture: The PR body or final report text, .uncle/attestation.json, and the ledger contents.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-406
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run `uncle --housekeeping "<an allowed command request>"` with no flag and then with `--attended`. Then run it with a request for a disallowed command in both modes.
-- Expected result: The default run skips the `Run these commands? [y/N]` prompt. The attended run shows the prompt. The disallowed request is refused by the policy gate in both modes, before any prompt.
-- Evidence to capture: Terminal transcripts of all four runs.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-407
-- Required for acceptance: YES
-- Exclusive resources: browser:system
-- Depends on: none
-- Exact action: Run `uncle --help`, then launch the interactive TUI with no flags and read its header and auto-mode help. Press Shift-Tab, then start a second TUI with `--attended`.
-- Expected result: The help names `--attended`, the new default, and the deprecation. The TUI starts unattended with the Mode header shown, and Shift-Tab switches it to attended. The `--attended` TUI starts attended. The auto-mode help describes actual PR behavior.
-- Evidence to capture: The help text and screenshots or transcripts of the TUI header in each state.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-408
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: With a newer version available, run an unflagged `uncle` command in a terminal, then run it with `--attended` in a terminal.
-- Expected result: The unflagged run prints a single line naming the newer version and the upgrade command, and does not prompt. The attended run prompts for the upgrade.
-- Evidence to capture: Terminal transcripts of both runs.
+- Exact action: In a real terminal, run `uncle --change-request` against a project that already contains CHANGE_REQUEST.md, both with and without `--noui`.
+- Expected result: Both refuse the existing CHANGE_REQUEST.md (CHANGE_REQUEST_EXISTS behavior) without overwriting it. The non-`--noui` run keeps its prior TUI behavior and the `--noui` run exits non-zero without starting a driver.
+- Evidence to capture: Messages, exit codes, and unchanged CHANGE_REQUEST.md content.
 - Actual result: 
 - Status: NOT RUN

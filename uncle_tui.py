@@ -44,6 +44,8 @@ except ImportError:  # Windows: no suspend character to disable.
 ROOT =os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 import terminal_title
+import run_duties
+from run_duties import finish_decision  # re-exported: tests and monkeypatches target uncle_tui.finish_decision
 from completion_preview import CompletionPreview, STAR_URL, launch_spec
 
 # Session-level terminal-title stack state (D-6/D-8): the TUI pushes once at
@@ -1568,17 +1570,18 @@ class UncleTUI:
     def cmd_for(self):
         # Unattended is the launcher default: pass --attended only when attended.
         auto = [] if self._next_run_unattended() else ["--attended"]
+        attended = bool(auto)
         if self.workflow_idx == 1:
             if not self._valid_issue(self.issue):
                 raise ValueError('Enter a GitHub issue number or https://github.com/owner/repo/issues/123')
-            cmd = list(WORKFLOWS[1][1]) + [self.issue]
-            if self.issue_mode:
-                cmd.append(self.issue_mode)
-            return cmd + auto
+            return run_duties.build_driver_command(
+                'github_issue', self.issue, attended, ROOT, self.issue_mode)
         housekeeping = getattr(self, '_housekeeping_text', None)
         if housekeeping:
-            return [os.path.join(ROOT, "scripts", "housekeeping-workflow.sh"), housekeeping] + auto
-        return list(WORKFLOWS[self.workflow_idx][1]) + auto
+            return run_duties.build_driver_command(
+                'housekeeping', housekeeping, attended, ROOT, None)
+        action = 'create_app' if self.workflow_idx == 0 else 'change_request'
+        return run_duties.build_driver_command(action, '', attended, ROOT, None)
 
     def _start_housekeeping(self, text):
         """Launch the housekeeping driver with the request text as its argument."""
@@ -2788,15 +2791,11 @@ class UncleTUI:
     # status would otherwise leave the status bar showing whatever ran last.
     def _read_banner(self, line):
         text = line.strip()
-        if text.startswith("Finished build:") or text.startswith("READY - ") or text.startswith("NOT READY - "):
-            self.finished_lines = getattr(self, "finished_lines", []) + [text]
-            self._in_finished_block = True
-        elif (getattr(self, "_in_finished_block", False)
-              and (text.startswith("Total time:") or text.startswith("PR:"))):
-            self.finished_lines = getattr(self, "finished_lines", []) + [text]
-        if text in ("Workflow complete.", "Change workflow complete.",
-                    "Workflow complete with waived acceptance.",
-                    "Change workflow complete with waived acceptance."):
+        finished_line, self._in_finished_block, completed = run_duties.read_banner(
+            text, getattr(self, "_in_finished_block", False))
+        if finished_line is not None:
+            self.finished_lines = getattr(self, "finished_lines", []) + [finished_line]
+        if completed:
             self.workflow_completed = True
         # Review banners identify the document only. The following question
         # owns stdin; never synthesize an answer on the user's behalf.
@@ -8042,16 +8041,6 @@ class UncleTUI:
                 self.draw()
                 dirty = False
                 size = current_size
-
-
-def finish_decision(unattended, completed, exit_code):
-    """What a finished driver does to the screen (Issue 107).
-
-    'exit' only for an unattended run that completed with exit 0: no Finished
-    or star dialog, leave curses and print the finished-build line. Anything
-    else, including an attended run, keeps the dialog flow and exit code.
-    """
-    return 'exit' if unattended and completed and exit_code == 0 else 'dialog'
 
 
 _EXIT_SUMMARY_LINES = []

@@ -1584,12 +1584,70 @@ class UncleTUI:
         text = (text or '').strip()
         if not text:
             raise ValueError('Usage: /housekeeping TEXT')
+        hk = getattr(self, 'hk_proc', None)
+        if hk is not None and hk.poll() is None:
+            raise ValueError('Housekeeping already running')
+        if self.proc is not None and self.proc.poll() is None:
+            self._start_housekeeping_background(text)
+            return
         self._housekeeping_text = text
         self.workflow_idx = 2
         try:
             self._run()
         finally:
             self._housekeeping_text = None
+
+    def _start_housekeeping_background(self, text):
+        """Run housekeeping beside an active build: always --unattended, no
+        confirmation (the slash command is the consent; the deny list still
+        applies), output to a truncated, symlink-refused tui.out."""
+        self.hk_proc = None
+        out_dir = os.path.join(_project_root(), '.uncle', 'workflow', 'housekeeping')
+        out_path = os.path.join(out_dir, 'tui.out')
+        fd = None
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o666)
+            self.hk_proc = subprocess.Popen(
+                [os.path.join(ROOT, 'scripts', 'housekeeping-workflow.sh'), text, '--unattended'],
+                cwd=_project_root(), env=dict(os.environ), stdin=subprocess.DEVNULL,
+                stdout=fd, stderr=subprocess.STDOUT)
+        except OSError as exc:
+            self.hk_proc = None
+            self.chat_error = sanitize('Cannot start housekeeping: %s' % exc)
+        finally:
+            if fd is not None:
+                os.close(fd)
+        if self.hk_proc is not None:
+            self.hk_notice_pending = True
+            self.home_history.append(('system', 'Housekeeping started in the background.'))
+
+    def _poll_housekeeping(self):
+        """One-shot completion notice: exit 0 is DONE, anything else FAILED."""
+        proc = getattr(self, 'hk_proc', None)
+        if proc is None:
+            return False
+        code = proc.poll()
+        if code is None:
+            return False
+        self.hk_proc = None
+        if code == 0:
+            text = 'Housekeeping DONE.'
+        elif code < 0:
+            text = 'Housekeeping FAILED (exit code %d, killed by signal %d).' % (code, -code)
+        else:
+            text = 'Housekeeping FAILED (exit code %d).' % code
+        self.home_history.append(('system', text))
+        return True
+
+    def _stop_housekeeping(self):
+        """Quit path: terminate the background run's tree, post no notice."""
+        proc = getattr(self, 'hk_proc', None)
+        self.hk_proc = None
+        if proc is not None and proc.poll() is None:
+            subprocess.run(["bash", os.path.join(ROOT, "scripts", "lib", "terminal-title.sh"),
+                            "--stop-tree", str(proc.pid), "include-root"], check=False)
+            proc.wait()
 
     # ---- config ----
     #
@@ -6039,7 +6097,7 @@ class UncleTUI:
                         '/configure': self.menu_items().index('Configure'),
                         '/settings': self.menu_items().index('Configure'),
                         '/quit': self.menu_items().index('Quit')}
-            if command in ('/new', '/requirements', '/change', '/issue', '/housekeeping') and (
+            if command in ('/new', '/requirements', '/change', '/issue') and (
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
@@ -7752,6 +7810,7 @@ class UncleTUI:
             self.completion_preview.close()
         self._close_early_preview()
         self._close_supervisor_session()
+        self._stop_housekeeping()
         self.state = "quit"
 
     # ---- main loop ----
@@ -7781,6 +7840,7 @@ class UncleTUI:
                     self.supervision_host.controller.cancel('cancelled')
                     self.supervision_host.close()
                     self.supervision_host = None
+                self._stop_housekeeping()
                 self.stop_workflow()
             finally:
                 signal.signal(signal.SIGTERM, previous_term)
@@ -7905,6 +7965,7 @@ class UncleTUI:
             dirty = self.poll_issue_picker() or dirty
             dirty = self.poll_model_catalog() or dirty
             self._poll_workflow()
+            dirty = self._poll_housekeeping() or dirty
             dirty = self.poll_supervision() or dirty
             dirty = self.poll_status() or dirty
             dirty = self.poll_session_stats() or dirty

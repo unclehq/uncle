@@ -16,8 +16,9 @@
 #                                     instead of /dev/tty
 # Exit:  0 when declined or the agent finished successfully; 1 otherwise.
 #
-# Records live in .uncle/workflow/housekeeping/. The shared driver.lock flock
-# is released by the kernel on every exit path.
+# Records live in .uncle/workflow/housekeeping/. Its own housekeeping.lock flock
+# (independent of the builds' driver.lock) is released by the kernel on every
+# exit path. The persisted build mode file is never read or written here.
 
 ROOT="${HK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PROJECT_ROOT="${UNCLE_PROJECT_ROOT:-$PWD}"
@@ -68,18 +69,18 @@ export UNCLE_UNATTENDED="$UNATTENDED" UNCLE_MODE_RESOLVED=1
 
 # --- Lock (flock on the shared driver.lock; held by this fd until exit) ------
 mkdir -p "$PROJECT_ROOT/.uncle/workflow"
-exec 9>>"$PROJECT_ROOT/.uncle/workflow/driver.lock"
+HK_LOCK="$PROJECT_ROOT/.uncle/workflow/housekeeping.lock"
+if [[ -L "$HK_LOCK" ]]; then
+    echo "housekeeping: REFUSED: housekeeping.lock is a symlink" >&2
+    exit 1
+fi
+exec 9>>"$HK_LOCK"
 if ! python3 -I -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null; then
-    echo "housekeeping: another workflow holds this checkout" >&2
+    echo "housekeeping: another housekeeping run is active" >&2
     exit 1
 fi
 
 mkdir -p "$HK_DIR"
-if [[ "$UNATTENDED" == 1 ]]; then
-    printf 'unattended\n' > "$PROJECT_ROOT/.uncle/workflow/mode"
-else
-    printf 'attended\n' > "$PROJECT_ROOT/.uncle/workflow/mode"
-fi
 rm -f "$HK_DIR"/plan.* "$HK_DIR"/ops.status "$HK_DIR"/run.log "$HK_DIR"/REPORT.md \
       "$HK_DIR"/last.err "$HK_DIR"/prompt.md "$HK_DIR"/agent.out "$HK_DIR"/agent.err
 hk_state STARTED

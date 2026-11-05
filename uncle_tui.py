@@ -2045,6 +2045,9 @@ class UncleTUI:
                     host.controller.cancel('interrupted')
                     host.controller.driver_exited(self.workflow_exit_code)
                 self._maybe_auto_triage()
+                if getattr(self, '_quit_when_housekeeping_exits', False):
+                    self._quit_when_housekeeping_exits = False
+                    self.state = 'quit'
 
     def _rerun_pending(self):
         """True when a stage rerun is waiting to be consumed in this project."""
@@ -4226,6 +4229,9 @@ class UncleTUI:
                 }
                 self._home_action(action, replace_approved=True)
             elif self._startup_action == 'housekeeping':
+                # A one-shot launch with no terminal on stdin (piped text) has
+                # nobody to press q once the run finishes: quit when it exits.
+                self._quit_when_housekeeping_exits = not sys.stdin.isatty()
                 self._start_housekeeping(self._resolve_startup_text())
             elif self._startup_action == 'change_request':
                 text = self._read_startup_text_file(self._startup_text_file)

@@ -59,8 +59,12 @@ def _json(path):
 
 def _fragments(payload):
     """Flatten an implementation-notes accumulator, including old nested ones."""
+    # The accumulator and any nested accumulator are `implementation-notes`; the per-step
+    # entries the parallel driver writes are `implementation-notes-fragment`, which the
+    # merge in implementation_notes.py already accepts. Rejecting them here made every
+    # parallel delivery fail completion with "wrong implementation-notes JSON schema".
     if not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1' \
-            or payload.get('kind') != 'implementation-notes':
+            or payload.get('kind') not in ('implementation-notes', 'implementation-notes-fragment'):
         raise ValueError('wrong implementation-notes JSON schema')
     children = payload.get('fragments')
     if children is None:

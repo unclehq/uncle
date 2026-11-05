@@ -226,6 +226,25 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(merged["AC-1"][0], "INCOMPLETE")
         self.assertNotEqual(completion.check_rows({"AC-1": ["c", "v"]}, merged), [])
 
+    def test_parallel_step_fragments_are_accepted_by_the_flattener(self):
+        # parallel_steps.py writes each step as kind implementation-notes-fragment under the
+        # implementation-notes accumulator. Requiring the accumulator kind of every child
+        # rejected every parallel delivery with "wrong implementation-notes JSON schema".
+        step = {"schema": "uncle.artifact/v1", "kind": "implementation-notes-fragment",
+                "changed_files": [{"path": "a.py", "purpose": "Written by isolated step 1", "plan_step": "1"}],
+                "deviations": [], "unresolved_concerns": [], "plan_blockers": []}
+        accumulator = {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "fragments": [step, dict(step)]}
+        self.assertEqual(len(completion._fragments(accumulator)), 2)
+        nested = {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "fragments": [accumulator, step]}
+        self.assertEqual(len(completion._fragments(nested)), 3)
+
+    def test_other_kinds_are_still_rejected_by_the_flattener(self):
+        for kind in ("change-spec", "implementation-notes-other", None):
+            bad = {"schema": "uncle.artifact/v1", "kind": "implementation-notes",
+                   "fragments": [{"schema": "uncle.artifact/v1", "kind": kind}]}
+            with self.assertRaisesRegex(ValueError, "wrong implementation-notes JSON schema"):
+                completion._fragments(bad)
+
     def test_two_incomplete_fragments_stay_incomplete_and_fail_the_check(self):
         merged = completion.json_delivered(self.notes(
             self.fragment(("AC-1", "INCOMPLETE", "a", "not built")), self.fragment(("AC-1", "INCOMPLETE", "b", "still not built"))))

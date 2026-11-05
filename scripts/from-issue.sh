@@ -93,6 +93,17 @@ check_origin_or_refuse() {
     exit 1
 }
 
+# True when CHANGE_REQUEST.md is tracked by HEAD and byte-identical to it, with
+# no run in flight: it is only a committed leftover from an earlier run, so
+# replacing it discards no hand edits.
+change_request_is_inherited() {
+    local target
+    target="$(generated_input_path CHANGE_REQUEST.md)"
+    run_in_flight && return 1
+    git ls-files --error-unmatch -- "$target" >/dev/null 2>&1 || return 1
+    git diff --quiet HEAD -- "$target" 2>/dev/null
+}
+
 # True when the CHANGE_REQUEST.md on disk already belongs to this issue's
 # in-flight run, in which case rewriting it would discard hand edits.
 seed_is_current() {
@@ -714,6 +725,13 @@ if [[ "$WORKTREE" == 1 ]]; then
     # with "Branch already exists". Reuse it when it is this repo's worktree on
     # the branch this issue derives; anything else is someone else's and is
     # reported rather than adopted.
+    # The branch may already exist (an earlier run whose worktree was removed
+    # or placed elsewhere). Adopt where it is checked out, else check it out.
+    if ! { [[ -d "$WORKTREE_DIR" ]] && worktree_registered "$PROJECT_ROOT" "$WORKTREE_DIR"; } \
+        && other_dir="$(worktree_branch_dir "$PROJECT_ROOT" "$WORKTREE_BRANCH")" \
+        && [[ "$(worktree_real "$other_dir")" != "$(worktree_real "$PROJECT_ROOT")" ]]; then
+        WORKTREE_DIR="$other_dir"
+    fi
     if [[ -d "$WORKTREE_DIR" ]] && worktree_registered "$PROJECT_ROOT" "$WORKTREE_DIR"; then
         existing_branch="$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null)"
         if [[ "$existing_branch" != "$WORKTREE_BRANCH" ]]; then
@@ -724,7 +742,7 @@ if [[ "$WORKTREE" == 1 ]]; then
         fi
         echo "Reusing worktree $WORKTREE_DIR on branch $WORKTREE_BRANCH"
     else
-        worktree_create "$WORKTREE_DIR" "$WORKTREE_BRANCH" || exit 1
+        worktree_create "$WORKTREE_DIR" "$WORKTREE_BRANCH" --reuse-branch || exit 1
         WORKTREE_JUST_CREATED=1
     fi
     cd "$WORKTREE_DIR"
@@ -979,7 +997,7 @@ case "$MODE" in
             # A worktree this invocation just created holds only what HEAD
             # tracked (committed docs from earlier runs), never the user's
             # work, so there is nothing to protect -- build anyway, as the TUI does.
-            [[ "$FRESH_START" == 1 || "${WORKTREE_JUST_CREATED:-0}" == 1 ]] || confirm_replace_change_request
+            [[ "$FRESH_START" == 1 || "${WORKTREE_JUST_CREATED:-0}" == 1 ]] || change_request_is_inherited || confirm_replace_change_request
             write_change_request
         fi
         PRE_RUN_JOURNAL_SIG="absent"

@@ -38,7 +38,8 @@ Actions:
 - run_change: run the existing CHANGE_REQUEST.md; no document/start fields.
 - github_issue: include "issue" (positive issue number or full https://github.com/
   owner/repo/issues/number URL), and "start". The existing issue importer fetches
-  the issue. When start is true, use Auto issue classification and immediately
+  the issue. If the user gave no issue number or URL, ask for it in plain text
+  instead of emitting this action. When start is true, use Auto issue classification and immediately
   start the From GitHub issue workflow. A bare issue reference means import
   only; start only when the user requests implementation. Never invent its contents.
 - stop_build: stop the build that is running now; no other fields.
@@ -115,6 +116,9 @@ def parse_reply(text):
     if unknown:
         raise ValueError('The chat model returned an action with unexpected fields: %s'
                          % ', '.join(unknown))
+    # "message" is only the sentence shown beside the action; a model that emits
+    # a valid action but forgets it should still have the action run.
+    data.setdefault('message', '')
     missing = sorted(keys - optional - set(data))
     if missing:
         # Naming the field distinguishes the common case -- the model described
@@ -140,6 +144,8 @@ def parse_reply(text):
             raise ValueError('%s takes an issue number.' % action)
     if action == 'github_issue':
         issue = data['issue']
+        if isinstance(issue, int) and not isinstance(issue, bool):
+            issue = str(issue)
         if isinstance(issue, str):
             issue = issue.strip().removeprefix('#')
             data['issue'] = issue

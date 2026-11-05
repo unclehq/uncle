@@ -524,14 +524,12 @@ expect_out "Not a registered git worktree"
 # AC-5 / I-3: refusals before any write.
 # ---------------------------------------------------------------------------
 
-new_case existing-branch-refused
+new_case existing-branch-reused
 g -C "$PROJ" branch feat/add-widget-42
 run_issue /dev/null 42 --worktree
-expect_status 1
-expect_out "Branch already exists: feat/add-widget-42"
-check "no worktree dir" test ! -e "$CASE/proj-issue-42"
-check "no CHANGE_REQUEST.md in the project" test ! -e "$PROJ/CHANGE_REQUEST.md"
-check "driver did not run" test ! -s "$DRIVER_LOG"
+expect_status 0
+expect_out "Branch feat/add-widget-42 already exists; checking it out"
+check "worktree dir on the existing branch" test "$(g -C "$CASE/proj-issue-42" branch --show-current)" = feat/add-widget-42
 
 new_case non-empty-dir-refused
 mkdir -p "$CASE/full" && echo x > "$CASE/full/file"

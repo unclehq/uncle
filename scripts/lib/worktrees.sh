@@ -43,12 +43,25 @@ worktree_registered() {
     return 1
 }
 
-# worktree_create <dir> <branch> — in the current project root. Refuses, with
+# worktree_branch_dir <repo> <branch> — print the worktree path that has the
+# branch checked out, if any.
+worktree_branch_dir() {
+    local repo="$1" branch="$2" line path=""
+    while IFS= read -r line; do
+        case "$line" in
+            "worktree "*) path="${line#worktree }" ;;
+            "branch refs/heads/$branch") printf '%s\n' "$path"; return 0 ;;
+        esac
+    done < <(git -C "$repo" worktree list --porcelain 2>/dev/null)
+    return 1
+}
+
+# worktree_create <dir> <branch> [--reuse-branch] — in the current project root. Refuses, with
 # nothing written, when the branch exists, the directory is non-empty or
 # registered, or the directory lies inside the project. Copies .uncle/config
 # when the project has one.
 worktree_create() {
-    local dir="$1" branch="$2" root parent abs
+    local dir="$1" branch="$2" root parent abs reuse="${3:-}" branch_exists=0
 
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         echo "Not a git repository: $PWD" >&2
@@ -59,8 +72,11 @@ worktree_create() {
         return 1
     fi
     if git show-ref --verify --quiet "refs/heads/$branch"; then
-        echo "Branch already exists: $branch" >&2
-        return 1
+        if [[ "$reuse" != "--reuse-branch" ]]; then
+            echo "Branch already exists: $branch" >&2
+            return 1
+        fi
+        branch_exists=1
     fi
     root="$(pwd -P)"
     parent="$(worktree_real "$(dirname "$dir")")"
@@ -86,8 +102,11 @@ worktree_create() {
         fi
     fi
 
-    if ! git worktree add "$dir" -b "$branch" HEAD; then
-        return 1
+    if [[ "$branch_exists" == 1 ]]; then
+        echo "Branch $branch already exists; checking it out in $dir"
+        git worktree add "$dir" "$branch" || return 1
+    else
+        git worktree add "$dir" -b "$branch" HEAD || return 1
     fi
 
     if [[ -e .uncle/config ]]; then

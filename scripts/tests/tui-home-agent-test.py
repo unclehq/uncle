@@ -39,7 +39,7 @@ class HomeAgent(unittest.TestCase):
         self.ui._set_field = Mock()
         self.ui._agent_state()
         self.ui.agent_started = 0.0
-        self.ui._follow_project_root = Mock(side_effect=lambda p: setattr(self, 'current', p))
+        self.ui._switch_project_root = Mock(side_effect=lambda p: setattr(self, 'current', p))
 
     def apply(self, text, denials=()):
         request = Mock(home_agent=True, generation=self.ui.agent_generation)
@@ -92,9 +92,17 @@ class HomeAgent(unittest.TestCase):
 
     # AC-6: unvalidated action text is never run; a valid action asks for confirmation
     def test_action_requires_confirmation(self):
+        self.ui._next_run_unattended = lambda: False
         self.apply('Plan.\n```uncle_action\n{"uncle_action": "github_issue", "issue": "34", "start": true, "message": "Building issue 34."}\n```')
         self.assertEqual(self.ui.agent_pending['kind'], 'action')
         self.ui._run.assert_not_called()
+
+    def test_action_runs_without_asking_in_auto_mode(self):
+        self.ui._next_run_unattended = lambda: True
+        self.ui._home_action = Mock()
+        self.apply('Plan.\n```uncle_action\n{"uncle_action": "github_issue", "issue": "34", "start": true, "message": "Building issue 34."}\n```')
+        self.assertIsNone(self.ui.agent_pending)
+        self.ui._home_action.assert_called_once()
 
     def test_invalid_action_is_ignored(self):
         self.apply('x\n```uncle_action\n{"uncle_action": "github_issue", "issue": "34"}\n```')
@@ -131,6 +139,26 @@ class HomeAgent(unittest.TestCase):
             with patch.dict(os.environ, {'UNCLE_HOUSEKEEPING_SESSION': '1'}):
                 config = supervision_lib.load_config(path)
         self.assertEqual(config.runner, supervision_lib.load_config(os.path.join(self.root, 'none')).runner)
+
+
+class SwitchProjectRootTest(unittest.TestCase):
+    def test_switch_survives_run_and_moves_config(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            a, b = os.path.realpath(a), os.path.realpath(b)
+            saved = tui.CONFIG_PATH
+            self.addCleanup(setattr, tui, 'CONFIG_PATH', saved)
+            with patch.dict(os.environ, {'UNCLE_PROJECT_ROOT': a}):
+                ui = tui.UncleTUI.__new__(tui.UncleTUI)
+                ui.home_history = []
+                ui.load_config = Mock()
+                ui._launch_root = a  # as left by an earlier _follow_project_root
+                ui._switch_project_root(b)
+                ui._restore_launch_root()  # what _run() does first
+                self.assertEqual(os.environ['UNCLE_PROJECT_ROOT'], b)
+                self.assertEqual(tui._project_root(), b)
+                self.assertEqual(tui.CONFIG_PATH, os.path.join(b, '.uncle', 'config'))
+                self.assertEqual(os.environ['UNCLE_CONFIG'], tui.CONFIG_PATH)
+                ui.load_config.assert_called_once()
 
 
 if __name__ == '__main__':

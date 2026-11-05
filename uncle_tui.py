@@ -3462,6 +3462,14 @@ class UncleTUI:
                                       % (tool, sanitize(verbatim))))
 
     def _agent_confirm_action(self, action):
+        if self._next_run_unattended():
+            self.home_history.append(('system', 'Auto mode: running the agent action without asking.'))
+            try:
+                self._home_action(action, replace_approved=True)
+            except (OSError, ValueError) as exc:
+                self.chat_error = sanitize(str(exc))
+                self.home_history.append(('system', self.chat_error))
+            return
         self.agent_pending = {'kind': 'action', 'action': action, 'generation': self.agent_generation}
         self.home_history.append(('system', 'The agent proposes this action:\n%s\n'
                                             'Reply "yes" to run it; anything else cancels.'
@@ -3484,8 +3492,34 @@ class UncleTUI:
             return False
         return getattr(info, 'st_birthtime', info.st_ctime) >= self.agent_started - 1
 
+    def _switch_project_root(self, path):
+        """Make `path` the project for everything: runs, config, stats.
+
+        Unlike _follow_project_root (a driver-created worktree that the next
+        run must leave again), this is the operator's choice, so the launch
+        root is forgotten -- _run() restoring it would start the build in the
+        directory uncle was launched from -- and the per-project config and
+        session state move with it.
+        """
+        global CONFIG_PATH
+        if hasattr(self, "_launch_root"):
+            del self._launch_root
+        os.environ["UNCLE_PROJECT_ROOT"] = path
+        CONFIG_PATH = os.path.join(path, ".uncle", "config")
+        os.environ["UNCLE_CONFIG"] = CONFIG_PATH
+        try:
+            self.load_config()
+        except (OSError, ValueError):
+            pass
+        stats = getattr(self, "session_stats", None)
+        if stats is not None:
+            metrics = os.path.join(path, ".uncle", "workflow", "metrics")
+            stats["seen"] = set(os.listdir(metrics)) if os.path.isdir(metrics) else set()
+            self._restore_session_totals()
+        self.home_history.append(("system", "Working in " + sanitize(path)))
+
     def _agent_apply_cwd(self, resolved, action):
-        self._follow_project_root(resolved)
+        self._switch_project_root(resolved)
         self._close_home_agent(handoff=True)
         if action is not None:
             self._agent_confirm_action(action)

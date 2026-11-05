@@ -9,6 +9,8 @@ import unittest
 from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import os
+os.environ.setdefault('UNCLE_HOUSEKEEPING_SESSION', '0')  # these tests exercise the supervisor chat, not the housekeeping default
 import uncle_tui as tui
 from chat import Conversation
 from home_actions import parse_reply, prompt

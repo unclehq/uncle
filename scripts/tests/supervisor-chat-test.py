@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT / 'scripts' / 'lib'))
 import supervisor as sv
 import supervisor_chat as sc
 import gate_answer as ga
+import os
+os.environ.setdefault('UNCLE_HOUSEKEEPING_SESSION', '0')  # these tests exercise the supervisor chat, not the housekeeping default
 import uncle_tui as tui
 from generated_input import generated_input_path
 

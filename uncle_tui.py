@@ -96,6 +96,7 @@ from self_hosted import key_file, read_keys, save_keys, connection_settings, ref
 import supervisor as supervision_lib
 import housekeeping_config as hk_config
 import supervisor_runner
+import housekeeping_session
 from supervisor_runner import SupervisorRequest, build_command as supervisor_command
 import supervisor_chat
 from supervisor_chat import ChatRequest
@@ -3301,7 +3302,83 @@ class UncleTUI:
         if host is not None:
             host.controller.steering_queued(stage, id, payload)
 
+    def _housekeeping_idle(self):
+        """True when the homepage chat should talk straight to the housekeeping runner."""
+        proc = getattr(self, 'proc', None)
+        return (getattr(self, 'home_mode', 'housekeeping') == 'housekeeping'
+                and self.state != 'running' and not (proc and proc.poll() is None)
+                and not getattr(self, 'recovery_active', False)
+                and getattr(self, 'home_replace_proposal', None) is None)
+
+    def _housekeeping_session(self):
+        """The persistent housekeeping runner, started once and kept; None when unavailable.
+
+        Same runner, model and effort as housekeeping-workflow.sh (the supervisor's
+        settings; housekeeping needs claude because the deny list is enforced
+        through its tool rules)."""
+        if os.environ.get('UNCLE_HOUSEKEEPING_SESSION') == '0':
+            return None
+        session = getattr(self, 'housekeeping_session', None)
+        if session is not None and session.alive():
+            return session
+        try:
+            config = supervision_lib.load_config(CONFIG_PATH)
+            if config.runner not in housekeeping_session.PERSISTENT_RUNNERS:
+                return None
+            session, command = housekeeping_session.persistent_session(
+                config.runner, ROOT, CONFIG_PATH, config.model, config.effort, _project_root())
+            session.base_command, session.config = command, config
+        except (OSError, ValueError):
+            self.housekeeping_session = None
+            return None
+        self.housekeeping_session = session if session.alive() else None
+        return self.housekeeping_session
+
+    def _warm_housekeeping(self):
+        """Startup thread: stand the runner up and spend its first-turn cost."""
+        session = self._housekeeping_session()
+        if session is not None:
+            session.prime()
+
+    def _close_housekeeping_session(self):
+        session = getattr(self, 'housekeeping_session', None)
+        if session is not None:
+            session.close()
+            self.housekeeping_session = None
+
+    def _housekeeping_turn(self, message):
+        """Send one homepage message straight to the persistent runner. False if it is unavailable."""
+        session = self._housekeeping_session()
+        if session is None:
+            return False
+        self._ensure_chat()
+        if getattr(self, 'home_request', None) is not None:
+            raise ValueError('A reply is still running. Wait or use /clear to cancel.')
+        if not message.strip():
+            return True
+        text = self.chat.refs.expand(sanitize(message))
+        self.chat_calls += 1
+        root = _project_root()
+        log = os.path.join(root, '.uncle', 'workflow', 'logs', 'housekeeping-chat-%d.jsonl' % self.chat_calls)
+        meta = {'call_id': uuid.uuid4().hex, 'number': self.chat_calls, 'trigger': 'housekeeping',
+                'deadline': int(os.environ.get('HOUSEKEEPING_CHAT_TIMEOUT', '900')),
+                'workflow_state': self._workflow_state(), 'stage': ''}
+        self.home_history.append(('user', sanitize(message)))
+        request = SupervisorRequest(session.base_command, text, session.env, session.home, log, meta, session=session)
+        request.housekeeping = True
+        request.config = session.config
+        self.home_request = request
+        return True
+
     def send_home_chat(self, message):
+        if self._housekeeping_idle() and not message.lstrip().startswith(('/', '\\')):
+            if self._housekeeping_turn(message):
+                return
+            if (os.environ.get('UNCLE_HOUSEKEEPING_SESSION') != '0'
+                    and not getattr(self, '_housekeeping_unavailable_noted', False)):
+                self._housekeeping_unavailable_noted = True
+                self.home_history.append(('system', 'Housekeeping has no persistent worker for the supervisor runner (claude, codex and kimi have one); '
+                                                    'using the supervisor chat.'))
         fix = re.match(r'^(?:please\s+)?fix(?:\s|$)', message.strip(), re.I)
         markdown_request = re.match(r'^(?:please\s+)?(?:edit|update|correct|repair|rewrite)\b', message.strip(), re.I) and re.search(r'\.md\b|markdown|\.uncle(?:/|\b)', message, re.I)
         if fix or markdown_request:
@@ -3584,7 +3661,7 @@ class UncleTUI:
         if not got:
             return False
         self._chat_partial_raw = raw
-        text = supervisor_chat.partial_reply(raw)
+        text = raw if (getattr(request, 'housekeeping', False) is True) else supervisor_chat.partial_reply(raw)
         if text == getattr(self, 'chat_partial', ''):
             return False
         self.chat_partial = text
@@ -3599,6 +3676,8 @@ class UncleTUI:
         except queue.Empty:
             return False
         self.home_request = None
+        if (getattr(request, 'housekeeping', False) is True):
+            return self._apply_housekeeping_reply(request, item)
         changed = self._apply_home_reply(request, item)
         text = getattr(request, 'startup_text', None)
         if isinstance(text, str) and self.state != 'running':
@@ -3610,6 +3689,21 @@ class UncleTUI:
                 self.chat_error = sanitize(str(exc))
                 self.home_history.append(('system', self.chat_error))
         return changed
+
+    def _apply_housekeeping_reply(self, request, outcome):
+        """A housekeeping reply is plain prose: show it as written, never parse an envelope."""
+        self.chat_partial = ''
+        self._chat_partial_raw = ''
+        self._record_chat_call(request, outcome)
+        if outcome.get('status') == 'reply':
+            self.home_history.append(('supervisor', sanitize(outcome.get('reply', ''))[:8000]))
+            self.chat_error = ''
+        else:
+            detail = sanitize(str(outcome.get('detail', '')))[:400]
+            self.chat_error = 'Housekeeping call %s%s. Retry; the runner restarts on the next message.' % (
+                outcome.get('status', 'failed'), ': ' + detail if detail else '')
+            self.home_history.append(('system', self.chat_error))
+        return True
 
     def _apply_home_reply(self, request, item):
         # The finished reply replaces the streamed preview.
@@ -6009,7 +6103,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/runstage', '/delegate', '/app-input', '/housekeeping']
+        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/runstage', '/delegate', '/app-input', '/housekeeping', '/mode']
         text = self.chat_composer.lower()
         if self._composer_cursor() != len(text):
             return []
@@ -6043,7 +6137,7 @@ class UncleTUI:
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command not in ('/issue', '/housekeeping', '/do', '/run', '/runstage', '/delegate', '/app-input', '/clear', '/resume'):
+            if argument and command not in ('/issue', '/housekeeping', '/do', '/run', '/runstage', '/delegate', '/app-input', '/clear', '/resume', '/mode'):
                 self.chat_error = command + ' does not take arguments'
                 return True
             if command == '/housekeeping':
@@ -6054,6 +6148,15 @@ class UncleTUI:
                     self.chat_error = ''
                 except (OSError, ValueError) as exc:
                     self.chat_error = sanitize(str(exc))
+                return True
+            if command == '/mode':
+                if argument in ('housekeeping', 'supervisor'):
+                    self.home_mode = argument
+                    self.home_history.append(('system', 'Homepage chat mode: ' + argument + '.'))
+                    self.chat_error = ''
+                else:
+                    self.chat_error = 'Homepage chat mode is %s. Usage: /mode housekeeping|supervisor' % getattr(self, 'home_mode', 'housekeeping')
+                self.chat_composer = ''
                 return True
             if command in ('/run', '/runstage'):
                 try:
@@ -6175,6 +6278,8 @@ class UncleTUI:
                 if self.home_request:
                     self.home_request.cancel()
                     self.home_request = None
+                self._close_housekeeping_session()
+                threading.Thread(target=self._warm_housekeeping, daemon=True).start()
                 self.chat_picker = False
                 self.home_history.clear()
                 self.home_history.append(('system', cleared))
@@ -6184,7 +6289,7 @@ class UncleTUI:
                 self.chat_error = ''
                 self.chat_choices = []
             else:
-                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /stop /triage /do N /resume [#N] /delegate on|off|status /app-input TEXT'
+                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /stop /triage /do N /resume [#N] /delegate on|off|status /app-input TEXT /mode housekeeping|supervisor'
             return True
         return False
 
@@ -7752,6 +7857,7 @@ class UncleTUI:
             self.completion_preview.close()
         self._close_early_preview()
         self._close_supervisor_session()
+        self._close_housekeeping_session()
         self.state = "quit"
 
     # ---- main loop ----
@@ -7765,11 +7871,13 @@ class UncleTUI:
         # while the homepage is being read instead of in front of the first
         # answer. A failure here is not an error -- the per-call path remains.
         threading.Thread(target=self._warm_supervisor, daemon=True).start()
+        threading.Thread(target=self._warm_housekeeping, daemon=True).start()
         self._start_model_refresh()
         try:
             self._run_loop()
         finally:
             self._close_supervisor_session()
+            self._close_housekeeping_session()
             try:
                 if getattr(self, "home_request", None):
                     self.home_request.cancel()

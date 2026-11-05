@@ -169,6 +169,7 @@ class SupervisorRequest:
     """One worker call in a background thread; `poll()` returns the result dict once."""
 
     session = None          # class-level default; set per instance when shared
+    cwd = None              # per-call working directory; default is the worker's empty home/cwd
 
     def __init__(self, command, prompt, env, home, log_path, meta, session=None):
         self.session = session
@@ -243,7 +244,7 @@ class SupervisorRequest:
                     # stdin; its combined output is read here and capped while
                     # it runs, not measured after it exits (D-16).
                     process = start_check(launch_command(command), prompt=prompt.encode('utf-8'),
-                                          cwd=os.path.join(self.home, 'cwd'), env=env,
+                                          cwd=self.cwd or getattr(self.session, 'cwd', None) or os.path.join(self.home, 'cwd'), env=env,
                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 except OSError as exc:
                     outcome.update(status='unavailable', detail=str(exc))
@@ -359,7 +360,7 @@ class SupervisorSession:
     the caller then falls back to spawning per-call, which always works.
     """
 
-    def __init__(self, command, env, home):
+    def __init__(self, command, env, home, cwd=None):
         self.env = env
         self.home = home
         self.lock = threading.Lock()
@@ -370,7 +371,7 @@ class SupervisorSession:
             self.command[at:at] = ['--input-format', 'stream-json']
         try:
             self.process = start_check(launch_command(self.command), prompt=KEEP_STDIN,
-                                       cwd=os.path.join(home, 'cwd'), env=env,
+                                       cwd=cwd or os.path.join(home, 'cwd'), env=env,
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         except OSError:
             self.process = None

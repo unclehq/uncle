@@ -60,7 +60,7 @@ done
 run "$D" "$TTY UNCLE_ATTENDED=1" --unattended;     check env-attended-plus-flag-unattended 0 "$N_FLAG" 0
 run "$D" "$TTY UNCLE_ATTENDED=1 UNCLE_UNATTENDED=1"; check env-attended-plus-legacy 0 "$(N_ENV UNCLE_UNATTENDED)" 0
 run "$D" "$NOTTY" --unattended;                     check unattended-flag 0 "$N_FLAG" 1
-for name in UNCLE_UNATTENDED WORKFLOW_UNATTENDED UNCLE_HOUSEKEEPING_UNATTENDED; do
+for name in UNCLE_UNATTENDED WORKFLOW_UNATTENDED; do
   run "$D" "$NOTTY $name=1";                        check "legacy-$name" 0 "$(N_ENV $name)" 1
   for v in 0 "" junk; do
     run "$D" "$NOTTY $name=$v";                     check "legacy-$name-ignored[$v]" 0 "" 1

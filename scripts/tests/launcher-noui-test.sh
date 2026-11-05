@@ -20,8 +20,8 @@ grep -q -- '--noui' "$tmp/h"; check "usage documents --noui" 0 $?
 
 "$UNCLE" --noui --application '' </dev/null >/dev/null 2>&1; check "noui empty application text exits 2" 2 $?
 echo t | "$UNCLE" --noui --attended --change-request >/dev/null 2>&1; check "noui attended without tty exits 2" 2 $?
-"$UNCLE" --noui --attended --housekeeping x </dev/null >/dev/null 2>&1; check "noui attended no tty (housekeeping) exits 2" 2 $?
-"$UNCLE" --attended --housekeeping x </dev/null >/dev/null 2>&1; check "attended without noui keeps exit 1" 1 $?
+"$UNCLE" --noui --attended --application x </dev/null >/dev/null 2>&1; check "noui attended no tty (application) exits 2" 2 $?
+"$UNCLE" --attended --application x </dev/null >/dev/null 2>&1; check "attended without noui keeps exit 1" 1 $?
 grep -q -- 'never starts the UI' "$tmp/h"; check "usage contrasts --noui with --noinput" 0 $?
 
 # Identity with committed HEAD when --noui is absent and UNCLE_NOUI is unset, 0 or empty:
@@ -42,7 +42,7 @@ if git -C "$ROOT_DIR" show HEAD:uncle >"$head_launcher" 2>/dev/null; then
     capture() { # launcher envspec...
         local l="$1"; shift
         : >"$tmp/cap"
-        ( cd "$tmp" && env -u UNCLE_NOUI "$@" PATH="$bin:$PATH" UNCLE_CAPTURE="$tmp/cap" "$l" --housekeeping x </dev/null >/dev/null 2>&1 )
+        ( cd "$tmp" && env -u UNCLE_NOUI "$@" PATH="$bin:$PATH" UNCLE_CAPTURE="$tmp/cap" "$l" --application x </dev/null >/dev/null 2>&1 )
         sed -e "s#$head_launcher#LAUNCHER#g" "$tmp/cap"
     }
     for spec in "UNSET=1" "UNCLE_NOUI=0" "UNCLE_NOUI="; do

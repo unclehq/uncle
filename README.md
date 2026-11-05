@@ -77,7 +77,7 @@ can just watch it build. You'll need at least one AI client configured; see
 Add `--attended` (or set `UNCLE_ATTENDED=1`) if you'd rather review each stage
 yourself as it goes. `--attended` needs a terminal; without one it refuses
 rather than running unattended. `--unattended` and the `UNCLE_UNATTENDED`,
-`WORKFLOW_UNATTENDED` and `UNCLE_HOUSEKEEPING_UNATTENDED` variables still work
+and `WORKFLOW_UNATTENDED` variables still work
 as no-ops with a deprecation notice on stderr; see
 [docs/UNATTENDED_DEFAULT_MIGRATION.md](docs/UNATTENDED_DEFAULT_MIGRATION.md).
 
@@ -490,32 +490,19 @@ same authority boundary.
 
 These systems operate within Uncle's authority boundaries. Protected approvals, reviewer artifacts, waivers, workflow state, and publication controls remain outside the coding agent's authority.
 
-### Housekeeping
+### Home chat agent
 
-`uncle --housekeeping "delete merged branches"` (or `/housekeeping TEXT` in
-the TUI) hands the request to one free-form agent run, as if Claude did the
-chore itself: it inspects the repository and makes the changes with its normal
-tools. It uses the supervisor's runner, model and effort
-(`supervision.runner`, `.model`, `.effort`) and needs the `claude` runner,
-because the deny list is enforced through Claude's tool rules. Unattended is the
-default; `--attended` asks once before the agent starts. The run exits 0 when
-declined or when the agent finishes, and 1 on refusal or agent failure.
+In the TUI home screen, typing free text that is not a slash command hands it
+to a home-chat agent. It answers questions and does ad-hoc chores (such as
+deleting merged branches) in the repository using its normal tools, instead of
+starting a workflow.
 
-Commands starting with the built-in refusals (`gh repo delete`, `gh repo
-archive`, `sudo`, force pushes, `rm -rf /` and `~`) are always denied. You can
-add more in `.uncle/config` under `housekeeping.disallow` (a JSON array), or
-edit them in Configure > Miscellaneous > Housekeeping disallow patterns, but
-never remove the built-in ones. Denials match by command prefix, so they are a
-guard rail rather than a sandbox. Records are written to
-`.uncle/workflow/housekeeping/` (untracked), with the report in `REPORT.md`.
-
-The text can also come from stdin: `uncle --housekeeping < chores.md` or
-`cat spec.md | uncle --application`. A bare `--application` or `--housekeeping`
-with no text reads piped stdin; on an interactive terminal with nothing piped it
-refuses with an "empty input" error. Empty input is refused. A value starting
-with `--` is treated as the next option, not as text, so text that begins with
-`--` must use the `=` form: `uncle --application="--foo bar"` or
-`uncle --housekeeping=--text`.
+The text for a workflow can also come from stdin:
+`cat spec.md | uncle --application`. A bare `--application` with no text reads
+piped stdin; on an interactive terminal with nothing piped it refuses with an
+"empty input" error. Empty input is refused. A value starting with `--` is
+treated as the next option, not as text, so text that begins with `--` must use
+the `=` form: `uncle --application="--foo bar"`.
 
 See the workflow documentation for the detailed supervision, triage, recovery, security, and configuration model.
 

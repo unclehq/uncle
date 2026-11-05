@@ -133,6 +133,24 @@ def parse_stream(lines):
     return reply, usage, cost, error
 
 
+def stream_denials(lines):
+    """[{tool_name, tool_input}] from the result event's permission_denials."""
+    found = []
+    for line in lines:
+        line = line.strip()
+        if not line.startswith('{') or 'permission_denials' not in line:
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('type') == 'result':
+            for item in event.get('permission_denials') or []:
+                if isinstance(item, dict) and item.get('tool_name'):
+                    found.append({'tool_name': item['tool_name'], 'tool_input': item.get('tool_input') or {}})
+    return found
+
+
 def delta_text(lines):
     """Text fragments from partial-message events; everything else ignored.
 
@@ -223,6 +241,7 @@ class SupervisorRequest:
                                               self.cancelled, self.progress)
                 if lines is not None:
                     reply, usage, cost, error = parse_stream(lines)
+                    outcome['permission_denials'] = stream_denials(lines)
                     outcome.update(usage=usage, cost=cost, exit=0,
                                    usage_source='stream-json result' if usage else None)
                     if error:
@@ -316,7 +335,9 @@ class SupervisorRequest:
             if flooded.is_set():
                 return
             with open(self.log_path, encoding='utf-8', errors='replace') as fh:
-                reply, usage, cost, error = parse_stream(fh)
+                text_lines = fh.read().splitlines()
+            reply, usage, cost, error = parse_stream(text_lines)
+            outcome['permission_denials'] = stream_denials(text_lines)
             outcome.update(usage=usage, cost=cost, usage_source='stream-json result' if usage else None)
             if outcome['status'] in ('cancelled', 'timeout'):
                 return  # charged: whatever usage the stream reported before the kill is kept

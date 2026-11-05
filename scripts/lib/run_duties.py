@@ -131,13 +131,12 @@ def desktop_decision(desktop_lib, root, environ=None, platform=None, unattended=
     return dict(out, status="prompt", reason="attended")
 
 
-STARTUP_ACTIONS = ("create_app", "github_issue", "housekeeping", "change_request")
+STARTUP_ACTIONS = ("create_app", "github_issue", "change_request")
 
 # Fixed driver names per allowlisted action; paths never come from the environment.
 _DRIVERS = {
     "create_app": "stagegate.sh",
     "github_issue": "from-issue.sh",
-    "housekeeping": "housekeeping-workflow.sh",
     "change_request": "change-workflow.sh",
 }
 _ISSUE_MODES = ("", "--change", "--new")
@@ -146,7 +145,7 @@ _ISSUE_MODES = ("", "--change", "--new")
 def build_driver_command(action, text, attended, root_dir, issue_mode=""):
     """Driver argv for a startup action (mirrors the TUI's cmd_for).
 
-    Raises ValueError for an action outside the four-action allowlist (unknown,
+    Raises ValueError for an action outside the three-action allowlist (unknown,
     empty, path-like, non-string) or for missing text where the driver needs it.
     """
     if not isinstance(action, str) or action not in STARTUP_ACTIONS:
@@ -155,7 +154,7 @@ def build_driver_command(action, text, attended, root_dir, issue_mode=""):
     if issue_mode not in _ISSUE_MODES:
         raise ValueError("Unknown issue mode: %r" % (issue_mode,))
     cmd = [os.path.join(root_dir, "scripts", _DRIVERS[action])]
-    if action in ("github_issue", "housekeeping"):
+    if action == "github_issue":
         text = (text or "").strip()
         if not text:
             raise ValueError("Startup text is required for " + action)

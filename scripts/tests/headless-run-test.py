@@ -199,7 +199,7 @@ class Attended(unittest.TestCase):
 
 
 class DriverFromEnv(unittest.TestCase):
-    """The launcher exports create_app/github_issue/change_request/housekeeping."""
+    """The launcher exports create_app/github_issue/change_request."""
 
     def _argv(self, action, text, runtime="/rt"):
         root = tempfile.mkdtemp()
@@ -216,7 +216,6 @@ class DriverFromEnv(unittest.TestCase):
     def test_actions_map_to_the_tui_drivers(self):
         for action, script, tail in (("create_app", "stagegate.sh", []),
                                      ("github_issue", "from-issue.sh", ["12"]),
-                                     ("housekeeping", "housekeeping-workflow.sh", ["tidy"]),
                                      ("change_request", "change-workflow.sh", [])):
             argv, err, root = self._argv(action, tail[0] if tail else "do a thing")
             self.assertEqual(argv, ["/rt/scripts/" + script] + tail, err)

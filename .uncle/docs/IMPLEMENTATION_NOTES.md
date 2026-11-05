@@ -1,35 +1,26 @@
 # Implementation notes
 
-## Step 1
+### Deviations
 
-## Step 2
-
-### Files changed
-
-- `scripts/lib/run_duties.py` — Written by isolated step 2; 2
-- `scripts/tests/run-duties-test.py` — Written by isolated step 2; 2
-
-## Step 3
-
-### Files changed
-
-- `uncle_tui.py` — Written by isolated step 3; 3
-
-## Step 4
-
-### Files changed
-
-- `scripts/lib/uncle_headless.py` — Written by isolated step 4; 4
-
-## Step 5
-
-### Files changed
-
-- `scripts/tests/launcher-noui-test.sh` — Written by isolated step 5; 5
-- `uncle` — Written by isolated step 5; 5
-
-## Step 6
-
-### Files changed
-
-- `README.md` — Written by isolated step 6; 6
+- `scripts/lib/startup_text_input.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/lib/supervisor_runner.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/chat-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/driver-marker-test.sh`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/headless-run-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/home-actions-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/home-agent-session-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/home-chat-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/housekeeping-input-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/housekeeping-launcher-test.sh`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/housekeeping-policy-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/housekeeping-session-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/housekeeping-workflow-test.sh`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/launcher-noui-test.sh`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/launcher-removed-flag-test.sh`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/launcher-stdin-text-test.sh`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/mode-resolution-test.sh`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/no-housekeeping-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/run-duties-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/startup-text-input-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/supervisor-chat-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/tui-home-agent-test.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.

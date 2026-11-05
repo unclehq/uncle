@@ -59,8 +59,8 @@ gates. Add `--attended` (or `UNCLE_ATTENDED=1`) to review each gate yourself;
 it needs a terminal and refuses without one. Run attended at least once first
 so you know what you're opting out of.
 
-`--unattended` and the legacy `UNCLE_UNATTENDED`, `WORKFLOW_UNATTENDED` and
-`UNCLE_HOUSEKEEPING_UNATTENDED` variables are deprecated no-ops that print a
+`--unattended` and the legacy `UNCLE_UNATTENDED` and
+`WORKFLOW_UNATTENDED` variables are deprecated no-ops that print a
 notice on stderr. See [UNATTENDED_DEFAULT_MIGRATION.md](UNATTENDED_DEFAULT_MIGRATION.md).
 
 ## Next steps

@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 import os
-os.environ.setdefault('UNCLE_HOUSEKEEPING_SESSION', '0')  # these tests exercise the supervisor chat, not the housekeeping default
+os.environ.setdefault('UNCLE_HOME_AGENT', '0')  # these tests exercise the supervisor chat, not the home agent
 import uncle_tui as tui
 from chat import Conversation
 from home_actions import parse_reply, prompt
@@ -340,6 +340,25 @@ class Actions(unittest.TestCase):
                 self.ui._run.assert_called_once()
                 self.assertEqual(self.ui.issue_mode, '')
         self.assertEqual((self.root / 'CHANGE_REQUEST.md').read_text(), 'Keep this request')
+
+    def test_golden_build_issue_34_transcript(self):
+        # Golden transcript recorded from current behavior before any deletion.
+        with patch.object(tui, 'HomeRequest') as request:
+            self.ui.send_home_chat('build issue 34')
+            request.assert_not_called()
+        self.assertEqual((self.ui.state, self.ui.issue, self.ui.input_buf, self.ui.workflow_idx, self.ui.issue_mode),
+                         ('issue', '34', '34', 1, ''))
+        self.ui._run.assert_called_once()
+
+    def test_golden_hello_world_transcript(self):
+        # Golden mapping: a hello-world request becomes a create_app action that writes the brief and starts the app build.
+        document = brief('app').replace('Shared grocery lists with offline support.',
+                                        'A hello-world C program that prints Hello, world.')
+        self.reply(uncle_action='create_app', document=document, start=True)
+        self.assertIn('hello-world C program', (self.root/'.uncle/docs/REQUIREMENTS.md').read_text())
+        self.ui._run.assert_called_once()
+        self.assertEqual(self.ui.workflow_idx, 0)
+        self.assertEqual(self.ui.chat_error, '')
 
     def test_issue_import_without_build(self):
         with patch.object(tui, 'IssueSeedRequest') as worker:

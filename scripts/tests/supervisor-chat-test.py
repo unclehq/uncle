@@ -26,7 +26,7 @@ import supervisor as sv
 import supervisor_chat as sc
 import gate_answer as ga
 import os
-os.environ.setdefault('UNCLE_HOUSEKEEPING_SESSION', '0')  # these tests exercise the supervisor chat, not the housekeeping default
+os.environ.setdefault('UNCLE_HOME_AGENT', '0')  # these tests exercise the supervisor chat, not the home agent
 import uncle_tui as tui
 from generated_input import generated_input_path
 

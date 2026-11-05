@@ -75,8 +75,6 @@ class DriverCommand(unittest.TestCase):
                          [s('stagegate.sh'), '--attended'])
         self.assertEqual(rd.build_driver_command('github_issue', '12', False, r, '--new'),
                          [s('from-issue.sh'), '12', '--new'])
-        self.assertEqual(rd.build_driver_command('housekeeping', ' t ', True, r),
-                         [s('housekeeping-workflow.sh'), 't', '--attended'])
         self.assertEqual(rd.build_driver_command('change_request', 'x', False, r),
                          [s('change-workflow.sh')])
         # the TUI passes issue_mode=None for non-issue actions (regression: it was refused)
@@ -90,7 +88,7 @@ class DriverCommand(unittest.TestCase):
 
     def test_rejects_bad_text_and_mode(self):
         with self.assertRaises(ValueError):
-            rd.build_driver_command('housekeeping', '  ', False, '/r')
+            rd.build_driver_command('github_issue', '  ', False, '/r')
         with self.assertRaises(ValueError):
             rd.build_driver_command('github_issue', '1', False, '/r', '--evil')
 

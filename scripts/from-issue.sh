@@ -725,6 +725,7 @@ if [[ "$WORKTREE" == 1 ]]; then
         echo "Reusing worktree $WORKTREE_DIR on branch $WORKTREE_BRANCH"
     else
         worktree_create "$WORKTREE_DIR" "$WORKTREE_BRANCH" || exit 1
+        WORKTREE_JUST_CREATED=1
     fi
     cd "$WORKTREE_DIR"
     # This worktree exists for one issue -- its name and branch both derive
@@ -975,7 +976,10 @@ case "$MODE" in
         else
             # An explicit fresh start (UNCLE_NEW_WORKFLOW=1) already archived
             # the old evidence and is its own confirmation.
-            [[ "$FRESH_START" == 1 ]] || confirm_replace_change_request
+            # A worktree this invocation just created holds only what HEAD
+            # tracked (committed docs from earlier runs), never the user's
+            # work, so there is nothing to protect -- build anyway, as the TUI does.
+            [[ "$FRESH_START" == 1 || "${WORKTREE_JUST_CREATED:-0}" == 1 ]] || confirm_replace_change_request
             write_change_request
         fi
         PRE_RUN_JOURNAL_SIG="absent"

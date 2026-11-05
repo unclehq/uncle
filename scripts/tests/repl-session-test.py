@@ -497,6 +497,26 @@ try:
 except Exception as exc:  # pragma: no cover
     check("uncle_tui importable for identity check", False, str(exc))
 
+# Home-agent parity: without a runner override the REPL runs the tool-enabled agent and
+# grants a denied Bash call (auto in unattended mode, after y in attended mode), then retries.
+fakebin = TMP / "fakebin"
+fakebin.mkdir()
+(fakebin / "claude").write_text("""#!/usr/bin/env python3
+import sys, json
+a = sys.argv; sys.stdin.read()
+ok = 'Bash(echo hi)' in a[a.index('--allowedTools')+1]
+print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':'ran it: hi' if ok else 'denied'}]}}))
+print(json.dumps({'type':'result','permission_denials':[] if ok else [{'tool_name':'Bash','tool_input':{'command':'echo hi'}}]}))
+""")
+(fakebin / "claude").chmod(0o755)
+agent_env = {"PATH": f"{fakebin}:{os.environ['PATH']}"}
+rc, out, err = session(["run echo hi"], extra=agent_env)
+check("unattended: denied Bash is auto-granted and retried", "ran it: hi" in out and "Auto mode" in out, out + err)
+rc, out, err = session(["run echo hi", "y"], extra=dict(agent_env, UNCLE_STARTUP_ATTENDED="1", UNCLE_STARTUP_UNATTENDED="0"))
+check("attended: denied Bash asks, y grants and retries", "Allow exactly this" in out and "ran it: hi" in out, out + err)
+rc, out, err = session(["run echo hi", "n"], extra=dict(agent_env, UNCLE_STARTUP_ATTENDED="1", UNCLE_STARTUP_UNATTENDED="0"))
+check("attended: n declines the grant", "ran it: hi" not in out, out + err)
+
 import shutil  # noqa: E402
 shutil.rmtree(TMP, ignore_errors=True)
 sys.exit(1 if FAILS else 0)

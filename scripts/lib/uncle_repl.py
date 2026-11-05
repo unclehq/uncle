@@ -169,7 +169,8 @@ class Session:
 
     def _ask(self, line):
         if self.chat is None:
-            self.chat = repl_chat.ChatSession(self.root, self.env)
+            self.chat = repl_chat.ChatSession(self.root, self.env, self.attended, self.confirm, self.say)
+        self.chat.attended = self.attended
         return self.chat.ask(line, self.history)
 
     # -- actions

@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 
 import home_actions
+import home_agent_session
 from process_tree import launch_command, kill_tree, group_options
 from triage_chat import extract_reply_from_log, runner_flags, scrub_env, MAX_REPLY, TIMEOUT_TICKS
 
@@ -24,6 +25,8 @@ class ChatError(Exception):
 _lock = threading.Lock()
 _current = None
 _cancelled = threading.Event()
+last_denials = []
+INSTALL_ROOT = str(Path(__file__).resolve().parents[2])
 
 
 def terminate():
@@ -75,6 +78,8 @@ def ask(command, prompt, cwd, env, log_path):
         if os.path.getsize(log_path) > MAX_REPLY:
             raise ChatError('Chat reply exceeds 1 MiB; discarded.')
         reply, error = extract_reply_from_log(log_path)
+        with open(log_path, encoding='utf-8', errors='replace') as fh:
+            last_denials[:] = home_agent_session.permission_denials(fh.read().splitlines())
         if error:
             raise ChatError('Chat runner reported an error: %s' % error)
         if code:
@@ -87,25 +92,85 @@ def ask(command, prompt, cwd, env, log_path):
 
 
 class ChatSession:
-    """Holds the one conversation history owner's runner config (I-6); history is passed in."""
+    """Holds the one conversation history owner's runner config (I-6); history is passed in.
 
-    def __init__(self, root, env):
+    Without UNCLE_REPL_RUNNER the turn runs the same tool-enabled home agent the
+    curses UI uses: read tools plus any exact-match grants, with denied tool
+    calls reported back so the REPL can grant them (auto in unattended mode,
+    after a y/N in attended mode) and retry once.
+    """
+
+    def __init__(self, root, env, attended=True, confirm=None, say=None):
         self.root, self.env = root, dict(env)
+        self.attended, self.confirm, self.say = attended, confirm, say
+        self.grants = []
+
+    def _agent_command(self):
+        model, effort = 'sonnet', 'low'
+        try:
+            import supervisor
+            config = supervisor.load_config(self.env.get('UNCLE_CONFIG') or os.path.join(self.root, '.uncle', 'config'))
+            model = getattr(config, 'model', None) or model
+            effort = getattr(config, 'effort', None) or effort
+        except Exception:
+            pass
+        argv, env = home_agent_session.build_command(INSTALL_ROOT, model, effort, tuple(self.grants), self.env)
+        return argv, env
 
     def command(self):
         override = self.env.get('UNCLE_REPL_RUNNER')
         if override:
             return shlex.split(override)
-        return ['claude'] + runner_flags('low', '', 'Read,Glob,Grep', 8)
+        return self._agent_command()[0]
 
-    def ask(self, line, history):
-        """Return (reply_text, action_dict_or_None). Raises ChatError."""
+    def _once(self, line, history):
         turns = [{'role': r, 'text': t} for r, t in history]
         if not turns or turns[-1] != {'role': 'user', 'text': line}:
             turns.append({'role': 'user', 'text': line})
-        prompt = home_actions.prompt(turns, self.root)
+        override = self.env.get('UNCLE_REPL_RUNNER')
+        if override:
+            prompt, env = home_actions.prompt(turns, self.root), scrub_env(self.env)
+            command = shlex.split(override)
+        else:
+            try:
+                command, env = self._agent_command()
+            except ValueError as exc:
+                raise ChatError(str(exc))
+            lines = ['%s: %s' % ('Operator' if t['role'] == 'user' else 'You', t['text'][:4000]) for t in turns[-12:]]
+            prompt = 'Conversation so far:\n' + '\n'.join(lines) + '\n\nReply to the operator\'s last message.'
         with tempfile.TemporaryDirectory(prefix='uncle-repl-') as d:
-            reply = ask(self.command(), prompt, self.root, scrub_env(self.env), os.path.join(d, 'chat.log'))
+            return ask(command, prompt, self.root, env, os.path.join(d, 'chat.log'))
+
+    def _grant_denials(self):
+        """Add exact grants for this turn's denials; True when any was added."""
+        added = False
+        for denial in list(last_denials):
+            try:
+                rule = home_agent_session.grant_for_denial(denial)
+            except ValueError as exc:
+                if self.say:
+                    self.say('Cannot grant %s: %s' % (denial.get('tool_name'), exc))
+                continue
+            if rule in self.grants:
+                continue
+            subject = (denial.get('tool_input') or {}).get('command') or (denial.get('tool_input') or {}).get('file_path') or ''
+            if self.attended:
+                if not (self.confirm and self.confirm('The agent wants to use %s:\n%s\nAllow exactly this for the session?'
+                                                      % (denial.get('tool_name'), subject))):
+                    continue
+            elif self.say:
+                self.say('Auto mode: allowing %s for this session: %s' % (denial.get('tool_name'), subject))
+            self.grants.append(rule)
+            added = True
+        return added
+
+    def ask(self, line, history):
+        """Return (reply_text, action_dict_or_None). Raises ChatError."""
+        reply = self._once(line, history)
+        if not self.env.get('UNCLE_REPL_RUNNER') and last_denials and self._grant_denials():
+            reply = self._once(line, history)
+        if not self.env.get('UNCLE_REPL_RUNNER'):
+            return self._split_agent_reply(reply)
         try:
             data = home_actions.parse_reply(reply)
         except ValueError as exc:
@@ -113,6 +178,20 @@ class ChatSession:
         if data is None:
             return reply, None
         return data.get('message') or '', data
+
+    @staticmethod
+    def _split_agent_reply(reply):
+        import re
+        action = None
+        m = re.search(r'```uncle_action\s*\n(.*?)\n```\s*$', reply.rstrip(), re.S)
+        text = reply
+        if m:
+            text = reply[:m.start()].rstrip()
+            try:
+                action = home_actions.parse_reply(m.group(1))
+            except ValueError as exc:
+                raise ChatError(str(exc))
+        return text, action
 
     def cancel(self):
         terminate()

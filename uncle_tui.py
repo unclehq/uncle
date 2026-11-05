@@ -89,6 +89,7 @@ from chat import Conversation, sanitize
 from generated_input import generated_input_path, generated_input_write_path
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
+from home_actions import ISSUE_REQUEST_RE  # shared "build <issue>" matcher
 from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compose_prompt as triage_prompt,
                          runner_flags as triage_runner_flags, scrub_env as triage_scrub_env,
                          hold_reason as triage_hold_reason, DIAGNOSIS_TOOLS, EXECUTE_TOOLS)
@@ -146,16 +147,6 @@ WORKFLOWS = [
 EFFORTS = ["none", "low", "medium", "high"]
 ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new"),
                ("change request in worktree", "--worktree")]
-# A complete, directly-sendable "build <issue>" message. Shared between
-# send_home_chat (which acts on it) and the chat composer's Enter handling
-# (which must not let the inline issue-picker swallow a message that already
-# fullmatches this -- see the ISSUE_REQUEST_RE check in handle_key).
-ISSUE_REQUEST_RE = re.compile(
-    r'(?:please\s+)?(?:build|bulid|implement|start|run|work on)\s+'
-    r'(?:(?P<change>change\s+request)\s+)?'
-    r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+(?:issue\s+)?)?'
-    r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
-    re.IGNORECASE)
 # A triage proposal that says there is nothing to edit needs no master turn.
 NO_EDIT_PROPOSAL = re.compile(
     r'(?i)\bno\s+(?:files?\s+)?edits?\b|\bno\s+files?\s+edited\b|\bnothing\s+to\s+(?:edit|change)\b'

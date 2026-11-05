@@ -150,20 +150,43 @@ def run_tui(d):
     return None if not (d / ".uncle" / "workflow" / "status.json").exists() else 0
 
 
+def run_repl(d):
+    """The same fake driver reached through the bare --noui REPL via a validated create_app action."""
+    chat = Path(tempfile.mkdtemp(prefix="uncle-equiv-chat-")) / "chat.py"
+    action = {"uncle_action": "create_app", "message": "Starting.", "document": "fixture", "start": True}
+    chat.write_text("import sys, json\nsys.stdin.read()\nprint(json.dumps({'type':'assistant','message':"
+                    "{'content':[{'type':'text','text':%r}]}}))\n" % json.dumps(action))
+    env = dict(os.environ, UNCLE_RUNTIME_ROOT=str(RT), UNCLE_SKIP_UPGRADE="1",
+               UNCLE_REPL_RUNNER=f"{sys.executable} {chat}")
+    r = subprocess.run([str(RT / "uncle"), "--noui", "--unattended"], input="build the fixture app\n",
+                       cwd=d, env=env, capture_output=True, text=True, timeout=120)
+    shutil.rmtree(chat.parent, ignore_errors=True)
+    return r.returncode
+
+
 RT = make_runtime()
-h, t = make_project(), make_project()
+h, t, rp = make_project(), make_project(), make_project()
 try:
     hc = run_headless(h)
     tc = run_tui(t)
     check("headless run exits 0", hc == 0, str(hc))
     check("tui run finished under the pty", tc is not None)
-    hs, ts = snapshot(h), snapshot(t)
+    rc = run_repl(rp)
+    check("repl run exits 0", rc == 0, str(rc))
+    hs, ts, rs = snapshot(h), snapshot(t), snapshot(rp)
+    check("repl artifact lists match one-shot", sorted(hs) == sorted(rs), f"{sorted(hs)} vs {sorted(rs)}")
+    for k in sorted(set(hs) & set(rs)):
+        check(f"repl content matches one-shot: {k}", hs[k] == rs[k])
+    check("repl run imported no curses (separate import probe)", subprocess.run(
+        [sys.executable, "-B", "-c", "import sys; sys.path.insert(0, %r); import uncle_repl; "
+         "sys.exit(int('curses' in sys.modules))" % str(ROOT / "scripts" / "lib")]).returncode == 0)
     check("artifact lists match", sorted(hs) == sorted(ts), f"{sorted(hs)} vs {sorted(ts)}")
     for k in sorted(set(hs) & set(ts)):
         check(f"content matches: {k}", hs[k] == ts[k])
 finally:
     shutil.rmtree(h, ignore_errors=True)
     shutil.rmtree(t, ignore_errors=True)
+    shutil.rmtree(rp, ignore_errors=True)
     shutil.rmtree(RT, ignore_errors=True)
 
 sys.exit(1 if FAILS else 0)

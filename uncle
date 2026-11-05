@@ -115,9 +115,10 @@ tool-using agents, especially with --unattended. --application, --issue and
 --unattended is passed to the driver you pick: it runs every human gate
 without a person, records what nobody reviewed, and reports that at the end.
 --noui (or UNCLE_NOUI=1) runs a startup action headlessly: no curses, plain
-text progress on stdout. It requires one of --application, --issue,
-or --change-request (otherwise exit 2; the menu is never shown)
-and cannot be combined with --noinput. Unlike --noinput (the TUI's
+text progress on stdout. With one of --application, --issue or
+--change-request it runs that action; on its own it starts a plain-text
+interactive REPL (chat with the home agent, /help for commands).
+It cannot be combined with --noinput. Unlike --noinput (the TUI's
 no-keyboard mode, which still draws the curses UI), --noui never starts the UI.
 Attended needs a tty on stdin.
 Exit codes: 0 completed; 1 driver failed; 2 refused before start; 3 stopped at
@@ -418,9 +419,9 @@ UNCLE_NOUI_ON=""
 { [[ -n "$UNCLE_FLAG_NOUI" ]] || [[ "${UNCLE_NOUI:-}" == 1 ]]; } && UNCLE_NOUI_ON=1
 if [[ -n "$UNCLE_NOUI_ON" ]]; then
     if [[ -z "$UNCLE_STARTUP_ACTION" ]]; then
-        printf 'Error: --noui needs a startup action (--application, --issue or --change-request); the menu is never shown\n' >&2
-        usage >&2
-        exit 2
+        # No startup action: start the plain-text REPL (no curses), e.g. over ssh.
+        export UNCLE_NOUI=1
+        exec python3 "$ROOT/scripts/lib/uncle_repl.py"
     fi
     export UNCLE_NOUI=1
     exec python3 "$ROOT/scripts/lib/uncle_headless.py"

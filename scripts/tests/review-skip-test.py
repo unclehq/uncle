@@ -95,9 +95,10 @@ class Decision(unittest.TestCase):
         result = fx.build(skip_answer('small'))
         self.assertEqual((result['class'], result['review']), ('small', 'skip'))
 
-    def test_ac1_no_review_key_in_answer_is_full(self):
+    def test_ac1_no_review_key_in_answer_takes_class_default(self):
         fx = Fixture(self, ['docs/guide.md'])
-        self.assertEqual(fx.build({'class': 'docs'})['review'], 'full')
+        self.assertEqual(fx.build({'class': 'docs'})['review'], 'skip')
+        self.assertEqual(fx.build({'class': 'standard'})['review'], 'full')
 
     def test_ac1_non_model_sources_are_full(self):
         fx = Fixture(self, ['docs/guide.md'])
@@ -305,7 +306,7 @@ class SkipReview(unittest.TestCase):
 
     def test_non_skip_decision_exits_1_without_stub(self):
         fx = Fixture(self, ['docs/guide.md'])
-        fx.finish({'class': 'docs', 'rationale': 'no review key'})
+        fx.finish({'class': 'docs', 'review': 'full'})
         self.assertEqual(fx.skip_review().returncode, 1)
         self.assertFalse(fx.stub().exists())
 

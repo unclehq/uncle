@@ -362,7 +362,7 @@ def review_decision(cls, raw_hits, owned, skip_requested, model_cls=None):
         return 'full', 'a docs change owns a non-documentation file'
     if cls == 'test-only' and any(kind != 'test' for kind in kinds):
         return 'full', 'a test-only change owns a non-test file'
-    if cls == 'small' and any(SENSITIVE_PATH.search(path) for path in owned):
+    if cls == 'small' and any(SENSITIVE_PATH.search(path) for path in owned if kind_of(path) != 'test'):
         return 'full', 'an owned path touches auth, secrets, shell, the driver or a gate'
     return 'skip', 'class %s, no risk hits' % cls
 
@@ -373,8 +373,8 @@ def build(family, project, plan, proposal, source, note=''):
     f, waived = apply_waivers(features_found, proposal)     # what the class is judged on; `features` keeps what was matched
     floor = deterministic_class(f)
     cls = merge(floor, proposal.get('class') if proposal else None)
-    requested = source == 'model' and proposal is not None and isinstance(proposal.get('review'), str) \
-        and proposal['review'] == 'skip'
+    # A model's answer that omits `review` takes the class default (small/docs/test-only skip); any other value but "skip" is full.
+    requested = source == 'model' and proposal is not None and proposal.get('review', 'skip') == 'skip'
     review, review_reason = review_decision(cls, features_found['risk_hits'], plan_steps_and_owns(plan)[1], requested,
                                           proposal.get('class') if proposal else None)
     result = {
@@ -450,7 +450,7 @@ def _no_duplicate_review(pairs):
     """A duplicate `review` key is ambiguous, so it counts as absent (full review); the rest of the answer is kept."""
     result = dict(pairs)
     if sum(1 for key, _ in pairs if key == 'review') > 1:
-        result.pop('review', None)
+        result['review'] = 'full'
     return result
 
 
@@ -537,13 +537,14 @@ def recheck(family, project, plan):
     f, _ = apply_waivers(features(family, project, plan), stored)    # a waiver the model gave stands for the plan too
     floor = deterministic_class(f)
     if CLASSES.index(floor) <= CLASSES.index(current):
-        if stored.get('review') == 'skip':
-            # The plan may have outgrown the skip without outgrowing the class: re-decide against the plan as it is now.
+        if stored.get('source') == 'model':
+            # Re-decide against the plan as it is now: it may have outgrown the skip, or (owned files are only known
+            # once the plan exists) may now qualify for one. A small/docs/test-only class skips unless a guard says otherwise.
             raw = features(family, project, plan)
             cls = merge(floor, current)
             review, reason = review_decision(cls, raw['risk_hits'], plan_steps_and_owns(plan)[1], True, current)
-            if review != 'skip':
-                write(project, dict(stored, review='full', review_reason=reason[:300]))
+            if review != stored.get('review'):
+                write(project, dict(stored, review=review, review_reason=reason[:300], features=raw))
         return ''
     result = build(family, project, plan, {'class': current}, 'plan-recheck',
                    'Raised from %s to %s: the plan (%d steps, %d files) is larger than the %s class allows.'

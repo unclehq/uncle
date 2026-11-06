@@ -1,170 +1,127 @@
 # Manual checklist
 
-## Coverage
+## Coverage: no-PR reasons
 
-### MC-101
+### MC-104
 - Required for acceptance: YES
-- Exclusive resources: file:err.txt, file:out.txt
+- Exclusive resources: dir:/tmp/uncle-mc-fixture
 - Depends on: none
-- Exact action: Run `uncle --noui` with a request that makes the driver fail, redirecting with `2>err.txt >out.txt`, then view both files.
-- Expected result: err.txt contains the driver's error text exactly once, followed by one `driver exited with status N` line. out.txt contains neither. The process exit status is 1.
-- Evidence to capture: Contents of err.txt and out.txt plus the printed exit status.
+- Exact action: In the fixture, make the recorded issue ineligible to close (for example, alter the audit artifact after classification) with a READY verdict, then run publish.
+- Expected result: No PR is created. A single `PR not created: issue-not-eligible:` line appears on stderr, and the finished block shows a readable label rather than a silent exit.
+- Evidence to capture: Stderr transcript, finished block text, and the gh stub log.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-102
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run `uncle --noui` interactively in a terminal with a failing request, with no redirection.
-- Expected result: The driver's error text and the exit status line are visible on the terminal. Stdout lines still carry the `[+hh:mm:ss]` prefix.
-- Evidence to capture: Terminal transcript or screenshot of the run.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-103
-- Required for acceptance: YES
-- Exclusive resources: file:err.txt
-- Depends on: none
-- Exact action: Run `uncle --noui` with a request that stops at a gate, capturing `2>err.txt`, and note the exit status.
-- Expected result: Exit status is 3. The gate message appears on stderr as before. Stdout formatting is unchanged.
-- Evidence to capture: Exit status and contents of err.txt and stdout.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-105
-- Required for acceptance: YES
-- Exclusive resources: file:err.txt
-- Depends on: none
-- Exact action: Run `uncle --help` and `uncle --noui --help`. Then run `uncle --noui` with an invalid or refused invocation and capture `2>err.txt`.
-- Expected result: Help text states that errors go to stderr. The launcher refusal appears in err.txt with exit status 2, unchanged.
-- Evidence to capture: Help output, err.txt contents and exit status.
-- Actual result: 
-- Status: NOT RUN
+## Coverage: unattended draft
 
 ### MC-106
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: dir:/tmp/uncle-mc-fixture
 - Depends on: none
-- Exact action: In the TUI, start a run that makes the driver fail with a non-zero exit, and watch the build window.
-- Expected result: The build window shows driver errors as before, followed by one line `Driver exited with status N: <last non-empty output line>`, with secrets and escape codes removed.
-- Evidence to capture: Screenshot or screen text of the build window.
+- Exact action: In the fixture, run an unattended finish (UNCLE_AUTO_PUBLISH path) with a non-READY audit verdict and gates otherwise satisfied.
+- Expected result: A draft PR is created. The stderr line reads `PR published as unreviewed draft: published-draft-unreviewed: verdict <class>`, and the finished block does not say plain `published`.
+- Evidence to capture: Stderr transcript, finished block text, and the gh stub log showing the draft flag.
 - Actual result: 
 - Status: NOT RUN
-
-### MC-107
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: In the TUI, run one driver that exits 0 and one that exits non-zero while printing nothing, or stop a run with Ctrl-C so it exits 130 or 143.
-- Expected result: Exit 0 adds no failure line. The silent failure shows `Driver exited with status N: (no output)`. The user stop shows the failure line with 130 or 143.
-- Evidence to capture: Screenshots of the build window for each case.
-- Actual result: 
-- Status: NOT RUN
-
-## Invariants
 
 ### MC-200
-- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui` against a disposable project with a request that makes the driver fail, redirecting with `1>out.txt 2>err.txt`. Then run `cat out.txt err.txt`.
-- Expected result: err.txt holds the driver's error text exactly once, followed once by the status line `driver exited with status N`. The shell exit status is 1. out.txt holds neither the error text nor the status line.
-- Evidence to capture: Contents of out.txt and err.txt, plus the exit status.
+- Exact action: In a disposable fixture git repo (signing disabled, bare local remote, gh stubbed), source the finished change-pr.sh and call change_pr_publish with a tree that differs from the attested tree (modify a tracked file), then with a non-READY verdict and override unavailable; observe stderr and whether handoff/push occurs.
+- Expected result: No PR is created and no push happens in either case; each shows existing diagnostics plus exactly one new line beginning 'PR not created: tree-mismatch' or 'PR not created: verdict-not-ready'; function still returns 0.
+- Evidence to capture: Captured stderr/stdout, return code, and the remote's ref list showing no pushed branch.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-202
-- Required for acceptance: YES
+### MC-201
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui` against a disposable project whose driver writes a stderr prompt with no trailing newline and then waits. Watch the terminal live, then let the run finish.
-- Expected result: The prompt text appears on the terminal within the idle timeout, before the driver exits. A normal gate still stops the run with exit status 3 and its message naming the gate.
-- Evidence to capture: Timestamped terminal observation and the exit status.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-203
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run `uncle --noui` against a disposable project, interrupt it with Ctrl-C while the driver has stderr output pending, and run it again with the same setup but send SIGTERM instead. Capture stderr to a file each time.
-- Expected result: Exit status is 130 for Ctrl-C and 143 for SIGTERM. All driver stderr text precedes the single status line, and no driver process is left running (`pgrep` finds none).
-- Evidence to capture: stderr files, exit statuses, and the `pgrep` output.
+- Exact action: In a disposable fixture repo with a ready verdict, an ORIGIN_FILE for an ineligible issue and gh stubbed, call change_pr_publish; then repeat with an empty ORIGIN_FILE and a passing tree.
+- Expected result: First run records issue-not-eligible, prints one 'PR not created: issue-not-eligible' line and creates no PR; the empty-ORIGIN_FILE run skips the issue gate, reaches handoff, and never reports issue-not-eligible.
+- Evidence to capture: Stderr output and reported reason for each run, plus whether the stubbed gh pr create was invoked.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-204
-- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui` against a disposable project where the driver prints a normal progress line to stdout and also writes to stderr, capturing `1>out.txt 2>err.txt`. Then check the stdout line format.
-- Expected result: Each stdout line in out.txt has a single `[+hh:mm:ss]` prefix, as before. Stderr text is not duplicated onto stdout.
-- Evidence to capture: Contents of out.txt and err.txt.
+- Exact action: Run the fixture publish unattended (UNCLE_AUTO_PUBLISH=1) over a non-READY verdict with a stubbed handoff that succeeds, then render the finished block with CHANGE_PR_EXTRAS_REASON set to an unknown multi-line value.
+- Expected result: The reason is published-draft-unreviewed and stderr names the verdict and states draft; the unknown/malformed value renders as the publication-pending label and is never echoed verbatim.
+- Evidence to capture: Stderr line and finished-block output for both runs.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-205
+## resources
+
+### MC-300
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Start the TUI against a disposable project whose driver prints a line and then exits with a non-zero status. Watch the build window. Repeat with a driver that exits 0.
-- Expected result: For the non-zero exit the build window ends with `Driver exited with status N: <last non-empty output line>`, or `(no output)` if the driver printed nothing, with any secret redacted and no escape sequences. For exit 0 no failure line appears.
-- Evidence to capture: Screenshot or terminal capture of the build window in both cases.
+- Exact action: In a disposable temp git repo (signing disabled) with a bare local remote and a stub `gh` on PATH, run a finished change through change_pr_publish with a READY verdict and a matching tree; capture stderr and the finished-block text.
+- Expected result: Branch is pushed to the local remote, the stub gh pr create is invoked, the finished block shows the `published` label, and not `publication pending`.
+- Evidence to capture: Remote ref listing, stub gh call log, stderr and finished-block output.
 - Actual result: 
 - Status: NOT RUN
 
-## Resources
+### MC-301
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In a fixture repo, trigger each no-PR path in turn (validate failure, verdict not READY with override declined, issue_close_eligible failure, tree differing from attested, handoff exit nonzero); capture stderr and finished-block output for each.
+- Expected result: Each path creates no PR, prints exactly one new line `PR not created: <key>: <detail>` with a distinct key (validate-failed, verdict-not-ready, issue-not-eligible, tree-mismatch, handoff-failed), existing diagnostics remain, and the finished block shows the matching label; the driver exits 0.
+- Evidence to capture: Per-path stderr, stub gh log showing no pr create, finished-block text, exit status.
+- Actual result: 
+- Status: NOT RUN
 
 ### MC-302
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui` interactively in a terminal with a failing request (no redirection) and watch the display.
-- Expected result: The error text is visible in the terminal, stdout lines keep the `[+hh:mm:ss]` prefix, and stderr error lines are shown verbatim without that prefix.
-- Evidence to capture: Terminal transcript or screenshot.
+- Exact action: Run the unattended path (UNCLE_AUTO_PUBLISH=1) in a fixture with a NOT_READY verdict and a stubbed gh that reports success, then view stderr and the finished block.
+- Expected result: A draft PR is created, the stderr line reads `PR published as unreviewed draft: published-draft-unreviewed: verdict <class>`, and the finished block says draft, not ready or plain published.
+- Evidence to capture: stderr line, stub gh args showing draft flag, finished-block text.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-303
 - Required for acceptance: YES
-- Exclusive resources: file:/tmp/uncle-gate-err.txt
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui` against a driver run that stops at an approval gate, with `2>/tmp/uncle-gate-err.txt`, and check the exit status.
-- Expected result: Exit status is 3, the gate is named on stderr, and gate behavior and stdout format are unchanged from before.
-- Evidence to capture: Exit status, stderr file, stdout excerpt.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-304
-- Required for acceptance: YES
-- Exclusive resources: browser:system
-- Depends on: none
-- Exact action: In the TUI, start a build whose driver fails with a non-zero exit, and observe the build window after it ends.
-- Expected result: The build window ends with a line `Driver exited with status N: <last non-empty output line>` with secrets redacted and no escape sequences; a successful run adds no such line.
-- Evidence to capture: Screenshot or captured build-window text of the failure line.
+- Exact action: Make the stub engine and gh emit a canary token and a credentialed URL (https://user:SECRET@host/repo) during a failing handoff, then inspect the `PR not created:` line and the finished block by eye.
+- Expected result: Neither the canary token, the credentialed URL, nor any gh/engine output appears in the reason line or the finished block; only the key, a static message and the numeric exit code.
+- Evidence to capture: Captured stderr and finished block with the canary searched for visually.
 - Actual result: 
 - Status: NOT RUN
 
 ## Regressions
 
+### MC-401
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In a disposable fixture repo (signing disabled, local bare remote, gh stubbed on PATH) with a READY verdict and an attested tree, run the finished-run publish path in attended mode and note the finished block and stderr.
+- Expected result: Handoff runs (push and PR create via the stubbed gh), the finished block shows the 'published' label rather than 'publication pending', and no 'PR not created:' line appears.
+- Evidence to capture: Terminal transcript of stdout and stderr, the stubbed gh call log, and the finished block text.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-402
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In a fixture repo, run the unattended publish path (UNCLE_AUTO_PUBLISH=1, origin recorded, CLOSE_ISSUE=1) twice: once with a READY verdict and once with a NOT_READY verdict. Record stdout, stderr and the finished block each time.
+- Expected result: Both runs publish without opening a dialog. The READY run reports 'published'. The NOT_READY run creates a draft and reports published-draft-unreviewed, with a stderr line naming the verdict and saying it is an unreviewed draft. Neither run reports 'publication pending'.
+- Evidence to capture: Transcripts of both runs, the stubbed gh call log showing draft vs ready, and the finished block text.
+- Actual result: 
+- Status: NOT RUN
+
 ### MC-403
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `--noui` against a driver that prints an attended prompt without a trailing newline on stdout while also writing stderr noise, observing the terminal live.
-- Expected result: The stdout prompt appears promptly and the gate behaves as before; stderr noise does not trigger or delay the gate.
-- Evidence to capture: Terminal transcript showing prompt timing and gate outcome.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-404
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Invoke the launcher refusals under `--noui` (for example with a missing or invalid argument) with `2>err.txt`.
-- Expected result: The refusal message is in err.txt and the exit status is 2, unchanged from prior behavior.
-- Evidence to capture: Exit code and err.txt contents.
+- Exact action: In a fixture repo with a non-READY verdict, run attended publish and decline the override prompt. Then repeat with a modified tracked file so the tree differs from the attested tree.
+- Expected result: Neither run pushes or creates a PR; the gh stub is never called for PR creation. Each prints exactly one new 'PR not created: <key>: <detail>' stderr line (verdict-not-ready, then tree-mismatch) alongside the existing 'PR pending:' and 'Publish refused' messages, which still appear. The driver still exits 0.
+- Evidence to capture: Stderr and stdout transcripts for both runs, the gh stub call log (empty for PR creation), and the exit status.
 - Actual result: 
 - Status: NOT RUN
 
@@ -172,9 +129,19 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `--noui` with a driver that emits a secret, ANSI escape codes, and an unterminated last line on stderr; capture stderr to a file.
-- Expected result: The file has no unredacted secret and no escape sequences, and the unterminated last line is present, redacted.
-- Evidence to capture: Contents of the stderr file (hex or cat -v view).
+- Exact action: In a fixture repo, make the stubbed gh or the git push fail so that handoff exits nonzero (once by declining consent, once by a push failure). Then run a rerun case where the PR was already created and handoff exits 0 with the journal phase 'created'.
+- Expected result: Nonzero handoff runs report handoff-failed, and the stderr line includes the exit code. The already-created rerun reports published. In every case the driver still exits 0.
+- Evidence to capture: Stderr transcripts and finished blocks for each scenario, plus the driver exit status.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-406
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Run the headless path (no TTY, no completed signed commit) in a fixture repo. Then run it with a completed signed commit present and a publish that sets a reason.
+- Expected result: With no completed commit, the output says 'PR handoff disabled or unattended' and the reason is handoff-disabled, with no PR created. With a completed commit, the reason set by publish survives and is not overwritten with publication-pending.
+- Evidence to capture: Stdout and stderr transcripts and the finished block text for both runs.
 - Actual result: 
 - Status: NOT RUN
 
@@ -182,8 +149,8 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Start a `--noui` run and interrupt it with Ctrl-C (SIGINT) while the driver is writing to stderr; afterwards check for leftover driver processes.
-- Expected result: Exit status is 130, all stderr output written before interrupt is present before a single status line, and no descendant processes survive.
-- Evidence to capture: Exit code, stderr contents, process listing after exit.
+- Exact action: Run a no-PR failure case and a handoff-failure case in a fixture whose stub remote URL contains a canary token (https://user:CANARY-TOKEN@example.invalid/repo.git) and where the stubbed gh prints CANARY-TOKEN on failure. Inspect the full stderr and finished block by eye.
+- Expected result: The 'PR not created:' line holds only the reason key, a static message, and the numeric exit code where applicable. The canary token, the credentialed URL and any gh output do not appear in it or in the finished block.
+- Evidence to capture: Full stderr and finished-block transcripts with a search for CANARY-TOKEN showing no match in the reason line or finished block.
 - Actual result: 
 - Status: NOT RUN

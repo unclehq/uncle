@@ -1648,6 +1648,14 @@ def handoff(j):
 def main():
     action = sys.argv[1]
     if git('rev-parse', '--show-prefix'):
+        # The project is a subdirectory of a larger repository (it has no .git
+        # of its own). Branch and PR binding need the worktree root, so the
+        # run proceeds without a PR instead of failing before any stage runs.
+        if action in ('start', 'freeze', 'bind'):
+            if action == 'start':
+                print('PR binding skipped: the project is a subdirectory of a larger '
+                      'Git repository, so no pull request will be created.', flush=True)
+            return
         raise ValueError('PR binding requires the Git worktree root.')
     restored = restore_unborn_head()
     if restored:

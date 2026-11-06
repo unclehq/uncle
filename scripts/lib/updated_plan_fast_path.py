@@ -30,7 +30,36 @@ def protected_paths(plan):
             paths = line.split(':', 1)[1].strip()
             if paths:
                 return paths
+    paths = _section_paths(plan.get('narrative', ''))
+    if paths:
+        return paths
     raise ValueError('project plan has no protected verification paths to preserve')
+
+
+_PATHS_HEADING = re.compile(r'^#{1,6}\s+.*\bprotected\b.*\bpaths?\b', re.I)
+_ANY_HEADING = re.compile(r'^#{1,6}\s')
+
+
+def _section_paths(narrative):
+    """Paths listed under the plan's own "Protected verification paths" heading, as bullets or one fenced block.
+
+    The project-plan prompt asks for that section but not for the dedicated field, so a plan that followed it exactly
+    still carried the list only here; ignoring it sent every clean review through a model call to copy the plan."""
+    found, inside, fenced = [], False, False
+    for line in (narrative or '').splitlines():
+        stripped = line.strip()
+        if not inside:
+            inside = bool(_PATHS_HEADING.match(stripped))
+            continue
+        if stripped.startswith('```'):
+            fenced = not fenced
+            continue
+        if not fenced and _ANY_HEADING.match(stripped):
+            break
+        text = re.sub(r'^[-*+]\s+', '', stripped).strip('`').strip()
+        if text and not text.startswith('#') and ' ' not in text:
+            found.append(text)
+    return '\n'.join(dict.fromkeys(found))
 
 
 # Older approved plans predate the dedicated protected-paths field.  These are

@@ -32,7 +32,7 @@ try:
 except ImportError:  # Windows has no curses in the stdlib
     sys.stderr.write(
         "uncle: this screen needs curses.\n"
-        "  Windows: pip install windows-curses\n"
+        "  Windows: " + sys.executable + " -m pip install windows-curses\n"
         "  Linux:   install your distribution's python3 curses package\n"
         "The line-based menu in `uncle` is used instead.\n")
     raise SystemExit(1)

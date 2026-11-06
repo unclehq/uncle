@@ -25,8 +25,9 @@
         "if ($LASTEXITCODE -ne 0) { throw 'Failed to create Uncle Python environment.' }",
         "& \"$dir\\venv\\Scripts\\python.exe\" -m pip install 'pytest>=8,<10' 'pytest-xdist==3.8.0'",
         "if ($LASTEXITCODE -ne 0) { throw 'Failed to install Uncle Python dependencies.' }",
-        "& \"$dir\\venv\\Scripts\\python.exe\" -m pip install windows-curses",
-        "if ($LASTEXITCODE -ne 0) { Write-Warning 'windows-curses has no build for this Python version; the full-screen UI is unavailable until one exists.' }",
+        "& \"$dir\\venv\\Scripts\\python.exe\" -m pip install --upgrade windows-curses",
+        "& \"$dir\\venv\\Scripts\\python.exe\" -c 'import curses'",
+        "if ($LASTEXITCODE -ne 0) { Write-Warning 'windows-curses is not importable in Uncle''s Python environment (no build for this Python version?). The full-screen UI is unavailable; the launcher retries on next start.' }",
         "$global:LASTEXITCODE = 0",
         "& \"$dir\\venv\\Scripts\\python.exe\" -c 'import pytest, xdist'",
         "if ($LASTEXITCODE -ne 0) { throw 'Uncle pytest-xdist verification failed.' }"

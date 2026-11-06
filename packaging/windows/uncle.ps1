@@ -34,6 +34,15 @@ foreach ($candidate in $pythonCandidates) {
 if (!$bash -or !(Test-Path $bash) -or !$python) {
     throw 'Install Git for Windows and Python 3.9+ on PATH (or scoop install git python). Disable Microsoft Store Python aliases if they shadow Python.'
 }
+# The full-screen UI needs curses, which Windows Python lacks. Repair it in the
+# interpreter Uncle will actually run, once, so a Python chosen differently from
+# the one the user ran pip with (or an install made before this was handled)
+# still ends up with a working UI. Only Uncle's private venv is modified.
+& $python -c 'import curses' 2>$null
+if ($LASTEXITCODE -ne 0 -and ($python -like (Join-Path $root 'venv\*'))) {
+    Write-Host 'uncle: installing windows-curses into its Python environment...'
+    & $python -m pip install --quiet --disable-pip-version-check windows-curses 2>&1 | Out-Null
+}
 $pythonRoot = Split-Path $python -Parent
 $oldPath = $env:PATH
 $oldPython = $env:UNCLE_WINDOWS_PYTHON

@@ -5474,6 +5474,28 @@ while true; do
             # Normally started when planning began; a run resumed here starts
             # it now, so the review stages are not minutes of nothing on screen.
             preview_build_start
+            skipped_marker="$STATE_DIR/review-skipped"
+            review_json="$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"
+            # A human decline of a skipped review forces a full panel review, never a re-skip.
+            if [[ -f "$STATE_DIR/review-skip-declined" ]]; then
+                rm -f "$STATE_DIR/review-skip-declined" "$skipped_marker"
+                if [[ -s "$review_json" ]] && grep -q 'skipped: class' "$review_json" 2>/dev/null; then
+                    rm -f "$review_json" .uncle/docs/ADVERSARIAL_REVIEW.md
+                fi
+            elif change_class_review_skipped .uncle/docs/PROJECT_PLAN.md \
+                    && { [[ ! -s "$review_json" ]] || grep -q 'skipped: class' "$review_json" 2>/dev/null; } \
+                    && python3 -B "$CHANGE_CLASS_PY" skip-review app . .uncle/docs/PROJECT_PLAN.md; then
+                python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
+                : > "$skipped_marker"
+                echo "Adversarial review $(python3 -B -c 'import json,sys; print(json.load(open(sys.argv[1])).get("overall_assessment",""))' "$review_json")"
+                set_state VALIDATE_ADVERSARIAL_REVIEW
+                continue
+            fi
+            # Full review: drop any stale stub and marker first; never overwrite a real review.
+            rm -f "$skipped_marker"
+            if [[ -s "$review_json" ]] && grep -q 'skipped: class' "$review_json" 2>/dev/null; then
+                rm -f "$review_json" .uncle/docs/ADVERSARIAL_REVIEW.md
+            fi
             run_gated_stage ADVERSARIAL_REVIEW \
                 .uncle/docs/PROJECT_PLAN.md \
                 .uncle/docs/ADVERSARIAL_REVIEW.md

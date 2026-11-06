@@ -52,7 +52,7 @@ def isolate_git():
     suite can reach a real signer or key even if a fixture forgets a flag."""
     if 'GIT_CONFIG_GLOBAL' not in os.environ:
         fd, path = tempfile.mkstemp(prefix='uncle-shell-tests-gitconfig-')
-        os.write(fd, b'[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[user]\n\tname = Fixture\n\temail = fixture@example.test\n')
+        os.write(fd, b'[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[user]\n\tname = Fixture\n\temail = me@brian.biz\n')
         os.close(fd)
         os.environ['GIT_CONFIG_GLOBAL'] = path
     os.environ.setdefault('GIT_CONFIG_NOSYSTEM', '1')

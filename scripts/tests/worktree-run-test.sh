@@ -282,7 +282,7 @@ DRV
     g -C "$PROJ" config commit.gpgsign false
     g -C "$PROJ" config tag.gpgsign false
     g -C "$PROJ" config user.name Fixture
-    g -C "$PROJ" config user.email fixture@example.test
+    g -C "$PROJ" config user.email me@brian.biz
     g -C "$PROJ" remote add origin https://github.com/owner/repo.git
     echo "hello" > "$PROJ/hello.txt"
     # Matches what _ensure_uncle_gitignored (uncle_tui.py) writes on a

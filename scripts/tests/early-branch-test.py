@@ -88,7 +88,7 @@ class EarlyBranchFixture(unittest.TestCase):
         subprocess.run([REAL_GIT, 'init', '--bare', '-q', str(self.bare)], check=True, env=self.env)
         self.git('init', '-q', '-b', 'main')
         self.git('config', 'user.name', 'Fixture')
-        self.git('config', 'user.email', 'fixture@example.test')
+        self.git('config', 'user.email', 'me@brian.biz')
         self.git('config', 'commit.gpgsign', 'false')
         self.git('config', 'tag.gpgsign', 'false')
         (self.repo / '.gitignore').write_text('.uncle/workflow/\n')

@@ -1,128 +1,101 @@
-# Change Plan (Issue 168)
+# Change Plan: Issue 168
 
-Seeded from [unclehq/uncle#168](https://github.com/unclehq/uncle/issues/168).
+Omitted sections: Schema, Migration, Concurrency, Feature flag, Observability (none apply)
 
 Issue 168
 
-Omitted sections: Schema, Migration, Feature flag, Concurrency, Observability (none apply)
+Seeded from [unclehq/uncle#168](https://github.com/unclehq/uncle/issues/168).
 
-## 1. Selected approach
+## 1. Selected technical approach
+The feature already exists in the tree (`Session.slash()`, uncle_repl.py:216-226) with tests. Plan: confirm it against AC-1..AC-5 via the driver's verification commands; make no source edit unless a gap is found. Decision D-1: leave `HELP` unchanged (the request says only "if useful"; HELP is pinned by tests and already lists full names).
 
-In `slash()` of `scripts/lib/uncle_repl.py`, after computing `name` (already lowercased by the existing `parts[0][1:].lower()`, so `/Q` behaves as `/q`), and BEFORE the existing quit/exit branch, if `len(name) == 1` and `name` is an ASCII letter a-z: collect candidates whose names start with it. Decision D1: the candidate set is the keys of `USAGE` in definition order followed by `quit` and `exit`, de-duplicated, so the set is fixed whether or not USAGE contains those two (no separate alias table). One match: set `name` to it, so /q -> quit, /e -> exit, /h -> help, /m -> mode, /i -> issue, /c -> clear, /t -> triage, /d -> do, /r -> resume, and all existing branches, arg validation and quit/exit handling then apply unchanged. Several: `self.refuse` with exactly `ambiguous command: /<c> (matches: /<a>, /<b>)`, e.g. `ambiguous command: /s (matches: /stop, /settings)`: matches are prefixed with `/`, listed in candidate order (USAGE definition order, then quit/exit) and joined by `, `; return None (rc 2). None: fall through to the existing unknown-command refusal (rc 2). A bare `/` (empty name) and any one-character name that is not ASCII a-z (digits, punctuation, control, non-ASCII or multibyte characters) or matches no command (e.g. `/x`, `/?`, `/1`) is never expanded and takes the unknown-command refusal unchanged; nothing is executed.
+## 2-3. Alternatives and rationale
+Re-implementing or refactoring the block was rejected: it duplicates working, tested code and widens the diff.
 
-Ordering: ambiguity is decided on the name alone, before any argument validation, so `/s foo` -> ambiguity refusal (rc 2). A uniquely expanded name then runs the existing branches, so `/q x` prints `usage: /quit` via complain and does not quit, `/c x`, `/r x`, `/t x` print `usage: /clear`, `usage: /resume`, `usage: /triage`, while a bare `/q` quits.
+## 4. Components to modify
 
-Dispatch: shortcut-invoked commands go through the same `self.execute` path and attended-mode behavior as the full names (/c -> clear_build, /r -> resume_build, /i N -> github_issue), with the original typed line passed unchanged to execute; /t and /d print the TUI-needed message.
-
-Decision D2: HELP is unchanged (no one-letter shortcut mention is added) and no test asserts that HELP mentions shortcuts; the existing HELP assertions and the unknown-command message, which prints `HELP.strip().splitlines()[-1]`, are unaffected.
-
-Decision D3: tests pin the fixed letter-to-command map (h->help, m->mode, i->issue, c->clear, t->triage, d->do, e->exit, r->resume, q->quit, and /s ambiguous between settings and stop), so any new USAGE key that makes a shortcut ambiguous or changes its target fails the suite.
-
-Ordering and validation (AR-013): one-character expansion runs first, immediately after `name` is lowercased and before the existing quit/exit branch. `name` is then rebound to the full command, so `/q foo` and `/e foo` hit the existing 'args present => usage error' check (`self.complain(USAGE[name])`) and do not quit; bare `/q` and `/e` return "quit". Expansion never bypasses argument validation.
-
-Session flow and case (AR-009, AR-010): the ambiguous refusal is emitted through `self.refuse`, exactly as the unknown-command refusal is, so it uses the same stream, rc 2, and session continuation (the REPL keeps reading subsequent lines, nothing is executed). Matching is case-insensitive because it runs on the already-lowercased `name`, so `/Q` expands like `/q`. A bare `/` (empty name) and any single character that matches no command (for example `/x`, `/1`, `/?`) keep the existing unknown-command refusal, rc 2, unchanged.
-
-Output safety (AR-014): the ambiguous message is emitted only via `self.refuse` (which writes through the escape-filtered `Out`), and is built only when the typed name is a single non-control character, validated before interpolation; it interpolates only that character and the candidate command names taken from USAGE. Any other typed text, control or multibyte characters included, takes the existing unknown-command refusal path, which also goes through `self.refuse`. Nothing is written outside `self.refuse`/`self.say`/`self.complain`.
-
-## 2-3. Alternatives
-A separate alias table: duplicates names and can drift. Rejected; deriving from USAGE is smaller.
-
-## 4. Components
-See table.
+None required. Candidate only: `scripts/tests/repl-session-test.py` if a requested case (`/q` quits, `/s` ambiguous, `/qu` refused, `/s extra` still ambiguous, `/q extra` gives /quit usage and does not quit) were found missing; the basic cases are present at :145-160.
 
 ## 5. Not to modify
-TUI slash handling, other scripts, USAGE contents.
 
-## 8. Interface
-No API change; stdin/stdout behavior only.
+TUI slash handling, shell drivers, HELP, other tests. Non-goal: confirmation prompts for single-letter expansions of /c, /d, /r, /e; they run identically to the full command (decision accepted).
+
+## 6-9. Data flow, state, interface, schema
+No change.
 
 ## 10. Compatibility
+Full names and args unchanged (SB-6).
 
-Full names and unmatched refusals unchanged. Single-character names only. A usage error from an expanded command behaves exactly as the full-name command (same stream, same rc, same usage text, e.g. `/i` prints `usage: /issue`). The original typed line (e.g. `/i 12`) is passed unchanged to `self.execute`; only the local `name` is rewritten. Any HELP change only appends a one-letter shortcut note and keeps existing assertions valid; the last line of HELP stays the Commands line, since the unknown-command refusal prints it.
+## 12. Error and recovery
+Ambiguous and unmatched cases refuse with rc 2 and the session continues.
 
-## 12. Error behavior
-Ambiguous and unmatched: refuse, rc 2, nothing executed.
-
-## 14. Rollback
-Revert the two files; no state or persistence involved.
+## 14. Rollback plan
+No new edits; to undo the feature revert the changes of commit 73c9097 in `scripts/lib/uncle_repl.py` and `scripts/tests/repl-session-test.py`.
 
 ## 16-17. Test strategy
 
-Add to `repl-session-test.py` (no existing test changed; the `/frob` check is the regression guard). Checks: (1) Map pin: `/h`,`/m`,`/i`,`/c`,`/t`,`/d`,`/e`,`/r`,`/q` each resolve to help, mode, issue, clear, triage, do, exit, resume, quit, and `/s` is ambiguous, so any USAGE change altering the map fails. (2) `/q` and `/e` each quit, with a following line NOT processed; `/e` is neither ambiguous nor unknown; `/Q` quits. (3) `/q now`, `/e foo`, `/q foo` print `usage: /quit` (and exit usage for /e), do not quit, and a following line IS processed. (4) `/s`: exact stderr `ambiguous command: /s (matches: /stop, /settings)` (USAGE insertion order, `, ` joined), not containing `unknown command`, rc 2, a following valid line still processed, same stream as the `/frob` refusal; `/s foo` gives the same ambiguity refusal. (5) `/qu`, bare `/`, `/?`, `/1`, and a non-ASCII single character give `unknown command` rc 2 with no crash and no raw ESC bytes in output; the ambiguity and unknown messages contain no raw ESC bytes. The unknown-command output still ends with the Commands line (HELP is unchanged and asserted byte-identical). (6) `/m unattended`, `/h`, `/i` without arg prints `usage: /issue`; paired `/i` vs `/issue` assert identical stderr and rc. (7) `/q x`, `/c x`, `/r x`, `/t x` emit the same usage text and rc as their full-name forms. (8) `/t` and `/d` print the full-name `needs the TUI` message. (9) With a stubbed execute, `/c` and `/clear` produce identical payloads (clear_build), `/r` and `/resume` identical payloads (resume_build), and the original typed line (e.g. `/r`, `/i 12`) is passed unchanged.
+Existing `repl-session-test.py` covers SB-1..SB-5 (including a-z map pin). Run `bash scripts/run-shell-tests.sh` and `bash scripts/run-python-tests.sh` (baseline group `1 2`). No test is expected to fail before the change since the feature is present; this is not a bug fix. Because there is no implementation diff, verification must also include a defect-injection check: temporarily mutate the expansion in `scripts/lib/uncle_repl.py` (e.g. remove the `len(hits) == 1` branch) and confirm at least one `repl-session-test.py` case fails; record the result in the test report and restore the file byte-for-byte afterward (the mutation is never left in the tree). Also verify that the unknown-command refusal echoing the user-typed name goes only through the Out escape filter, with a test that an escape sequence in the name is filtered.
 
 ## 18. Manual verification
-Run `uncle --noui` and type `/q`, `/s`.
+Run `uncle --noui`, type `/q` (exits), `/s` (refused, lists matches), `/qu` (unknown).
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/lib/uncle_repl.py` | one-char prefix expansion in slash(); optional HELP tweak | feature | Low: quit/exit/unknown paths | repl-session-test.py |
-| `scripts/tests/repl-session-test.py` | add new checks | AC-1..4 | Low | self |
+| `scripts/lib/uncle_repl.py` | None (already implemented) | Feature present | Low | repl-session-test.py |
+| `scripts/tests/repl-session-test.py` | None unless gap found | Cases present | Low | self |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1: /q quits the session; /q with arguments (e.g. /q now) prints usage for /quit and does not quit. | S1 | V2 | uncle_repl.py | repl-session-test.py | /q |
-| AC-2: fixed unique one-letter shortcuts h,m,i,c,t,d,e,r (and q) resolve to help, mode, issue, clear, triage, do, exit, resume, quit; a test asserts this complete map so USAGE changes that alter it fail the suite. Case-insensitive (/Q = /q); non-ASCII-letter single characters are unknown commands. | S2, S5, S6 | V2 | uncle_repl.py | repl-session-test.py | /m unattended |
-| AC-3: an ambiguous one-character command such as `/s` is refused via the refusal path with rc 2 and nothing executed; the message is `ambiguous command: /<c> (matches: /<a>, /<b>)`, listing every candidate (USAGE keys plus quit and exit, de-duplicated) in USAGE insertion order with quit/exit appended last, each prefixed with `/` and joined by `, `. | S3 | V1, V2 | uncle_repl.py | repl-session-test.py | /s |
-| AC-4 | S4 | V1, V2 | uncle_repl.py | repl-session-test.py | /qu |
-| AC-5 | S7 | V1 | both | baseline commands | none |
-
-## Restrictions
-
-| ID | Source | Reqs | Property | Mechanism | Phase |
-|---|---|---|---|---|---|
-| R-1 | USER (CHANGE_REQUEST Details) | AC-4 | Only one-char names expand | `len(name)==1` guard | CODING |
-| R-2 | USER | AC-3 | Ambiguous refused with rc 2 via self.refuse, message exactly `ambiguous command: /s (matches: /settings, /stop)`, candidates sorted alphabetically, comma-space separated, each prefixed with /; no unfiltered terminal escapes in the message | `self.refuse` only (escape-filtered Out); message built only for a validated single non-control character, interpolating just that character and USAGE-derived names | CODING |
-| R-3 | USER | AC-5 | TUI untouched | no edits outside table | CODING |
-
-Feasibility: inspected uncle_repl.py:212-223 (`refuse` already used for rc 2). No external capabilities needed (CAP: none).
+| AC-1: bare `/q` (or `/e`) expands to /quit (/exit) and quits the session with process exit status 0. Name matching is case-insensitive via lower() before the a-z check, so `/Q` and `/H` expand identically to `/q` and `/h`. Expansion occurs before argument checks, so `/q <args>` or `/e <args>` expands to /quit (/exit), prints the usage complaint `usage: /quit` (or `usage: /exit`), does NOT quit, sets last-command status 2, and the session continues. | SB-1 | SI-1 | uncle_repl.py slash | repl-session-test /q, repl-session-test /Q uppercase expands like /q and quits (add if missing), repl-session-test `/q extra` prints usage, does not quit, sets status 2 (add if missing) | `/q` exits |
+| AC-2: Candidates are exactly the USAGE keys plus quit and exit (currently help, mode, issue, stop, resume, clear, triage, do, settings, quit, exit). A unique one-letter prefix expands to the full command: a one-character name in a-z (after lowercasing, so /Q behaves like /q) expands when exactly one candidate starts with it. Any other single character (digits, punctuation such as /1 or /?) is never expanded and is an unknown command with rc 2. Single-letter expansion of /c (clear), /d (do), /r (resume) and /e (exit) runs identically to the full command with no extra confirmation; this is accepted, as it is the purpose of the feature. Adding a command requires updating the a-z map pin test, which asserts the full letter-to-command table. | SB-2, SB-3 | SI-1 | uncle_repl.py slash | AC-2, map pin: asserts the full letter-to-command table; candidates are exactly USAGE keys plus quit and exit, so adding any command fails the pin until it is updated | /m unattended |
+| AC-3: an ambiguous one-character name such as `/s` (or `/S`, since names are case-insensitive) is refused regardless of any arguments; ambiguity is checked before arguments are examined. Refusal sets the last-command status to 2 (rc 2) without ending the session; rc elsewhere means the process exit status at session end. The message lists matches sorted alphabetically, exactly `ambiguous command: /s (matches: /settings, /stop)`. The candidate set is exactly help, quit, exit, mode, issue, stop, resume, clear, triage, do, settings (USAGE keys plus quit and exit); a test pins the full letter-to-command table, so adding or removing a command fails it until the pin is updated. | SB-4 | SI-2 | uncle_repl.py slash | AC-3: asserts the exact message `ambiguous command: /s (matches: /settings, /stop)` (matches sorted alphabetically) on the refuse stream, with refusal status 2, /S refused as ambiguous, /s with arguments is refused as ambiguous, a-z map pin asserts full letter-to-command table and the exact candidate set | /s |
+| AC-4: Unmatched letters, multi-letter partial names such as /qu, `/`, `/?` and any one-character name outside a-z (digits and punctuation such as /1 or /?) are unknown commands, refused with rc 2, and never expand. Uppercase one-character names are lowered before matching, so /S is refused as ambiguous exactly like /s. Expansion applies before argument checks: /q extra (and /e foo) expands to /quit (/exit), prints the usage complaint with rc 2, does not quit, and the session continues. The unknown-command refusal echoes the user-typed name only through the Out escape filter, so control or escape sequences in the name are never emitted raw. | SB-5 | SI-2, SI-3 | uncle_repl.py slash | AC-4, repl-session-test: /1 and /? refused as unknown command, no expansion, repl-session-test: /q extra expands to /quit, usage complaint rc 2, session continues, repl-session-test: uppercase /S refused as ambiguous like /s, unknown-command refusal with an escape sequence in the name is filtered (asserted in repl-session-test.py; add if missing) | /qu |
+| AC-5 | SB-6 | all | both runners | run-shell/python-tests | n/a |
 
 ## Implementation sequence
 
-1. Implement prefix expansion in slash() restricted to a single ASCII a-z character (after lowercasing; /Q expands like /q; anything else takes the unknown-command refusal), and optional HELP tweak. Candidate set = USAGE keys plus quit and exit (de-duplicated). Expansion runs immediately after lowercasing the name and BEFORE the quit/exit branch, so /q -> quit and /e -> exit; after expansion all existing branches run unchanged, so /q foo or /e foo prints USAGE['quit'] / USAGE['exit'] via complain and does not quit. Rewrite only the local `name`; pass the original `line` unchanged to `self.execute`, keeping execute-type shortcuts on the same self.execute path with the same attended-mode behavior. Usage errors from expanded commands go through the same branches as full names (rc unchanged). The ambiguous refusal is emitted only via `self.refuse`, after validating that the typed name is a single non-control character; it starts `ambiguous command: /<c>` and lists candidates in USAGE insertion order joined by `, `. Any HELP tweak must only append a shortcut note on or before the Commands line and keep the last HELP line as the Commands line. Tests (step 2) must pin the fixed letter-to-command map per D3 and the /s ambiguity.
-   Owns: `scripts/lib/uncle_repl.py`
-2. **Pin argument and case edge cases in tests** — Add checks in repl-session-test.py: `/s foo` -> ambiguity refusal rc 2; `/q now` -> usage for /quit and session continues; `/Q` quits; bare `/` and `/?` -> unknown command rc 2.
-   Owns: `scripts/tests/repl-session-test.py`
-3. Add tests for AC-1..4 (independent of step 1's file; written against the specified behavior).
-   
-   Steps are independent and can proceed in parallel.
-   Owns: `scripts/tests/repl-session-test.py`
+1. Confirm the existing implementation and tests satisfy AC-1..AC-4 by reading uncle_repl.py:212-234 and repl-session-test.py:145-160, then run both suites. Verify: (a) the a-z map pin asserts the full letter-to-command table, with candidates exactly USAGE keys (help, mode, issue, stop, resume, clear, triage, do, settings) plus quit and exit; (b) the AC-3 test asserts the exact sorted message `ambiguous command: /s (matches: /settings, /stop)` on the refuse stream with status 2, and the refusal path writes through the Out escape filter with a test covering it; (c) case-insensitive cases exist (`/Q` quits like `/q`, `/S` is ambiguous); (d) argument-bearing cases are asserted: `/q extra` and `/e extra` print usage, do not quit, set status 2 and do not end the session, and `/s extra` is refused as ambiguous; (e) one-character names outside a-z (e.g. `/1`, `/?`) are unknown commands (rc 2) and never expand. Add any missing case to repl-session-test.py and record it as a closed gap. Run the defect-injection check: temporarily remove the `len(hits) == 1` expansion branch, confirm at least one repl-session-test.py case fails, record the result, then restore the file exactly. Gap criterion: a green run with all cases present means no diff; if either suite regresses against baseline, fix it in uncle_repl.py or the test and record the fix as a deviation in IMPLEMENTATION_NOTES.md.
+   Owns: `scripts/lib/uncle_repl.py`, `scripts/tests/repl-session-test.py`
+2. **Conditional gap fix** — Only if step 1 found a gap or either suite regressed against baseline: make the minimal fix or add the missing case in scripts/lib/uncle_repl.py or scripts/tests/repl-session-test.py, and record it as a deviation in IMPLEMENTATION_NOTES.md. Pass criterion: both `bash scripts/run-shell-tests.sh` and `bash scripts/run-python-tests.sh` exit 0 and match baseline. If no gap, make no edit.
+   Owns: `scripts/lib/uncle_repl.py`, `scripts/tests/repl-session-test.py`
+   Depends on: 1
+3. **Defect-injection check** — Temporarily remove the `len(hits) == 1` expansion branch in scripts/lib/uncle_repl.py, run repl-session-test.py and show at least one case fails, then restore the file byte-for-byte and confirm via hash. Record the result in .uncle/docs/CHANGE_TEST_REPORT.md.
+   Owns: `scripts/lib/uncle_repl.py`, `.uncle/docs/CHANGE_TEST_REPORT.md`
+   Depends on: 2
+4. Record in `.uncle/docs/IMPLEMENTATION_NOTES.md` that no further change was needed (or the gap closed).
+   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
+   Depends on: 1, 2, 3
 
-## Scope cuts
+## Scope cuts under time pressure
+Nothing to cut; HELP edit is already excluded.
 
-No HELP change is planned. If time expires, cut the extra argument-handling tests for `/c`, `/r`, `/t` and `/d` first; keep AC-1..4 core tests.
-
-## Risks
-
-quit and exit are handled before the USAGE lookup and may not be USAGE keys; the candidate set is therefore always USAGE keys plus quit and exit, de-duplicated, and expansion runs before the quit/exit branch. Ambiguous message wording must not contain the text `unknown command`.
+## Risks and unresolved questions
+- Risk: reviewer expects a diff; the feature predates this run (commit 73c9097). Decision D-2: verify, do not duplicate.
+- No blocking planning decisions.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | Code handles quit/exit before the USAGE lookup, so they may not be USAGE keys; the candidate set must be fixed, not conditional. | s1.1 and s16.1 now fix candidates as USAGE keys plus quit and exit (de-duplicated), expanded before the quit/exit branch. |
-| AR-002 | Accepted | Message order and format must be deterministic so tests are stable. | s1.1 fixes the ambiguous message format and USAGE-definition order (quit/exit appended last); AC-3 and R-2 agree. |
-| AR-003 | Accepted | Ordering of ambiguity versus argument validation was unspecified; settling it avoids divergent implementations. | s1.1 gains an ordering rule: ambiguity first, then expansion and existing arg validation (/q now -> usage, /s foo -> ambiguity). |
-| AR-004 | Accepted | slash() already lowercases the name; the plan must state case-insensitivity and the fall-through for empty or non-matching names. | s1.1 gains a rule: matching is on the lowercased name, /Q quits, bare / or any no-match character is refused as unknown command, rc 2. |
-| AR-005 | Accepted | Expansion precedes dispatch, so usage errors for shortcuts must match the full-name command exactly. | s6.1 (Compatibility) states usage errors from expanded commands behave identically to the full name, rc unchanged. |
-| AR-006 | Accepted | The line passed to execute should stay the original typed text, and a HELP edit must not break the unknown-command message. | s6.1 and step-1 state the original line is passed unchanged and any HELP change only appends a shortcut note, keeping the Commands line last. |
-| AR-007 | Accepted | Code handles quit/exit before the USAGE lookup, so the candidate set must be fixed rather than conditional. | Step 1 and Risks now fix candidates as USAGE keys plus quit and exit, with expansion before the quit/exit branch. |
-| AR-008 | Accepted | Expansion-then-existing-branches gives /q now the same usage error as /quit now; this needs to be explicit and traceable. | AC-1 and step 1 now specify that /q with args prints usage for /quit and does not quit. |
-| AR-009 | Accepted | Real gap: the plan did not state that the ambiguous refusal matches unknown-command session flow. | s1.1 now states the ambiguous refusal uses self.refuse, so same stream, rc 2 and session continuation as unknown command. |
-| AR-010 | Accepted | Real gap: case, bare slash and non-letter one-character names were unspecified. | s1.1 now states matching is case-insensitive after lowercasing, and bare / or unmatched single characters keep the unknown-command refusal. |
-| AR-011 | Accepted | The unknown-command refusal prints HELP's last line, so any HELP edit must keep the Commands line last. | Edit s1.1 D2 to say any shortcut note goes on or before the Commands line and the last HELP line stays the Commands line. |
-| AR-012 | Accepted | Candidate order and wording must be fixed so AC-3 and its test are deterministic. | Edit s1.1 and AC-3 to list candidates in USAGE insertion order joined by ', ', message starting 'ambiguous command: /<c>'. |
-| AR-013 | Accepted | Real ordering gap: quit/exit are handled before the USAGE lookup, so expansion must run first for /q foo to hit the usage check. | Add a block to s1 fixing order: expansion first, then existing quit/exit branch, so /q foo and /e foo print usage and do not quit. |
-| AR-014 | Accepted | Refusal text interpolates typed input; it must go only through self.refuse (Out escape filter) and only for a validated single character. | Add a block to s1 requiring emission only via self.refuse with a validated single non-control character, and tighten R-2's mechanism. |
-| AR-015 | Accepted | Real gap: the guard only checks length, so control/non-ASCII single characters and case behavior are unspecified. | s1.1 now states expansion applies only to a single ASCII a-z name after lowercasing (/Q expands like /q); others take the unknown-command refusal. |
-| AR-016 | Accepted | Dynamic derivation from USAGE means future keys could silently change shortcuts; a pinned map test catches that. | s1.1 (D3) and AC-2 now require tests asserting the fixed letter-to-command map and /s ambiguity; step-1 text notes it. |
-| AR-017 | Accepted | Real gap; shortcuts resolve to the full name, so they should share the full-name execute path and confirmation behavior. | Add to s1.1 that shortcut commands use the same self.execute path and attended-mode behavior, with the original line passed unchanged. |
-| AR-018 | Accepted | quit/exit are handled before the USAGE lookup and may not be USAGE keys, so the candidate set must be fixed, not conditional. | Edit s1.1 D1 so candidates are USAGE keys plus quit and exit (de-duplicated), expansion runs before the quit/exit branch, and update Risks s16. |
-| AR-019 | Accepted | A fixed message format makes AC-3 testable; sorted order is deterministic and independent of dict order. | s1.1 now fixes the message as `ambiguous command: /s (matches: /settings, /stop)`, sorted alphabetically, via self.refuse, rc 2; AC-3 and R-2 aligned. |
-| AR-020 | Accepted | name is already lowercased at line 214, so case-insensitivity and unmatched single characters just need to be stated. | s1.1 states expansion follows lowercasing (/Q quits) and any unmatched one-character name, including bare `/`, takes the unknown-command refusal, rc 2. |
-| AR-021 | Accepted | Expansion precedes dispatch, so argument handling and usage text are identical to full-name form; this needs stating and testing. | Added argument-handling rule to s1.1 and extra-arg tests (/q x, /c x, /r x, /t x) to s9.1. |
-| AR-022 | Accepted | Expected outputs for /t, /d, /c, /r are determinable from existing code and must be asserted. | s9.1 now asserts /t and /d TUI-needed messages and /c and /r invoking clear_build and resume_build. |
-| AR-023 | Accepted | An optional, untested HELP edit is ambiguous and could alter the unknown-command message, which prints HELP's last line; leaving HELP unchanged removes the ambiguity. | s1.1 D2 now states HELP is unchanged and no test asserts one-letter shortcuts in HELP; s15.1 no longer lists a HELP tweak as a cut. |
+| AR-001 | Accepted | Code derives candidates from USAGE plus quit/exit; the plan must state the exact set and pin it by test. | AC-3 requirement and tests state the exact candidate set; step-1 confirms the map pin covers it. |
+| AR-002 | Accepted | Code lowercases before the a-z check; case-insensitivity and non-letter refusal should be stated and tested. | AC-1 and AC-2 requirements state /Q expands like /q and non-letters never expand; step-1 verifies a test exists. |
+| AR-003 | Accepted | Code at uncle_repl.py:227-230 complains with usage and does not quit when /q or /e has args; the plan should state it. | AC-1 requirement/behaviors/tests state /q or /e with args prints usage: /quit (or /exit), does not quit, refusal status 2; step-1 checks it. |
+| AR-004 | Accepted | rc is ambiguous between session exit status and per-command status; defining both removes the conflict. | AC-3 requirement defines rc as the process exit status at session end and a refusal as setting last-command status 2 without ending the session. |
+| AR-005 | Accepted | Code uses sorted(hits); pinning exact message and order in AC-3 makes the behavior testable. | AC-3 requirement/tests now state the exact sorted message `ambiguous command: /s (matches: /settings, /stop)` with rc 2. |
+| AR-006 | Accepted | Code lowercases the name before the a-z check, so case-insensitivity is real behavior that needs a stated rule and test. | AC-1 and AC-3 now state /Q behaves as /q and /S is refused as ambiguous; step-1 requires a case test. |
+| AR-007 | Accepted | Code refuses ambiguity before args are examined, while /q extra expands then complains; the plan should state both. | AC-3 and AC-4 requirement text state args handling; s3.1 names test cases for ambiguous-with-args and /q extra. |
+| AR-008 | Accepted | Candidates are derived from USAGE plus quit/exit, so the plan must say so and require the a-z map pin to be updated when commands are added. | AC-2 requirement states candidate set rule; step-1 checks that the map pin covers every candidate. |
+| AR-009 | Accepted | Step 1 lacked a gap criterion and a rule for regressions when no diff is expected. | Step 1 now defines the gap criterion: green run means no diff; a regression is fixed and recorded as a deviation. |
+| AR-010 | Accepted | Non-letter single characters are not expanded by the a-z guard; the plan should state this and have it tested. | AC-4 requirement and tests now state that one-character names outside a-z are unknown commands (rc 2) and never expand. |
+| AR-011 | Accepted | Code lowercases the name and expands before the quit args check; the plan should state this so behavior is pinned. | AC-1 and AC-4 requirements and tests state case-insensitive expansion and that /q extra expands then refuses with usage rc 2 without quitting; step 1 checks it. |
+| AR-012 | Accepted | Silent expansion of /c, /d, /r, /e is the requested behavior; the risk is accepted and should be recorded. | AC-2 requirement records that single-letter expansion runs identically to the full command with no extra confirmation (accepted). |
+| AR-013 | Accepted | The unknown-command refusal echoes user-typed text; the plan should require it to go only through the Out escape filter and be verified. | AC-4 requirement and tests, and s9.1, now require escape-filtered refusal output with a test; step-1 checks it. |
+| AR-014 | Accepted | With no diff, the pre-existing tests are unproven to catch defects; a defect-injection check is needed. | s9.1 and step-1 require a temporary mutation (removing the len(hits)==1 branch) that must fail a repl-session-test.py case, recorded and reverted. |
+| AR-015 | Accepted | Code lowercases before the a-z check, so /Q expands; the plan was silent, so the behavior is now stated and pinned by a test. | AC-1 requirement and tests state /Q and /H expand like lowercase; step-1 confirms/adds a case-insensitive test. |
+| AR-016 | Accepted | After expansion /q or /e with args hits the usage complaint path and does not quit; the plan must state this and its status. | AC-1 states /q <args> and /e <args> print usage, do not quit, refused with status 2; step-1 verifies with a test. |
+| AR-017 | Accepted | Candidates come from USAGE keys plus quit/exit, so a new command could silently change uniqueness; the full-table pin is the right guard. | AC-2 tests and step-1 state the candidate rule and that the a-z map pin asserts the full letter-to-command table. |
+| AR-018 | Accepted | The sorted order and exact text are observable behavior and should be asserted, not only implied. | AC-3 tests and step-1 require asserting the exact ambiguous message on the refuse stream with status 2. |

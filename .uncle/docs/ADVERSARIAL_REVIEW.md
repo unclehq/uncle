@@ -1,184 +1,144 @@
-## AR-001: Plan leaves open whether quit/exit are USAGE keys, so /q and /e may not resolve.
+## AR-001: Spec/plan contradict the code on the candidate set.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1.1 D1 ('implementer confirms') and Risks s16; uncle_repl.py:216-221 handles quit/exit before the USAGE check.
-- Failure: Plan leaves open whether quit/exit are USAGE keys, so /q and /e may not resolve. Settle: 'The candidate set is USAGE keys plus quit and exit; /q -> quit, /e -> exit, /h -> help, /d -> do, /t -> triage.'
+- References: CHANGE_SPEC §4 lists 11 names; uncle_repl.py:217-220 derives cands from USAGE, so any future USAGE key silently changes expansion.
+- Failure: Spec/plan contradict the code on the candidate set. SB-4 and the ambiguity text assume `/s` matches only /settings and /stop. The code builds candidates from USAGE plus quit/exit, and the plan never says whether USAGE contains every command. Plan should say: 'The candidate set is exactly help, quit, exit, mode, issue, stop, resume, clear, triage, do, settings, and a test pins it.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Ambiguity message ordering and format are unspecified; the example '/stop, /settings' depends on dict order.
-
-- Severity: HIGH
-- References: CHANGE_PLAN s1.1 example message; AC-3 requires only that both names appear.
-- Failure: Ambiguity message ordering and format are unspecified; the example '/stop, /settings' depends on dict order. Settle: 'Matches are listed in USAGE definition order, comma-separated, each prefixed with /.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-003: Arguments combined with ambiguity or quit are unspecified (/s foo, /q now).
+## AR-002: Letter-only expansion is unspecified for uppercase and non-letter single characters.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 says existing branches apply but orders nothing for ambiguous input; uncle_repl.py:216-219.
-- Failure: Arguments combined with ambiguity or quit are unspecified (/s foo, /q now). Settle: 'Ambiguity is checked before argument validation; /q with args prints usage for /quit and does not quit; /s with args gives the ambiguity refusal.'
+- References: uncle_repl.py:214,216 lowercases before the a-z check; SI-1 says only 'a-z names expand'.
+- Failure: Letter-only expansion is unspecified for uppercase and non-letter single characters. Code lowercases first, so `/Q` expands, but AC-1..4 never state that; `/1` and `/?` fall through to unknown. Plan should say: '/Q expands the same as /q; non-letter single characters are never expanded.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Uppercase and empty or non-letter names are unspecified (/Q, bare /, /?).
+## AR-003: Expanded /q and /e with arguments is unspecified.
 
 - Severity: MEDIUM
-- References: uncle_repl.py:214 lowercases the name; plan guard is only len(name)==1; S4 lists /x only.
-- Failure: Uppercase and empty or non-letter names are unspecified (/Q, bare /, /?). Settle: 'Names are lowercased before matching so /Q quits; an empty name or a character matching no command is refused as unknown command, rc 2.'
+- References: uncle_repl.py:227-230 calls complain(USAGE[name]) and returns None; AC-1 covers only bare /q.
+- Failure: Expanded /q and /e with arguments is unspecified. After expansion `/q now` hits the quit-with-args path, which complains and does not quit, with an unstated rc. Plan should say: '/q or /e with any argument prints usage: /quit, does not quit, and exits rc 2.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Usage-error rc for expanded commands is unstated; the spec says 'usage error' for /i but 'rc 2' for refusals.
+## AR-004: Two statements conflict on rc.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC S6 vs Errors section; uncle_repl.py:218 uses complain, 222 uses refuse.
-- Failure: Usage-error rc for expanded commands is unstated; the spec says 'usage error' for /i but 'rc 2' for refusals. Settle: 'A usage error from an expanded command behaves exactly as the full-name command, rc unchanged.'
+- References: CHANGE_PLAN §12 says rc 2 and the session continues; CHANGE_SPEC AC-3 says exits rc 2.
+- Failure: Two statements conflict on rc. 'Ambiguous and unmatched cases refuse with rc 2 and the session continues' sits beside AC-1's 'quits the session with rc 0', and the rc for ordinary and error commands in an interactive session is undefined. Plan should say: 'rc is the process exit status at session end, and a refusal sets the last-command status to 2 without ending the session.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Echoed or logged line and HELP edit are unspecified.
+## AR-005: Ambiguous message ordering and the `/` and `/?` cases are underspecified.
 
 - Severity: LOW
-- References: uncle_repl.py:236-237 passes line to self.execute; CHANGE_PLAN D2 optional HELP tweak.
-- Failure: Echoed or logged line and HELP edit are unspecified. Settle: 'The original typed line is passed unchanged to execute; any HELP change only appends a one-letter shortcut note and keeps existing assertions valid.'
+- References: uncle_repl.py:225 uses sorted(hits); CHANGE_SPEC §8 gives the string but AC-3 does not.
+- Failure: Ambiguous message ordering and the `/` and `/?` cases are underspecified. Matches are sorted alphabetically, while AC-3 only says 'names /settings and /stop'. Plan should say: 'The ambiguous message lists matches sorted alphabetically, exactly `ambiguous command: /s (matches: /settings, /stop)`.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: quit/exit are handled before the USAGE lookup and may not be USAGE keys; the plan leaves the candidate set conditional.
-
-- Severity: HIGH
-- References: uncle_repl.py:216-221 handles quit/exit before the USAGE check; CHANGE_PLAN Risks says 'if so'.
-- Failure: quit/exit are handled before the USAGE lookup and may not be USAGE keys; the plan leaves the candidate set conditional. Settle with: 'Candidate set = USAGE keys plus quit and exit, and expansion runs before the quit/exit branch.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: Expanded one-character commands with arguments (e.g.
-
-- Severity: HIGH
-- References: uncle_repl.py:216-219; AC-1 covers only bare `/q`.
-- Failure: Expanded one-character commands with arguments (e.g. `/q now`) are unspecified. Settle with: 'Expansion happens first, then all existing branches run unchanged, so `/q now` prints usage for /quit and does not quit.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: The plan does not say whether the ambiguous refusal behaves like the unknown-command refusal in session flow.
+## AR-006: Case of one-character names is unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 'return None (rc 2)'; uncle_repl.py:221-223.
-- Failure: The plan does not say whether the ambiguous refusal behaves like the unknown-command refusal in session flow. Settle with: 'Ambiguous refusal uses the same stream, rc 2 and session continuation as the unknown-command refusal.'
+- References: uncle_repl.py:214 lowercases before the :216 check; SI-1 says only a-z and no test covers uppercase.
+- Failure: Case of one-character names is unspecified. Code lowercases first, so /Q quits. Plan sentence: 'One-character slash names are case-insensitive: /Q behaves as /q, and /S is refused as ambiguous.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Case, bare `/` and non-letter one-character names are unspecified.
+## AR-007: Arguments on one-character names are unspecified.
 
 - Severity: MEDIUM
-- References: uncle_repl.py:214 lowercases name; CHANGE_SPEC S4 lists only `/qu`, `/frob`, `/x`.
-- Failure: Case, bare `/` and non-letter one-character names are unspecified. Settle with: 'Matching is case-insensitive; `/` alone and any single character matching no command keep the existing unknown-command refusal.'
+- References: uncle_repl.py:224-231; AC-3/AC-4 cover only bare /s, /qu, /, /?.
+- Failure: Arguments on one-character names are unspecified. Ambiguity refuses before args are examined, while /q extra expands then complains of usage. Plan sentence: 'Ambiguous names are refused rc 2 regardless of args; /q extra gives the /quit usage complaint and does not quit.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The HELP tweak (D2) can break the unknown-command message, which prints the last HELP line.
+## AR-008: Plan lists a fixed candidate set but code derives it from USAGE plus quit/exit, so a new command silently changes expans
 
 - Severity: MEDIUM
-- References: uncle_repl.py:222 uses HELP.strip().splitlines()[-1]; HELP at lines 30-32.
-- Failure: The HELP tweak (D2) can break the unknown-command message, which prints the last HELP line. Settle with: 'Any shortcut mention goes on or before the Commands line; the last line of HELP stays the Commands line.'
+- References: uncle_repl.py:217-221 vs CHANGE_SPEC section 4 fixed list; SI-1 verified only by map pin.
+- Failure: Plan lists a fixed candidate set but code derives it from USAGE plus quit/exit, so a new command silently changes expansion. Plan sentence: 'Candidates are exactly USAGE keys plus quit and exit; adding a command requires updating the a-z map pin.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Candidate order and wording in the ambiguous message are undefined.
+## AR-009: No rule for a regression in the verification commands when the plan expects no diff.
 
 - Severity: LOW
-- References: CHANGE_PLAN s1.1 example `/stop, /settings` vs AC-3 'names both'.
-- Failure: Candidate order and wording in the ambiguous message are undefined. Settle with: 'Candidates are listed in USAGE insertion order joined by ", ", message starting `ambiguous command: /<c>`.'
+- References: CHANGE_PLAN step 1 says 'edit only if a gap is found' with no gap criterion; CHANGE_SPEC section 5 marks rows ADD.
+- Failure: No rule for a regression in the verification commands when the plan expects no diff. Plan sentence: 'If either suite regresses against baseline, the regression is fixed in uncle_repl.py or the test and recorded as a deviation; a green run means no diff.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Plan says one-char expansion applies to every USAGE key and that /e (exit) and /q (quit) run, yet it does not say whethe
-
-- Severity: HIGH
-- References: CHANGE_PLAN s1.1 says name is set to the expansion 'so all existing branches ... apply'; uncle_repl.py:216-220 handles quit/exit before the USAGE lookup. Plan sentence needed: 'Expansion occurs before the quit/exit check, so /q foo and /e foo produce the usage error and do not quit.'
-- Failure: Plan says one-char expansion applies to every USAGE key and that /e (exit) and /q (quit) run, yet it does not say whether the single-char name is matched before or after the existing quit/exit branch. A /q handled by prefix expansion must not skip the 'args present => usage error' check. Decision needed: expansion runs first, then the quit/exit branch.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-014: The plan does not say how an expanded or refused command is echoed.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 ambiguous message format; uncle_repl.py:35-49 Out is the 'single escape-filtered writer'. Plan sentence needed: 'The ambiguous message is emitted only via self.refuse and contains only the literal typed single character, which is a single non-control character validated before interpolation.'
-- Failure: The plan does not say how an expanded or refused command is echoed. The refusal text interpolates user-typed input, and the plan does not require that input to go through the escape-filtered writer. The ambiguity message could carry unfiltered terminal escapes if built outside self.refuse.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: The plan does not specify what the 'one character' is: a typed `/\x1b` or a multibyte or non-ASCII character, or an uppe
-
-- Severity: MEDIUM
-- References: uncle_repl.py:214 name = parts[0][1:].lower(); CHANGE_PLAN s1.1 only says len(name)==1. Plan sentence needed: '/Q expands like /q; a one-character name that is not ASCII a-z falls through to the unknown-command refusal.'
-- Failure: The plan does not specify what the 'one character' is: a typed `/\x1b` or a multibyte or non-ASCII character, or an uppercase character, which is lowercased. A control or Unicode character is a one-length name that matches nothing and echoes into the unknown-command message. The case behavior of `/Q` is also unspecified.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: The plan says /s is ambiguous (stop, settings) and that /d, /t, /e map to do, triage, exit.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D1 derives candidates dynamically from USAGE; CHANGE_SPEC AC-2 lists fixed unique letters h,m,i,c,t,d,e,r. Plan sentence needed: 'Tests assert the fixed letter-to-command map so a new USAGE key that makes a shortcut ambiguous fails the suite.'
-- Failure: The plan says /s is ambiguous (stop, settings) and that /d, /t, /e map to do, triage, exit. The plan does not say that adding any future USAGE key silently changes which shortcuts are unique or ambiguous. A previously unique /m could become ambiguous, and /r/c/e depend on the current key set. The test should pin it.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: The plan allows execute-type commands (/r resume, /c clear, /i with a number) to be triggered by a single keystroke.
+## AR-010: Non-letter single characters (e.g.
 
 - Severity: LOW
-- References: CHANGE_SPEC S2 maps /c and /r; uncle_repl.py:245-254 call self.execute for resume_build and clear_build. Plan sentence needed: 'Shortcut-invoked commands go through the same self.execute path and attended-mode confirmation as full names; the original line is passed unchanged.'
-- Failure: The plan allows execute-type commands (/r resume, /c clear, /i with a number) to be triggered by a single keystroke. A mistyped /c or /r runs a state-changing action, the same as the full name. Under attended mode, whether confirmation behavior is identical for shortcuts is not stated.
+- References: uncle_repl.py:216 guards on a-z; AC-4 names only /qu, unmatched letters, /, /?.
+- Failure: Non-letter single characters (e.g. /1) are unspecified. Plan sentence: 'Any one-character name outside a-z, including digits and punctuation, is an unknown command with rc 2 and never expands.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: The plan leaves open whether `/e` and `/q` are candidates, since quit/exit may not be USAGE keys.
-
-- Severity: HIGH
-- References: CHANGE_PLAN s1.1 'implementer confirms quit/exit are keys' and Risks s16; code line 216 handles quit/exit before the USAGE check.
-- Failure: The plan leaves open whether `/e` and `/q` are candidates, since quit/exit may not be USAGE keys. Settle: 'Candidates are USAGE keys plus quit and exit, de-duplicated; /q expands to quit and /e to exit, both quit the session.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-019: The ambiguous-message format is not fixed (the plan's example lists '/stop, /settings'; the spec only says 'names both')
-
-- Severity: HIGH
-- References: CHANGE_PLAN s1.1 example text vs CHANGE_SPEC AC-3 'names both stop and settings'.
-- Failure: The ambiguous-message format is not fixed (the plan's example lists '/stop, /settings'; the spec only says 'names both'). Settle: 'The message is exactly `ambiguous command: /s (matches: /settings, /stop)`, candidates sorted alphabetically, sent to stderr via self.refuse, rc 2.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: Case and non-letter single characters are unspecified (`/Q`, `/?`, `/1`, bare `/`).
+## AR-011: Plan never states whether a bare `/s`-style ambiguity or expansion must apply identically for `/Q` (uppercase) and for o
 
 - Severity: MEDIUM
-- References: Code line 214 `parts[0][1:].lower()`; plan guard is only `len(name)==1`; spec S4 lists only `/x`.
-- Failure: Case and non-letter single characters are unspecified (`/Q`, `/?`, `/1`, bare `/`). Settle: 'Expansion applies after lowercasing so /Q quits; any one-character name with no match, including a bare `/`, takes the unknown-command refusal, rc 2.'
+- References: uncle_repl.py:214,216,227-230 lowercases the name and applies the quit args check after expansion; SB-1..SB-5 specify no uppercase or argument-bearing case.
+- Failure: Plan never states whether a bare `/s`-style ambiguity or expansion must apply identically for `/Q` (uppercase) and for one-character names with args. Settle: 'Name matching is case-insensitive via lower(); uppercase `/Q` expands to /quit; expansion applies before argument checks, so `/q extra` expands to /quit and then refuses with usage (rc 2) without quitting.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: Argument handling for expanded commands is only partly specified: `/q extra` and extra args on `/c`, `/r`, `/t` are unte
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1.1 'arg validation'; s9 test list covers only `/m unattended` and `/i` without argument.
-- Failure: Argument handling for expanded commands is only partly specified: `/q extra` and extra args on `/c`, `/r`, `/t` are untested, and the usage text could name the letter or the full command. Settle: 'Expansion precedes dispatch, so usage text is identical to the full-name form (`/q x` prints `usage: /quit`).'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-022: No verifiable expected output is given for `/t`, `/d`, `/r` and `/c`, and the test strategy lists only `/m`, `/h` and `/
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s9; CHANGE_SPEC AC-2 lists h,m,i,c,t,d,e,r; code lines 245-259.
-- Failure: No verifiable expected output is given for `/t`, `/d`, `/r` and `/c`, and the test strategy lists only `/m`, `/h` and `/i`. Settle: 'Tests assert `/t` and `/d` print the full-name TUI-needed message, and `/c` and `/r` invoke clear_build and resume_build.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-023: The HELP tweak is optional with no expected text and no test, so a HELP assertion could pass or fail either way.
+## AR-012: The destructive or side-effecting expansions (/c clear, /d do, /r resume, /e exit) are not stated to be safe against acc
 
 - Severity: LOW
-- References: CHANGE_PLAN s1.1 D2 and Scope cuts; code lines 30-32.
-- Failure: The HELP tweak is optional with no expected text and no test, so a HELP assertion could pass or fail either way. Settle: 'HELP is unchanged and no test asserts it mentions one-letter shortcuts.'
+- References: CHANGE_SPEC SB-2 maps /d to do and /c to clear with no confirmation behavior; uncle_repl.py:222-223 expands silently.
+- Failure: The destructive or side-effecting expansions (/c clear, /d do, /r resume, /e exit) are not stated to be safe against accidental single-keystroke triggering. Settle: 'Single-letter expansion of /c, /d, /r, /e runs identical to the full command with no extra confirmation; this is accepted.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-013: SI-3 (escape filtering) is asserted for the ambiguity and unknown messages, but the unknown-command message echoes user-
+
+- Severity: LOW
+- References: uncle_repl.py:233 interpolates user name into the refuse message; SI-3 verification cites only a :598 test, not the slash refusal path.
+- Failure: SI-3 (escape filtering) is asserted for the ambiguity and unknown messages, but the unknown-command message echoes user-supplied name text. Settle: 'The refusal message echoing the user-typed name is emitted only through the Out escape filter.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-014: Plan has no implementation diff, so the testable claim rests on pre-existing tests the plan never proves can fail.
+
+- Severity: HIGH
+- References: CHANGE_PLAN s9: 'No test is expected to fail before the change since the feature is present'; uncle_repl.py:216-226.
+- Failure: Plan has no implementation diff, so the testable claim rests on pre-existing tests the plan never proves can fail. Plan should state: 'Verification must include a defect-injection check: temporarily mutating the expansion (e.g. removing the len(hits)==1 branch) must make at least one repl-session-test.py case fail, recorded in the test report.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-015: Uppercase and mixed-case one-char input is unspecified: the code lowercases the name before the a-z check, so `/Q` expan
+
+- Severity: MEDIUM
+- References: uncle_repl.py:214 `.lower()` precedes :216; SI-1 'Only 1-char a-z names expand'.
+- Failure: Uppercase and mixed-case one-char input is unspecified: the code lowercases the name before the a-z check, so `/Q` expands to quit, but SI-1 and AC-1 say nothing about case. Plan should say: '`/Q` and `/H` expand identically to lowercase forms (or are refused)', with a test.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: One-char expansion with extra args is not specified for non-mapped quit/exit: `/q extra` and `/e foo` would fall to the
+
+- Severity: MEDIUM
+- References: uncle_repl.py:227-230 complain(USAGE[name]) returns None; AC-1 covers only bare `/q`.
+- Failure: One-char expansion with extra args is not specified for non-mapped quit/exit: `/q extra` and `/e foo` would fall to the usage complaint path, and the rc is undefined. Plan should say: '`/q <args>` prints usage /quit and does not quit; rc is X'.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: Candidate set conflicts: the spec lists 11 names, but the code builds candidates from USAGE plus quit/exit, so any futur
+
+- Severity: MEDIUM
+- References: uncle_repl.py:217-220 vs CHANGE_SPEC s4 list; SI-1 'map pin a-z'.
+- Failure: Candidate set conflicts: the spec lists 11 names, but the code builds candidates from USAGE plus quit/exit, so any future USAGE key silently changes uniqueness (e.g. adding a 'q...' command breaks `/q`). Plan should say: 'The a-z map pin test asserts the full letter-to-command table, so any new command fails it.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: Observable output for the ambiguous refusal and its rc 2 depends on `refuse`, and the plan does not say whether the sort
+
+- Severity: LOW
+- References: uncle_repl.py:225 sorted(hits); CHANGE_SPEC s8 message; AC-3 only says 'names /settings and /stop'.
+- Failure: Observable output for the ambiguous refusal and its rc 2 depends on `refuse`, and the plan does not say whether the sorted match order or stderr/stdout stream is asserted. Plan should say: 'Tests assert the exact message `ambiguous command: /s (matches: /settings, /stop)` on the refuse stream and rc 2.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

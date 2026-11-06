@@ -6,9 +6,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Start `uncle --noui` in a scratch project directory, type `/q` and press Enter, then type `echo after` on the next line (or pipe both lines via stdin).
-- Expected result: The session ends on `/q` exactly as `/quit` does; the following line is not processed and no unknown-command error appears.
-- Evidence to capture: Terminal transcript showing the session exit, absence of any response to the later line, and the process exit code.
+- Exact action: Start `uncle --noui`, type `/q` and press Enter, then check the process exit status.
+- Expected result: The session quits and the process exit status is 0.
+- Evidence to capture: Terminal transcript and the exit status.
 - Actual result: 
 - Status: NOT RUN
 
@@ -16,9 +16,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In a fresh `uncle --noui` session, type `/s` and press Enter, then type `/mode` on the next line.
-- Expected result: `/s` prints `ambiguous command: /s (matches: /settings, /stop)` (matches sorted alphabetically per the change plan) to stderr with no `unknown command` text and runs nothing. The session keeps running, so `/mode` still responds. When the session ends, the exit code is 2.
-- Evidence to capture: Transcript with stdout and stderr shown separately, the `/mode` response after the refusal, and the exit code.
+- Exact action: In `uncle --noui`, type `/s`, then `/S`, then `/s extra`. Afterwards type `/mode` to confirm the session is still alive.
+- Expected result: Each of the three inputs is refused with `ambiguous command: /s (matches: /settings, /stop)`, and no command runs. The session continues and `/mode` still answers.
+- Evidence to capture: Terminal transcript showing all three refusal messages and the `/mode` reply.
 - Actual result: 
 - Status: NOT RUN
 
@@ -26,19 +26,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In `uncle --noui`, type `/m unattended`, then `/m`, then `/h`, then `/i` with no number, then `/Q`.
-- Expected result: `/m unattended` prints `mode: unattended`, and `/m` then reports `mode: unattended`. `/h` prints the help text. `/i` prints `usage: /issue`, the same as `/issue`. `/Q` quits the session.
-- Evidence to capture: Terminal transcript of each command's output and the final session exit.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-104
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: In `uncle --noui`, type `/qu`, `/frob`, `/x`, `/?`, `/1`, and a bare `/`, one per line, then `/quit`.
-- Expected result: Each of the first five lines prints `unknown command: /<name>` followed by the Commands line, and the session continues. The refusals use the unknown-command path and contain no raw escape bytes, and the bare `/` is also refused. `/quit` then exits.
-- Evidence to capture: Transcript of the refusals, a check that no raw ESC bytes appear in the output (for example `cat -v`), and the exit code.
+- Exact action: In `uncle --noui`, type `/qu`, `/frob`, `/x`, `/1`, `/?` and a bare `/`, one per line. Then type `/mode` to confirm the session is still alive.
+- Expected result: Each line is refused with `unknown command: /<name>` and nothing expands or runs. The session continues and `/mode` still answers.
+- Evidence to capture: Terminal transcript of the six refusals and the `/mode` reply.
 - Actual result: 
 - Status: NOT RUN
 
@@ -46,9 +36,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In `uncle --noui`, type `/q now`, `/e foo`, `/c x`, `/r x`, `/t x`, then `/t`, `/d`, then `/quit`.
-- Expected result: `/q now` prints `usage: /quit` and `/e foo` prints `usage: /exit`, and neither quits. `/c x`, `/r x` and `/t x` print `usage: /clear`, `usage: /resume` and `usage: /triage`. `/t` and `/d` print the `needs the TUI` message, and `/quit` finally ends the session.
-- Evidence to capture: Transcript of each command's output, showing the session still alive after the usage errors.
+- Exact action: In `uncle --noui`, type `/q now`, then `/e foo`, then `/mode`. Finish by typing `/Q`.
+- Expected result: `/q now` prints `usage: /quit` and `/e foo` prints `usage: /exit`. Neither quits the session. `/mode` still answers, and `/Q` then quits with exit status 0.
+- Evidence to capture: Terminal transcript of the two usage messages and the `/mode` reply, plus the final exit status.
 - Actual result: 
 - Status: NOT RUN
 
@@ -58,9 +48,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui`, type `/frob`, then `/qu`, then `/x`, then `/`, then `/?`, then `/1`, then `/help`, and finally `/quit`.
-- Expected result: Each of the first six lines prints `unknown command: /<name>` plus the Commands line on stderr and is not run, the session keeps reading, `/help` still prints help, and `/quit` ends the session.
-- Evidence to capture: Terminal transcript showing each refusal, the later `/help` output and the session ending.
+- Exact action: Run `uncle --noui`, type `/s`, then `/s extra`, `/S`, then `/h`, and finish with `/q`.
+- Expected result: Each of `/s`, `/s extra` and `/S` prints `ambiguous command: /s (matches: /settings, /stop)` and runs neither command; the session continues, then `/h` shows help and `/q` exits with status 0.
+- Evidence to capture: Terminal transcript showing the refusal text for all three inputs and the final exit status.
 - Actual result: 
 - Status: NOT RUN
 
@@ -68,9 +58,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui`, type `/s`, then `/s foo`, then `/mode`, then `/quit`; check the exit code after the session ends.
-- Expected result: `/s` and `/s foo` each print `ambiguous command: /s (matches: ...)` naming both /stop and /settings, without the text `unknown command` and without running either command. `/mode` is still processed afterwards. The exit code is 2 and the output has no raw escape bytes.
-- Evidence to capture: Transcript with both ambiguity messages, the later `/mode` output and the exit code.
+- Exact action: Run `uncle --noui`, type `/qu`, `/x`, `/1`, `/?`, `/`, then `/q`.
+- Expected result: Each of `/qu`, `/x`, `/1`, `/?` and `/` is refused as an unknown command and nothing expands or runs. The session continues until `/q` exits with status 0.
+- Evidence to capture: Terminal transcript of the refusals and the final exit status.
 - Actual result: 
 - Status: NOT RUN
 
@@ -78,9 +68,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui`, type `/q now`, then `/e foo`, then `/mode`, then `/q`, then `/mode`. Run `printf '/Q\n/mode\n' | uncle --noui` in a separate session.
-- Expected result: `/q now` prints `usage: /quit` and `/e foo` prints the exit usage, neither quits, and the first `/mode` still prints. Bare `/q` quits so the final `/mode` is never processed. In the separate session `/Q` quits and its `/mode` output never appears.
-- Evidence to capture: Both terminal transcripts showing the usage lines and where each session ended.
+- Exact action: Run `uncle --noui`, type `/q now`, then `/e foo`, then `/Q`.
+- Expected result: `/q now` prints `usage: /quit` and `/e foo` prints `usage: /exit`; the session does not quit on either. `/Q` then quits with status 0.
+- Evidence to capture: Terminal transcript showing the usage lines, the session still accepting input, and the exit status after `/Q`.
 - Actual result: 
 - Status: NOT RUN
 
@@ -88,9 +78,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui` and type `/m unattended`, `/m`, `/h`, `/i`, `/i x`, `/issue`, `/c x`, `/clear x`, `/r x`, `/t`, `/t x`, `/d`, `/triage`, `/do`, then `/quit`.
-- Expected result: `/m unattended` sets and reports unattended mode and `/m` reports it. `/h` prints help. Each shortcut gives the same output as its full name, so `/i` and `/issue` both print `usage: /issue`, and `/c x`, `/r x` and `/t x` print the full-name usage lines. `/t` and `/d` print the same `needs the TUI` message as `/triage` and `/do`.
-- Evidence to capture: Transcript pairing each shortcut with its full-name output.
+- Exact action: Run `uncle --noui`, type `/m unattended`, `/mode`, `/M attended`, `/mode`, then `/q`.
+- Expected result: `/m unattended` behaves exactly like `/mode unattended` and the argument is kept: `mode: unattended`, then `/mode` reports unattended. `/M attended` switches to `mode: attended`, so uppercase one-letter names expand too.
+- Evidence to capture: Terminal transcript showing the mode output after each command.
 - Actual result: 
 - Status: NOT RUN
 
@@ -98,21 +88,31 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui` and type `/\x1b` (a literal escape character) and a non-ASCII single character such as `/é`. Then type `/s`.
-- Expected result: The escape and non-ASCII names are refused as unknown commands with no crash. No raw terminal escape sequence reaches the terminal for any of the three lines, and the session continues.
-- Evidence to capture: Transcript, plus a hex dump of the output (for example via `| od -c`) showing no raw ESC bytes.
+- Exact action: Run `uncle --noui`, type `/h`, `/i`, `/c`, `/t`, `/d`, `/r`, `/e`, one command per line, and watch for each result. Run `/e` last, since it exits.
+- Expected result: Each one-letter command behaves as its full command would (help, issue, clear, triage, do, resume, exit) with no extra confirmation. Any usage complaint, for example `/i` with no issue number, is the full command's own complaint and not an unknown or ambiguous refusal. `/e` ends the session.
+- Evidence to capture: Terminal transcript with the output of each command, compared against its full-name form.
 - Actual result: 
 - Status: NOT RUN
 
-## resources
+### MC-205
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Run `uncle --noui` and type an unknown command whose name contains a raw escape sequence, such as `/` followed by Esc `[31mred`. Do this by piping `printf '/\033[31mred\n/q\n' | uncle --noui | cat -v`.
+- Expected result: The unknown-command refusal appears, but the raw escape byte is not emitted: `cat -v` shows no `^[[31m` color sequence passing through. The session then quits on `/q`.
+- Evidence to capture: The `cat -v` output of the refusal line.
+- Actual result: 
+- Status: NOT RUN
+
+## Resources: live --noui session
 
 ### MC-301
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Start `uncle --noui` in a scratch project directory, type `/q`, then type `/help` on the next line, and note the process exit status.
-- Expected result: The session ends on `/q` with exit code 0, and the following `/help` line is never processed (no help output).
-- Evidence to capture: Terminal transcript showing no help output after `/q`, and the exit code.
+- Exact action: Start `uncle --noui` in a terminal, type `/q`, then check the process exit status with `echo $?`.
+- Expected result: The session quits immediately with no error, and the exit status is 0.
+- Evidence to capture: Terminal transcript showing `/q` and `echo $?` printing 0.
 - Actual result: 
 - Status: NOT RUN
 
@@ -120,9 +120,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In `uncle --noui`, type `/s`, then `/s foo`, then `/mode`, then `/quit`; capture stderr separately and the exit code.
-- Expected result: Both `/s` and `/s foo` print `ambiguous command: /s (matches: /settings, /stop)` on stderr without the text `unknown command`; the session keeps running so `/mode` prints the mode, and `/quit` ends the session.
-- Evidence to capture: Transcript with stdout and stderr distinguished, showing the ambiguity messages and the `/mode` output.
+- Exact action: Start `uncle --noui`. Type `/s`, then `/qu`, then `/frob`, then `/1`, then `/q extra`. After that type `/q`.
+- Expected result: `/s` prints `ambiguous command: /s (matches: /settings, /stop)`. `/qu`, `/frob` and `/1` each print `unknown command: /<name>`. `/q extra` prints `usage: /quit` and does not quit. Every refusal leaves the session running, and the final `/q` quits.
+- Evidence to capture: Terminal transcript with the message for each input and the session still accepting input until the final `/q`.
 - Actual result: 
 - Status: NOT RUN
 
@@ -130,9 +130,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In `uncle --noui`, type `/m unattended`, `/m`, `/h`, `/i`, `/t`, `/d`, then `/quit`.
-- Expected result: `/m unattended` prints `mode: unattended` and `/m` then reports unattended; `/h` prints the help text; `/i` prints `usage: /issue`; `/t` and `/d` print the `needs the TUI` messages for triage and do.
-- Evidence to capture: Transcript of each command's output.
+- Exact action: Start `uncle --noui`. Type `/m`, then `/m unattended`, then `/mode`, then `/h`, then `/S`, then `/Q`.
+- Expected result: `/m` prints the current mode. `/m unattended` behaves like `/mode unattended` and prints `mode: unattended`. `/mode` then reports unattended. `/h` prints the help text. `/S` is refused as ambiguous with the same message as `/s`. `/Q` quits the session.
+- Evidence to capture: Terminal transcript of each input with its output, ending with the session quitting on `/Q`.
 - Actual result: 
 - Status: NOT RUN
 
@@ -140,9 +140,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In `uncle --noui`, type `/qu`, `/frob`, `/x`, `/?`, `/1`, a bare `/`, then `/q now`, then `/mode`, then `/Q`.
-- Expected result: Each of the first six prints `unknown command: /<name>` followed by the Commands line, with no crash and no raw escape characters; `/q now` prints `usage: /quit` and does not quit; `/mode` is still processed; `/Q` quits the session.
-- Evidence to capture: Transcript of the outputs and the final exit.
+- Exact action: Start `uncle --noui`. Type `/` followed by an ESC character and `[31m` (for example `/\x1b[31mx`), then `/?`. Observe the terminal's colour and the output.
+- Expected result: Both inputs are refused as unknown commands. The terminal does not switch to red, and no raw escape byte is emitted. The session keeps running.
+- Evidence to capture: Terminal transcript or `cat -v` of the output showing no raw ESC byte, plus a note that the terminal colour was unchanged.
 - Actual result: 
 - Status: NOT RUN
 
@@ -152,9 +152,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui`, type `/quit`, then type `/help` on a second session after `/exit`, confirming each full name still works; in a third session type `/quit` followed by `/help`.
-- Expected result: `/quit` and `/exit` end the session with later lines unread; `/help` prints the help text in a session that continues.
-- Evidence to capture: Terminal transcript of the three sessions showing no output for lines after quit.
+- Exact action: Start `uncle --noui` and type full-name commands: `/help`, `/mode`, `/mode unattended`, `/mode attended`, then `/quit`.
+- Expected result: Each full command behaves as before: help text lists the commands, mode reports and switches correctly, and `/quit` ends the session with exit status 0.
+- Evidence to capture: Session transcript and the process exit status after `/quit`.
 - Actual result: 
 - Status: NOT RUN
 
@@ -162,9 +162,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In `uncle --noui` type `/frob`, `/qu`, `/x`, bare `/`, `/?` and `/1`, then `/help`, noting the exit code at the end via `/quit`.
-- Expected result: Each unmatched name prints `unknown command: /<name>` followed by the Commands line, nothing is executed, the session keeps reading lines, and the process exit code is 2.
-- Evidence to capture: Transcript of stderr output for each line and the final process exit code.
+- Exact action: In `uncle --noui` type `/qu`, `/frob`, `/x`, `/`, `/?` and `/1`, then `/q`.
+- Expected result: Each of the first six prints `unknown command: /<name>` with refusal status 2, none expands or runs a command, and the session stays open until `/q` quits it with exit status 0.
+- Evidence to capture: Transcript showing each refusal message and the final exit status.
 - Actual result: 
 - Status: NOT RUN
 
@@ -172,9 +172,19 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In `uncle --noui` type `/mode unattended`, `/mode`, `/mode attended`, `/mode bogus`, `/issue` and `/issue abc`.
-- Expected result: Full-name commands behave as before: mode is set and echoed, `/mode bogus` prints `usage: /mode ...`, `/issue` and `/issue abc` print `usage: /issue`.
-- Evidence to capture: Transcript showing each output line.
+- Exact action: In `uncle --noui` type `/s`, `/S` and `/s extra`, then `/q extra`, then `/q`.
+- Expected result: The first three print exactly `ambiguous command: /s (matches: /settings, /stop)` with status 2 and run nothing. `/q extra` prints `usage: /quit` and does not quit. Bare `/q` then quits with exit status 0.
+- Evidence to capture: Transcript with the messages and the final exit status.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-404
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In `uncle --noui` type `/m`, `/m unattended`, `/m`, `/mode`, `/h` and `/Q`.
+- Expected result: `/m` and `/mode` print the same mode line, and `/m unattended` switches the mode exactly as `/mode unattended` does. `/h` prints the same help text as `/help`. `/Q` quits with exit status 0.
+- Evidence to capture: Transcript showing the mode output, the help text and the exit status.
 - Actual result: 
 - Status: NOT RUN
 
@@ -182,18 +192,8 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In `uncle --noui` type `/q now`, `/e foo`, `/c x`, `/r x`, `/t x`, then `/h`, then `/q`, then a final line `/help`.
-- Expected result: Argument forms print the full-name usage lines (`usage: /quit`, `usage: /exit`, `usage: /clear`, `usage: /resume`, `usage: /triage`) and do not quit; `/h` prints help; bare `/q` ends the session and the final `/help` is not processed.
-- Evidence to capture: Transcript showing usage lines and absence of output after `/q`.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-406
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: In `uncle --noui` type `/Q` in one session, and in another type `/m unattended`, `/m`, `/i`, `/t`, `/d`.
-- Expected result: `/Q` quits like `/q`; `/m unattended` sets and echoes mode unattended, `/m` shows the mode, `/i` prints `usage: /issue`, `/t` and `/d` print `/triage needs the TUI; run `uncle` without --noui.` and the `/do` equivalent.
-- Evidence to capture: Transcripts of both sessions.
+- Exact action: In `uncle --noui` type `/\x1b[31mred` (a real ESC byte in the name), capture the raw output bytes, then type `/q`.
+- Expected result: The unknown-command refusal does not emit the raw escape sequence, because the output is escape-filtered. The session continues until `/q` quits it.
+- Evidence to capture: Hex dump of the captured output showing no raw ESC (0x1b) byte.
 - Actual result: 
 - Status: NOT RUN

@@ -226,7 +226,7 @@ class Session:
                 return None
         if name in ("quit", "exit"):
             if args:
-                self.complain(USAGE[name])
+                self.refuse(USAGE[name])
                 return None
             return "quit"
         if name not in USAGE:
@@ -384,7 +384,8 @@ class Session:
                 self.idle_ctrlc = 1
                 continue
             if outcome == "quit":
-                return self.code
+                # An explicit /quit is a clean exit: an earlier refusal (status 2) must not stick.
+                return 0 if self.code == 2 else self.code
             if outcome == "interrupted":
                 self.idle_ctrlc = 1
 

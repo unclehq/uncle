@@ -1,57 +1,60 @@
-# Change Spec (Issue 168)
+# Change Spec: Issue 168
 
-Omitted sections: Performance, Security, Migration, Prototype isolation (not applicable)
+Omitted sections: Performance, Security (no change), Migration, Prototype isolation (n/a)
 
 ## 1. Change type
 Feature.
 
 ## 2. Problem
-In `--noui`, `/q` is refused though only one command starts with `q`.
+`--noui` refuses `/q` though only one command starts with `q`.
 
 ## 3. Current behavior
-See baseline B2, B3.
+See baseline B-1..B-6: the working tree already implements expansion.
 
 ## 4. Desired behavior
-A slash command whose name is exactly one character expands to the single command starting with that character; ambiguous or unmatched stays refused (rc 2), ambiguous names its candidates. Arguments preserved.
+One-character slash names expand to the unique command with that prefix among help, quit, exit, mode, issue, stop, resume, clear, triage, do, settings; ambiguous or unmatched keep refusal rc 2; ambiguous names candidates.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| S1 | MODIFY | `/q` | unknown, rc 2 | quits like /quit | repl-session-test |
-| S2 | MODIFY | `/h /m /i /c /t /d /e /r` | unknown | run help, mode, issue, clear, triage, do, exit, resume | repl-session-test |
-| S3 | MODIFY | `/s` | unknown | refused, rc 2, message lists stop and settings, nothing run | repl-session-test |
-| S4 | PRESERVE | `/qu`, `/frob`, `/x` | unknown, rc 2 | unchanged | repl-session-test |
-| S5 | MODIFY | `/m unattended` | unknown | acts as `/mode unattended` | repl-session-test |
-| S6 | MODIFY | `/i` without N | unknown | usage error for /issue | repl-session-test |
-| S7 | PRESERVE | full-name commands | works | unchanged | existing tests |
+| SB-1 | ADD | `/q` | quits (already) | runs /quit, rc 0 | repl-session-test |
+| SB-2 | ADD | `/h /m /i /c /t /d /e /r` | expand (already) | run the mapped command | map pin test |
+| SB-3 | ADD | `/m unattended` | args kept | same as `/mode unattended` | test :145ff |
+| SB-4 | ADD | `/s` | refused naming matches | not run, rc 2, lists /settings, /stop | test :153 |
+| SB-5 | PRESERVE | `/qu`, `/frob`, `/`, `/?` | unknown, rc 2 | unchanged | test :156-159 |
+| SB-6 | PRESERVE | full command names | work | unchanged | existing suite |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| V1 | EXISTING | Unmatched slash commands refused with rc 2 | REPL | slash() | existing + new test |
-| V2 | NEW | Only single-character names expand; never ambiguous prefixes | REPL | slash() | /qu, /s tests |
+| SI-1 | NEW | Only 1-char a-z names expand | uncle_repl.slash | uncle_repl.py:216 | map pin a-z |
+| SI-2 | EXISTING | Ambiguous/unmatched never executes; rc 2 | slash | uncle_repl.py:224-234 | AC-3/4 tests |
+| SI-3 | EXISTING | Output escape-filtered | REPL | Out class | :598 test |
 
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Full-name commands unchanged.
+Full command names and arguments unchanged.
 
-## 8. Errors
-Ambiguous: stderr message naming candidates, rc 2, no command executed.
+## 8. Error behavior
+Ambiguous: `ambiguous command: /s (matches: /settings, /stop)`, rc 2. Unmatched: `unknown command: /x`, rc 2.
+
+## 12. Rollback
+Revert commit 73c9097 changes to the two files.
 
 ## 14. Non-goals
-TUI slash handling; longer abbreviations; new commands.
+TUI slash handling; abbreviations longer than one character.
 
 ## 15. Assumptions
-Candidate set is the REPL's known command names (including quit/exit). Help text update is optional.
+Existing implementation satisfies the request; HELP edit optional.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | `/q` quits the session and later lines are not processed. | New check in scripts/tests/repl-session-test.py |
-| AC-2 | Unique one-character commands (h,m,i,c,t,d,e,r) run the matching command; arguments are preserved (`/m unattended` sets unattended mode). | New checks in repl-session-test.py |
-| AC-3 | `/s` is not run, exits rc 2 and the stderr message names both stop and settings. | New check in repl-session-test.py |
-| AC-4 | `/qu` and `/frob` remain refused with `unknown command` and rc 2. | New check for /qu plus existing /frob check |
-| AC-5 | Existing shell and Python suites show no new regressions versus baseline. | Driver verification commands |
+| AC-1 | `/q` in --noui quits the session with rc 0. | repl-session-test.py check for /q |
+| AC-2 | `/h /m /i /c /t /d /e /r` each run help, mode, issue, clear, triage, do, exit, resume, and arguments are preserved (`/m unattended` == `/mode unattended`). | repl-session-test.py AC-2 and map-pin checks |
+| AC-3 | `/s` is not run, exits rc 2, and the message names /settings and /stop. | repl-session-test.py AC-3 checks |
+| AC-4 | `/qu`, unmatched letters, `/`, and `/?` remain unknown commands with rc 2. | repl-session-test.py AC-4 and map-pin checks |
+| AC-5 | The shell and Python regression suites show no regression versus baseline. | bash scripts/run-shell-tests.sh; bash scripts/run-python-tests.sh |
 

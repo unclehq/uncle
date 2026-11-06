@@ -1,59 +1,61 @@
-# Baseline Report (Issue 168)
+# Baseline Report
 
-Omitted sections: Reproduction (feature, not bug); Schema contracts (none)
+Omitted sections: Reproduction (not a bug); Existing failures (none documented; driver baseline is authority)
 
 ## 1. Change-request summary
-See .uncle/docs/CHANGE_REQUEST.md: in `uncle --noui`, a one-character slash command whose first letter matches exactly one command should run that command.
+Issue 168 (.uncle/docs/CHANGE_REQUEST.md): in `--noui`, a single-character slash command expands to the one command with that prefix; ambiguous `/s` refused with candidates; `/qu` stays unknown.
 
 ## 2. Repository architecture
-Shell driver plus Python libs. The --noui REPL is `scripts/lib/uncle_repl.py`; tests in `scripts/tests/repl-session-test.py` (subprocess-driven via `session()`, line ~52).
+Shell workflow drivers in `scripts/`, Python REPL in `scripts/lib/uncle_repl.py`, tests in `scripts/tests/*-test.py` (custom `check()` scripts, hyphenated names), runners `scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh`.
 
 ## 3. Relevant code paths
-- `scripts/lib/uncle_repl.py:~15-29` USAGE dict (keys: help, mode, issue, stop, resume, clear, triage, do, settings, and quit/exit - `USAGE[name]` is used at line 218).
-- `uncle_repl.py:30-32` HELP text.
-- `uncle_repl.py:212-262` `slash()`: lowercases name, handles quit/exit, refuses names not in USAGE (line 221-223, via `self.refuse`, exit code 2), dispatches by name.
-- `uncle_repl.py:264-269` `handle()` routes lines starting with `/` to `slash()`.
-- Tests: `repl-session-test.py:111-118` slash tests incl. `/frob` unknown -> rc 2.
+- `scripts/lib/uncle_repl.py:212-234` `Session.slash()`: one-letter expansion block (lines 216-226) over `USAGE` keys plus quit/exit, then quit/exit handling, then unknown-command refusal.
+- `scripts/lib/uncle_repl.py:~14-32` `USAGE` dict and `HELP` text.
+- `scripts/tests/repl-session-test.py:145-160` (AC-2/3/4 checks) and `:555-575` (full a-z map pin).
 
 ## 4. Current observable behavior
+The working tree already contains the requested feature (HEAD 73c9097 "expand one-character slash commands when the prefix is unique", +11 lines in uncle_repl.py, +82 in repl-session-test.py).
+
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B1 | `/quit` or `/exit` | session ends, later lines unread | test line 117 | Yes |
-| B2 | `/frob` | stderr `unknown command: /frob` + commands line, rc 2 | test line 118 | Yes |
-| B3 | `/q`, `/h`, `/m` etc. | refused as unknown | uncle_repl.py:221 | No (modified) |
-| B4 | `/mode unattended` | sets mode | uncle_repl.py:229 | Yes |
-| B5 | `/qu` | refused as unknown | uncle_repl.py:221 | Yes |
+| B-1 | `/q` | quits (rc 0) | uncle_repl.py:216-231 | Yes |
+| B-2 | `/h /m /i /c /t /d /e /r` | expand to full command, args kept | uncle_repl.py:221-223; test :145-152, :555-568 | Yes |
+| B-3 | `/s` | refused rc 2: `ambiguous command: /s (matches: /settings, /stop)` | uncle_repl.py:225; test :153-155 | Yes |
+| B-4 | `/qu`, `/frob`, `/x` | `unknown command: /<name>` rc 2 | uncle_repl.py:232-234; test :156-159 | Yes |
+| B-5 | bare `/`, `/?`, non-ASCII | unknown, session continues | test :130-132, :598 | Yes |
+| B-6 | `/quit extra` | usage complaint | uncle_repl.py:228-230 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I1 | Unmatched slash command refused with rc 2 | slash() line 221 | repl-session-test.py:118 | High |
-| I2 | All REPL output passes the escape filter | Out class | other tests | Medium |
-| I3 | Per-command arg validation via USAGE | slash() branches | line 112-116 | High |
+| I-1 | Only 1-char ASCII a-z names expand | uncle_repl.py:216 | map pin :555-572 | High |
+| I-2 | Ambiguous/unmatched never runs a command; rc 2 | uncle_repl.py:224-226,232-234 | :153-159 | High |
+| I-3 | All output passes the escape filter (`Out`) | uncle_repl.py:35+ | :598 | High |
 
-## 6. Interfaces
-Stdin lines in; stdout/stderr and exit code out. No API/schema.
+## 6. Interface contracts
+CLI `uncle --noui` stdin slash lines; exit codes 0 quit, 2 refusal. No API/schema changes.
 
-## 7. Existing test coverage
-Python suite `repl-session-test.py` covers slash commands. Shell and Python runners use separate temp dirs and no shared ports, so they may run in parallel.
+## 7. Existing automated-test coverage
+`repl-session-test.py` covers all rows above. The shell suite and the Python suite use separate temp dirs and no shared ports, so they run as one parallel group.
 
 ## 9. Baseline test results
-Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (Uncle runners, per workflow instructions). No results run here; the driver's baseline supplies them. Some Python suites may already fail on a clean checkout.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (both exist). Not executed here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout.
 
 ## 12. Likely change surface
-`uncle_repl.py` slash() (and HELP optionally); `repl-session-test.py`.
+None required: feature and tests already present. At most `HELP` text (uncle_repl.py:30-32).
 
 ## 13. Regression-sensitive components
-quit/exit handling; unknown-command refusal; `self.refuse` exit code.
+TUI slash handling (out of scope); HELP text pinned by tests; escape filtering.
 
 ## 14. Outside the change
-TUI slash handling; multi-character abbreviations; other scripts.
+TUI slash handling, longer abbreviations, workflow shell scripts.
 
-## 15. Unknowns
-Exact content of USAGE keys beyond line 25-29 assumed to include quit/exit (inferred from line 218); verify at implementation.
+## 15. Unknowns and assumptions
+- ASSUMPTION: the existing HEAD commit is the intended implementation; this change verifies and, if gaps exist, closes them.
+- UNKNOWN: whether CHANGE_REQUEST.md's "update HELP if useful" is wanted; treated as optional.
 
 ## 16. Risk
-Low. Main risk: prefix matching accidentally accepting longer abbreviations or mis-ordering the ambiguous list.
+Low. Risk of redundant or conflicting edits since the feature already exists.
 
 ## Exact build and test commands executed
 

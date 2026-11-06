@@ -19,7 +19,11 @@ $bash = $null
 $python = $null
 if (Get-Command scoop -ErrorAction SilentlyContinue) {
     try { $gitRoot = (& scoop prefix git 2>$null | Out-String).Trim() } catch { $gitRoot = $null }
-    try { $pythonRoot = (& scoop prefix python 2>$null | Out-String).Trim() } catch { $pythonRoot = $null }
+    # Uncle's Python is pinned to 3.13: windows-curses has no wheel for newer releases.
+    try { $pythonRoot = (& scoop prefix python313 2>$null | Out-String).Trim() } catch { $pythonRoot = $null }
+    if (!$pythonRoot -or !(Test-Path (Join-Path $pythonRoot 'python.exe'))) {
+        try { $pythonRoot = (& scoop prefix python 2>$null | Out-String).Trim() } catch { $pythonRoot = $null }
+    }
     if ($gitRoot) { $bash = Join-Path $gitRoot 'bin\bash.exe' }
     if ($pythonRoot) { $python = Join-Path $pythonRoot 'python.exe' }
 }
@@ -57,9 +61,25 @@ if (!$bash -or !(Test-Path $bash) -or !$python) {
 # interpreter Uncle will actually run, once, so a Python chosen differently from
 # the one the user ran pip with (or an install made before this was handled)
 # still ends up with a working UI. Only Uncle's private venv is modified.
+# When pip cannot supply it (typically a Python newer than any windows-curses
+# wheel) say why, once per Python version, instead of retrying silently on every
+# start and leaving only a bare "needs curses".
 if ((Invoke-Quiet $python @('-c', 'import curses')) -ne 0 -and ($python -like (Join-Path $root 'venv\*'))) {
-    Write-Host 'uncle: installing windows-curses into its Python environment...'
-    $null = Invoke-Quiet $python @('-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', 'windows-curses')
+    $pyVersion = ((& $python -c 'import sys; print(sys.version.split()[0])' 2>$null) | Out-String).Trim()
+    $marker = Join-Path $root 'venv\.windows-curses-unavailable'
+    $known = (Test-Path -LiteralPath $marker) -and ((Get-Content -LiteralPath $marker -Raw -ErrorAction SilentlyContinue).Trim() -eq $pyVersion)
+    if (!$known) {
+        Write-Host 'uncle: installing windows-curses into its Python environment...'
+        $saved = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { $pipOutput = (& $python -m pip install --disable-pip-version-check windows-curses *>&1 | Out-String) } catch { $pipOutput = [string]$_ }
+        finally { $ErrorActionPreference = $saved }
+        if ((Invoke-Quiet $python @('-c', 'import curses')) -ne 0) {
+            $tail = (($pipOutput -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 4) -join "`n  ")
+            Write-Warning "windows-curses could not be installed for Python $pyVersion, so the full-screen UI is unavailable.`n  $tail`n  Install a Python that has a windows-curses wheel (3.9-3.13 at last check), then set UNCLE_WINDOWS_PYTHON to its python.exe."
+            Set-Content -LiteralPath $marker -Value $pyVersion -Encoding ASCII
+        }
+    }
 }
 $pythonRoot = Split-Path $python -Parent
 $oldPath = $env:PATH

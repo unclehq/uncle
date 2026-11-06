@@ -19,6 +19,39 @@ change_pr_extras_reason() {
     printf '%s\n' "${CHANGE_PR_EXTRAS_REASON:-not-published}"
 }
 
+# Publish/completion guard. With an attested tree ($1) every tracked path must match it byte for byte (.gitignore included, no
+# managed-line tolerance); without one only the clean tracked-status check applies. Nothing under .uncle/ outside the allowlist may
+# be tracked or staged, and no .uncle/docs artifact of the attested tree may be ignored. Untracked artifacts never fail it.
+# Offending paths and the reason go to stderr; returns nonzero on any failure.
+assert_tree_matches_attested() {
+    local tree="${1:-}" bad=0 line path
+    local allow='^\.uncle/(docs/.*|attestation\.json|attestation\.sig|allowed_signers)$'
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        echo "tracked file not clean: $line" >&2; bad=1
+    done < <(git status --porcelain --untracked-files=no 2>&1)
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        [[ "$path" == .uncle/* && ! "$path" =~ $allow ]] || continue
+        echo "path outside the .uncle/ allowlist is tracked or staged: $path" >&2; bad=1
+    done < <({ git ls-files .uncle; git diff --cached --name-only -- .uncle; } 2>/dev/null | sort -u)
+    if [[ -n "$tree" ]]; then
+        local status
+        while IFS=$'\t' read -r status path; do
+            [[ -n "$path" ]] || continue
+            # An approved artifact that is merely untracked is not a difference.
+            # Likewise a file of the change that is not yet tracked: present on disk, absent from the index.
+            if [[ "$status" == D && ( "$path" =~ $allow || -e "$path" ) ]]; then continue; fi
+            echo "path differs from the attested tree ($status): $path" >&2; bad=1
+        done < <(git diff --name-status --no-renames "$tree" 2>/dev/null)
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            echo "approved artifact is ignored: $line" >&2; bad=1
+        done < <(git ls-tree -r --name-only "$tree" -- .uncle/docs 2>/dev/null | git check-ignore --no-index -v --stdin 2>/dev/null)
+    fi
+    return "$bad"
+}
+
 change_pr_complete() {
     CHANGE_PR_EXTRAS_REASON=""
     # The publication boundary. The unattended stages have ended; whether the
@@ -58,6 +91,7 @@ change_pr_complete() {
                 echo "PR handoff disabled or unattended; no PR was created."
             fi
             CHANGE_PR_EXTRAS_REASON=handoff-disabled
+            assert_tree_matches_attested "" || echo "Completed with tracked changes left in the checkout (see above)." >&2
             return 0
         fi
         change_pr_publish 0 </dev/null
@@ -120,6 +154,9 @@ change_pr_publish() {
                 ;;
         esac
     fi
+    local attested
+    attested="$(change_pr_engine commit-tree 2>/dev/null)" || attested=""
+    assert_tree_matches_attested "$attested" || { echo "Publish refused: the tree differs from the audited tree." >&2; return 0; }
     change_pr_engine handoff || true
 }
 
@@ -1690,6 +1727,8 @@ def main():
         if j.get('manual_signing'):
             manual_signed_commit(j)
         validate(j)
+    elif action == 'commit-tree':
+        print(load()['commit_tree'])
     elif action == 'verdict-override':
         j = load()
         verdict = read(STATE / 'audit-verdict').strip().split('\t')

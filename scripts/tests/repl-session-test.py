@@ -115,7 +115,13 @@ check("/mode with bad arg prints usage", "usage: /mode" in err)
 check("/issue with bad arg prints usage", "usage: /issue N" in err)
 check("/settings prints mode and root", "mode: unattended" in out and str(PROJ) in out)
 check("/quit stops reading further lines", out.count("mode: ") == 1, out)
-check("unknown command refused", "unknown command: /frob" in err and rc == 2, f"{rc}")
+check("unknown command refused; explicit /quit afterwards is a clean exit (MC-200..403)", "unknown command: /frob" in err and rc == 0, f"{rc}")
+for lines, want, why in ((["/s", "/q"], 0, "ambiguous then /q"), (["/x", "/quit"], 0, "unknown then /quit"),
+                         (["/s", "/q extra", "/q"], 0, "ambiguous, /q extra, then /q"),
+                         (["/s"], 2, "ambiguous then EOF keeps 2"), (["/x", "/mode"], 2, "unknown then EOF keeps 2"),
+                         (["/q extra"], 2, "/q extra then EOF keeps 2")):
+    rc, out, err = session(lines)
+    check("exit status: " + why, rc == want, f"{rc} {err}")
 rc, out, err = session(["/mode attended", "/mode"])
 check("/mode attended changes mode", "mode: attended" in out and out.count("mode: attended") == 2, out)
 
@@ -123,7 +129,7 @@ check("/mode attended changes mode", "mode: attended" in out and out.count("mode
 rc, out, err = session(["/s foo", "/mode"])
 check("/s foo -> ambiguity refusal, rc 2, session continues", "ambiguous command: /s" in err and rc == 2 and "mode: unattended" in out, f"{rc} {err}")
 rc, out, err = session(["/q now", "/mode"])
-check("/q now prints usage for /quit and session continues", "usage: /quit" in err and "mode: unattended" in out, f"{rc} {err} {out}")
+check("/q now prints usage for /quit and session continues", "usage: /quit" in err and "mode: unattended" in out and rc == 2, f"{rc} {err} {out}")
 rc, out, err = session(["/Q", "/mode"])
 check("/Q quits like /q", "mode: " not in out and rc == 0, f"{rc} {out}")
 rc, out, err = session(["/", "/mode"])
@@ -152,6 +158,22 @@ for letter, usage in (("c", "usage: /clear"), ("t", "usage: /triage"), ("d", "us
 rc, out, err = session(["/s"])
 check("AC-3 /s refused rc 2 naming stop and settings", rc == 2 and "stop" in err and "settings" in err and "mode: " not in out, f"{rc} {out} {err}")
 check("AC-3 /s message format: matches label, alphabetical", "ambiguous command: /s (matches: /settings, /stop)" in err, f"{err}")
+# Full a-z map pin: only these letters expand; s is ambiguous; all others unknown
+for letter in "abfgjklnopuvwxyz":
+    rc, out, err = session(["/%s" % letter])
+    check("map pin /%s unknown, rc 2" % letter, "unknown command: /%s" % letter in err and rc == 2, f"{rc} {err}")
+rc, out, err = session(["/S", "/mode"])
+check("/S is ambiguous like /s (case-insensitive)", "ambiguous command: /s (matches: /settings, /stop)" in err and rc == 2 and "mode: unattended" in out, f"{rc} {err}")
+rc, out, err = session(["/q extra", "/mode"])
+check("/q extra: usage on stderr, session continues", "usage: /quit" in err and "mode: unattended" in out and rc == 2, f"{rc} {out} {err}")
+rc, out, err = session(["/e extra", "/mode"])
+check("/e extra: usage on stderr, session continues", "usage: /exit" in err and "mode: unattended" in out and rc == 2, f"{rc} {out} {err}")
+rc, out, err = session(["/s extra", "/mode"])
+check("/s extra refused as ambiguous", "ambiguous command: /s" in err and rc == 2 and "mode: unattended" in out, f"{rc} {out} {err}")
+rc, out, err = session(["/1"])
+check("/1 is unknown command, rc 2", "unknown command: /1" in err and rc == 2, f"{rc} {err}")
+rc, out, err = session(["/\x1b[31mz"])
+check("refusal output is escape-filtered, printable remainder kept", "\x1b" not in err and "unknown command: /z" in err and rc == 2, f"{rc} {err!r}")
 # AC-4: multi-letter non-commands stay refused
 rc, out, err = session(["/qu"])
 check("AC-4 /qu unknown command rc 2", "unknown command" in err and rc == 2, f"{rc} {err}")
@@ -603,7 +625,7 @@ st = _S(); captured.clear(); st.slash("/i 7"); one = list(captured); captured.cl
 check("/i 7 payload equals /issue 7", one == captured and len(one) == 1, f"{one} {captured}")
 # non-ASCII / ESC-bearing slash input is refused without raw ESC on output
 rc, out, err = session(None, raw="/\u00e9\n/\x1b[31mq\n/mode\n".encode())
-check("non-ASCII/ESC slash input: unknown, no raw ESC, session continues", "unknown command" in err and "\x1b" not in out + err and "mode: unattended" in out and rc == 2, f"{rc} {out!r} {err!r}")
+check("non-ASCII/ESC slash input: unknown, no raw ESC, session continues", "unknown command: /\u00e9" in err and "unknown command: /q" in err and "\x1b" not in out + err and "mode: unattended" in out and rc == 2, f"{rc} {out!r} {err!r}")
 rc, out, err = session(["/s", "/mode"])
 check("ambiguity is not reported as unknown", "unknown command" not in err and "mode: unattended" in out, err)
 

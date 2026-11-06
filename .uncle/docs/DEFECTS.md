@@ -1,141 +1,29 @@
 # Defects
 
-## MC-101
+## Observed defect: ./uncle --noui exits 2 on /q or /quit after an earlier refusal; expected 0. Not yet logged in DEFECTS.md (worker may not edit it).
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. test_tui_reload_leaves_gitignore_unchanged calls _ensure_uncle_gitignored 3x; .gitignore u
-- **Expected result:** per checklist.
-- **Actual result:** test_tui_reload_leaves_gitignore_unchanged calls _ensure_uncle_gitignored 3x; .gitignore unchanged, exclude has block once. TUI launch, touch .uncle/config and project switch not driven.
+- **Status:** FAIL
+- **Evidence:** Transcript: 'ambiguous command: /s (matches: /settings, /stop)' x3, then the help line, then exit status 2 (`echo $?` after the run). Source comment at scripts/lib/uncle_repl.py:387 says an explicit /quit after a refusal should return 0, but via ./uncle --noui the status was 2. Same exit 2 for '/x' then '/quit' and for '/h', '/x', '/q'.
+- **Expected result:** Each of /s, /s extra, /S prints 'ambiguous command: /s (matches: /settings, /stop)' and runs nothing; /h shows help; /q exits with status 0.
+- **Actual result:** The three refusals printed exactly 'ambiguous command: /s (matches: /settings, /stop)', nothing ran, and /h printed help. But after the refusals, /q exited with status 2, not 0. A lone '/q' or '/quit' exits 0. Running python3 scripts/lib/uncle_repl.py directly with '/x' then '/q' exited 0, so the 2 comes from running through ./uncle. I did not find the cause.
 
-## MC-102
+## Same defect as MC-200: exit status 2 after /q following refusals, expected 0.
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. test_deferral_notice_once_per_root: one notice over 3 calls, .gitignore unchanged. Reload/
-- **Expected result:** per checklist.
-- **Actual result:** test_deferral_notice_once_per_root: one notice over 3 calls, .gitignore unchanged. Reload/switch not driven.
+- **Status:** FAIL
+- **Evidence:** Transcript: 'unknown command: /qu', '/x', '/1', '/?' and '/', each followed by the Commands line. `echo $?` printed 2.
+- **Expected result:** Each of /qu, /x, /1, /?, / is refused as an unknown command, nothing expands or runs, and /q exits with status 0.
+- **Actual result:** All five were refused with 'unknown command: /<token>' followed by the Commands line, and nothing ran or expanded. The session continued to /q, but the final exit status was 2, not 0.
 
-## MC-104
+## Unrecorded: exit status 2 instead of 0 after /q following refusals when launched via ./uncle --noui (module-direct run returns 0)
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. test_clean_passes_silently covers guard on clean tree only.
-- **Expected result:** per checklist.
-- **Actual result:** test_clean_passes_silently covers guard on clean tree only.
+- **Status:** FAIL
+- **Evidence:** Transcript in /tmp/mc402.txt; `printf '/qu\n/frob\n/x\n/\n/?\n/1\n/q\n' | ./uncle --noui` -> exit=2; `printf '/frob\n/quit\n' | ./uncle --noui` -> exit=2; same input to python3 scripts/lib/uncle_repl.py -> exit=0.
+- **Expected result:** First six each print 'unknown command: /<name>' with refusal status 2, nothing expands, session stays open until '/q' quits with exit status 0.
+- **Actual result:** All six printed 'unknown command: /qu', '/frob', '/x', '/', '/?', '/1' (followed by the command list) and nothing expanded; session stayed open and /q quit silently. However the final process exit status was 2, not 0. '/q' alone exits 0. '/frob' then '/quit' via ./uncle also exits 2. Running scripts/lib/uncle_repl.py directly (also with UNCLE_NOUI=1) with '/frob' then '/quit' exits 0, so the code comment 'explicit /quit is a clean exit' holds in the module but not via the ./uncle --noui launcher path; cause not determined.
 
-## MC-105
+## New: bare /q (or /quit) after an ambiguous slash command exits with status 2 instead of 0 (last-command status leaks into quit exit code). Not recorded in DEFECTS.md by this worker.
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. Guard tests test_extra_staged_paths_fail_naming_both and test_gitignore_managed_line_only_
-- **Expected result:** per checklist.
-- **Actual result:** Guard tests test_extra_staged_paths_fail_naming_both and test_gitignore_managed_line_only_difference_fails pass via sourced assert_tree_matches_attested; no real publish. Note managed-line test does not stage the change.
-
-## MC-106
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. pr-auto-publish-test.sh passed in driver output.log line 448-450 (10 checks, incl. 2 new f
-- **Expected result:** per checklist.
-- **Actual result:** pr-auto-publish-test.sh passed in driver output.log line 448-450 (10 checks, incl. 2 new for AC-3); real post-PR flow not run.
-
-## MC-200
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-101.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-101.
-
-## MC-201
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-102.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-102.
-
-## MC-203
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-104.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-104.
-
-## MC-204
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-105 (guard only).
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-105 (guard only).
-
-## MC-207
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-106; dependency MC-202 is not in the checklist.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-106; dependency MC-202 is not in the checklist.
-
-## MC-300
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-101; second repo not exercised.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-101; second repo not exercised.
-
-## MC-301
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-102.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-102.
-
-## MC-303
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. guard-level only; its dependency MC-302 is not in the checklist.
-- **Expected result:** per checklist.
-- **Actual result:** guard-level only; its dependency MC-302 is not in the checklist.
-
-## MC-304
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-106.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-106.
-
-## MC-401
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-101; docs-visible part covered by test_visibility_root_and_linked_worktree.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-101; docs-visible part covered by test_visibility_root_and_linked_worktree.
-
-## MC-402
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-102.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-102.
-
-## MC-404
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. no end-to-end run with PR.
-- **Expected result:** per checklist.
-- **Actual result:** no end-to-end run with PR.
-
-## MC-405
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-105 (guard only).
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-105 (guard only).
-
-## MC-406
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. guard tests cover clean and dirty (no_attestation_dirty_tracked) cases; no run completion.
-- **Expected result:** per checklist.
-- **Actual result:** guard tests cover clean and dirty (no_attestation_dirty_tracked) cases; no run completion.
-
-## MC-407
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Live TUI/change run needed; action: run attended with real runner. same as MC-106.
-- **Expected result:** per checklist.
-- **Actual result:** same as MC-106.
+- **Status:** FAIL
+- **Evidence:** Transcript: 'ambiguous command: /s (matches: /settings, /stop)' x3, 'usage: /quit', EXIT=2. Isolation runs: '/s\n/q' EXIT=2; '/s\n/quit' EXIT=2; '/q' EXIT=0.
+- **Expected result:** First three print exactly `ambiguous command: /s (matches: /settings, /stop)`, run nothing. `/q extra` prints `usage: /quit` and does not quit. Bare `/q` then quits with exit status 0.
+- **Actual result:** Output matched for the first three (identical ambiguous line x3) and `/q extra` printed `usage: /quit` without quitting; session then quit on `/q`. But the process exit status was 2, not 0. Isolation: '/q' alone -> 0; '/q extra' then '/q' -> 0; any prior ambiguous command ('/s' then '/q' or '/quit') -> exit 2. The ambiguous status 2 is carried into the final exit code of the quit.

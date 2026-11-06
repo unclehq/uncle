@@ -67,7 +67,7 @@ change_pr_complete() {
         echo "Unattended: publishing the PR without a dialog (draft when the audit is not READY)."
         local -x UNCLE_AUTO_PUBLISH=1
         change_pr_publish 0 </dev/null
-        CHANGE_PR_EXTRAS_REASON=publication-pending
+        [[ -n "$CHANGE_PR_EXTRAS_REASON" ]] || CHANGE_PR_EXTRAS_REASON=publication-pending
         return 0
     fi
     if [[ "$CLOSE_ISSUE" == 1 ]]; then
@@ -95,7 +95,7 @@ change_pr_complete() {
             return 0
         fi
         change_pr_publish 0 </dev/null
-        CHANGE_PR_EXTRAS_REASON=publication-pending
+        [[ -n "$CHANGE_PR_EXTRAS_REASON" ]] || CHANGE_PR_EXTRAS_REASON=publication-pending
         return 0
     fi
     if [[ "$boundary" == 1 ]]; then
@@ -117,14 +117,22 @@ change_pr_publish() {
     # Exit 3 is the one recoverable failure: the recorded verdict is not
     # READY, so the operator gets one explicit override decision, showing the
     # actual verdict. Headless runs are never asked.
+    CHANGE_PR_EXTRAS_REASON=""
+    local overridden=0
     change_pr_engine validate || status=$?
     if [[ "$status" == 3 ]]; then
         if { [[ "$interactive" == 1 ]] || [[ "${UNCLE_AUTO_PUBLISH:-0}" == 1 ]]; } && change_pr_engine verdict-override; then
-            change_pr_engine validate || return 0
+            overridden=1
+            if ! change_pr_engine validate; then
+                change_pr_no_pr validate-failed "validation failed after the verdict override"
+                return 0
+            fi
         else
+            change_pr_no_pr verdict-not-ready "the audit verdict is not READY and no override was given"
             return 0
         fi
     elif [[ "$status" != 0 ]]; then
+        change_pr_no_pr validate-failed "validation exited $status"
         return 0
     fi
     if [[ -s "$ORIGIN_FILE" ]]; then
@@ -145,7 +153,8 @@ change_pr_publish() {
                 issue_close_eligible "$recorded" \
                     "$(origin_field "$ORIGIN_FILE" 1)" "$(origin_field "$ORIGIN_FILE" 2)" \
                     "$VERDICT_FILE" "$ORIGIN_FILE" "$audit_artifact" "$MARKER_FILE" \
-                    1 "$ORIGIN_BOUND" 1 "$(origin_fetch_method "$ORIGIN_FILE")" || return 0
+                    1 "$ORIGIN_BOUND" 1 "$(origin_fetch_method "$ORIGIN_FILE")" \
+                    || { change_pr_no_pr issue-not-eligible "the issue is not eligible to close"; return 0; }
                 ;;
             *)
                 # Validation passed, so an operator override exists. An
@@ -156,8 +165,46 @@ change_pr_publish() {
     fi
     local attested
     attested="$(change_pr_engine commit-tree 2>/dev/null)" || attested=""
-    assert_tree_matches_attested "$attested" || { echo "Publish refused: the tree differs from the audited tree." >&2; return 0; }
-    change_pr_engine handoff || true
+    assert_tree_matches_attested "$attested" || {
+        echo "Publish refused: the tree differs from the audited tree." >&2
+        change_pr_no_pr tree-mismatch "the tree differs from the audited tree"
+        return 0
+    }
+    local rc=0
+    change_pr_engine handoff || rc=$?
+    if [[ "$rc" != 0 ]]; then
+        change_pr_no_pr handoff-failed "handoff exited $rc"
+        return 0
+    fi
+    local phase vclass jdraft
+    phase="$(python3 -c 'import json,sys; print(json.load(open(".uncle/workflow/pr/journal.json")).get("phase",""))' 2>/dev/null)" || phase=""
+    jdraft="$(python3 -c 'import json,sys; print("1" if json.load(open(".uncle/workflow/pr/journal.json")).get("draft") else "0")' 2>/dev/null)" || jdraft=0
+    if [[ "$phase" != created ]]; then
+        change_pr_no_pr handoff-incomplete "handoff exited 0 but the journal phase is '${phase:-unknown}', not created"
+        return 0
+    fi
+    vclass="$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE" 2>/dev/null)"
+    case "$vclass" in
+        READY|READY_WITH_NON_BLOCKING_ISSUES)
+            CHANGE_PR_EXTRAS_REASON=published
+            if [[ "$jdraft" == 1 ]]; then
+                echo "PR published (verdict $vclass): opened as a draft, not ready for review." >&2
+            else
+                echo "PR created (verdict $vclass): ready for review." >&2
+            fi
+            ;;
+        *)
+            CHANGE_PR_EXTRAS_REASON=published-draft-unreviewed
+            echo "PR published as unreviewed draft: published-draft-unreviewed: verdict ${vclass:-unknown} (draft, not ready for review)" >&2
+            ;;
+    esac
+    return 0
+}
+
+# Record why no PR exists and say so once on stderr.
+change_pr_no_pr() {
+    CHANGE_PR_EXTRAS_REASON="$1"
+    echo "PR not created: $1: $2" >&2
 }
 
 change_pr_engine() {

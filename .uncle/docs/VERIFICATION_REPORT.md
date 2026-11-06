@@ -2,151 +2,127 @@
 
 ## Findings
 
-### MC-101
+### MC-104
 
-- **Action:** Ran `uncle --noui --application 'build a thing' 2>err.txt >out.txt </dev/null` in a disposable git project, with UNCLE_RUNTIME_ROOT pointing at a copy of the runtime whose scripts/stagegate.sh was a stub printing 'progress line' to stdout and 'DRIVER-ERROR-TEXT' to stderr, then exiting 1 (a stub driver, so no real agents ran). Then cat both files.
-- **Expected result:** err.txt contains the driver error text once, then one `driver exited with status N` line. out.txt contains neither. Exit status 1.
-- **Actual result:** Exit status 1. err.txt: the launcher's 'Mode: unattended' notice, then 'DRIVER-ERROR-TEXT' once, then 'uncle --noui: driver exited with status 1' once. out.txt: only '[+00:00:00] progress line'.
-- **Defects:** None
-
-### MC-102
-
-- **Action:** In a fresh temp git dir, ran `UNCLE_SKIP_UPGRADE=1 uncle --noui --change-request < req.md` (request 'x') with no stdout/stderr redirection, so both streams went to the same shared output sink. A real pty was unavailable (`script` failed: tcgetattr/ioctl not supported on socket), so this was not a true interactive terminal.
-- **Expected result:** The driver's error text and the exit status line are visible on the terminal. Stdout lines still carry the [+hh:mm:ss] prefix.
-- **Actual result:** Combined output showed stdout lines prefixed with [+00:00:00]..[+00:00:21], the driver error text '[+00:00:21] canonical change-planning bundle: invalid baseline_report packet: baseline report is missing verification_commands', and the final stderr line 'uncle --noui: driver exited with status 1'. Process exit status was 1. The launcher's initial 'Mode: ...' line is unprefixed (launcher output, not the driver's stdout stream).
-- **Defects:** None
-
-### MC-103
-
-- **Action:** Replaced the stub driver with one that prints 'progress line' and 'Human gate: approve PROJECT_PLAN.md' on stdout and exits 0 with no completion banner. Ran `uncle --noui --application 'build a thing' 2>err.txt >out.txt` and noted the exit status.
-- **Expected result:** Exit status 3. Gate message on stderr as before. Stdout formatting unchanged.
-- **Actual result:** Exit status 3. err.txt has 'uncle --noui: driver stopped without completing (gate or blocked); exit 3' and 'uncle --noui: stopped at: Human gate: approve PROJECT_PLAN.md'. Stdout lines keep the [+hh:mm:ss] prefix.
-- **Defects:** None
-
-### MC-105
-
-- **Action:** Ran `uncle --help` and `uncle --noui --help` and grepped for stderr. Ran `uncle --noui --application=` (empty text) and `uncle --noui --noinput` with `2>err.txt`, noting the exit status.
-- **Expected result:** Help states that errors go to stderr. The launcher refusal is in err.txt with exit status 2, unchanged.
-- **Actual result:** Both help outputs, at line 53, say 'driver errors go to stderr'. The empty --application refusal exited 2 with 'Error: --application text cannot be empty' in err.txt. The --noui with --noinput refusal exited 2 with 'Error: --noui cannot be combined with --noinput' in err.txt (the usage text was also printed).
+- **Action:** Built a fixture in /tmp/uncle-mc-fixture/ineligible: sourced the real scripts/lib/change-pr.sh, READY verdict, altered FINAL_AUDIT.json after classification (hash mismatch, real hash-compare stub for issue_close_eligible), stubbed gh/engine, ran change_pr_publish then finished_extras.py print.
+- **Expected result:** No PR created; single 'PR not created: issue-not-eligible:' stderr line; finished block shows readable label.
+- **Actual result:** rc=0; no handoff/gh call (gh log empty). Stderr contained exactly one line 'PR not created: issue-not-eligible: the issue is not eligible to close' (plus the existing 'changed after it was classified' message). Finished block: 'PR: not created (issue not eligible)'.
 - **Defects:** None
 
 ### MC-106
 
-- **Action:** Read the checklist row. Did not launch the interactive curses TUI or force a driver failure in it, because the row needs a human to watch the live build window and no non-interactive harness was assigned to this lane.
-- **Expected result:** The build window shows driver errors as before, followed by one line `Driver exited with status N: <last non-empty output line>`, with secrets and escape codes removed.
-- **Actual result:** Not observed. The live TUI observation was not performed.
-- **Defects:** None
-
-### MC-107
-
-- **Action:** Inspected uncle_tui.py:102 and scripts/tests/tui-failure-line-test.py to see what covers the failure line. Did not launch the curses TUI or capture build-window screenshots.
-- **Expected result:** Exit 0 adds no failure line. A silent non-zero exit shows `Driver exited with status N: (no output)`. A user stop shows the failure line with 130 or 143.
-- **Actual result:** Not observed live. A worker without an interactive terminal cannot run a driver in the curses TUI, press Ctrl-C, or take screenshots of the build window.
+- **Action:** Fixture /tmp/uncle-mc-fixture/draft: NOT_READY verdict, UNCLE_AUTO_PUBLISH=1, validate stub fails first (exit 3) then passes on revalidation (override path), stubbed handoff logging 'gh pr create --draft' and writing a created/draft journal; ran real change_pr_publish and finished_extras.py print.
+- **Expected result:** Draft PR created; stderr 'PR published as unreviewed draft: published-draft-unreviewed: verdict <class>'; finished block does not say plain 'published'.
+- **Actual result:** rc=0; gh log shows 'gh pr create --draft'. Stderr: 'PR published as unreviewed draft: published-draft-unreviewed: verdict NOT_READY (draft, not ready for review)'. Reason=published-draft-unreviewed. Finished block: 'PR: https://github.com/o/r/pull/3 (#3) [draft]' (URL with [draft] marker, not plain 'published').
 - **Defects:** None
 
 ### MC-200
 
-- **Action:** Created disposable project /tmp/mc200.s7gr/proj (git init) and a fake runtime whose change-workflow.sh driver prints 'DRIVER-ERROR-TEXT' to stderr and exits 7. Ran the headless runner that `uncle --noui` execs (scripts/lib/uncle_headless.py) with UNCLE_RUNTIME_ROOT=fake runtime, UNCLE_STARTUP_ACTION=change_request, UNCLE_STARTUP_TEXT set, with 1>out.txt 2>err.txt, then cat'd both files and printed the exit status.
-- **Expected result:** err.txt holds the driver error text exactly once followed once by `driver exited with status N`; shell exit status 1; out.txt holds neither.
-- **Actual result:** exit=1. out.txt was empty. err.txt contained exactly two lines: 'DRIVER-ERROR-TEXT' then 'uncle --noui: driver exited with status 7'.
+- **Action:** Built a disposable fixture (bare local remote, git repo with signing disabled, gh stubbed to log+fail, engine stubbed with handoff that would git push). Sourced scripts/lib/change-pr.sh under bash and called change_pr_publish 0 twice: (1) with a modified tracked file (a.txt) vs the attested tree; (2) validate returning 3 (non-READY) with override declined/unavailable.
+- **Expected result:** No PR and no push in either case; existing diagnostics plus exactly one new line 'PR not created: tree-mismatch' or 'PR not created: verdict-not-ready'; function returns 0.
+- **Actual result:** Case 1 stderr: 'tracked file not clean:  M a.txt', 'path differs from the attested tree (M): a.txt', 'Publish refused: the tree differs from the audited tree.', then exactly one 'PR not created: tree-mismatch: the tree differs from the audited tree'; rc=0. Case 2: exactly one 'PR not created: verdict-not-ready: the audit verdict is not READY and no override was given'; rc=0. git ls-remote on the bare remote returned no refs; handoff.log and gh.log were never created (no handoff, no gh call).
 - **Defects:** None
 
-### MC-202
+### MC-201
 
-- **Action:** Ran scripts/lib/uncle_headless.py (the --noui runner) with an explicit disposable fake driver (/tmp/mc202/drv.sh) that writes 'Continue? [y/N] ' to stderr with no trailing newline, sleeps 3s, prints a line to stdout and exits 0 without a completion banner. Read stdout and stderr live through separate pipes with monotonic timestamps. Did not go through the `uncle` launcher or a real project driver.
-- **Expected result:** Prompt text appears on the terminal within the idle timeout, before the driver exits. A normal gate still stops the run with exit status 3 and a message naming the gate.
-- **Actual result:** The prompt appeared on stderr at 0.34s (idle timeout 0.2s), 2.8s before the driver exited at 3.13s. It was emitted with a newline appended. The run ended with exit status 3 and the message 'uncle --noui: driver stopped without completing (gate or blocked); exit 3'. That message does not name a specific gate, because the fake driver emitted no gate name; the driver-emitted gate text was only a stdout line.
+- **Action:** Read scripts/tests/pr-publish-reason-test.sh and scripts/lib/change-pr.sh. The harness builds a disposable fixture, sources change-pr.sh, stubs issue_close_eligible and the handoff, and calls change_pr_publish. I ran the script once (bash scripts/tests/pr-publish-reason-test.sh) and read the assertions for the ineligible-issue case (STUB_ISSUE=1) and the empty-ORIGIN_FILE case (ORIGIN_EMPTY=1).
+- **Expected result:** The ineligible-issue run records issue-not-eligible, prints exactly one 'PR not created: issue-not-eligible' line and makes no handoff or PR. The empty-ORIGIN_FILE run skips the issue gate, reaches handoff and never reports issue-not-eligible.
+- **Actual result:** The script finished with 'pr-publish-reason-test: 156 passed, 0 failed'. In the ineligible-issue case, expect_nopr asserted reason issue-not-eligible, exactly one keyed 'PR not created: issue-not-eligible' stderr line with no token or URL, zero handoffs, and the issue gate invoked once. In the empty-origin case, the reason was 'published', handoffs were 1, issue-gate calls were 0, and stderr did not contain issue-not-eligible. Side note: the run printed non-fatal 'issue.calls: No such file or directory' stderr noise from the test harness (line 91). It did not affect any assertion.
 - **Defects:** None
-
-### MC-203
-
-- **Action:** Ran the real scripts/lib/uncle_headless.py run() (the --noui code path, install_signals=True) from a small wrapper against a fake driver that writes 'pending-err MARKER203' to stderr and then sleeps 60s. Sent SIGINT (the Ctrl-C signal) to the wrapper after 2s, then repeated with SIGTERM. Captured stdout and stderr to files each time, then ran pgrep for the driver marker. Did not go through the full `uncle` launcher with a real workflow driver.
-- **Expected result:** Exit 130 for Ctrl-C and 143 for SIGTERM. All driver stderr precedes the single status line, and no driver process is left running.
-- **Actual result:** SIGINT gave exit 130 and SIGTERM gave exit 143. Each err file held exactly one 'pending-err MARKER203' line, and the out files were empty. pgrep found no leftover driver process. No 'driver exited with status' line was written in either signal case. Code at uncle_headless.py:370-371 deliberately suppresses that line when a signal was received, and the unit test asserts at most one status line. So 'all stderr precedes the status line' holds only vacuously.
-- **Defects:** None (note: the checklist wording implies a status line on user signals, but the implementation intentionally omits it)
 
 ### MC-204
 
-- **Action:** Ran the real uncle_headless.run() (the --noui implementation) in a subprocess with a fake driver (/tmp/mc204/drv.py) that prints three progress lines to stdout and one line to stderr, with real fd redirection 1>out.txt 2>err.txt; inspected both files with cat -v. Did not invoke the uncle launcher script itself.
-- **Expected result:** Each stdout line in out.txt has a single [+hh:mm:ss] prefix; stderr text is not duplicated onto stdout.
-- **Actual result:** out.txt had exactly three lines, each with a single [+00:00:00] prefix: progress one/two/three. err.txt contained 'stderr-noise-abc' once, unprefixed, plus the runner's own status line (exit 3, because the fake driver did not complete a run). The stderr noise did not appear in out.txt.
+- **Action:** Ran scripts/tests/pr-publish-reason-test.sh (fixture publish with UNCLE_AUTO_PUBLISH=1 over non-READY verdict with stubbed succeeding handoff; finished_extras.py print with unknown/multi-line/credential-bearing reasons). Inspected change-pr.sh lines 189-198 and finished_extras.py REASONS/FALLBACK.
+- **Expected result:** Reason is published-draft-unreviewed and stderr names verdict and states draft; unknown/malformed reason renders as publication-pending label and is never echoed verbatim.
+- **Actual result:** Test output: 156 passed, 0 failed. change-pr.sh sets CHANGE_PR_EXTRAS_REASON=published-draft-unreviewed and emits stderr 'PR published as unreviewed draft: published-draft-unreviewed: verdict <class> (draft, not ready for review)'. Unknown values (including 'bad\nvalue', URL with token, 'published; rm -rf', empty) render 'PR: not created (publication pending)' with no echo. Benign 'No such file' stderr noise from test helper redirects (lines 90/91) did not affect results. I did not separately run the stub fixture by hand beyond the test.
 - **Defects:** None
 
-### MC-205
+### MC-300
 
-- **Action:** Called uncle_tui.format_failure_line directly with sample statuses/outputs (3 with 'last', 4 with empty, 0, and 1 with ANSI+token). Inspected uncle_tui.py:2063 where the result is appended to the build window output. Did not launch the interactive TUI against disposable drivers.
-- **Expected result:** Non-zero exit: build window ends with 'Driver exited with status N: <last line>' or '(no output)', redacted, no escapes. Exit 0: no failure line.
-- **Actual result:** Function output matched: 'Driver exited with status 3: last'; 'Driver exited with status 4: (no output)'; None for status 0; 'Driver exited with status 1: token=[REDACTED]' with escapes stripped. The live build-window rendering was not observed.
+- **Action:** Ran a temp script (/tmp/mc300.sh) in a disposable git repo (signing disabled) with a bare local remote and a stub gh on PATH. It sourced the real scripts/lib/change-pr.sh with the real assert_tree_matches_attested and a hash-checking issue gate. The engine handoff was stubbed to git push and call stub gh pr create. Ran change_pr_publish with a READY verdict and a matching tree, then rendered the finished block with finished_extras.py print using the resulting reason.
+- **Expected result:** Branch is pushed to the local remote, the stub gh pr create is invoked, the finished block shows the `published` label, and not `publication pending`.
+- **Actual result:** rc=0; reason=published. The remote has refs/heads/feat. The gh stub log has 'gh pr create --title t --body b'. Stderr was 'PR created (verdict READY): ready for review.' with no 'PR not created' line. The finished block printed 'PR: published' and did not contain 'publication pending'.
+- **Defects:** None
+
+### MC-301
+
+- **Action:** Read scripts/tests/pr-publish-reason-test.sh and ran it (fixture publish with stubbed engine/gh/gates). It drives change_pr_publish through each no-PR path: validate failure (exit 1, 2), verdict not READY with override declined (interactive and unattended), revalidate failure, issue_close_eligible failure, tree mismatch (stubbed and attested), and handoff nonzero exit (1 and 3). It also covers handoff-incomplete. It checks stderr, reason and return code.
+- **Expected result:** Each path creates no PR and prints exactly one `PR not created: <key>: <detail>` line with a distinct key (validate-failed, verdict-not-ready, issue-not-eligible, tree-mismatch, handoff-failed). Existing diagnostics remain, the finished block shows the matching label, and the driver exits 0.
+- **Actual result:** Test output: 'pr-publish-reason-test: 156 passed, 0 failed'. expect_nopr asserted rc 0, exact reason key, exactly one 'PR not created:' line starting with the key, and no canary or URL in the line. Handoff was not invoked for validate-failed, issue-not-eligible or tree-mismatch. Existing stderr 'tracked file not clean', 'path differs from the attested tree' and 'Publish refused' were retained. Section 8 of the script covers the finished_extras.py labels. Caveat: I did not separately view the rendered finished block by eye; label mapping is verified by the script's assertions only. The run also printed harmless 'No such file' noise for handoff.calls/issue.calls from the stub harness.
 - **Defects:** None
 
 ### MC-302
 
-- **Action:** In a scratch git repo with no remote, ran `uncle --issue 99999999 --noui` (a failing request) under a pty via `script` with no redirection, then re-ran with stdout and stderr redirected to separate files to attribute each line to its stream.
-- **Expected result:** The error text is visible in the terminal, stdout lines keep the `[+hh:mm:ss]` prefix, and stderr error lines are shown verbatim without that prefix.
-- **Actual result:** In the pty transcript all error text was visible: `Mode: unattended (default)...`, `[+00:00:00] No git remote found. Provide a full GitHub URL.`, and `uncle --noui: driver exited with status 1`. In the split run, stdout held only the `[+00:00:00]`-prefixed line; stderr held the `Mode:` and `uncle --noui: driver exited with status 1` lines verbatim with no prefix. Exit status 1. Caveat: the driver's own failure message went to stdout with the prefix here; the stderr lines observed were the launcher's. The behavior matches the expected result for both streams.
+- **Action:** Sourced scripts/lib/change-pr.sh in a temp fixture (origin bound, verdict NOT_READY), stubbed change_pr_engine (handoff writes a journal with phase=created, draft=true, and records a 'pr create --draft' marker), ran change_pr_publish with UNCLE_AUTO_PUBLISH=1, captured stderr, then rendered the finished block with scripts/lib/finished_extras.py print using the resulting reason.
+- **Expected result:** Draft PR created; stderr reads 'PR published as unreviewed draft: published-draft-unreviewed: verdict <class>'; finished block says draft.
+- **Actual result:** rc=0, reason=published-draft-unreviewed. stderr: 'PR published as unreviewed draft: published-draft-unreviewed: verdict NOT_READY (draft, not ready for review)'. Finished block: 'PR: https://github.com/o/r/pull/3 (#3) [draft]'. Caveat: the engine and gh were stubbed, so the real gh --draft flag was not exercised; the draft marker came from the stub's journal. Also pr-publish-reason-test.sh ran 156 passed, 0 failed.
 - **Defects:** None
 
 ### MC-303
 
-- **Action:** Drove the real uncle_headless.run() (the --noui engine in scripts/lib/uncle_headless.py) with a fake driver that prints a progress line and 'Human gate: PROJECT_PLAN.md awaiting approval' then exits 0 without the completion banner. Redirected stderr to /tmp/uncle-gate-err.txt and stdout to /tmp/uncle-gate-out.txt, and checked the exit status. I did not invoke the full ./uncle launcher with a real approval-gate project.
-- **Expected result:** Exit status is 3, the gate is named on stderr, and gate behavior and stdout format are unchanged.
-- **Actual result:** Exit status was 3. stderr named the gate. stdout lines kept the single [+hh:mm:ss] prefix, and no stderr text appeared on stdout.
+- **Action:** Ran scripts/tests/pr-publish-reason-test.sh. Its stub engine and gh emit CANARY-TOKEN-9f3a and https://user:CANARYPASS@example.com/x.git on stdout and stderr during failing handoff and published paths. It then checks the captured `PR not created:` reason and the `PR ` lines. I read the stub definitions at lines 17-18, 65-82 and the canary assertions at lines 102 and 151-154. I did not inspect a live finished block by eye.
+- **Expected result:** No canary token, credentialed URL or gh/engine output appears in the reason line or finished block. Only the key, a static message and the numeric exit code appear.
+- **Actual result:** The script finished with 156 passed, 0 failed. This includes the 'canary reason' and 'canary pr line' hasnt-CANARY assertions and the per-reason 'no token' assertions. The script printed harmless 'No such file or directory' noise for handoff.calls and issue.calls writes in stub subshells, with no effect on assertions.
 - **Defects:** None
 
-### MC-304
+### MC-401
 
-- **Action:** Located the failure-line formatter in uncle_tui.py:102 and ran the narrow scripts/tests/tui-failure-line-test.py (6 tests). Did not drive the interactive curses TUI through a real failing build; no pty/human-visible observation was made.
-- **Expected result:** The build window ends with a line `Driver exited with status N: <last non-empty output line>` with secrets redacted and no escape sequences; a successful run adds no such line.
-- **Actual result:** Formatter produces 'Driver exited with status %s: %s' (with '(no output)' fallback). The unit test for it passed (6 tests OK). The live build-window rendering after a real non-zero driver exit was not observed.
+- **Action:** Ran change_pr_publish in attended mode (INTERACTIVE=1) from a temp script derived from scripts/tests/pr-publish-reason-test.sh harness, in a disposable git fixture (gpgsign disabled, attested FINAL_AUDIT.json hash bound to a READY verdict) using the REAL assert_tree_matches_attested; then rendered the finished block via finished_extras.py print --kind change --reason <reason>.
+- **Expected result:** Handoff runs, finished block shows 'published' label rather than 'publication pending', and no 'PR not created:' line appears.
+- **Actual result:** RC=0, reason=published, handoff invoked once. Stderr: 'PR created (verdict READY): ready for review.' with no 'PR not created:' line. Finished block line: 'PR: published' (not 'publication pending').
+- **Defects:** None
+
+### MC-402
+
+- **Action:** Ran scripts/tests/pr-publish-reason-test.sh (stubbed gh/handoff fixture harness exercising change_pr_publish) and inspected its READY and auto-publish NOT_READY cases (lines 134-141) plus the source in scripts/lib/change-pr.sh. This is the project's fixture-based run, not a separate hand-built fixture repo with stdout/stderr transcripts.
+- **Expected result:** Both runs publish without a dialog. READY reports 'published'. NOT_READY (UNCLE_AUTO_PUBLISH=1) creates a draft and reports published-draft-unreviewed with a stderr line naming the verdict and saying unreviewed draft. Neither reports 'publication pending'.
+- **Actual result:** Harness finished: 156 passed, 0 failed. READY run: reason 'published', rc 0, handoff called once, no 'PR not created' line. Auto NOT_READY run (VCLASS=NOT_READY UNCLE_AUTO_PUBLISH=1): reason 'published-draft-unreviewed', stderr contains 'verdict NOT_READY'. The source emits 'PR published as unreviewed draft: published-draft-unreviewed: verdict <class> (draft, not ready for review)' (change-pr.sh:198). The test also asserts every reason label differs from the 'publication pending' label. Gaps: the harness does not set CLOSE_ISSUE=1 in the auto run, and I did not read the stubbed gh call log for draft vs ready. Draft state is only inferred from the stub's draft flag and the reason string. Some harmless 'No such file' stderr noise appeared from stub log reads.
 - **Defects:** None
 
 ### MC-403
 
-- **Action:** Ran uncle_headless.main in attended mode under a pty (observed live with timestamps) against a fake driver that wrote stderr noise, printed 'Approve plan? [y/N] ' with no trailing newline on stdout, wrote more stderr noise 1s later, then read stdin; sent 'y' at 2.5s.
-- **Expected result:** The stdout prompt appears promptly and the gate behaves as before; stderr noise does not trigger or delay the gate.
-- **Actual result:** Prompt appeared at 0.03s (with elapsed prefix) despite no trailing newline; stderr lines 'noise1' and 'noise2' were shown as separate lines and did not trigger or delay any gate; the driver received 'y' and proceeded. Driver then exited 3 because the fake driver did not complete, reported as stopped without completing.
-- **Defects:** None
-
-### MC-404
-
-- **Action:** In a temp dir ran `uncle --noui --bogus-flag 2>err.txt >out.txt` (invalid argument refusal) and checked exit code, err.txt and out.txt.
-- **Expected result:** The refusal message is in err.txt and the exit status is 2, unchanged from prior behavior.
-- **Actual result:** Exit status 2. err.txt contained 'Unknown argument: --bogus-flag' followed by the usage text. out.txt was empty.
+- **Action:** Ran scripts/tests/pr-publish-reason-test.sh (prepared probe; sources change_pr_publish with stubbed change_pr_engine, gh stub, disposable temp dirs) and inspected the decline/tree-mismatch scenarios: 'v3 declined' (INTERACTIVE=1, STUB_OVERRIDE=1), 'v3 auto declined', 'tree-mismatch' (STUB_TREE_FAIL=1) and 'tree-mismatch attested'.
+- **Expected result:** Declined override and tree mismatch each: no handoff/PR creation, exactly one 'PR not created: <key>' stderr line (verdict-not-ready, tree-mismatch), existing 'Publish refused' and tree-differs messages still present, return/exit 0.
+- **Actual result:** Probe finished with '156 passed, 0 failed'. Assertions covered rc 0, reason key, exactly one 'PR not created:' line with the right key, no token/URL leak, handoff call count 0, and retained stderr 'tracked file not clean: one', 'path differs from the attested tree', 'Publish refused'. Limitations: the probe stubs the engine functions and gh in-process rather than using a real git repo with a bare remote, and it does not explicitly assert a literal 'PR pending:' line. Harmless 'No such file' noise appeared for unwritten call-log files when no handoff/issue call occurred (expected).
 - **Defects:** None
 
 ### MC-405
 
-- **Action:** Ran scripts/lib/uncle_headless.py (the --noui engine) directly with a fake driver script that writes to stderr a line with ANSI SGR codes and the secret (env MYSECRET_TOKEN=s3cr3tvalue12345), then an unterminated last line containing an OSC title sequence and the secret. Stderr was captured to a file and viewed with cat -v. The full `uncle --noui` launcher was not used; the module it invokes was.
-- **Expected result:** The file has no unredacted secret and no escape sequences, and the unterminated last line is present, redacted.
-- **Actual result:** err.txt held 'hello red token=[REDACTED]', 'last line key [REDACTED]' (the unterminated line, present and redacted), and the driver's exit-3 status message. cat -v showed no ^[ sequences. grep -c for the secret value gave 0 in both stderr and stdout files. The exit code of 3 is the expected 'driver did not emit completion banner' result for the fake driver.
+- **Action:** Ran scripts/tests/pr-publish-reason-test.sh, which sources scripts/lib/change-pr.sh in disposable fixtures with a stubbed handoff. It exercises STUB_HANDOFF=1 and STUB_HANDOFF=3 (nonzero handoff exits) and STUB_PHASE=created (rerun, handoff exit 0). I read the cases at lines 132-138 and the expect_nopr helper. I did not run a real gh or git push failure; the nonzero exit is stubbed.
+- **Expected result:** Nonzero handoff runs report handoff-failed, and the stderr line includes the exit code. The already-created rerun reports published. In every case the driver still exits 0.
+- **Actual result:** STUB_HANDOFF=1 and STUB_HANDOFF=3 both gave reason handoff-failed with return code 0. There was exactly one 'PR not created: handoff-failed' stderr line, it contained the exit code (1 and 3 respectively), and it leaked no token or URL. The STUB_PHASE=created rerun gave reason published. The plain published case had rc 0 and no 'PR not created' line. Result: 156 passed, 0 failed. Limitation: the two failure modes (consent declined, push failure) are modelled only as stubbed nonzero handoff exit codes, and 'driver exit 0' is checked as the return code of change_pr_publish, not of the full driver process. The run also printed harmless 'No such file or directory' noise for handoff.calls and issue.calls from the fixture temp directories.
+- **Defects:** None
+
+### MC-406
+
+- **Action:** Ran scripts/tests/pr-publish-reason-test.sh (fixture harness sourcing change-pr.sh and exercising change_pr_complete in headless and completed-commit modes with stubbed publish), and inspected change-pr.sh lines 84-97 for the headless message and reason assignment.
+- **Expected result:** With no completed commit, output says 'PR handoff disabled or unattended' and reason is handoff-disabled with no PR created. With a completed commit, the reason set by publish survives and is not overwritten with publication-pending.
+- **Actual result:** Test run ended '156 passed, 0 failed'. Relevant cases: 'complete handoff-disabled' (resume fails -> reason handoff-disabled); 'complete headless keeps reason' (tree-mismatch) and 'keeps published' for unattended/headless/interactive; empty reason -> publication-pending only when publish set nothing. Source shows the no-commit branch echoes 'PR handoff disabled or unattended; no PR was created.' and sets CHANGE_PR_EXTRAS_REASON=handoff-disabled. The output message itself was verified by source inspection, not by captured output, because the test discards the function's stdout. Stderr noise (missing handoff.calls/issue.calls files at test lines 90-91) did not affect results.
 - **Defects:** None
 
 ### MC-407
 
-- **Action:** Ran the real scripts/lib/uncle_headless.py run() (the --noui driver runner, signal handlers installed) in a separate process, with a fake driver that wrote two lines to stderr, spawned a grandchild sleeper, then slept. After 2s I sent an external SIGINT to the runner, then listed leftover processes with pgrep. I did not launch the full `./uncle --noui` build because that would invoke paid agent stages.
-- **Expected result:** Exit status is 130, all stderr output written before interrupt is present before a single status line, and no descendant processes survive.
-- **Actual result:** Exit status was 130. Captured stderr held 'pending-err-1' and 'pending-err-2' exactly once each, and nothing leaked to stdout. No 'driver exited with status' line appeared at all, so there was no more than one status line (the unit test allows at most one). pgrep showed the driver and grandchild alive before the signal and no processes afterwards.
+- **Action:** Ran scripts/tests/pr-publish-reason-test.sh (prepared fixture probe, read-only). It stubs gh and a remote URL with canary values (CANARY-TOKEN-9f3a, https://user:CANARYPASS@example.com/x.git), where the stubbed gh prints the canary to stdout and stderr and fails. It runs no-PR failure cases and a handoff-failure case (STUB_HANDOFF=3), then asserts on the 'PR not created:' line, the reason, and the PR line.
+- **Expected result:** The 'PR not created:' line holds only the reason key, a static message and the exit code where applicable. The canary token, the credentialed URL and any gh output do not appear in it or in the finished block.
+- **Actual result:** The script finished with '156 passed, 0 failed'. The expect_nopr assertions require exactly one 'PR not created' line, an exact reason key, no 'CANARY' and no '://' in the line. The canary assertions on the handoff-failed path found no CANARY in the reason or the PR line. The run also printed 'No such file or directory' warnings for handoff.calls and issue.calls inside the test's temp dirs. These come from the test harness's own stub bookkeeping, did not fail any assertion, and are not an application defect. I did not separately inspect the finished-block text by eye beyond the script's assertions.
 - **Defects:** None
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-101 | YES | PASS | exit=1; err.txt lines: 'Mode: unattended (default)...', 'DRIVER-ERROR-TEXT', 'uncle --noui: driver exited with status 1'; out.txt: '[+00:00:00] progress line'. The unattended-mode notice in err.txt is a pre-existing launcher notice, not driver error text. |
-| MC-102 | YES | PASS | Captured transcript: '[+00:00:21] [done] success ... canonical change-planning bundle: invalid baseline_report packet: baseline report is missing verification_commands / [+00:00:21] Total time: 22s ... / uncle --noui: driver exited with status 1 / exit=1'. Caveat: no real tty available in this environment; both streams were visible in the merged non-redirected output. |
-| MC-103 | YES | PASS | exit=3; err.txt gate lines as above; out.txt: '[+00:00:00] progress line' and '[+00:00:00] Human gate: approve PROJECT_PLAN.md'. A first attempt, with the stub exiting with raw status 3, gave exit 1 because the contract defines a gate as exit 0 without a completion banner, so I redid it that way. |
-| MC-105 | YES | PASS | help grep line 53 in both outputs; 'refusal exit=2' and 'refusal2 exit=2' with the messages above taken from err.txt. |
-| MC-106 | YES | BLOCKED-HUMAN | None. Automated coverage exists in scripts/tests/tui-failure-line-test.py, but I did not rerun or cite a driver result for it, so it is not evidence for this row. |
-| MC-107 | YES | BLOCKED-HUMAN | uncle_tui.py:102 returns 'Driver exited with status %s: %s' % (status, text or '(no output)'). The unit test tui-failure-line-test.py asserts the (no output) case at line 23 and the 130/143 cases at line 26. I did not re-run it, because the driver green-check owns automated commands. This is code-level evidence only and does not satisfy the required screenshots of the real build window. |
-| MC-200 | YES | PASS | Terminal output: exit=1; ---out (empty); ---err: DRIVER-ERROR-TEXT / uncle --noui: driver exited with status 7. Note: the headless module was invoked directly (the same python script `uncle` execs at line 437) rather than via the ./uncle shell wrapper. |
-| MC-202 | YES | PASS | 0.34s err b'Continue? [y/N] \n'; 3.13s out b'[+00:00:03] gate: needs approval\n'; 3.13s err b'uncle --noui: driver stopped without completing (gate or blocked); exit 3'; 3.14s exit=3 |
-| MC-203 | YES | PASS | Transcript: 'INT exit=130', 'TERM exit=143', 'pgrep: none'. err_INT.txt and err_TERM.txt each contained only 'pending-err MARKER203'. Code reference: scripts/lib/uncle_headless.py lines 370-371. Existing unit test test_signal_drains_pending_stderr covers the same behavior. |
-| MC-204 | YES | PASS | out.txt: '[+00:00:00] progress one' / '[+00:00:00] progress two' / '[+00:00:00] progress three'. err.txt: 'stderr-noise-abc' / 'uncle --noui: driver stopped without completing (gate or blocked); exit 3'. Files in /tmp/mc204. |
-| MC-205 | YES | BLOCKED-HUMAN | Terminal output of the function calls; uncle_tui.py:93-102 and :2063 call site. The live TUI capture the checklist requires was not performed. |
-| MC-302 | YES | PASS | /tmp/mc302.txt (pty transcript), /tmp/o (stdout), /tmp/e (stderr), captured in this run. |
-| MC-303 | YES | PASS | exit=3. /tmp/uncle-gate-err.txt: 'uncle --noui: driver stopped without completing (gate or blocked); exit 3' and 'uncle --noui: stopped at: Human gate: PROJECT_PLAN.md awaiting approval'. out: '[+00:00:00] progress line' and '[+00:00:00] Human gate: PROJECT_PLAN.md awaiting approval'. This matches the test_gate_named_on_stderr and test_fake_drivers assertions in scripts/tests/headless-run-test.py. The real-launcher path was not exercised end to end. |
-| MC-304 | YES | BLOCKED-HUMAN | uncle_tui.py:102; python3 scripts/tests/tui-failure-line-test.py -> Ran 6 tests, OK. Check requires a human-visible TUI observation of a real failing build. |
-| MC-403 | YES | PASS | Transcript: [0.03] '[+00:00:00] Approve plan? [y/N] ' ; [0.03] 'noise1'; [1.04] 'noise2'; [sent y]; [2.60] "GOT 'y\n' after 2.6"; exit-3 status line. |
-| MC-404 | YES | PASS | rc=2; err.txt: 'Unknown argument: --bogus-flag' + 'Usage: uncle [-h/--help/--performance/--runs] [--attended] [--noui] ...'; out.txt empty. Source uncle:209-213 sets UNCLE_REFUSE_CODE=2 under --noui. Only one refusal path (invalid argument) was exercised. |
-| MC-405 | YES | PASS | cat -v err.txt output: 'hello red token=[REDACTED]' / 'last line key [REDACTED]' / 'uncle --noui: driver stopped without completing (gate or blocked); exit 3'; grep -c s3cr3t err.txt out.txt -> 0 and 0. |
-| MC-407 | YES | PASS | Before SIGINT: pids 89762 (driver) and 89763 (grandchild). exit=130. After: pgrep printed 'none'. stdout: 'RC 130'. stderr: 'pending-err-1' then 'pending-err-2'. Caveat: this exercised the headless runner directly, not the full uncle CLI wrapper. The status line was absent rather than present after the stderr output. |
+| MC-104 | YES | PASS | Fixture transcript: stderr 'PR not created: issue-not-eligible: the issue is not eligible to close'; reason=issue-not-eligible; gh log '(none)'; finished output 'PR: not created (issue not eligible)'. Fixture used stubbed gh/engine/issue_close_eligible, not a live GitHub. |
+| MC-106 | YES | PASS | Fixture transcript as described; gh stub log 'gh pr create --draft'. Handoff/gh were stubs, not live GitHub. |
+| MC-200 | YES | PASS | Script /tmp/mc200.sh output captured above; empty ls-remote; absent handoff/gh log files. |
+| MC-201 | YES | PASS | Test output line 'pr-publish-reason-test: 156 passed, 0 failed'. Assertions are at scripts/tests/pr-publish-reason-test.sh lines 117-124. Gate code is at scripts/lib/change-pr.sh lines 138-157. The fixture stubs gh/handoff, so no real PR is created. |
+| MC-204 | YES | PASS | pr-publish-reason-test: 156 passed, 0 failed; change-pr.sh:197-198; finished_extras.py REASONS/FALLBACK; test lines 190-205. |
+| MC-300 | YES | PASS | git ls-remote: 4b7543880c393d653f74e84c3556513217558748 refs/heads/feat. gh.log: 'gh pr create --title t --body b'. Finished block: 'Total time: unknown / PR: published'. |
+| MC-301 | YES | PASS | bash scripts/tests/pr-publish-reason-test.sh -> '156 passed, 0 failed'; assertions at scripts/tests/pr-publish-reason-test.sh lines 95-154 and section 8 (lines 188+). |
+| MC-302 | YES | PASS | Fixture output: stderr line quoted above; finished block line quoted above; stub args file 'pr create --draft'; scripts/lib/change-pr.sh:195-199 and finished_extras.py pr_line. |
+| MC-303 | YES | PASS | Output line: 'pr-publish-reason-test: 156 passed, 0 failed'. Canary assertions are at scripts/tests/pr-publish-reason-test.sh:102 and :153-154. This is a scripted simulation with an automated string check, not a by-eye inspection of a real run. |
+| MC-401 | YES | PASS | Transcript: RC=0 REASON=published HANDOFFS=1; stderr contained 'PR created (verdict READY): ready for review.'; finished block 'Total time: unknown / PR: published'. Caveat: the harness stubs change_pr_engine (handoff, validate, commit-tree) and gh, and no real bare remote push was exercised; the 'push and PR create' step is a stubbed handoff call, not a real git push. The stub's canary token/URL printed to stdout/stderr come from the stub engine itself, not from the product's reason line. |
+| MC-402 | YES | PASS | Test output tail: 'pr-publish-reason-test: 156 passed, 0 failed'; scripts/tests/pr-publish-reason-test.sh:132,139-141,190-195; scripts/lib/change-pr.sh:124,197-198. |
+| MC-403 | YES | PASS | Terminal output of 'bash scripts/tests/pr-publish-reason-test.sh': 'pr-publish-reason-test: 156 passed, 0 failed'; test source lines 95-130 of scripts/tests/pr-publish-reason-test.sh. |
+| MC-405 | YES | PASS | Output tail: 'pr-publish-reason-test: 156 passed, 0 failed', exit status 0. Assertions at scripts/tests/pr-publish-reason-test.sh:136-137 (handoff 1 and 3, including the exit-code check) and :135 (rerun created -> published). |
+| MC-406 | YES | PASS | Test output tail 'pr-publish-reason-test: 156 passed, 0 failed'; scripts/lib/change-pr.sh:84-97; scripts/tests/pr-publish-reason-test.sh:157-186. |
+| MC-407 | YES | PASS | Console output of the test run ended with 'pr-publish-reason-test: 156 passed, 0 failed' (exit 0). Assertions are at scripts/tests/pr-publish-reason-test.sh:96-103 and :151-154. |

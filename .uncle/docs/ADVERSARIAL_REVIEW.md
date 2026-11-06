@@ -1,160 +1,168 @@
-## AR-001: The plan never says where lines from the driver's stderr that are not errors (banners, gate prompts, progress notes) end
+## AR-001: Plan lists reason keys but not which publish exit maps to which.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1 ('Stderr lines also feed handle_line') against CHANGE_SPEC section 4 and S-5 ('gate messages unchanged').  Suggested sentence: 'Every driver stderr line is written verbatim to process stderr only; handle_line may react to it but must never write it to stdout, and gate/banner text formatted by handle_line keeps its current stream.'
-- Failure: The plan never says where lines from the driver's stderr that are not errors (banners, gate prompts, progress notes) end up. D-1 sends all stderr to `err`, but the spec's desired behavior reads as if only errors go there. Also, `handle_line` is fed stderr lines, so whether gate or banner text is shown on stdout or stderr is left open.
+- References: change-pr.sh:120-129 has four return-0 branches; CHANGE_PLAN s7 lists keys without a mapping.
+- Failure: Plan lists reason keys but not which publish exit maps to which. Decision: validate exit 3 with no override, or a declined or failed verdict-override -> verdict-not-ready; any other validate failure, including the post-override re-validate -> validate-failed.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: D-2 says the final summary on `err` is preceded by nothing extra and that the 'status line is retained'.
+## AR-002: Plan says 'stop overwriting' the reason but not which lines change.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2 against CHANGE_SPEC AC-3 and S-2 ('status line only (B-2)').  Suggested sentence: 'On non-zero exit the 20-line buffer is never re-emitted; only the existing status line is written, once, to stderr, after all driver stderr lines have been flushed.'
-- Failure: D-2 says the final summary on `err` is preceded by nothing extra and that the 'status line is retained'. AC-3 and S-2 require stderr to contain the driver's error text and the status line. The plan never says what the status line is, which stream it uses, or whether the 'last 20 stderr lines' buffer is replayed. It is also unclear whether replaying would duplicate lines.
+- References: change-pr.sh:70 and :98 overwrite after change_pr_publish; spec AC-3 gives no line scope.
+- Failure: Plan says 'stop overwriting' the reason but not which lines change. Decision: delete the post-publish publication-pending assignments at change-pr.sh:70 and :98; set publication-pending only if publish left the reason empty; keep handoff-disabled.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: The plan does not define the TUI failure line (AC-5, S-3).
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-3 and risk row 4 against CHANGE_SPEC AC-5.  Suggested sentence: 'The TUI appends exactly "Driver exited with status N: <last non-empty build-window line, or (no output)>" for every non-zero exit except a user-initiated stop (130/143), and nothing on exit 0.'
-- Failure: The plan does not define the TUI failure line (AC-5, S-3). D-3 says 'last error line seen', but under merged stderr the TUI cannot tell stderr from stdout. The plan leaves open what happens when the driver printed no output, what the exact wording is, and whether exit codes 130, 143 or 3 (cancelled, gate) count as failure.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-004: The ordering of the status line against late stderr output is not specified.
+## AR-003: 'published' on successful handoff is ambiguous: handoff exit 0 can occur when a PR already exists, and a declined consen
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN sections 11 and 12 against CHANGE_SPEC V-4 ('none dropped at EOF').  Suggested sentence: 'After driver exit, timeout or signal, the loop drains both fds until EOF (or a 2 s cap) before the status line is written, and any descendant holding either fd open is killed by _killpg.'
-- Failure: The ordering of the status line against late stderr output is not specified. Both pipes are read in one select loop and the 'final kill' happens after EOF on both. The plan does not say whether the loop drains all remaining stderr bytes after the process exits or after a signal or idle timeout. Output could be lost on kill, which V-4 forbids.
+- References: change-pr.sh:1457-1465 returns 0 for an already-created PR; :1508-1509 raises on decline; :1783-1790 exits 1.
+- Failure: 'published' on successful handoff is ambiguous: handoff exit 0 can occur when a PR already exists, and a declined consent exits 1. Decision: published means handoff exit 0 only; any nonzero exit, including declined consent, is handoff-failed, and the stderr line includes the exit code.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: The plan does not say how stderr output interacts with stdout prompts that lack a trailing newline.
+## AR-004: Plan does not state the reason when ORIGIN_FILE is empty, when the verdict is non-READY under an override, or when commi
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 8 ('Prompts without trailing newline must still display promptly') against CHANGE_PLAN D-1 ('partial last line flushed at EOF').  Suggested sentence: 'A partial stderr line is flushed after the same idle timeout used for stdout prompts, and a stderr write never splits a partial stdout line already pending.'
-- Failure: The plan does not say how stderr output interacts with stdout prompts that lack a trailing newline. The spec requires such prompts to display promptly. Stderr line-by-line flushing with partial lines held until EOF could hold back a stderr prompt, while a partial stdout line is pending, and could interleave mid-line.
+- References: change-pr.sh:130-159: the case branches and the attested=...||"" fallback at line 158 are unspecified in the plan.
+- Failure: Plan does not state the reason when ORIGIN_FILE is empty, when the verdict is non-READY under an override, or when commit-tree is empty. Decision: issue-not-eligible is set only when issue_close_eligible runs and fails; an empty commit-tree that fails assert_tree_matches_attested records tree-mismatch.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: The plan does not define the redaction and escape-filter rules for output with sequences or secrets split across a read
+## AR-005: 'One stderr line per no-PR path' conflicts with existing stderr and stdout messages.
+
+- Severity: MEDIUM
+- References: change-pr.sh:159 already echoes 'Publish refused' to stderr; engine prints 'PR pending:' to stdout at :1778 and :1789; spec AC-2.
+- Failure: 'One stderr line per no-PR path' conflicts with existing stderr and stdout messages. Decision: add exactly one new line, formatted 'PR not created: <key>: <detail>', to stderr; leave existing messages untouched.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-006: Stale reason across direct change_pr_publish calls is unspecified.
 
 - Severity: LOW
-- References: CHANGE_PLAN D-1 ('second EscapeFilter') against CHANGE_SPEC AC-2.  Suggested sentence: 'Stderr uses its own EscapeFilter and line buffer, redaction runs on complete lines only, and invalid UTF-8 bytes are replaced with U+FFFD.'
-- Failure: The plan does not define the redaction and escape-filter rules for output with sequences or secrets split across a read boundary or across the stdout/stderr pair. A single shared `EscapeFilter` or a second one is ambiguous. Binary or invalid UTF-8 bytes on stderr are also unspecified.
+- References: change-pr.sh:56 resets only in change_pr_complete; SI4 demands a non-empty key on every no-PR return of publish.
+- Failure: Stale reason across direct change_pr_publish calls is unspecified. Decision: change_pr_publish clears CHANGE_PR_EXTRAS_REASON on entry and sets it on every return path.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Stderr partial lines are flushed only at EOF, but Spec §8 requires prompts without newline to display promptly.
+## AR-007: change_pr_complete's unattended and headless branches force publication-pending after change_pr_publish, so AC-3 is ambi
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1 'line by line... partial last line flushed at EOF' vs CHANGE_SPEC §8 prompts without trailing newline.
-- Failure: Stderr partial lines are flushed only at EOF, but Spec §8 requires prompts without newline to display promptly. Plan should say: a stderr partial line is flushed after the same idle/prompt heuristic as stdout, not only at EOF.
+- References: change-pr.sh:69-70 and 97-98 overwrite the reason; line 104 does not.
+- Failure: change_pr_complete's unattended and headless branches force publication-pending after change_pr_publish, so AC-3 is ambiguous about which call sites are fixed. Plan should say: remove the unconditional assignment at both sites; set publication-pending only if publish left the reason empty.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Gate/banner detection now sees two sources with undefined order when both fds are ready.
+## AR-008: change_pr_publish has several silent returns the plan does not map to reason keys: validate failure other than 3, status
 
 - Severity: HIGH
-- References: D-1 'Stderr lines also feed handle_line'; Spec §15 interleaving not guaranteed; Risks row on existing tests.
-- Failure: Gate/banner detection now sees two sources with undefined order when both fds are ready. Plan should say: when both fds are ready, drain stdout before stderr each iteration, with handle_line semantics identical for both.
+- References: change-pr.sh:120-129 returns 0 in four places with no reason; plan section 8 lists keys but no mapping.
+- Failure: change_pr_publish has several silent returns the plan does not map to reason keys: validate failure other than 3, status 3 with no override, declined override, and re-validate after override. Plan should say: rc 3 with no or declined override sets verdict-not-ready; any other validate failure sets validate-failed.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: D-2 keeps the last 20 stderr lines but emits nothing extra, while Spec §4 says the final summary includes the driver's l
+## AR-009: The plan does not say when 'published' is recorded.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-2 vs CHANGE_SPEC §4 'final stderr summary includes the driver's last error lines'.
-- Failure: D-2 keeps the last 20 stderr lines but emits nothing extra, while Spec §4 says the final summary includes the driver's last error lines. Plan should say: buffered lines are not re-emitted, and Spec §4 wording is amended accordingly.
+- References: change-pr.sh:1457-1465 exits 0 on already-created; lines 150-154 proceed to handoff on override.
+- Failure: The plan does not say when 'published' is recorded. Handoff exits 0 on an already-created rerun, and a non-READY override proceeds to handoff. Plan should say: published is set only when handoff exits 0, including the rerun path and override-created PRs.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Kill, idle-timeout and signal paths (exit 130/143) are unspecified for pending stderr bytes, risking V-4 violation.
+## AR-010: Handoff exit 0 does not always mean a ready PR: unattended mode publishes a draft over a failed audit.
 
 - Severity: MEDIUM
-- References: V-4 'none dropped at EOF'; Plan §11 covers only EOF, not kill-triggered paths.
-- Failure: Kill, idle-timeout and signal paths (exit 130/143) are unspecified for pending stderr bytes, risking V-4 violation. Plan should say: on kill or signal, drain and flush both fds before the final status line.
+- References: change-pr.sh:1480-1492 and 1514-1518 handle release_skipped/draft; lines 1777-1790 map exits 3 and 1 to 'PR pending'.
+- Failure: Handoff exit 0 does not always mean a ready PR: unattended mode publishes a draft over a failed audit. Plan should say: handoff-failed covers any nonzero rc; published requires rc 0, and the stderr line states whether the PR is a draft.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: D-3 needs 'last error line seen' but the TUI stream is merged, so errors are indistinguishable from ordinary output.
+## AR-011: The reason is reset only in change_pr_complete, so a stale value could survive a direct change_pr_publish call.
+
+- Severity: LOW
+- References: change-pr.sh:56 resets it; change_pr_publish at line 107 does not.
+- Failure: The reason is reset only in change_pr_complete, so a stale value could survive a direct change_pr_publish call. Plan should say: change_pr_publish clears CHANGE_PR_EXTRAS_REASON on entry.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: Plan adds a stderr line per no-PR path but never says whether handoff failure output (engine, gh, remote URLs) may be ec
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-3 and §6 'TUI unchanged' vs Spec S-3.
-- Failure: D-3 needs 'last error line seen' but the TUI stream is merged, so errors are indistinguishable from ordinary output. Plan should say: the last error text is the last non-empty line of merged output before exit.
+- References: CHANGE_PLAN s12 and s19: 'handoff exit status captured ... then reported'; 'One stderr line per no-PR path'. Content of the line is not constrained.
+- Failure: Plan adds a stderr line per no-PR path but never says whether handoff failure output (engine, gh, remote URLs) may be echoed; tokens or credentialed URLs could leak. Say: 'The stderr reason line has only the reason key and a static message, never engine/gh output, URLs or env values.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Redaction applied per line on the stderr stream is unspecified for secrets split across read chunks, and for the partial
+## AR-013: Reason keys flow via CHANGE_PR_EXTRAS_REASON into finished_extras.py, but the render rule for unknown or malformed value
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC s7 'Unknown reason keys already fall back safely' is unverified; CHANGE_PLAN s7 fixes the key set but not the render rule.
+- Failure: Reason keys flow via CHANGE_PR_EXTRAS_REASON into finished_extras.py, but the render rule for unknown or malformed values is unstated and the spec's 'fall back safely' claim is uncited. Say: 'finished_extras.py renders only allowlisted keys; any other value renders as publication-pending, never verbatim.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-014: Unattended path publishes a draft PR over a non-READY verdict via UNCLE_AUTO_PUBLISH; once complete stops overwriting, i
+
+- Severity: MEDIUM
+- References: change-pr.sh:66-71, 122 and 1747-1750 (override written, unattended notice printed). Plan s7 lists only 'published'.
+- Failure: Unattended path publishes a draft PR over a non-READY verdict via UNCLE_AUTO_PUBLISH; once complete stops overwriting, it would report 'published' for an unreviewed draft. Say: 'Publishing over a non-READY verdict by override or auto-publish records published-draft-unreviewed, and the stderr line names the verdict.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-015: AC-5 allows fixing 'any proven defect' on the skip path but does not say whether the fix may touch the SI1/SI2 gates in
+
+- Severity: LOW
+- References: CHANGE_PLAN s1(d) and R-1 versus change-pr.sh:139-148, where a wrong gate input already caused a silent skip.
+- Failure: AC-5 allows fixing 'any proven defect' on the skip path but does not say whether the fix may touch the SI1/SI2 gates in the wrapper (issue_close_eligible and tree assertion `|| return 0`). Say: 'AC-5 may correct gate inputs but may not remove or loosen any gate; that is a deviation needing human approval.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: Stubbing issue_close_eligible and assert_tree_matches_attested hides the likely skip.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1 says bytes pass through EscapeFilter, redact, then lines are written; AC-2 requires a partial last line redacted.
-- Failure: Redaction applied per line on the stderr stream is unspecified for secrets split across read chunks, and for the partial last line at EOF. Plan must say: stderr is buffered to complete lines (or EOF) before redact runs, never redacting raw chunks.
+- References: CHANGE_PLAN s16-17 lists the stubs; change-pr.sh:145-148 and :159 are the silent return 0 sites.
+- Failure: Stubbing issue_close_eligible and assert_tree_matches_attested hides the likely skip. Plan sentence: 'The AC-5 regression test runs the real issue_close_eligible and assert_tree_matches_attested on a fixture; only gh and network are stubbed.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: The plan does not say how unbounded or very long stderr lines are handled, or how the 20-line retention interacts with t
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-2 keeps the last 20 stderr lines with no length cap and does not say whether they are stored pre- or post-redaction.
-- Failure: The plan does not say how unbounded or very long stderr lines are handled, or how the 20-line retention interacts with them. Plan must say: stderr line length and retained buffer are capped, and the retained lines are the redacted text.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-014: TUI failure line includes the last error text, but the plan does not say whether that text is redacted or escape-filtere
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-3 and AC-5 appends exit status plus the last error line to the build window; V-2 scope is headless only.
-- Failure: TUI failure line includes the last error text, but the plan does not say whether that text is redacted or escape-filtered. Plan must say: the TUI failure line text passes through the same redact and EscapeFilter as other build-window output.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: D-2 contradicts the spec on the final summary: D-2 says nothing extra is emitted, while the spec says stderr contains bo
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-1 and D-2 versus CHANGE_SPEC section 4; handle_line is fed stderr in D-1.
-- Failure: D-2 contradicts the spec on the final summary: D-2 says nothing extra is emitted, while the spec says stderr contains both the driver's error text and the status line. Stderr lines feeding handle_line also leaves unspecified whether a gate trigger on stderr is trusted. Plan must say: the final summary adds no replay of lines, and gate detection on stderr lines is intended or ignored.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: D-1 sends stderr lines to handle_line and D-2 says the final summary is preceded by nothing extra, but the plan never sa
+## AR-017: Reasons for the early returns after validate are unspecified.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1/D-2 versus CHANGE_SPEC AC-3. D-2 keeps 'the last 20 stderr lines' but says they are not re-emitted. The plan should say: 'Each stderr line is written to err exactly once, as it arrives; the exit summary writes only the status line and never replays the buffer.'
-- Failure: D-1 sends stderr lines to handle_line and D-2 says the final summary is preceded by nothing extra, but the plan never says whether stderr lines are also echoed or formatted like stdout lines. AC-3 requires 'driver error text and the status line' on stderr, and the plan does not say whether the 20-line buffer is replayed at exit. Tests could disagree on whether the error text appears once or twice.
+- References: change-pr.sh:120-129 has four silent return 0 paths; CHANGE_PLAN s7 names only validate-failed and verdict-not-ready.
+- Failure: Reasons for the early returns after validate are unspecified. Plan sentence: 'validate exit 1 or a failing second validate sets validate-failed; exit 3 with no override or a declined override sets verdict-not-ready.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: D-3 says the TUI failure line shows the 'last error line seen', but the plan never defines what that is when the TUI mer
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-3 and risk row 4 ('TUI exit-handling site not yet read'), versus CHANGE_SPEC AC-5. The plan should say: 'The failure line is `driver exited with status N: <last non-empty output line>`, or `driver exited with status N` when there is no output; it is shown only for non-zero exits, and is also shown for signal exits 130 and 143.'
-- Failure: D-3 says the TUI failure line shows the 'last error line seen', but the plan never defines what that is when the TUI merges stderr into stdout (B-6). It also never says what shows when the driver emitted no output, when the exit code is 0, or when the exit is a signal, 130 or 143. AC-5 cannot be tested without these answers.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: The test strategy says the TUI test is placed in the headless suite 'if a pure helper is extractable', else in a new fil
+## AR-018: How change_pr_complete preserves the reason on every path is unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 16 versus Change-impact table row 5 and step 3 Owns. The plan should say: 'Extract a pure function `format_failure_line(status, last_line)` in uncle_tui.py and test it in the new file scripts/tests/tui-failure-line-test.py.'
-- Failure: The test strategy says the TUI test is placed in the headless suite 'if a pure helper is extractable', else in a new file. The plan lists the new file in the change-impact table and the step 3 'Owns' list as definite. The test location and the helper's existence are therefore left open.
+- References: change-pr.sh:69-71 and :97-99 overwrite it; :104 does not. AC-3 and SI4 do not separate these paths.
+- Failure: How change_pr_complete preserves the reason on every path is unspecified. Plan sentence: 'change_pr_complete never assigns CHANGE_PR_EXTRAS_REASON after change_pr_publish returns, except publication-pending when it is empty.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: The plan leaves unspecified how stderr and stdout interact when both fds are open.
+## AR-019: 'One stderr line' collides with existing multi-line output from assert_tree_matches_attested and the engine's stdout 'PR
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1, section 11, and section 12. The plan should say: 'Gate and prompt detection use stdout only; stderr lines feed handle_line only for banner detection. Tests assert content per stream, never ordering across streams.'
-- Failure: The plan leaves unspecified how stderr and stdout interact when both fds are open. Partial-line prompts on stdout must display promptly while stderr is mid-line, and a prompt-detection pass fed by stderr could misfire. AC-4 requires gate behavior to be unchanged, yet D-1 feeds stderr to handle_line. The interleaving test is nondeterministic unless the plan fixes it.
+- References: change-pr.sh:31-49 prints several stderr lines; :1778-1789 prints to stdout. AC-2 says one explanatory stderr line.
+- Failure: 'One stderr line' collides with existing multi-line output from assert_tree_matches_attested and the engine's stdout 'PR pending'. Plan sentence: 'Each no-PR path adds exactly one stderr line beginning "PR not created: <key>", in addition to existing diagnostics.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: The plan does not say how redaction behaves when a secret is split across stderr chunk boundaries or lines.
+## AR-020: Handoff exit 0 does not mean a PR was created (declined or early-return paths).
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1 ('second EscapeFilter', redact) and CHANGE_SPEC AC-2. The plan should say: 'Redaction is applied per complete line after the filter, and a partial last line is redacted before it is flushed at EOF.'
-- Failure: The plan does not say how redaction behaves when a secret is split across stderr chunk boundaries or lines. It also does not say whether a separate EscapeFilter instance is required to stop escape state leaking between the two streams. AC-2 tests could pass or fail depending on the implementation.
+- References: CHANGE_PLAN s12 detects success by exit status only; change-pr.sh:1464-1465 and :1507-1509 return without creating a PR.
+- Failure: Handoff exit 0 does not mean a PR was created (declined or early-return paths). Plan sentence: 'published is set only when handoff exits 0 and the journal phase is created; otherwise handoff-incomplete.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: The empty ORIGIN_FILE case, where the issue gate is skipped, is untested and has no stated reason.
+
+- Severity: MEDIUM
+- References: change-pr.sh:130 and :143-155; the CHANGE_PLAN test list covers only AC-1..4 paths.
+- Failure: The empty ORIGIN_FILE case, where the issue gate is skipped, is untested and has no stated reason. Plan sentence: 'When ORIGIN_FILE is empty the issue gate is skipped, and the test matrix includes that case.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

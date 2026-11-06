@@ -1,80 +1,73 @@
-# Baseline Report
+# Baseline report
 
-Omitted sections: Reproduction result (feature/bug is behavioral, not run here); API/schema contracts (no schema; only exit codes and stream contract)
+Omitted sections: Reproduction result (not reproduced here: stage forbids running flows; reproduction is plan step 1); Areas outside change folded into section 12.
 
 ## 1. Change-request summary
-Issue 174 (CHANGE_REQUEST.md): every Uncle error goes to stderr, and is also visible in `--noui` and in the TUI build window; callers get stderr text plus non-zero exit.
+See .uncle/docs/CHANGE_REQUEST.md: regression, no PR/push after a finished run; cause unconfirmed; when no PR is made the reason must be reported.
 
 ## 2. Repository architecture
-- `uncle` (bash launcher, 1012 lines): parses flags; `--noui`/no-tty with a startup action execs `scripts/lib/uncle_headless.py` (uncle:418-441).
-- `scripts/lib/uncle_headless.py` (408 lines): spawns driver (`stagegate.sh`/`change-workflow.sh`), streams output as plain text.
-- `uncle_tui.py` (8372 lines): curses UI; spawns driver and feeds the build window.
-- Drivers: `scripts/stagegate.sh`, `scripts/change-workflow.sh`, `scripts/workflow.sh`, plus `scripts/lib/*`.
+Bash driver `scripts/change-workflow.sh` sources libs in `scripts/lib/`. PR publication = bash wrapper `change-pr.sh` (`change_pr_complete`, `change_pr_publish`) plus an embedded Python engine (`change_pr_engine`, actions validate/commit-tree/verdict-override/completed-signing-resume/handoff) that runs git push and `gh pr create`. Finished-block text comes from `scripts/lib/finished_extras.py` (REASONS map, lines 12-15).
 
 ## 3. Relevant code paths
-- `uncle_headless.py:167` Popen with `stderr=subprocess.STDOUT` (driver stderr merged into stdout).
-- `uncle_headless.py:183-278` `_stream`: select loop on one fd, `handle_line`, `_Writer.emit` to `out` (stdout) with `[+hh:mm:ss]` prefix and `redact`.
-- `uncle_headless.py:285-296`: only status-level messages (`driver exited with status N`, gate stop) go to `err`.
-- `uncle_headless.py:107-115` `classify_exit`; `uncle:209-213,234` refusals already print to stderr.
-- `uncle_tui.py:2213` Popen `stderr=subprocess.STDOUT`; `_reader` 2234; `drain_output` 2249 -> `_absorb_line` (build window); `proc_done` set on EOF.
-- Drivers write errors with `>&2` (stagegate.sh 67 sites, change-workflow.sh 47).
+- scripts/change-workflow.sh:4979-5003 calls `change_pr_complete` (unattended and attended branches), then `change_pr_extras_print` (437-448).
+- scripts/lib/change-pr.sh:55-105 `change_pr_complete`; 107-161 `change_pr_publish`; 26-53 `assert_tree_matches_attested`; 1429-1520 engine `handoff`; 1589 git push; 1621 gh pr create; 1775-1790 engine error handler (prints `PR pending: ...` to stdout, exit 1 or 3).
+- Silent `return 0` in `change_pr_publish`: line 123 and 126 (verdict not READY / override declined), 128-129 (validate failed), 148 (`issue_close_eligible ... || return 0`), 159 (tree mismatch, message only to stderr); line 160 `change_pr_engine handoff || true` discards the handoff exit status.
+- change-pr.sh:70 and 98 set `CHANGE_PR_EXTRAS_REASON=publication-pending` unconditionally after `change_pr_publish`, even when the PR was created.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `--noui` run, driver prints error to its stderr | Appears on stdout (merged), NOT on stderr; `2>file` is empty | uncle_headless.py:167 | No (MODIFY) |
-| B-2 | `--noui` driver exits non-zero | stderr gets `driver exited with status N`; exit 1 | uncle_headless.py:288-289; headless-run-test.py:82-91 | Yes |
-| B-3 | `--noui` stops at gate | exit 3, stderr names gate | headless-run-test.py:75-87 | Yes |
-| B-4 | `--noui` stdout line | `[+hh:mm:ss]` prefix once per line, escapes stripped, secrets redacted | headless-run-test.py:98-137 | Yes |
-| B-5 | Launcher refusals | stderr, exit 2 under `--noui` | uncle:209-234 | Yes |
-| B-6 | TUI driver stderr | merged into build window via `_absorb_line` | uncle_tui.py:2213,2249 | Yes |
-| B-7 | TUI driver exits non-zero | build window shows whatever driver printed; no explicit failure line (to be confirmed in implementation) | uncle_tui.py:2249-2278 | Partly |
+| B1 | Unattended run, origin recorded, CLOSE_ISSUE=1 | change_pr_publish 0 with UNCLE_AUTO_PUBLISH=1 (draft when not READY) | change-pr.sh:66-72; pr-auto-publish-test.sh | Yes |
+| B2 | Attended, interactive | change_pr_publish 1, dialogs | change-pr.sh:104; pr-auto-publish-test.sh | Yes |
+| B3 | Handoff disabled/headless and no completed signed commit | prints disabled message, reason handoff-disabled, no PR | change-pr.sh:84-96 | Yes |
+| B4 | Verdict not READY, no override | publish returns 0 silently; engine prints `PR pending:` to stdout only | change-pr.sh:120-129, 1778 | Yes (gating) |
+| B5 | issue_close_eligible fails | silent return 0, no PR, no reason | change-pr.sh:145-148 | Gate yes; silence no |
+| B6 | Tree differs from attested | stderr `Publish refused`, no PR | change-pr.sh:159 | Yes |
+| B7 | Handoff engine fails | status discarded by `|| true` | change-pr.sh:160 | Gate yes |
+| B8 | After any publish call | extras reason forced to publication-pending | change-pr.sh:70,98 | No (misleading) |
+| B9 | Any path | driver exits 0 | change-workflow.sh:5004 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Exit precedence: signal > nonzero driver > no banner > ok | `classify_exit` | ExitCodes.test_precedence_table | High |
-| I-2 | No secret/escape sequence reaches output | `redact`, `EscapeFilter` | Output.test_redaction, Filter tests | High |
-| I-3 | No surviving descendants; signals forwarded | `_killpg`, signal handler | Signals tests | High |
-| I-4 | `--noui` never imports curses | launcher exec | launcher-noui-test.sh | Medium |
+| I1 | Tree must match attested tree before publishing | assert_tree_matches_attested | gitignore-clean-end-test.py | High |
+| I2 | Non-READY audit needs human override (or unattended draft) | engine verdict-override | pr-verdict-binding-test.sh | High |
+| I3 | Never force-push | engine push at line 1589 uses plain refspec | UNRESOLVED (no dedicated test found) | Medium |
+| I4 | Unattended publication never opens a dialog | UNCLE_AUTO_PUBLISH + </dev/null | pr-auto-publish-test.sh | High |
+| I5 | Bash 3.2 compatible driver libs | convention | shell suites | Medium |
+
+## 6. Interface contracts
+Engine exit codes: 0 ok, 1 pending/error, 3 recoverable (not READY/attestation). `CHANGE_PR_EXTRAS_REASON` keys consumed by finished_extras.py REASONS; unknown keys fall back to not-published (finished_extras.py:106).
 
 ## 7. Existing automated-test coverage
-- `scripts/tests/headless-run-test.py` (319 lines) drives `H.run(...)` with fake drivers, capturing `out`/`err` StringIO.
-- `scripts/tests/launcher-noui-test.sh` covers launcher.
-- Shell suites (run-shell-tests.sh) and Python suites (run-python-tests.sh) use separate temp dirs and no shared ports; they are independent and grouped.
+scripts/tests/pr-auto-publish-test.sh (routing with stubbed publish/engine), pr-verdict-binding-test.sh, unattended-test.sh (stubs change_pr_complete), gitignore-clean-end-test.py, supervisor-test.py. No test exercises change_pr_publish reason reporting. Shell and Python runners use separate temp dirs and share no ports, so they run as one parallel group.
 
 ## 9. Baseline test results
-Commands from CLAUDE.md/stage instructions: `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` both exist. Not executed here; driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout.
+Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (Uncle's documented runners). Not run here; the driver's baseline (.uncle/workflow/green-check.baseline.tsv) is authoritative. Some Python suites are known to fail on a clean checkout; pre-existing failures are recorded by the driver.
 
-## 10. Existing failures, warnings, flaky behavior
-None documented in the files inspected; UNRESOLVED until driver baseline.
+## 10. Existing failures/warnings
+None documented in-repo beyond the note that some Python suites fail clean. UNRESOLVED: which.
 
 ## 12. Likely change surface
-`scripts/lib/uncle_headless.py`, `uncle_tui.py` (failure line), `scripts/tests/headless-run-test.py`, `scripts/tests/launcher-noui-test.sh` (if needed), `uncle` help text.
+scripts/lib/change-pr.sh (change_pr_complete/publish), scripts/lib/finished_extras.py (REASONS), one new shell test.
 
 ## 13. Regression-sensitive components
-select loop and EOF handling in `_stream`; output ordering; timestamp prefix; attended prompts (no trailing newline) which must still be shown promptly; redaction of the new stderr stream.
+change_pr_publish gating order, engine handoff, attestation/tree checks, unattended routing (pr-auto-publish-test.sh stubs change_pr_publish and change_pr_engine).
 
 ## 14. Outside the change
-Driver shell scripts' error wording and `>&2` sites; reviewer scripts; exit-code table.
+Publication dialogs, audit/approval gates, attestation logic, home_agent_session.py, gate_answer.py, supervisor, GITHUB_INTEGRATION.md semantics.
 
 ## 15. Unknowns and assumptions
-- Assumption: drivers already write errors to their stderr; the loss happens at the `stderr=STDOUT` merge.
-- Unknown: exact TUI behavior on non-zero exit (B-7); resolved by reading `uncle_tui.py` near 2249-2278 and `_absorb_line` during implementation.
+- Operator's actual skip path is unknown; static reading shows several silent returns and an overwritten reason, but none proven to be the operator's cause. Plan step 1 must reproduce.
+- Assumed commits a6c05c2/355822d/45d8feb did not touch change-pr.sh (git log on it shows last change 50b8c18); the regression may be in state/inputs (e.g. verdict or origin files) rather than the library.
 
 ## 16. Initial risk assessment
-Medium: splitting streams changes interleaving and can deadlock a prompt if a second pipe is mishandled; mitigated by tests.
+Medium: wrong fix could weaken gates. Mitigation: only reporting/status changes plus whatever the reproduction proves broken.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-```
-
-## Parallel verification groups
-
-```text
-1 2
 ```
 

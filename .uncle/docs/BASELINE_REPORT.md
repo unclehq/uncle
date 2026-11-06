@@ -1,71 +1,59 @@
-# Baseline report: issue 165 (bare `uncle --noui` REPL)
+# Baseline Report (Issue 168)
 
-Omitted sections: Reproduction (feature, not a bug); Baseline test results as run output (the driver supplies them)
+Omitted sections: Reproduction (feature, not bug); Schema contracts (none)
 
 ## 1. Change-request summary
-See .uncle/docs/CHANGE_REQUEST.md. Bare `--noui` (no startup action) currently refused with exit 2; it must start a plain-text interactive chat that can start builds via the validated home actions. One-shot forms unchanged.
+See .uncle/docs/CHANGE_REQUEST.md: in `uncle --noui`, a one-character slash command whose first letter matches exactly one command should run that command.
 
 ## 2. Repository architecture
-- `uncle` (bash launcher, 1001 lines): parses flags, resolves attended/unattended, execs TUI (`uncle_tui.py`, 8367 lines, curses) or headless runner.
-- `scripts/lib/uncle_headless.py` (378 lines): `run()` streams a driver with an escape filter, signal forwarding, attended gate pass-through on stdin; `main()`/`_driver_from_env()` build driver argv from `UNCLE_STARTUP_*`.
-- `scripts/lib/run_duties.py`: shared TUI/headless duties (`build_driver_command`, banners, `startup_brief_document`, `write_change_request`).
-- `scripts/lib/home_actions.py` (`prompt`, `parse_reply`, action schema), `home_chat.py`, `home_agent_session.py` (persistent home agent), `supervisor_chat.py`, `supervisor_runner.py`.
-- Home-action *execution* (`_home_action`, `_stop_build`, `_resume_build`, `_clear_build`, `run_named_stage`) lives inside `uncle_tui.py` class methods, not in a shared module.
+Shell driver plus Python libs. The --noui REPL is `scripts/lib/uncle_repl.py`; tests in `scripts/tests/repl-session-test.py` (subprocess-driven via `session()`, line ~52).
 
 ## 3. Relevant code paths
-- `uncle:232-233` --noui + --noinput refusal; `uncle:208-212` refusal exit code 2 under --noui; `uncle:385-413` mode resolution; `uncle:415-425` bare-noui refusal (`exit 2`) and exec of headless.
-- `uncle_headless.py:137-175` `run()` (refuses attended without tty; SIGINT/SIGTERM -> 128+n); `:293-316` `main`; `:319-367` `_driver_from_env`.
-- `uncle_tui.py:153` `ISSUE_REQUEST_RE`; `:3603` `send_home_chat`; `:3412` `_agent_turn`; `:4304` `_apply_home_action`; `:4360` `_home_action`; `:5148` `run_named_stage`; `:5201/5220/5352` stop/resume/clear; `:6377-6521` slash command handling.
-- `home_actions.py:73` `parse_reply` (ACTIONS allowlist, strict schema).
+- `scripts/lib/uncle_repl.py:~15-29` USAGE dict (keys: help, mode, issue, stop, resume, clear, triage, do, settings, and quit/exit - `USAGE[name]` is used at line 218).
+- `uncle_repl.py:30-32` HELP text.
+- `uncle_repl.py:212-262` `slash()`: lowercases name, handles quit/exit, refuses names not in USAGE (line 221-223, via `self.refuse`, exit code 2), dispatches by name.
+- `uncle_repl.py:264-269` `handle()` routes lines starting with `/` to `slash()`.
+- Tests: `repl-session-test.py:111-118` slash tests incl. `/frob` unknown -> rc 2.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `uncle --noui --application T` / `--issue` / `--change-request` | One headless run, plain output, exit 0/1/2/3/128+n | uncle_headless.py:1-8; headless-run-test.py | Yes |
-| B-2 | `uncle --noui` bare, or `UNCLE_NOUI=1 uncle` | stderr error + usage, exit 2 | uncle:419-424; launcher-noui-test.sh:13-14 | No (MODIFY) |
-| B-3 | `--noui --noinput` | Error, exit 2 | uncle:232; launcher-noui-test.sh:15 | Yes |
-| B-4 | `--noui --attended` with non-tty stdin | exit 2 | uncle_headless.py:142; launcher-noui-test.sh | Yes |
-| B-5 | TUI home chat | Curses chat; NL requests -> validated actions; slash commands | uncle_tui.py:3603-4360, 6377+ | Yes |
-| B-6 | Multiple startup actions | exit 1 | launcher-noui-test.sh:19 | Yes |
-| B-7 | Headless vs TUI equivalence | Same artifacts/attestation fields | headless-equivalence-test.py | Yes |
+| B1 | `/quit` or `/exit` | session ends, later lines unread | test line 117 | Yes |
+| B2 | `/frob` | stderr `unknown command: /frob` + commands line, rc 2 | test line 118 | Yes |
+| B3 | `/q`, `/h`, `/m` etc. | refused as unknown | uncle_repl.py:221 | No (modified) |
+| B4 | `/mode unattended` | sets mode | uncle_repl.py:229 | Yes |
+| B5 | `/qu` | refused as unknown | uncle_repl.py:221 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| EI-1 | --noui never imports curses | headless module imports no curses | headless-run-test.py | Medium |
-| EI-2 | Model cannot start a driver; only validated actions | `parse_reply` allowlist; TUI `_apply_home_action` requires home intent | home-actions-test.py, tui-home-agent-test.py | High |
-| EI-3 | Child driver not left behind on exit/signal | `run()` killpg with grace | headless-run-test.py | Medium |
-| EI-4 | Output has only printable text, TAB, LF | `EscapeFilter` | headless-run-test.py | High |
-| EI-5 | Gate answers via stdin recorded as human | UNCLE_ATTENDED_STDIN path in `_stream` | headless-run-test.py | Medium |
+| I1 | Unmatched slash command refused with rc 2 | slash() line 221 | repl-session-test.py:118 | High |
+| I2 | All REPL output passes the escape filter | Out class | other tests | Medium |
+| I3 | Per-command arg validation via USAGE | slash() branches | line 112-116 | High |
 
-## 6. Interface contracts
-Launcher env: `UNCLE_NOUI`, `UNCLE_STARTUP_ACTION/TEXT/TEXT_FILE`, `UNCLE_STARTUP_ATTENDED/UNATTENDED`, `UNCLE_PROJECT_ROOT`, `UNCLE_RUNTIME_ROOT`. Headless exit codes: 0 completed, 1 failure, 2 refusal, 3 stopped at gate, 128+n signal. Action schema: `home_actions.ACTIONS` with `uncle_action`, `message`, `document`, `start`, `issue`.
+## 6. Interfaces
+Stdin lines in; stdout/stderr and exit code out. No API/schema.
 
-## 7. Existing automated-test coverage
-`scripts/tests/`: `launcher-noui-test.sh`, `headless-run-test.py`, `headless-equivalence-test.py`, `home-actions-test.py`, `home-chat-test.py`, `home-agent-session-test.py`, `tui-home-agent-test.py`. The shell and Python runners use separate temp dirs and bind no shared ports, so they form one parallel group (per runner docs: run-python-tests.sh does not overlap run-shell-tests.sh).
+## 7. Existing test coverage
+Python suite `repl-session-test.py` covers slash commands. Shell and Python runners use separate temp dirs and no shared ports, so they may run in parallel.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (repository runners, CLAUDE.md-mandated). Not run here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Known: some Python suites already fail on a clean checkout (per runner guidance).
-
-## 10. Existing failures/flakiness
-None documented in-repo beyond the note above. UNRESOLVED until driver baseline lands.
+Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (Uncle runners, per workflow instructions). No results run here; the driver's baseline supplies them. Some Python suites may already fail on a clean checkout.
 
 ## 12. Likely change surface
-`uncle` (bare-noui branch, usage text); new `scripts/lib/uncle_repl.py` (loop + I/O), new REPL action/chat modules; `uncle_headless.py` (extract `prepare_driver`); `home_actions.py` + one import line in `uncle_tui.py` (shared `ISSUE_REQUEST_RE`); `launcher-noui-test.sh` rows B-2 (request explicitly changes #160 N-6); new tests.
+`uncle_repl.py` slash() (and HELP optionally); `repl-session-test.py`.
 
 ## 13. Regression-sensitive components
-`uncle` launcher arg parsing and mode resolution; `uncle_headless.run` signal handling; TUI home chat issue-regex handling.
+quit/exit handling; unknown-command refusal; `self.refuse` exit code.
 
 ## 14. Outside the change
-Curses TUI behavior, driver scripts, gates, verification, PRs, supervisor tool capabilities (#164), machine protocol, `/set` editing.
+TUI slash handling; multi-character abbreviations; other scripts.
 
-## 15. Unknowns and assumptions
-- A1: `/date` and `/mode` do not exist in the TUI (grep: no `/mode` handler); REPL defines `/mode`; `/date` is omitted.
-- A2: HomeAgentSession/SupervisorRequest threading APIs are driven synchronously by the REPL; exact binding confirmed at implementation.
-- A3: TUI-only `/triage` and `/do` depend on TUI triage state; REPL maps them to the same stage rerun/resume driver paths or prints that they need the TUI.
+## 15. Unknowns
+Exact content of USAGE keys beyond line 25-29 assumed to include quit/exit (inferred from line 218); verify at implementation.
 
-## 16. Initial risk
-Medium-high: action execution is TUI-embedded, so extraction must not alter TUI behavior; stdin sharing between REPL and attended gates; Ctrl-C semantics across child process groups.
+## 16. Risk
+Low. Main risk: prefix matching accidentally accepting longer abbreviations or mis-ordering the ambiguous list.
 
 ## Exact build and test commands executed
 

@@ -213,6 +213,17 @@ class Session:
         parts = line.split()
         name = parts[0][1:].lower()
         args = parts[1:]
+        if len(name) == 1 and "a" <= name <= "z":
+            cands = list(USAGE)
+            for extra in ("quit", "exit"):
+                if extra not in cands:
+                    cands.append(extra)
+            hits = [c for c in cands if c.startswith(name)]
+            if len(hits) == 1:
+                name = hits[0]
+            elif len(hits) > 1:
+                self.refuse("ambiguous command: /%s (matches: %s)" % (name, ", ".join("/" + h for h in sorted(hits))))
+                return None
         if name in ("quit", "exit"):
             if args:
                 self.complain(USAGE[name])

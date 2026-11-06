@@ -1,5 +1,17 @@
 # Works with Scoop or an existing Git for Windows + python.org installation.
 $ErrorActionPreference = 'Stop'
+# Run a native command quietly and return its exit code. Windows PowerShell 5.1
+# turns any stderr output from a native command into a terminating error under
+# $ErrorActionPreference = 'Stop' (even with 2>$null), so a Python that prints an
+# ImportError traceback would abort the launcher. Probes must never do that.
+function Invoke-Quiet {
+    param([string]$Exe, [string[]]$Arguments)
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Exe @Arguments *> $null; return $LASTEXITCODE }
+    catch { return 1 }
+    finally { $ErrorActionPreference = $saved }
+}
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $gitRoot = $null
 $pythonRoot = $null
@@ -33,11 +45,9 @@ $python = $null
 $fallback = $null
 foreach ($candidate in $pythonCandidates) {
     if (!$candidate -or !(Test-Path $candidate) -or $candidate -match '[\\/]WindowsApps[\\/]') { continue }
-    & $candidate -c 'import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)' 2>$null
-    if ($LASTEXITCODE -ne 0) { continue }
+    if ((Invoke-Quiet $candidate @('-c', 'import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)')) -ne 0) { continue }
     if (!$fallback) { $fallback = $candidate }
-    & $candidate -c 'import curses' 2>$null
-    if ($LASTEXITCODE -eq 0) { $python = $candidate; break }
+    if ((Invoke-Quiet $candidate @('-c', 'import curses')) -eq 0) { $python = $candidate; break }
 }
 if (!$python) { $python = $fallback }
 if (!$bash -or !(Test-Path $bash) -or !$python) {
@@ -47,10 +57,9 @@ if (!$bash -or !(Test-Path $bash) -or !$python) {
 # interpreter Uncle will actually run, once, so a Python chosen differently from
 # the one the user ran pip with (or an install made before this was handled)
 # still ends up with a working UI. Only Uncle's private venv is modified.
-& $python -c 'import curses' 2>$null
-if ($LASTEXITCODE -ne 0 -and ($python -like (Join-Path $root 'venv\*'))) {
+if ((Invoke-Quiet $python @('-c', 'import curses')) -ne 0 -and ($python -like (Join-Path $root 'venv\*'))) {
     Write-Host 'uncle: installing windows-curses into its Python environment...'
-    & $python -m pip install --quiet --disable-pip-version-check windows-curses 2>&1 | Out-Null
+    $null = Invoke-Quiet $python @('-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', 'windows-curses')
 }
 $pythonRoot = Split-Path $python -Parent
 $oldPath = $env:PATH

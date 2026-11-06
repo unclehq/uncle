@@ -119,6 +119,45 @@ check("unknown command refused", "unknown command: /frob" in err and rc == 2, f"
 rc, out, err = session(["/mode attended", "/mode"])
 check("/mode attended changes mode", "mode: attended" in out and out.count("mode: attended") == 2, out)
 
+# One-letter shortcut edge cases: ambiguity, arguments, case, non-commands
+rc, out, err = session(["/s foo", "/mode"])
+check("/s foo -> ambiguity refusal, rc 2, session continues", "ambiguous command: /s" in err and rc == 2 and "mode: unattended" in out, f"{rc} {err}")
+rc, out, err = session(["/q now", "/mode"])
+check("/q now prints usage for /quit and session continues", "usage: /quit" in err and "mode: unattended" in out, f"{rc} {err} {out}")
+rc, out, err = session(["/Q", "/mode"])
+check("/Q quits like /q", "mode: " not in out and rc == 0, f"{rc} {out}")
+rc, out, err = session(["/", "/mode"])
+check("bare / is an unknown command, rc 2 (session continues)", "unknown command" in err and rc == 2 and "mode: unattended" in out, f"{rc} {err}")
+rc, out, err = session(["/?"])
+check("/? is an unknown command, rc 2", "unknown command" in err and rc == 2, f"{rc} {err}")
+
+# AC-1: /q quits and later lines are not processed
+rc, out, err = session(["/q", "/mode"])
+check("AC-1 /q quits; later /mode not processed", "mode: " not in out and rc == 0, f"{rc} {out}")
+# AC-2: unique one-letter shortcuts run the matching command, arguments preserved
+rc, out, err = session(["/h"])
+check("AC-2 /h runs help", "/quit" in out and rc == 0, f"{rc} {out} {err}")
+rc, out, err = session(["/m unattended"])
+check("AC-2 /m unattended sets mode", "mode: unattended" in out and rc == 0, f"{rc} {out} {err}")
+rc, out, err = session(["/m attended", "/m"])
+check("AC-2 /m attended preserves argument", out.count("mode: attended") == 2, f"{rc} {out} {err}")
+rc, out, err = session(["/i x"])
+check("AC-2 /i runs issue (usage on bad arg)", "usage: /issue N" in err, f"{rc} {err}")
+rc, out, err = session(["/e", "/mode"])
+check("AC-2 /e runs exit", "mode: " not in out and rc == 0, f"{rc} {out}")
+for letter, usage in (("c", "usage: /clear"), ("t", "usage: /triage"), ("d", "usage: /do"), ("r", "usage: /resume")):
+    rc, out, err = session(["/%s extra" % letter])
+    check("AC-2 /%s maps to its command" % letter, usage in err, f"{rc} {err}")
+# AC-3: /s is ambiguous (stop, settings): not run, rc 2, names both
+rc, out, err = session(["/s"])
+check("AC-3 /s refused rc 2 naming stop and settings", rc == 2 and "stop" in err and "settings" in err and "mode: " not in out, f"{rc} {out} {err}")
+check("AC-3 /s message format: matches label, alphabetical", "ambiguous command: /s (matches: /settings, /stop)" in err, f"{err}")
+# AC-4: multi-letter non-commands stay refused
+rc, out, err = session(["/qu"])
+check("AC-4 /qu unknown command rc 2", "unknown command" in err and rc == 2, f"{rc} {err}")
+rc, out, err = session(["/frob"])
+check("AC-4 /frob unknown command rc 2", "unknown command: /frob" in err and rc == 2, f"{rc} {err}")
+
 # I-6: conversation text never reaches the driver argv
 rc, out, err = session(["secret-history-token", "build issue 8"], runner("ok", "noted"))
 check("history is not replayed into driver", "fake-issue-driver 8" in out and "secret-history-token" not in out.split("noted", 1)[1])
@@ -524,6 +563,49 @@ rc, out, err = session(["run echo hi", "y"], extra=dict(agent_env, UNCLE_STARTUP
 check("attended: denied Bash asks, y grants and retries", "Allow exactly this" in out and "ran it: hi" in out, out + err)
 rc, out, err = session(["run echo hi", "n"], extra=dict(agent_env, UNCLE_STARTUP_ATTENDED="1", UNCLE_STARTUP_UNATTENDED="0"))
 check("attended: n declines the grant", "ran it: hi" not in out, out + err)
+
+# Review gaps: pin the complete letter map, payloads, TUI-only messages, hostile input
+import string  # noqa: E402
+import uncle_repl  # noqa: E402
+EXPECT = {"h": "help", "q": "quit", "e": "exit", "m": "mode", "i": "issue", "r": "resume",
+          "c": "clear", "t": "triage", "d": "do"}
+for letter in string.ascii_lowercase:
+    rc, out, err = session(["/%s zzz" % letter, "/mode"])
+    if letter in EXPECT:
+        want = "usage: /%s" % EXPECT[letter]
+        check("map pin /%s -> /%s" % (letter, EXPECT[letter]), want in err and "unknown command" not in err and "ambiguous" not in err, err)
+    elif letter == "s":
+        check("map pin /s ambiguous", "ambiguous command: /s (matches: /settings, /stop)" in err and rc == 2, err)
+    else:
+        check("map pin /%s unknown" % letter, "unknown command: /%s" % letter in err and rc == 2, err)
+# /i N and bare /c, /r, /t, /d: same effect as the full name
+a = session(["/i 7"]); b = session(["/issue 7"])
+check("/i 7 equals /issue 7", a == b and "fake-issue-driver 7" in a[1], f"{a} {b}")
+a = session(["/i x"]); b = session(["/issue x"])
+check("/i x stderr equals /issue x", a[2] == b[2] and "usage: /issue N" in a[2], f"{a} {b}")
+for letter, full in (("t", "triage"), ("d", "do")):
+    a = session(["/%s" % letter]); b = session(["/%s" % full])
+    check("/%s equals /%s with TUI-needed message" % (letter, full), a == b and "needs the TUI" in a[2] + a[1] and ("/%s" % full) in a[2] + a[1], f"{a} {b}")
+captured = []
+class _S(uncle_repl.Session):
+    def __init__(self):
+        self.attended = False
+    def execute(self, action, text, change=False):
+        captured.append(action)
+    def say(self, t): pass
+    def complain(self, t): pass
+    def refuse(self, t): pass
+for letter, full in (("c", "clear"), ("r", "resume")):
+    st = _S(); captured.clear(); st.slash("/%s" % letter); one = list(captured)
+    captured.clear(); st.slash("/%s" % full); two = list(captured)
+    check("/%s action payload equals /%s" % (letter, full), one == two and len(one) == 1, f"{one} {two}")
+st = _S(); captured.clear(); st.slash("/i 7"); one = list(captured); captured.clear(); st.slash("/issue 7")
+check("/i 7 payload equals /issue 7", one == captured and len(one) == 1, f"{one} {captured}")
+# non-ASCII / ESC-bearing slash input is refused without raw ESC on output
+rc, out, err = session(None, raw="/\u00e9\n/\x1b[31mq\n/mode\n".encode())
+check("non-ASCII/ESC slash input: unknown, no raw ESC, session continues", "unknown command" in err and "\x1b" not in out + err and "mode: unattended" in out and rc == 2, f"{rc} {out!r} {err!r}")
+rc, out, err = session(["/s", "/mode"])
+check("ambiguity is not reported as unknown", "unknown command" not in err and "mode: unattended" in out, err)
 
 import shutil  # noqa: E402
 shutil.rmtree(TMP, ignore_errors=True)

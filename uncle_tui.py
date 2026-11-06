@@ -86,6 +86,20 @@ def _title_signal_exit(signum, _frame):
     raise SystemExit(128 + signum)
 from preview_server import DevelopmentPreview, PreviewServer, development_preview
 from chat import Conversation, sanitize
+
+_FAILURE_ANSI_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]')
+
+
+def format_failure_line(status, last_line):
+    """Failure line for a non-zero driver exit; None for exit 0.
+
+    The quoted last output line is escape-filtered and redacted.
+    """
+    if status == 0:
+        return None
+    text = _FAILURE_ANSI_RE.sub('', last_line or '')
+    text = sanitize(text).strip()
+    return 'Driver exited with status %s: %s' % (status, text or '(no output)')
 from generated_input import generated_input_path, generated_input_write_path
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
@@ -2041,6 +2055,12 @@ class UncleTUI:
                     message = reason + '. Stage chat disconnected. Type /homepage to return to the menu.'
                     self.home_history.append(('system', message))
                     self.chat_error = message
+                    last = ''
+                    for held in reversed(getattr(self, 'output', [])):
+                        if str(held).strip():
+                            last = str(held)
+                            break
+                    getattr(self, 'output', []).append(format_failure_line(self.workflow_exit_code, last))
                 host = getattr(self, 'supervision_host', None)
                 if host is not None:
                     # Triage owns a failure exit; an in-flight diagnosis is

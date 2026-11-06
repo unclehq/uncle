@@ -1,184 +1,160 @@
-## AR-001: The spec's stub text is `skipped: class <class>, no risk hits`, but the plan's console line is `Adversarial review skipp
+## AR-001: The plan never says where lines from the driver's stderr that are not errors (banners, gate prompts, progress notes) end
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-5 and SB-1 give the stub text. CHANGE_PLAN section 19 gives the console line.
-- Failure: The spec's stub text is `skipped: class <class>, no risk hits`, but the plan's console line is `Adversarial review skipped: class <class>, no risk hits`. Neither says which string is validated or rendered. Settle it: the stub overall_assessment is exactly `skipped: class <class>, no risk hits`, and the console line is that text prefixed with `Adversarial review `.
+- References: CHANGE_PLAN D-1 ('Stderr lines also feed handle_line') against CHANGE_SPEC section 4 and S-5 ('gate messages unchanged').  Suggested sentence: 'Every driver stderr line is written verbatim to process stderr only; handle_line may react to it but must never write it to stdout, and gate/banner text formatted by handle_line keeps its current stream.'
+- Failure: The plan never says where lines from the driver's stderr that are not errors (banners, gate prompts, progress notes) end up. D-1 sends all stderr to `err`, but the spec's desired behavior reads as if only errors go there. Also, `handle_line` is fed stderr lines, so whether gate or banner text is shown on stdout or stderr is left open.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: AC-1 and AC-2 put the stale plan sha under build() rejection, but the plan checks the sha in the shell helper, and build
+## AR-002: D-2 says the final summary on `err` is preceded by nothing extra and that the 'status line is retained'.
 
 - Severity: HIGH
-- References: CHANGE_PLAN section 1 and section 8 interface. AC-2 lists a stale plan sha under build rejection.
-- Failure: AC-1 and AC-2 put the stale plan sha under build() rejection, but the plan checks the sha in the shell helper, and build() has no plan to compare. It doesn't say whether `skip-review` re-checks it. Settle it: `skip-review` re-verifies the stored plan_sha against the supplied plan and exits 1 on mismatch, and build() does not evaluate the sha.
+- References: CHANGE_PLAN D-2 against CHANGE_SPEC AC-3 and S-2 ('status line only (B-2)').  Suggested sentence: 'On non-zero exit the 20-line buffer is never re-emitted; only the existing status line is written, once, to stderr, after all driver stderr lines have been flushed.'
+- Failure: D-2 says the final summary on `err` is preceded by nothing extra and that the 'status line is retained'. AC-3 and S-2 require stderr to contain the driver's error text and the status line. The plan never says what the status line is, which stream it uses, or whether the 'last 20 stderr lines' buffer is replayed. It is also unclear whether replaying would duplicate lines.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: The plan doesn't say how the doc/test path rule treats an empty set of owned files, or files that are neither doc nor te
+## AR-003: The plan does not define the TUI failure line (AC-5, S-3).
+
+- Severity: HIGH
+- References: CHANGE_PLAN D-3 and risk row 4 against CHANGE_SPEC AC-5.  Suggested sentence: 'The TUI appends exactly "Driver exited with status N: <last non-empty build-window line, or (no output)>" for every non-zero exit except a user-initiated stop (130/143), and nothing on exit 0.'
+- Failure: The plan does not define the TUI failure line (AC-5, S-3). D-3 says 'last error line seen', but under merged stderr the TUI cannot tell stderr from stdout. The plan leaves open what happens when the driver printed no output, what the exact wording is, and whether exit codes 130, 143 or 3 (cancelled, gate) count as failure.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-004: The ordering of the status line against late stderr output is not specified.
 
 - Severity: MEDIUM
-- References: AC-1 says `for docs/test-only every owned file is doc/test respectively`. No behavior covers empty or mixed sets.
-- Failure: The plan doesn't say how the doc/test path rule treats an empty set of owned files, or files that are neither doc nor test. It also doesn't say whether `small` has a path rule. Settle it: an empty owned-file set means full review, any non-doc or non-test file in a docs or test-only class means full review, and `small` has no path rule beyond the floor.
+- References: CHANGE_PLAN sections 11 and 12 against CHANGE_SPEC V-4 ('none dropped at EOF').  Suggested sentence: 'After driver exit, timeout or signal, the loop drains both fds until EOF (or a 2 s cap) before the status line is written, and any descendant holding either fd open is killed by _killpg.'
+- Failure: The ordering of the status line against late stderr output is not specified. Both pipes are read in one select loop and the 'final kill' happens after EOF on both. The plan does not say whether the loop drains all remaining stderr bytes after the process exits or after a signal or idle timeout. Output could be lost on kill, which V-4 forbids.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: D-4 says a recheck clears skip, but the plan doesn't say what happens if the plan changes after the stub is written or a
+## AR-005: The plan does not say how stderr output interacts with stdout prompts that lack a trailing newline.
 
 - Severity: MEDIUM
-- References: SB-9 and D-4 cover the stale sha only before the review runs. CHANGE_PLAN sections 6-7 describe no re-entry.
-- Failure: D-4 says a recheck clears skip, but the plan doesn't say what happens if the plan changes after the stub is written or approved. It doesn't say whether the stub is regenerated or discarded. Settle it: if the plan sha changes after the stub is written, the stub is discarded and the review state reruns the decision against the new sha.
+- References: CHANGE_SPEC section 8 ('Prompts without trailing newline must still display promptly') against CHANGE_PLAN D-1 ('partial last line flushed at EOF').  Suggested sentence: 'A partial stderr line is flushed after the same idle timeout used for stdout prompts, and a stderr write never splits a partial stdout line already pending.'
+- Failure: The plan does not say how stderr output interacts with stdout prompts that lack a trailing newline. The spec requires such prompts to display promptly. Stderr line-by-line flushing with partial lines held until EOF could hold back a stderr prompt, while a partial stdout line is pending, and could interleave mid-line.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: The plan doesn't say what happens when the human declines at the review gate on a skipped review: rerun with a forced fu
-
-- Severity: MEDIUM
-- References: SB-6 says the `human can decline`, and D-3 creates a marker. No behavior defines the decline outcome.
-- Failure: The plan doesn't say what happens when the human declines at the review gate on a skipped review: rerun with a forced full review, or stop. It also doesn't say whether the marker is cleared. Settle it: declining a skipped review reruns ADVERSARIAL_REVIEW as a full review, and the `review-skipped` marker is removed before the panel starts.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-006: AC-7 requires a cost ledger row, but the scope-cut list drops the ledger row first, so the two collide.
+## AR-006: The plan does not define the redaction and escape-filter rules for output with sequences or secrets split across a read
 
 - Severity: LOW
-- References: AC-7 requires the ledger row. CHANGE_PLAN section 21 lists the ledger row as the first cut.
-- Failure: AC-7 requires a cost ledger row, but the scope-cut list drops the ledger row first, so the two collide. Settle it: the ledger row is not required to satisfy AC-7, and the change-class.json fields and the marker are the required records.
+- References: CHANGE_PLAN D-1 ('second EscapeFilter') against CHANGE_SPEC AC-2.  Suggested sentence: 'Stderr uses its own EscapeFilter and line buffer, redaction runs on complete lines only, and invalid UTF-8 bytes are replaced with U+FFFD.'
+- Failure: The plan does not define the redaction and escape-filter rules for output with sequences or secrets split across a read boundary or across the stdout/stderr pair. A single shared `EscapeFilter` or a second one is ambiguous. Binary or invalid UTF-8 bytes on stderr are also unspecified.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan never says what happens when a skip stub is declined at the gate or the run re-enters ADVERSARIAL_REVIEW.
+## AR-007: Stderr partial lines are flushed only at EOF, but Spec §8 requires prompts without newline to display promptly.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s6-7, D-3/D-4 cover only recheck clearing; SB-6 says the human can decline with no post-decline behavior.
-- Failure: Plan never says what happens when a skip stub is declined at the gate or the run re-enters ADVERSARIAL_REVIEW. Decision: skip is recomputed from the current plan sha on every entry, and the review-skipped marker is deleted whenever a full review runs.
+- References: CHANGE_PLAN D-1 'line by line... partial last line flushed at EOF' vs CHANGE_SPEC §8 prompts without trailing newline.
+- Failure: Stderr partial lines are flushed only at EOF, but Spec §8 requires prompts without newline to display promptly. Plan should say: a stderr partial line is flushed after the same idle/prompt heuristic as stdout, not only at EOF.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Stale plan sha check is placed in the shell helper per the Interface section, but AC-2 and SB-9 test it as Python build
+## AR-008: Gate/banner detection now sees two sources with undefined order when both fds are ready.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 and s8 versus CHANGE_SPEC AC-2/SB-9.
-- Failure: Stale plan sha check is placed in the shell helper per the Interface section, but AC-2 and SB-9 test it as Python build behavior. Decision: the sha check lives in change_class_review_skipped and skip-review CLI only; build() does not evaluate it.
+- References: D-1 'Stderr lines also feed handle_line'; Spec §15 interleaving not guaranteed; Risks row on existing tests.
+- Failure: Gate/banner detection now sees two sources with undefined order when both fds are ready. Plan should say: when both fds are ready, drain stdout before stderr each iteration, with handle_line semantics identical for both.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: Other consumers of ADVERSARIAL_REVIEW.json (final audit, approval hashes) may assume non-empty findings; only updated-pl
+## AR-009: D-2 keeps the last 20 stderr lines but emits nothing extra, while Spec §4 says the final summary includes the driver's l
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s5 Not modified and s22 risk; AC-9 covers updated-plan only.
-- Failure: Other consumers of ADVERSARIAL_REVIEW.json (final audit, approval hashes) may assume non-empty findings; only updated-plan is proven by AC-9. Decision: tests must also run final-audit input and approval hashing on the stub, and the stub overall_assessment is non-empty.
+- References: CHANGE_PLAN D-2 vs CHANGE_SPEC §4 'final stderr summary includes the driver's last error lines'.
+- Failure: D-2 keeps the last 20 stderr lines but emits nothing extra, while Spec §4 says the final summary includes the driver's last error lines. Plan should say: buffered lines are not re-emitted, and Spec §4 wording is amended accordingly.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Existing suites are said to be unchanged, yet may use classifier stubs or fixtures returning docs/small that would now e
+## AR-010: Kill, idle-timeout and signal paths (exit 130/143) are unspecified for pending stderr bytes, risking V-4 violation.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s17 versus s22 risk 3.
-- Failure: Existing suites are said to be unchanged, yet may use classifier stubs or fixtures returning docs/small that would now emit skip. Decision: default test classifier stubs never emit review: skip, and any broken existing suite is changed only with renewed approval.
+- References: V-4 'none dropped at EOF'; Plan §11 covers only EOF, not kill-triggered paths.
+- Failure: Kill, idle-timeout and signal paths (exit 130/143) are unspecified for pending stderr bytes, risking V-4 violation. Plan should say: on kill or signal, drain and flush both fds before the final status line.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: Validation of the optional classifier review field is unspecified for non-string, uppercase or unknown values.
+## AR-011: D-3 needs 'last error line seen' but the TUI stream is merged, so errors are indistinguishable from ordinary output.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s8 classifier answer item; AC-3 covers only unusable whole answers.
-- Failure: Validation of the optional classifier review field is unspecified for non-string, uppercase or unknown values. Decision: only the exact lowercase string skip is honored; any other value is treated as absent (full review) without invalidating the rest of the answer.
+- References: CHANGE_PLAN D-3 and §6 'TUI unchanged' vs Spec S-3.
+- Failure: D-3 needs 'last error line seen' but the TUI stream is merged, so errors are indistinguishable from ordinary output. Plan should say: the last error text is the last non-empty line of merged output before exit.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: s12 says a failing stub hits the existing format-retry/stop path, then says stop directly without retry.
-
-- Severity: LOW
-- References: CHANGE_PLAN s12 versus AC-8.
-- Failure: s12 says a failing stub hits the existing format-retry/stop path, then says stop directly without retry. Decision: a failing stub stops the run immediately, with no retry and no fallback to full review.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-013: The skip floor sees only plan text and owned files, so a small or docs plan can skip review while touching sensitive cod
+## AR-012: Redaction applied per line on the stderr stream is unspecified for secrets split across read chunks, and for the partial
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-1 applies the path rule only to docs/test-only; class small has none. D-1 uses plan-text risk_hits.
-- Failure: The skip floor sees only plan text and owned files, so a small or docs plan can skip review while touching sensitive code. Plan should say: skip fails closed when no owned files are declared, or any owned path is outside doc/test globs; for class small, auth/secret/shell/driver/gate paths force full review.
+- References: CHANGE_PLAN D-1 says bytes pass through EscapeFilter, redact, then lines are written; AC-2 requires a partial last line redacted.
+- Failure: Redaction applied per line on the stderr stream is unspecified for secrets split across read chunks, and for the partial last line at EOF. Plan must say: stderr is buffered to complete lines (or EOF) before redact runs, never redacting raw chunks.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: The model's `review` value is the only positive skip signal, and the plan does not say how a malformed value or a prompt
+## AR-013: The plan does not say how unbounded or very long stderr lines are handled, or how the 20-line retention interacts with t
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-2 keeps the last 20 stderr lines with no length cap and does not say whether they are stored pre- or post-redaction.
+- Failure: The plan does not say how unbounded or very long stderr lines are handled, or how the 20-line retention interacts with them. Plan must say: stderr line length and retained buffer are capped, and the retained lines are the redacted text.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-014: TUI failure line includes the last error text, but the plan does not say whether that text is redacted or escape-filtere
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-3 and AC-5 appends exit status plus the last error line to the build window; V-2 scope is headless only.
+- Failure: TUI failure line includes the last error text, but the plan does not say whether that text is redacted or escape-filtered. Plan must say: the TUI failure line text passes through the same redact and EscapeFilter as other build-window output.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-015: D-2 contradicts the spec on the final summary: D-2 says nothing extra is emitted, while the spec says stderr contains bo
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-1 and D-2 versus CHANGE_SPEC section 4; handle_line is fed stderr in D-1.
+- Failure: D-2 contradicts the spec on the final summary: D-2 says nothing extra is emitted, while the spec says stderr contains both the driver's error text and the status line. Stderr lines feeding handle_line also leaves unspecified whether a gate trigger on stderr is trusted. Plan must say: the final summary adds no replay of lines, and gate detection on stderr lines is intended or ignored.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: D-1 sends stderr lines to handle_line and D-2 says the final summary is preceded by nothing extra, but the plan never sa
 
 - Severity: HIGH
-- References: CHANGE_PLAN s8 lists optional "review":"skip"; D-2 trusts source model. AC-3 covers only failure or unusable answers.
-- Failure: The model's `review` value is the only positive skip signal, and the plan does not say how a malformed value or a prompt-injected plan is handled. Plan should say: only the exact string "skip" counts; any other value, type or duplicate key means full; plan text is untrusted data in the classifier prompt.
+- References: CHANGE_PLAN D-1/D-2 versus CHANGE_SPEC AC-3. D-2 keeps 'the last 20 stderr lines' but says they are not re-emitted. The plan should say: 'Each stderr line is written to err exactly once, as it arrives; the exit summary writes only the status line and never replays the buffer.'
+- Failure: D-1 sends stderr lines to handle_line and D-2 says the final summary is preceded by nothing extra, but the plan never says whether stderr lines are also echoed or formatted like stdout lines. AC-3 requires 'driver error text and the status line' on stderr, and the plan does not say whether the 20-line buffer is replayed at exit. Tests could disagree on whether the error text appears once or twice.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: The shell helper trusts stored review=skip plus a matching sha, so a hand-edited change-class.json or a race can bypass
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s8: skip-review only writes the stub and exits 1 if the decision is not skip; the helper checks stored review and sha.
-- Failure: The shell helper trusts stored review=skip plus a matching sha, so a hand-edited change-class.json or a race can bypass the floor. Plan should say: skip-review recomputes the floor against the current plan in the same invocation that writes the stub, and never trusts stored review=skip alone.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: WORKFLOW_SKIP_REVIEW disables skip only when it equals 0, so empty, false or no leaves skip enabled, which fails open.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s8: 'true only when env not 0'; SI-4 says any uncertainty runs full review.
-- Failure: WORKFLOW_SKIP_REVIEW disables skip only when it equals 0, so empty, false or no leaves skip enabled, which fails open. Plan should say: skip is enabled only when WORKFLOW_SKIP_REVIEW is unset or exactly 1; any other value means full review.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: The plan does not say what happens to an existing ADVERSARIAL_REVIEW.json or marker on rerun or resume.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s6-7 and s14 describe writing the stub and the marker .uncle/workflow/review-skipped but say nothing about reruns or stale files. D-4 clears skip on recheck only.
-- Failure: The plan does not say what happens to an existing ADVERSARIAL_REVIEW.json or marker on rerun or resume. Plan should say: the stub is written only when no review exists or the existing one is a stub, a non-skip decision removes a stale stub and marker before the panel runs.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: AC-9 expects the updated-plan stage to accept zero findings, but the risk section leaves the failure case open ('emit no
+## AR-017: D-3 says the TUI failure line shows the 'last error line seen', but the plan never defines what that is when the TUI mer
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-9; CHANGE_PLAN s22 risk 2 conflicts with AC-5 'zero findings'.
-- Failure: AC-9 expects the updated-plan stage to accept zero findings, but the risk section leaves the failure case open ('emit non-empty assessment, otherwise stop and ask'). Settle: 'If the updated-plan path rejects zero findings, the stub carries one informational finding; the plan stage is not modified.'
+- References: CHANGE_PLAN D-3 and risk row 4 ('TUI exit-handling site not yet read'), versus CHANGE_SPEC AC-5. The plan should say: 'The failure line is `driver exited with status N: <last non-empty output line>`, or `driver exited with status N` when there is no output; it is shown only for non-zero exits, and is also shown for signal exits 130 and 143.'
+- Failure: D-3 says the TUI failure line shows the 'last error line seen', but the plan never defines what that is when the TUI merges stderr into stdout (B-6). It also never says what shows when the driver emitted no output, when the exit code is 0, or when the exit is a signal, 130 or 143. AC-5 cannot be tested without these answers.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: AC-1 requires every owned file to be doc/test, but the plan never defines how files are classified or what a plan with z
-
-- Severity: HIGH
-- References: CHANGE_SPEC AC-1 'every owned file is doc/test'; no rule source named in CHANGE_PLAN s1 or s8.
-- Failure: AC-1 requires every owned file to be doc/test, but the plan never defines how files are classified or what a plan with zero owned files does. Settle: 'Owned-file classification reuses the existing floor path rules in change_class.py; a plan with no owned files is never skipped.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: AC-7 is assigned to the Python suite, but the marker and ledger row are written by the shell drivers, and the ledger row
+## AR-018: The test strategy says the TUI test is placed in the headless suite 'if a pure helper is extractable', else in a new fil
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s16 'review-skip-test.py covers ... 7' vs D-3 and s21.
-- Failure: AC-7 is assigned to the Python suite, but the marker and ledger row are written by the shell drivers, and the ledger row is the first scope cut. Settle: 'AC-7 is split: change-class.json is tested in the .py suite, marker and ledger in the .sh suite; if the ledger row is cut, AC-7 needs only json plus marker.'
+- References: CHANGE_PLAN section 16 versus Change-impact table row 5 and step 3 Owns. The plan should say: 'Extract a pure function `format_failure_line(status, last_line)` in uncle_tui.py and test it in the new file scripts/tests/tui-failure-line-test.py.'
+- Failure: The test strategy says the TUI test is placed in the headless suite 'if a pure helper is extractable', else in a new file. The plan lists the new file in the change-impact table and the step 3 'Owns' list as definite. The test location and the helper's existence are therefore left open.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: Corrupted-stub behavior is stated two ways: 'existing format-retry/stop path' versus 'stop directly'.
+## AR-019: The plan leaves unspecified how stderr and stdout interact when both fds are open.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s12; CHANGE_SPEC AC-8 'stops the run like a bad review'.
-- Failure: Corrupted-stub behavior is stated two ways: 'existing format-retry/stop path' versus 'stop directly'. Settle: 'A stub failing validation stops the run immediately with no retry, nonzero exit, and no model invocation, in both drivers.'
+- References: CHANGE_PLAN D-1, section 11, and section 12. The plan should say: 'Gate and prompt detection use stdout only; stderr lines feed handle_line only for banner detection. Tests assert content per stream, never ordering across streams.'
+- Failure: The plan leaves unspecified how stderr and stdout interact when both fds are open. Partial-line prompts on stdout must display promptly while stderr is mid-line, and a prompt-detection pass fed by stderr could misfire. AC-4 requires gate behavior to be unchanged, yet D-1 feeds stderr to handle_line. The interleaving test is nondeterministic unless the plan fixes it.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: Stale plan sha handling is split: AC-2 puts it in build(), the plan puts it in the shell helper, and D-4 has recheck cle
+## AR-020: The plan does not say how redaction behaves when a secret is split across stderr chunk boundaries or lines.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-2, SB-9 vs CHANGE_PLAN s8 and D-4.
-- Failure: Stale plan sha handling is split: AC-2 puts it in build(), the plan puts it in the shell helper, and D-4 has recheck clearing skip. Missing plan_sha is unspecified. Settle: 'The sha check lives only in change_class_review_skipped; a missing plan_sha is a mismatch and yields full review; recheck independently clears skip.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-023: Other values of the classifier's review field (Skip, full, null, non-string) are unspecified.
-
-- Severity: LOW
-- References: CHANGE_PLAN s8 'optional review:skip'; no handling of other values.
-- Failure: Other values of the classifier's review field (Skip, full, null, non-string) are unspecified. Settle: 'Only the exact lowercase string skip is honored; any other value or type is treated as full without error.'
+- References: CHANGE_PLAN D-1 ('second EscapeFilter', redact) and CHANGE_SPEC AC-2. The plan should say: 'Redaction is applied per complete line after the filter, and a partial last line is redacted before it is flushed at EOF.'
+- Failure: The plan does not say how redaction behaves when a secret is split across stderr chunk boundaries or lines. It also does not say whether a separate EscapeFilter instance is required to stop escape state leaking between the two streams. AC-2 tests could pass or fail depending on the implementation.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

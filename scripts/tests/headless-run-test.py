@@ -136,6 +136,234 @@ class Output(unittest.TestCase):
         self.assertIn("NC=1", out)
 
 
+SECRET = "s3cr3t-key-material"
+
+
+def drive_env(script, **kw):
+    os.environ["UNCLE_TEST_SIGNING_KEY"] = SECRET
+    try:
+        return drive(script, env=dict(os.environ), **kw)
+    finally:
+        del os.environ["UNCLE_TEST_SIGNING_KEY"]
+
+
+class Stderr(unittest.TestCase):
+    """AC-1..3: driver stderr is surfaced on stderr, not on stdout."""
+
+    def test_stderr_goes_to_err_not_out(self):
+        code, out, err, _ = drive(
+            "import sys; sys.stderr.write('boom-on-stderr\\n'); print(%r)" % BANNER)
+        self.assertIn("boom-on-stderr", err)
+        self.assertNotIn("boom-on-stderr", out)
+        self.assertEqual(code, 0)
+
+    def test_banner_like_stderr_text_stays_off_stdout(self):
+        code, out, err, _ = drive(
+            "import sys; sys.stderr.write(%r + '\\n')" % BANNER)
+        self.assertIn(BANNER, err)
+        self.assertNotIn(BANNER, out)
+
+    def test_stdout_gate_with_stderr_noise(self):
+        code, out, err, _ = drive(
+            "import sys\nsys.stderr.write('noise\\n'); sys.stderr.flush()\n"
+            "print('Human gate: PROJECT_PLAN.md awaiting approval')")
+        self.assertEqual(code, 3)
+        self.assertIn("PROJECT_PLAN.md awaiting approval", err)
+        self.assertNotIn("noise", out)
+
+    def test_gate_like_stderr_does_not_trigger_gate(self):
+        code, out, err, _ = drive(
+            "import sys\nsys.stderr.write('Human gate: X.md awaiting approval\\n')\n"
+            "print(%r)" % BANNER)
+        self.assertEqual(code, 0)
+        self.assertNotIn("stopped at:", err)
+        self.assertIn("Human gate: X.md awaiting approval", err)
+        self.assertNotIn("Human gate", out)
+
+    def test_failure_text_once_plus_status_line(self):
+        code, out, err, _ = drive(
+            "import sys; sys.stderr.write('driver-error-xyz\\n'); sys.exit(7)")
+        self.assertEqual(code, 1)
+        self.assertEqual(err.count("driver-error-xyz"), 1, err)
+        self.assertIn("status 7", err)
+        self.assertNotIn("driver-error-xyz", out)
+        self.assertNotIn("status 7", out)
+
+    def test_late_stderr_drained_before_status_line(self):
+        code, out, err, _ = drive(
+            "import sys,time\nsys.stderr.write('late-err\\n'); sys.stderr.flush()\nsys.exit(4)")
+        self.assertIn("late-err", err)
+        self.assertLess(err.index("late-err"), err.index("status 4"))
+
+    def test_stderr_redacted(self):
+        code, out, err, _ = drive_env(
+            "import sys; sys.stderr.write('k=%s\\n'); print(%r)" % (SECRET, BANNER))
+        self.assertNotIn(SECRET, err)
+        self.assertIn("[REDACTED]", err)
+
+    def test_secret_split_across_chunks_redacted(self):
+        code, out, err, _ = drive_env(
+            "import sys,time\nsys.stderr.write('k=s3cr3t-'); sys.stderr.flush()\n"
+            "time.sleep(.05)\nsys.stderr.write('key-material\\n'); sys.stderr.flush()\n"
+            "print(%r)" % BANNER)
+        self.assertNotIn(SECRET, err)
+        self.assertNotIn("s3cr3t-", err)
+        self.assertIn("[REDACTED]", err)
+
+    def test_partial_last_line_redacted_at_eof(self):
+        code, out, err, _ = drive_env(
+            "import sys; sys.stderr.write('tail %s'); sys.stderr.flush(); print(%r)" % (SECRET, BANNER))
+        self.assertNotIn(SECRET, err)
+        self.assertIn("tail", err)
+
+    def test_invalid_utf8_becomes_replacement(self):
+        code, out, err, _ = drive(
+            "import sys; sys.stderr.buffer.write(b'bad\\xff\\xfeok\\n'); sys.stderr.flush()")
+        self.assertIn("�", err)
+        self.assertIn("ok", err)
+
+    def test_escapes_filtered_on_stderr(self):
+        code, out, err, _ = drive(
+            "import sys; sys.stderr.write('a\\x1b[31mred\\x1b[0m\\n')")
+        self.assertNotIn("\x1b", err)
+        self.assertIn("ared", err)
+
+    def test_stderr_escape_state_does_not_leak_to_stdout(self):
+        code, out, err, _ = drive(
+            "import sys,time\nsys.stderr.write('x\\x1b[3'); sys.stderr.flush(); time.sleep(.05)\n"
+            "print('stdout-visible'); sys.stdout.flush(); time.sleep(.05)\n"
+            "sys.stderr.write('1mdone\\n')")
+        self.assertIn("stdout-visible", out)
+        self.assertNotIn("\x1b", out + err)
+        self.assertNotIn("1mdone", out + err)
+        self.assertIn("done", err)
+        self.assertNotIn("done", out)
+        self.assertIn("x", err)
+
+    def test_overlong_line_is_capped(self):
+        code, out, err, _ = drive(
+            "import sys; sys.stderr.write('A'*30000 + '\\n'); sys.exit(2)")
+        longest = max((len(l) for l in err.splitlines()), default=0)
+        self.assertGreater(longest, 1000)
+        self.assertLessEqual(longest, 8192 + 64, longest)
+        self.assertIn("…[truncated]", err)
+        self.assertEqual(err.count("…[truncated]"), 1)
+
+    def test_overlong_line_retained_text_has_no_secret(self):
+        code, out, err, _ = drive_env(
+            "import sys; sys.stderr.write('A'*9000 + '%s' + 'B'*20000 + '\\n'); sys.exit(2)" % SECRET)
+        self.assertNotIn(SECRET, err)
+        self.assertNotIn("s3cr3t", err)
+        self.assertIn("…[truncated]", err)
+
+    def test_each_stderr_line_once_then_one_status_line(self):
+        code, out, err, _ = drive(
+            "import sys\nfor i in range(3): sys.stderr.write('uniq-%d\\n' % i)\n"
+            "sys.stderr.flush(); sys.exit(5)")
+        for i in range(3):
+            self.assertEqual(err.count("uniq-%d" % i), 1, err)
+        self.assertEqual(err.count("driver exited with status 5"), 1, err)
+        self.assertGreater(err.index("driver exited with status 5"), err.index("uniq-2"))
+        self.assertEqual(out.count("uniq-"), 0)
+
+    def test_stderr_only_driver(self):
+        code, out, err, _ = drive(
+            "import sys,time\nsys.stdout.close()\ntime.sleep(.2)\n"
+            "sys.stderr.write('only-err\\n'); sys.exit(6)")
+        self.assertEqual(code, 1)
+        self.assertEqual(err.count("only-err"), 1, err)
+        self.assertEqual(err.count("status 6"), 1, err)
+        self.assertNotIn("only-err", out)
+
+    def test_stdout_only_driver(self):
+        code, out, err, _ = drive(
+            "import sys,time\nsys.stderr.close()\ntime.sleep(.2)\nprint('only-out'); sys.exit(6)")
+        self.assertEqual(code, 1)
+        self.assertEqual(out.count("only-out"), 1, out)
+        self.assertEqual(err.count("status 6"), 1, err)
+        self.assertNotIn("only-out", err)
+
+    def test_stdout_before_stderr_both_drained(self):
+        code, out, err, _ = drive(
+            "import sys\nprint('first-out', flush=True)\n"
+            "sys.stderr.write('second-err\\n'); sys.stderr.flush(); sys.exit(3)")
+        self.assertEqual(out.count("first-out"), 1, out)
+        self.assertEqual(err.count("second-err"), 1, err)
+        self.assertLess(err.index("second-err"), err.index("status 3"))
+
+    def test_signal_drains_pending_stderr(self):
+        for sig, want in ((signal.SIGTERM, 143), (signal.SIGINT, 130)):
+            out, err = io.StringIO(), io.StringIO()
+            timer = threading.Timer(0.8, os.kill, (os.getpid(), sig))
+            timer.start()
+            try:
+                code = H.run([sys.executable, "-c",
+                              "import sys,time\nsys.stderr.write('pending-err\\n'); sys.stderr.flush()\n"
+                              "time.sleep(60)"], tempfile.mkdtemp(), out=out, err=err,
+                             grace=2.0, install_signals=True)
+            finally:
+                timer.cancel()
+            e = err.getvalue()
+            self.assertEqual(code, want)
+            self.assertEqual(e.count("pending-err"), 1, e)
+            self.assertLessEqual(e.count("driver exited with status"), 1, e)
+            self.assertNotIn("pending-err", out.getvalue())
+
+    def test_defect_injection_merged_stderr_is_detected(self):
+        # Real defect: driver stderr merged into stdout. Run the product code
+        # with that defect and require the separation assertion to fail.
+        orig = H.subprocess.Popen
+
+        class Merged(orig):
+            def __init__(self, *a, **k):
+                k["stderr"] = H.subprocess.STDOUT
+                super().__init__(*a, **k)
+                self.stderr = open(os.devnull, "rb", buffering=0)
+        H.subprocess.Popen = Merged
+        try:
+            code, out, err, _ = drive("import sys; sys.stderr.write('boom-on-stderr\\n')")
+        finally:
+            H.subprocess.Popen = orig
+        with self.assertRaises(AssertionError):
+            self.assertIn("boom-on-stderr", err)
+        with self.assertRaises(AssertionError):
+            self.assertNotIn("boom-on-stderr", out)
+
+    def test_defect_injection_no_redaction_is_detected(self):
+        orig = H.redact
+        H.redact = lambda text, env: text
+        try:
+            code, out, err, _ = drive_env(
+                "import sys,time\nsys.stderr.write('k=s3cr3t-'); sys.stderr.flush()\n"
+                "time.sleep(.05)\nsys.stderr.write('key-material\\n'); sys.stderr.flush()\n"
+                "sys.stderr.write('tail %s'); sys.stderr.flush()" % SECRET)
+        finally:
+            H.redact = orig
+        with self.assertRaises(AssertionError):
+            self.assertNotIn(SECRET, err)
+
+    def test_stderr_prompt_flushed_without_splitting_stdout_partial(self):
+        code, out, err, _ = drive(
+            "import sys,time\nsys.stdout.write('OUT-PARTIAL '); sys.stdout.flush()\n"
+            "time.sleep(.05)\nsys.stderr.write('ERR-PROMPT? '); sys.stderr.flush()\n"
+            "time.sleep(1.5)\nsys.stdout.write('end\\n')")
+        self.assertIn("ERR-PROMPT?", err)
+        self.assertIn("OUT-PARTIAL end", out)
+
+    def test_defect_injection_naive_chunk_redaction_leaks(self):
+        # a redactor that works per raw chunk misses a split secret; the
+        # assertions used above must be able to detect that.
+        chunks = ["k=s3cr3t-", "key-material\n"]
+        env = {"UNCLE_TEST_SIGNING_KEY": SECRET}
+        naive = "".join(H.redact(c, env) for c in chunks)
+        with self.assertRaises(AssertionError):
+            self.assertNotIn(SECRET, naive)
+        self.assertNotIn(SECRET, H.redact("".join(chunks), env))
+        # and a stdout/stderr mix-up must be detected by the separation check
+        with self.assertRaises(AssertionError):
+            self.assertNotIn("boom", "[+00:00:00] boom")
+
+
 class Attended(unittest.TestCase):
     def test_non_tty_refused(self):
         for opener in (lambda: os.open(os.devnull, os.O_RDONLY),

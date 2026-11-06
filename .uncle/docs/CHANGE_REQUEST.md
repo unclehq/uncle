@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 172
+Issue 174
 
-Seeded from [unclehq/uncle#172](https://github.com/unclehq/uncle/issues/172).
+Seeded from [unclehq/uncle#174](https://github.com/unclehq/uncle/issues/174).
 
 ## Change Type
 
@@ -10,55 +10,23 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Let the classifier skip adversarial review for docs, test-only and small builds
+Send all errors to stderr and surface them in --noui and the build window
 
 ## Motivation
 
 ## Problem
+Errors from Uncle are not reliably visible. Programs that run Uncle (scripts, CI, wrappers) cannot see why a run failed.
 
-Every build runs the adversarial review, even a docs-only, test-only or small change. The classifier (`scripts/lib/change-class-stage.sh`, `prompts/classify-change.md`) already picks a class and trims review lenses, but `profile()` in `scripts/lib/change_class.py` never goes below `requirements` + `regression`, so a trivial change still pays for a review panel and a primary reviewer.
+## Desired behavior
+- Every error is written to stderr.
+- Errors are also displayed in `--noui` mode.
+- Errors are also displayed in the build window.
+- Errors must be visible to programs that invoke Uncle (stderr output plus a non-zero exit status on failure).
 
-## Proposal
-
-Let the classifier decide that a build needs no adversarial review, for the classes `docs`, `test-only` and `small` only (the existing `REDUCIBLE` classes).
-
-1. The classifier may return `review: skip` for those three classes only.
-2. A deterministic floor in `change_class.py` rejects the skip when any of these is true: `risk_hits` is non-empty (security, secrets, signing, publication, approval gates, deletion, migrations, concurrency); the floor raised the class above the model's; the plan touches non-doc, non-test paths for a `docs` or `test-only` class.
-3. A skipped review still writes a stub `ADVERSARIAL_REVIEW` artifact that says "skipped: class <class>, no risk hits" and has zero findings. It goes through the normal approval gate, so the state machine, hashes, envelopes and `plan-gate` keep working, and the human can see the skip and decline it.
-4. Fail closed: a classifier failure, bad answer, or disabled classifier (`WORKFLOW_CLASSIFY=0`) runs the full review, as today.
-5. An off switch (for example `WORKFLOW_SKIP_REVIEW=0`) and a record of the decision in the cost ledger and run record.
-6. Both drivers: `scripts/stagegate.sh` and `scripts/change-workflow.sh` each have their own review flow.
-
-## Observable behaviors
-
-- Docs-only change with no risk hits: review panel and primary reviewer do not run; the stub review reaches the approval gate with a visible "skipped" reason.
-- Small change that mentions deletion, signing or approval gates: full review runs.
-- Classifier runner fails: full review runs.
-
-## Invariants
-
-- A skip never happens when `risk_hits` is non-empty.
-- A skipped review is always visible at the human gate and recorded.
-- The human plan-approval gate and the final audit are unchanged.
-
-## Failure behavior
-
-Any uncertainty runs the full review. A stub that fails validation stops the run, as a bad review does today.
-
-## Verification
-
-- docs plan skips; small plan with a risk keyword does not; classifier failure runs the review.
-- Stub passes `VALIDATE_ADVERSARIAL_REVIEW`, approval and attestation checks in both drivers.
-- `WORKFLOW_SKIP_REVIEW=0` restores the full review.
-
-## Risks
-
-- For a new app, `small` ("a handful of requirements, no sensitive behavior") rests on the model's judgment plus the floor. A misjudged small app would ship without adversarial review; the human plan-approval gate is the remaining check.
-- The updated-plan stage must accept a review with no findings.
-
-## Non-goals
-
-- Skipping the final audit, the human gates, or reviews for `standard`, `large` and `risky` classes.
+## Success criteria
+- Triggering a failure with `--noui` prints the error on stderr (verifiable with `2>file`).
+- The same error appears in the build window in UI mode.
+- A calling program capturing stderr receives the error text.
 
 ## Observed Current Behavior
 

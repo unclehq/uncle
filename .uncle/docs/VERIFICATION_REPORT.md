@@ -4,229 +4,149 @@
 
 ### MC-101
 
-- **Action:** Read the checklist row only. Did not launch change-workflow.sh: the row requires a full end-to-end run with a real classifier model (WORKFLOW_SKIP_REVIEW unset) through the review stage, which this isolated worker (no repo exploration, no starting other agents or model runs, small budget) cannot perform.
-- **Expected result:** No review panel launched; console prints `Adversarial review skipped: class docs, no risk hits`; run proceeds to validation and approval gate.
-- **Actual result:** Not executed live. No console transcript was captured.
-- **Defects:** None. Setup needed: an operator runs a docs-only change through change-workflow.sh in a scratch project with a real classifier configured, then reruns this lane.
+- **Action:** Ran `uncle --noui --application 'build a thing' 2>err.txt >out.txt </dev/null` in a disposable git project, with UNCLE_RUNTIME_ROOT pointing at a copy of the runtime whose scripts/stagegate.sh was a stub printing 'progress line' to stdout and 'DRIVER-ERROR-TEXT' to stderr, then exiting 1 (a stub driver, so no real agents ran). Then cat both files.
+- **Expected result:** err.txt contains the driver error text once, then one `driver exited with status N` line. out.txt contains neither. Exit status 1.
+- **Actual result:** Exit status 1. err.txt: the launcher's 'Mode: unattended' notice, then 'DRIVER-ERROR-TEXT' once, then 'uncle --noui: driver exited with status 1' once. out.txt: only '[+00:00:00] progress line'.
+- **Defects:** None
 
 ### MC-102
 
-- **Action:** Not performed. Depends on the skipped run from MC-101, which did not occur, so there is no review gate, rendered ADVERSARIAL_REVIEW.md, change-class.json or review-skipped marker to inspect.
-- **Expected result:** Rendered review shows zero findings and `skipped: class <class>, no risk hits`; change-class.json records review=skip with review_reason; marker exists.
-- **Actual result:** Not executed; prerequisite MC-101 blocked.
-- **Defects:** None. Setup needed: complete MC-101 and stop at the review approval gate.
+- **Action:** In a fresh temp git dir, ran `UNCLE_SKIP_UPGRADE=1 uncle --noui --change-request < req.md` (request 'x') with no stdout/stderr redirection, so both streams went to the same shared output sink. A real pty was unavailable (`script` failed: tcgetattr/ioctl not supported on socket), so this was not a true interactive terminal.
+- **Expected result:** The driver's error text and the exit status line are visible on the terminal. Stdout lines still carry the [+hh:mm:ss] prefix.
+- **Actual result:** Combined output showed stdout lines prefixed with [+00:00:00]..[+00:00:21], the driver error text '[+00:00:21] canonical change-planning bundle: invalid baseline_report packet: baseline report is missing verification_commands', and the final stderr line 'uncle --noui: driver exited with status 1'. Process exit status was 1. The launcher's initial 'Mode: ...' line is unprefixed (launcher output, not the driver's stdout stream).
+- **Defects:** None
 
 ### MC-103
 
-- **Action:** Not performed. Declining a skipped review as a human needs the live gate from MC-102, which is unavailable.
-- **Expected result:** Run does not stop; ADVERSARIAL_REVIEW reruns as a full panel; stub and marker removed before the panel starts; skip not re-applied.
-- **Actual result:** Not executed; prerequisite MC-102 blocked. This check also needs a human decline action at the gate.
-- **Defects:** None. Setup needed: reach the skipped-review gate (MC-101/MC-102), then a human declines it.
+- **Action:** Replaced the stub driver with one that prints 'progress line' and 'Human gate: approve PROJECT_PLAN.md' on stdout and exits 0 with no completion banner. Ran `uncle --noui --application 'build a thing' 2>err.txt >out.txt` and noted the exit status.
+- **Expected result:** Exit status 3. Gate message on stderr as before. Stdout formatting unchanged.
+- **Actual result:** Exit status 3. err.txt has 'uncle --noui: driver stopped without completing (gate or blocked); exit 3' and 'uncle --noui: stopped at: Human gate: approve PROJECT_PLAN.md'. Stdout lines keep the [+hh:mm:ss] prefix.
+- **Defects:** None
 
 ### MC-105
 
-- **Action:** Ran the narrow script scripts/tests/review-skip-test.sh once and inspected its WORKFLOW_SKIP_REVIEW and WORKFLOW_CLASSIFY cases. I did not launch a live driver review.
-- **Expected result:** Every one of these runs launches a full review panel and prints no skip line.
-- **Actual result:** The skip-decision helper change_class_review_skipped returned 'full review' (rc 1) for WORKFLOW_SKIP_REVIEW=0, empty, false, no and 2, and for WORKFLOW_CLASSIFY=0. Unset and =1 still honored the skip. The script ended with 36 passed, 0 failed, and the runner-calls file confirmed zero runner invocations. No live docs-only driver run was made, so I did not observe a console transcript showing the panel launching and no skip line. That needs a real reviewer panel run (agent/Codex invocation) that this lane cannot start.
+- **Action:** Ran `uncle --help` and `uncle --noui --help` and grepped for stderr. Ran `uncle --noui --application=` (empty text) and `uncle --noui --noinput` with `2>err.txt`, noting the exit status.
+- **Expected result:** Help states that errors go to stderr. The launcher refusal is in err.txt with exit status 2, unchanged.
+- **Actual result:** Both help outputs, at line 53, say 'driver errors go to stderr'. The empty --application refusal exited 2 with 'Error: --application text cannot be empty' in err.txt. The --noui with --noinput refusal exited 2 with 'Error: --noui cannot be combined with --noinput' in err.txt (the usage text was also printed).
 - **Defects:** None
 
 ### MC-106
 
-- **Action:** Read scripts/tests/review-skip-test.sh to see what it covers for editing the plan after a skip stub is written. I did not run a live ADVERSARIAL_REVIEW re-entry.
-- **Expected result:** The stale stub, its rendered md and the marker are discarded and the skip decision is recomputed against the new plan; a stale or missing plan sha yields a full panel review.
-- **Actual result:** The stale or missing plan sha half is covered at helper level: sha-mismatch-full and sha-empty-full both returned full review, and sha-match returned skip. Discarding the stale stub, its rendered md and the marker on re-entry was NOT observed. The script only greps the drivers for the 'review-skipped' marker and has no behavioral test for the discard. Doing it live needs a driver run to the review stage, an edit of the plan, and re-entry, which this lane cannot do.
+- **Action:** Read the checklist row. Did not launch the interactive curses TUI or force a driver failure in it, because the row needs a human to watch the live build window and no non-interactive harness was assigned to this lane.
+- **Expected result:** The build window shows driver errors as before, followed by one line `Driver exited with status N: <last non-empty output line>`, with secrets and escape codes removed.
+- **Actual result:** Not observed. The live TUI observation was not performed.
 - **Defects:** None
 
 ### MC-107
 
-- **Action:** Read the checklist row and the driver green-check; did not run the live driver flow.
-- **Expected result:** Run stops immediately with nonzero exit, no retry, no model invocation, no fallback to full review when the skip stub is corrupt.
-- **Actual result:** Not executed. Reaching the driver's validation state with a corrupted stub requires a live stagegate.sh run with an approved plan and a classifier outcome, which was not set up in this worker.
-- **Defects:** None
-
-### MC-108
-
-- **Action:** Read the checklist row; did not run the end-to-end stagegate.sh flow.
-- **Expected result:** Review panel not launched, skip line shown, human gate appears, and the updated-plan stage accepts the zero-finding review and continues.
-- **Actual result:** Not executed. The row needs a real classifier model answering review: skip and an interactive human approval gate, which are not available to this isolated worker.
+- **Action:** Inspected uncle_tui.py:102 and scripts/tests/tui-failure-line-test.py to see what covers the failure line. Did not launch the curses TUI or capture build-window screenshots.
+- **Expected result:** Exit 0 adds no failure line. A silent non-zero exit shows `Driver exited with status N: (no output)`. A user stop shows the failure line with 130 or 143.
+- **Actual result:** Not observed live. A worker without an interactive terminal cannot run a driver in the curses TUI, press Ctrl-C, or take screenshots of the build window.
 - **Defects:** None
 
 ### MC-200
 
-- **Action:** None. Read the checklist row only. The row needs a live change-workflow.sh run with a real classifier and a real reviewer panel on a risky docs-only plan. That cannot be done within this worker's compact policy and budget.
-- **Expected result:** Full adversarial review panel runs; no 'Adversarial review skipped' line appears and no review-skipped marker exists (SI-1).
-- **Actual result:** Not executed. No console output or marker state was observed.
-- **Defects:** None
-
-### MC-201
-
-- **Action:** Ran scripts/tests/review-skip-test.sh (narrow, stub-level check). Did not run a live change-workflow.sh with a real classifier through the review gate.
-- **Expected result:** Console shows skip line; no panel; gate shows zero-finding stub with 'skipped: class <class>, no risk hits'; change-class.json review=skip; marker exists.
-- **Actual result:** Helper/CLI-level test passed 36/0 (stub written only for verified skip, exact overall_assessment, zero runner invocations, drivers reference the helper and marker). The live end-to-end driver run with a real classifier was not performed in this worker.
+- **Action:** Created disposable project /tmp/mc200.s7gr/proj (git init) and a fake runtime whose change-workflow.sh driver prints 'DRIVER-ERROR-TEXT' to stderr and exits 7. Ran the headless runner that `uncle --noui` execs (scripts/lib/uncle_headless.py) with UNCLE_RUNTIME_ROOT=fake runtime, UNCLE_STARTUP_ACTION=change_request, UNCLE_STARTUP_TEXT set, with 1>out.txt 2>err.txt, then cat'd both files and printed the exit status.
+- **Expected result:** err.txt holds the driver error text exactly once followed once by `driver exited with status N`; shell exit status 1; out.txt holds neither.
+- **Actual result:** exit=1. out.txt was empty. err.txt contained exactly two lines: 'DRIVER-ERROR-TEXT' then 'uncle --noui: driver exited with status 7'.
 - **Defects:** None
 
 ### MC-202
 
-- **Action:** None live. Declining a review at the gate is a human action, and MC-201 was not run live.
-- **Expected result:** Run continues; stub and marker removed; full panel review runs; skip never re-applied.
-- **Actual result:** Not executed. The test script only partly covers the stale/marker handling.
+- **Action:** Ran scripts/lib/uncle_headless.py (the --noui runner) with an explicit disposable fake driver (/tmp/mc202/drv.sh) that writes 'Continue? [y/N] ' to stderr with no trailing newline, sleeps 3s, prints a line to stdout and exits 0 without a completion banner. Read stdout and stderr live through separate pipes with monotonic timestamps. Did not go through the `uncle` launcher or a real project driver.
+- **Expected result:** Prompt text appears on the terminal within the idle timeout, before the driver exits. A normal gate still stops the run with exit status 3 and a message naming the gate.
+- **Actual result:** The prompt appeared on stderr at 0.34s (idle timeout 0.2s), 2.8s before the driver exited at 3.13s. It was emitted with a newline appended. The run ended with exit status 3 and the message 'uncle --noui: driver stopped without completing (gate or blocked); exit 3'. That message does not name a specific gate, because the fake driver emitted no gate name; the driver-emitted gate text was only a stdout line.
 - **Defects:** None
 
 ### MC-203
 
-- **Action:** None. Read the checklist row only. The row needs live change-workflow.sh runs with WORKFLOW_SKIP_REVIEW set to 0, empty and false against a real classifier and reviewer panel. This worker did not perform them.
-- **Expected result:** Each run performs a full review; skip is honored only when the variable is unset or exactly 1 (SI-4).
-- **Actual result:** Not executed. No console output was observed for any of the three values.
-- **Defects:** None
+- **Action:** Ran the real scripts/lib/uncle_headless.py run() (the --noui code path, install_signals=True) from a small wrapper against a fake driver that writes 'pending-err MARKER203' to stderr and then sleeps 60s. Sent SIGINT (the Ctrl-C signal) to the wrapper after 2s, then repeated with SIGTERM. Captured stdout and stderr to files each time, then ran pgrep for the driver marker. Did not go through the full `uncle` launcher with a real workflow driver.
+- **Expected result:** Exit 130 for Ctrl-C and 143 for SIGTERM. All driver stderr precedes the single status line, and no driver process is left running.
+- **Actual result:** SIGINT gave exit 130 and SIGTERM gave exit 143. Each err file held exactly one 'pending-err MARKER203' line, and the out files were empty. pgrep found no leftover driver process. No 'driver exited with status' line was written in either signal case. Code at uncle_headless.py:370-371 deliberately suppresses that line when a signal was received, and the unit test asserts at most one status line. So 'all stderr precedes the status line' holds only vacuously.
+- **Defects:** None (note: the checklist wording implies a status line on user signals, but the implementation intentionally omits it)
 
 ### MC-204
 
-- **Action:** Not run live. The review-skip-test.sh stale-plan sha cases passed as part of the 36 checks.
-- **Expected result:** Stale stub, rendered md and marker discarded after a plan edit; decision recomputed against the new plan.
-- **Actual result:** Not executed end to end in the driver; depends on MC-201 live state.
+- **Action:** Ran the real uncle_headless.run() (the --noui implementation) in a subprocess with a fake driver (/tmp/mc204/drv.py) that prints three progress lines to stdout and one line to stderr, with real fd redirection 1>out.txt 2>err.txt; inspected both files with cat -v. Did not invoke the uncle launcher script itself.
+- **Expected result:** Each stdout line in out.txt has a single [+hh:mm:ss] prefix; stderr text is not duplicated onto stdout.
+- **Actual result:** out.txt had exactly three lines, each with a single [+00:00:00] prefix: progress one/two/three. err.txt contained 'stderr-noise-abc' once, unprefixed, plus the runner's own status line (exit 3, because the fake driver did not complete a run). The stderr noise did not appear in out.txt.
 - **Defects:** None
 
 ### MC-205
 
-- **Action:** Not run live in either driver. The review-skip-test.sh wiring checks passed (both drivers reference the helper, marker and skip-review).
-- **Expected result:** Each driver stops immediately with nonzero exit on a corrupt stub, with no retry, no fallback and no model call.
-- **Actual result:** Not executed against stagegate.sh or change-workflow.sh with a corrupted stub.
-- **Defects:** None
-
-### MC-206
-
-- **Action:** Ran bash scripts/tests/review-skip-test.sh, which exercises the shared change_class_review_skipped helper (the function the drivers call) for WORKFLOW_CLASSIFY=0, a forced WORKFLOW_CHANGE_CLASS=docs, and the path-floor cases. Read review-skip-test.py, which covers driver/gate/auth/secret script paths (scripts/stagegate.sh, scripts/change-workflow.sh, src/auth.py, etc.). I did not run the full workflow end to end.
-- **Expected result:** All three scenarios run a full review with no skip (SI-4, SI-5 path floor).
-- **Actual result:** 36 passed, 0 failed. The classify-off-full and forced-class-full cases return 1 (not skipped). The path-floor test list includes driver and gate script paths. The driver green-check reports no regressions.
-- **Defects:** None
-
-### MC-207
-
-- **Action:** Not run. This needs both drivers taken through the human approval gate and the final audit, which needs a human and a real reviewer.
-- **Expected result:** Plan approval gate and final audit run normally on the zero-finding stub; updated-plan stage accepts it.
-- **Actual result:** Not executed.
-- **Defects:** None
-
-### MC-300
-
-- **Action:** Read the checklist row only. Did not launch change-workflow.sh in a scratch project.
-- **Expected result:** No review panel runs; console shows `Adversarial review skipped: class docs, no risk hits`; the human review gate shows the stub with that reason and zero findings.
-- **Actual result:** Not executed. The check needs a full change-workflow.sh run with a real model classifier in a scratch project, taken to an interactive human review gate. A compact worker has no budget or gate access for that.
-- **Defects:** None
-
-### MC-301
-
-- **Action:** Not performed. It depends on the MC-300 gate, which was not reached.
-- **Expected result:** Declining the skipped review at the gate reruns ADVERSARIAL_REVIEW as a full panel review, removes the stub and review-skipped marker before the panel starts, and does not re-take the skip.
-- **Actual result:** Not executed. It needs the MC-300 gate state and a human decline action at an interactive approval gate.
+- **Action:** Called uncle_tui.format_failure_line directly with sample statuses/outputs (3 with 'last', 4 with empty, 0, and 1 with ANSI+token). Inspected uncle_tui.py:2063 where the result is appended to the build window output. Did not launch the interactive TUI against disposable drivers.
+- **Expected result:** Non-zero exit: build window ends with 'Driver exited with status N: <last line>' or '(no output)', redacted, no escapes. Exit 0: no failure line.
+- **Actual result:** Function output matched: 'Driver exited with status 3: last'; 'Driver exited with status 4: (no output)'; None for status 0; 'Driver exited with status 1: token=[REDACTED]' with escapes stripped. The live build-window rendering was not observed.
 - **Defects:** None
 
 ### MC-302
 
-- **Action:** Did not execute. The check needs a scratch project plus a full change-workflow.sh run with a real classifier agent CLI and reviewer panel. I judged that too costly for this compact worker, and the budget is limited.
-- **Expected result:** Full adversarial review runs with no skip stub and no review-skipped marker.
-- **Actual result:** Not performed. Related automated coverage of risky-path floors is in review-skip-test.py, but it does not substitute for the live transcript this check requires.
+- **Action:** In a scratch git repo with no remote, ran `uncle --issue 99999999 --noui` (a failing request) under a pty via `script` with no redirection, then re-ran with stdout and stderr redirected to separate files to attribute each line to its stream.
+- **Expected result:** The error text is visible in the terminal, stdout lines keep the `[+hh:mm:ss]` prefix, and stderr error lines are shown verbatim without that prefix.
+- **Actual result:** In the pty transcript all error text was visible: `Mode: unattended (default)...`, `[+00:00:00] No git remote found. Provide a full GitHub URL.`, and `uncle --noui: driver exited with status 1`. In the split run, stdout held only the `[+00:00:00]`-prefixed line; stderr held the `Mode:` and `uncle --noui: driver exited with status 1` lines verbatim with no prefix. Exit status 1. Caveat: the driver's own failure message went to stdout with the prefix here; the stderr lines observed were the launcher's. The behavior matches the expected result for both streams.
 - **Defects:** None
 
 ### MC-303
 
-- **Action:** Ran scripts/tests/review-skip-test.sh (narrow check) and inspected its WORKFLOW_SKIP_REVIEW value matrix. Did not run change-workflow.sh end-to-end in a scratch project, because that needs a live reviewer panel.
-- **Expected result:** Both runs (WORKFLOW_SKIP_REVIEW=0 and =false) perform a full panel review with no skip stub, even if the classifier answered skip.
-- **Actual result:** At the helper level, with a stored class review=skip and a matching plan sha, WORKFLOW_SKIP_REVIEW=0 and =false both return 1 (full review); only unset and =1 honor the skip. The suite reported 36 passed, 0 failed. No full-driver transcript showing the panel being invoked was captured.
+- **Action:** Drove the real uncle_headless.run() (the --noui engine in scripts/lib/uncle_headless.py) with a fake driver that prints a progress line and 'Human gate: PROJECT_PLAN.md awaiting approval' then exits 0 without the completion banner. Redirected stderr to /tmp/uncle-gate-err.txt and stdout to /tmp/uncle-gate-out.txt, and checked the exit status. I did not invoke the full ./uncle launcher with a real approval-gate project.
+- **Expected result:** Exit status is 3, the gate is named on stderr, and gate behavior and stdout format are unchanged.
+- **Actual result:** Exit status was 3. stderr named the gate. stdout lines kept the single [+hh:mm:ss] prefix, and no stderr text appeared on stdout.
 - **Defects:** None
 
 ### MC-304
 
-- **Action:** Inspected review-skip-test.sh and ran it. Did not edit a plan after a stub was written or re-enter ADVERSARIAL_REVIEW in a scratch project.
-- **Expected result:** After the plan is edited, the stale stub, its rendered md and the marker are discarded, and the skip decision is recomputed against the new plan.
-- **Actual result:** The suite covers sha-mismatch, sha-empty and mismatched-sha skip-review, and each gives a full review with no stub written. It does not cover removal of an existing stub, its rendered md or the marker after a plan edit. The required before/after file listing was not produced.
-- **Defects:** None
-
-### MC-305
-
-- **Action:** Read the checklist row. No live run: it needs two interactive drivers with a skip stub in a fifth scratch project, and this worker has no scratch project or driver session assigned.
-- **Expected result:** Each driver stops immediately with nonzero exit, no retry, no model invocation, and no fallback to a full review.
-- **Actual result:** Not performed. No live observation of either driver's behavior on a corrupted ADVERSARIAL_REVIEW.json.
-- **Defects:** None
-
-### MC-306
-
-- **Action:** Read the checklist row. No live run: it needs stagegate.sh on a new small app project with a real classifier answering skip, through to the human approval gate. No real classifier session or scratch-app-small project was available to this worker.
-- **Expected result:** No panel runs; the stub shows `skipped: class small, no risk hits` at the gate; the marker is written; the human approval gate still appears.
-- **Actual result:** Not performed. No gate transcript or marker listing was captured.
-- **Defects:** None
-
-### MC-401
-
-- **Action:** Did not launch a fresh change-workflow.sh run with a real classifier (requires a full multi-agent workflow run, outside this worker's scope). Inspected the current run's own artifacts: change-class.json (class risky, 4 lenses), adversarial-review-panel directory, and workflow dir for skip markers.
-- **Expected result:** Full reviewer panel runs as before; no skip stub is written and no review-skipped marker exists.
-- **Actual result:** Observed only for this run: the classifier labelled the plan risky, all four lens packets (requirements, regression, security, testability) exist plus a synthesis, and no skip marker file is in .uncle/workflow. This is incidental evidence, not the dedicated risky-plan scenario with the plan text the check names (data deletion / auth-secret path). Not independently exercised.
-- **Defects:** None
-
-### MC-402
-
-- **Action:** Did not run stagegate.sh with a standard/large-class change, nor a docs-class change with WORKFLOW_CLASSIFY=0. Each needs a full live driver run with the reviewer panel.
-- **Expected result:** Both runs launch the full review panel with every lens; disabled classification or a non-reducible class never skips.
-- **Actual result:** Not performed; no observation was made of either scenario.
+- **Action:** Located the failure-line formatter in uncle_tui.py:102 and ran the narrow scripts/tests/tui-failure-line-test.py (6 tests). Did not drive the interactive curses TUI through a real failing build; no pty/human-visible observation was made.
+- **Expected result:** The build window ends with a line `Driver exited with status N: <last non-empty output line>` with secrets redacted and no escape sequences; a successful run adds no such line.
+- **Actual result:** Formatter produces 'Driver exited with status %s: %s' (with '(no output)' fallback). The unit test for it passed (6 tests OK). The live build-window rendering after a real non-zero driver exit was not observed.
 - **Defects:** None
 
 ### MC-403
 
-- **Action:** Did not run a full change-workflow.sh pass. Ran the narrow scripts/tests/review-skip-test.sh, whose value matrix drives the shared skip-decision helper with WORKFLOW_SKIP_REVIEW unset, 1, 0, empty, false, no and 2 against a plan classified review=skip. Also read the ADVERSARIAL_REVIEW state in scripts/change-workflow.sh.
-- **Expected result:** Every run with WORKFLOW_SKIP_REVIEW=0, empty or false performs a full panel review and writes no stub, even when the classifier answered review: skip.
-- **Actual result:** The helper returned 'full review' (rc 1) for 0, empty, false, no and 2, and 'skip' only for unset and 1. No runner calls were made. The helper-level suite passed 36 of 36. The end-to-end driver run was not executed, so the no-stub outcome is shown only through the decision helper and the driver wiring.
+- **Action:** Ran uncle_headless.main in attended mode under a pty (observed live with timestamps) against a fake driver that wrote stderr noise, printed 'Approve plan? [y/N] ' with no trailing newline on stdout, wrote more stderr noise 1s later, then read stdin; sent 'y' at 2.5s.
+- **Expected result:** The stdout prompt appears promptly and the gate behaves as before; stderr noise does not trigger or delay the gate.
+- **Actual result:** Prompt appeared at 0.03s (with elapsed prefix) despite no trailing newline; stderr lines 'noise1' and 'noise2' were shown as separate lines and did not trigger or delay any gate; the driver received 'y' and proceeded. Driver then exited 3 because the fake driver did not complete, reported as stopped without completing.
+- **Defects:** None
+
+### MC-404
+
+- **Action:** In a temp dir ran `uncle --noui --bogus-flag 2>err.txt >out.txt` (invalid argument refusal) and checked exit code, err.txt and out.txt.
+- **Expected result:** The refusal message is in err.txt and the exit status is 2, unchanged from prior behavior.
+- **Actual result:** Exit status 2. err.txt contained 'Unknown argument: --bogus-flag' followed by the usage text. out.txt was empty.
 - **Defects:** None
 
 ### MC-405
 
-- **Action:** Read the decline and stale-plan handling in change-workflow.sh and stagegate.sh. Ran review-skip-test.sh, which covers a plan edited after the decision. Did not run a live driver at a review gate.
-- **Expected result:** Declining a skipped review reruns ADVERSARIAL_REVIEW as a full panel review with the stub and review-skipped marker removed. A plan edit discards the stale stub and recomputes the decision.
-- **Actual result:** Plan-edit half: the test passed (plan-edited-after-decision-full and sha-mismatch-full both force a full review). Decline half: the code removes the review-skipped and review-skip-declined markers and falls through to the panel. I found no code removing the stub ADVERSARIAL_REVIEW.json on decline, and the decline gate was not exercised live, so that half is unverified.
-- **Defects:** None
-
-### MC-406
-
-- **Action:** Read the checklist row and inspected scripts/tests/review-skip-test.sh to see what is covered. Did not run stagegate.sh end to end.
-- **Expected result:** Same skip text appears at the gate, the review-skipped marker exists, and the remaining stages and human gates behave unchanged.
-- **Actual result:** Not executed. A live run through stagegate.sh needs the approval gates signed by a person and the downstream stages run with a model. The existing test only greps the drivers for the helper, marker and skip-review references, which is not behavioral evidence.
+- **Action:** Ran scripts/lib/uncle_headless.py (the --noui engine) directly with a fake driver script that writes to stderr a line with ANSI SGR codes and the secret (env MYSECRET_TOKEN=s3cr3tvalue12345), then an unterminated last line containing an OSC title sequence and the secret. Stderr was captured to a file and viewed with cat -v. The full `uncle --noui` launcher was not used; the module it invokes was.
+- **Expected result:** The file has no unredacted secret and no escape sequences, and the unterminated last line is present, redacted.
+- **Actual result:** err.txt held 'hello red token=[REDACTED]', 'last line key [REDACTED]' (the unterminated line, present and redacted), and the driver's exit-3 status message. cat -v showed no ^[ sequences. grep -c for the secret value gave 0 in both stderr and stdout files. The exit code of 3 is the expected 'driver did not emit completion banner' result for the fake driver.
 - **Defects:** None
 
 ### MC-407
 
-- **Action:** Read the checklist row and inspected scripts/tests/review-skip-test.sh. Did not corrupt the stub or resume either driver.
-- **Expected result:** The run stops immediately with a nonzero exit, with no retry, no model invocation, and no fallback to full review.
-- **Actual result:** Not executed. It needs a staged run in each of change-workflow.sh and stagegate.sh with a skip stub, which needs an approved earlier gate that only a person can supply. The test suite only greps for the helper, marker and skip-review references. The 'no-runner-calls' check covers the helper's value matrix, not a driver resume.
+- **Action:** Ran the real scripts/lib/uncle_headless.py run() (the --noui driver runner, signal handlers installed) in a separate process, with a fake driver that wrote two lines to stderr, spawned a grandchild sleeper, then slept. After 2s I sent an external SIGINT to the runner, then listed leftover processes with pgrep. I did not launch the full `./uncle --noui` build because that would invoke paid agent stages.
+- **Expected result:** Exit status is 130, all stderr output written before interrupt is present before a single status line, and no descendant processes survive.
+- **Actual result:** Exit status was 130. Captured stderr held 'pending-err-1' and 'pending-err-2' exactly once each, and nothing leaked to stdout. No 'driver exited with status' line appeared at all, so there was no more than one status line (the unit test allows at most one). pgrep showed the driver and grandchild alive before the signal and no processes afterwards.
 - **Defects:** None
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-101 | YES | BLOCKED-SETUP | None captured. Automated skip-path coverage, if any, belongs to the driver green-check and is not claimed here. |
-| MC-102 | YES | BLOCKED-SETUP | None. |
-| MC-103 | YES | BLOCKED-SETUP | None. |
-| MC-105 | YES | NOT RUN | review-skip-test: 36 passed, 0 failed (env-[0]/[]/[false]-full-review and classify-off-full checks). The script is not in green-check.commands or green-check.md, so this was a narrow run, not a cited driver result. |
-| MC-106 | YES | NOT RUN | review-skip-test.sh lines 65-68 (sha cases) pass. Lines 114-120 only grep for marker references. No before/after listing of artifacts was captured. |
-| MC-107 | YES | NOT RUN | The green-check shows no regressions (bash scripts/run-shell-tests.sh and run-python-tests.sh, PREEXISTING). The review-skip-test.sh corrupt-json-full check covers only a corrupt change-class.json, not the corrupted ADVERSARIAL_REVIEW.json stub. No live evidence exists for this row. |
-| MC-108 | YES | BLOCKED-HUMAN | No live transcript was captured. Automated coverage is limited to the driver green-check, which reports no regressions. |
-| MC-200 | YES | NOT RUN | None. The driver green-check and scripts/tests/review-skip-test.sh may cover the skip logic with stubs, but this worker did not run or read them. They are not a substitute for the live run the row requires. |
-| MC-201 | YES | NOT RUN | review-skip-test: 36 passed, 0 failed; driver green-check reports no regressions. This is not a substitute for the live console transcript. |
-| MC-202 | YES | BLOCKED-HUMAN | No transcript. Depends on MC-201 live run, and on a person declining the gate. |
-| MC-203 | YES | NOT RUN | None. Nothing was run or inspected for this row, so there is no evidence of the behavior either way. |
-| MC-204 | YES | NOT RUN | review-skip-test: 36 passed (includes plan sha mismatch/edit cases), cited as partial only. |
-| MC-205 | YES | NOT RUN | Static wiring grep checks passed in review-skip-test.sh; no runtime exit-code observation. |
-| MC-206 | YES | PASS | review-skip-test: 36 passed, 0 failed; helper cases at review-skip-test.sh lines 55-56; path-floor list at review-skip-test.py line 149; .uncle/workflow/green-check.md. Scope limit: this is helper-level evidence, not console output from three full change-workflow.sh runs. The mapping of 'a plan owning a driver/gate script classified small' to the floor test rests on my reading of the test list at review-skip-test.py line 149; I did not run that case individually. |
-| MC-207 | YES | BLOCKED-HUMAN | No transcript. Depends on MC-201 live run and on human gate approvals. |
-| MC-300 | YES | NOT RUN | None. No runtime observation was made, and the driver green-check does not cover this live end-to-end behavior. |
-| MC-301 | YES | NOT RUN | None. The MC-300 prerequisite was not run, so there was nothing to decline. |
-| MC-302 | YES | NOT RUN | None for the live run. |
-| MC-303 | YES | NOT RUN | review-skip-test: 36 passed, 0 failed. Cases env-[0]-full-review and env-[false]-full-review pass. |
-| MC-304 | YES | NOT RUN | Cases sha-mismatch-full, sha-empty-full and skip-review-mismatch-no-stub pass in the 36/36 run. There is no stale-stub removal evidence. |
-| MC-305 | YES | NOT RUN | I did not run scripts/tests/review-skip-test.sh. The driver green-check owns automated commands, and I did not read it, so I make no claim that it covers this row. |
-| MC-306 | YES | BLOCKED-SETUP | None. The human approval gate cannot be signed or observed by this worker. Setup needed: a real classifier and a scratch-app-small project, plus a person to reach the gate. |
-| MC-401 | YES | NOT RUN | change-class.json class=risky; adversarial-review-panel/{requirements,regression,security,testability}.json; ls .uncle/workflow / grep -i skip returned nothing. scripts/tests/review-skip-test.sh covers the helper and CLI refusal logic, but I did not run it and the driver green-check is not cited here. |
-| MC-402 | YES | NOT RUN | None. scripts/tests/review-skip-test.sh has a value-matrix section for the disabling switches, but I did not execute it. |
-| MC-403 | YES | PASS | review-skip-test: 36 passed, 0 failed; checks env-[0]-full-review, env-[]-full-review and env-[false]-full-review. change-workflow.sh:3964-3979 only calls skip-review when change_class_review_skipped succeeds. |
-| MC-405 | YES | NOT RUN | change-workflow.sh:3964-3965 removes only the markers; the stagegate.sh:5480 path looks similar. The human decline interaction was not performed. |
-| MC-406 | YES | BLOCKED-HUMAN | scripts/tests/review-skip-test.sh lines 114-120 are static greps of the drivers. No live run was performed. |
-| MC-407 | YES | BLOCKED-HUMAN | scripts/tests/review-skip-test.sh line 63 (corrupt-json-full covers change-class.json, not the review stub) and lines 111 and 114-120 (static greps). No live resume was performed. |
+| MC-101 | YES | PASS | exit=1; err.txt lines: 'Mode: unattended (default)...', 'DRIVER-ERROR-TEXT', 'uncle --noui: driver exited with status 1'; out.txt: '[+00:00:00] progress line'. The unattended-mode notice in err.txt is a pre-existing launcher notice, not driver error text. |
+| MC-102 | YES | PASS | Captured transcript: '[+00:00:21] [done] success ... canonical change-planning bundle: invalid baseline_report packet: baseline report is missing verification_commands / [+00:00:21] Total time: 22s ... / uncle --noui: driver exited with status 1 / exit=1'. Caveat: no real tty available in this environment; both streams were visible in the merged non-redirected output. |
+| MC-103 | YES | PASS | exit=3; err.txt gate lines as above; out.txt: '[+00:00:00] progress line' and '[+00:00:00] Human gate: approve PROJECT_PLAN.md'. A first attempt, with the stub exiting with raw status 3, gave exit 1 because the contract defines a gate as exit 0 without a completion banner, so I redid it that way. |
+| MC-105 | YES | PASS | help grep line 53 in both outputs; 'refusal exit=2' and 'refusal2 exit=2' with the messages above taken from err.txt. |
+| MC-106 | YES | BLOCKED-HUMAN | None. Automated coverage exists in scripts/tests/tui-failure-line-test.py, but I did not rerun or cite a driver result for it, so it is not evidence for this row. |
+| MC-107 | YES | BLOCKED-HUMAN | uncle_tui.py:102 returns 'Driver exited with status %s: %s' % (status, text or '(no output)'). The unit test tui-failure-line-test.py asserts the (no output) case at line 23 and the 130/143 cases at line 26. I did not re-run it, because the driver green-check owns automated commands. This is code-level evidence only and does not satisfy the required screenshots of the real build window. |
+| MC-200 | YES | PASS | Terminal output: exit=1; ---out (empty); ---err: DRIVER-ERROR-TEXT / uncle --noui: driver exited with status 7. Note: the headless module was invoked directly (the same python script `uncle` execs at line 437) rather than via the ./uncle shell wrapper. |
+| MC-202 | YES | PASS | 0.34s err b'Continue? [y/N] \n'; 3.13s out b'[+00:00:03] gate: needs approval\n'; 3.13s err b'uncle --noui: driver stopped without completing (gate or blocked); exit 3'; 3.14s exit=3 |
+| MC-203 | YES | PASS | Transcript: 'INT exit=130', 'TERM exit=143', 'pgrep: none'. err_INT.txt and err_TERM.txt each contained only 'pending-err MARKER203'. Code reference: scripts/lib/uncle_headless.py lines 370-371. Existing unit test test_signal_drains_pending_stderr covers the same behavior. |
+| MC-204 | YES | PASS | out.txt: '[+00:00:00] progress one' / '[+00:00:00] progress two' / '[+00:00:00] progress three'. err.txt: 'stderr-noise-abc' / 'uncle --noui: driver stopped without completing (gate or blocked); exit 3'. Files in /tmp/mc204. |
+| MC-205 | YES | BLOCKED-HUMAN | Terminal output of the function calls; uncle_tui.py:93-102 and :2063 call site. The live TUI capture the checklist requires was not performed. |
+| MC-302 | YES | PASS | /tmp/mc302.txt (pty transcript), /tmp/o (stdout), /tmp/e (stderr), captured in this run. |
+| MC-303 | YES | PASS | exit=3. /tmp/uncle-gate-err.txt: 'uncle --noui: driver stopped without completing (gate or blocked); exit 3' and 'uncle --noui: stopped at: Human gate: PROJECT_PLAN.md awaiting approval'. out: '[+00:00:00] progress line' and '[+00:00:00] Human gate: PROJECT_PLAN.md awaiting approval'. This matches the test_gate_named_on_stderr and test_fake_drivers assertions in scripts/tests/headless-run-test.py. The real-launcher path was not exercised end to end. |
+| MC-304 | YES | BLOCKED-HUMAN | uncle_tui.py:102; python3 scripts/tests/tui-failure-line-test.py -> Ran 6 tests, OK. Check requires a human-visible TUI observation of a real failing build. |
+| MC-403 | YES | PASS | Transcript: [0.03] '[+00:00:00] Approve plan? [y/N] ' ; [0.03] 'noise1'; [1.04] 'noise2'; [sent y]; [2.60] "GOT 'y\n' after 2.6"; exit-3 status line. |
+| MC-404 | YES | PASS | rc=2; err.txt: 'Unknown argument: --bogus-flag' + 'Usage: uncle [-h/--help/--performance/--runs] [--attended] [--noui] ...'; out.txt empty. Source uncle:209-213 sets UNCLE_REFUSE_CODE=2 under --noui. Only one refusal path (invalid argument) was exercised. |
+| MC-405 | YES | PASS | cat -v err.txt output: 'hello red token=[REDACTED]' / 'last line key [REDACTED]' / 'uncle --noui: driver stopped without completing (gate or blocked); exit 3'; grep -c s3cr3t err.txt out.txt -> 0 and 0. |
+| MC-407 | YES | PASS | Before SIGINT: pids 89762 (driver) and 89763 (grandchild). exit=130. After: pgrep printed 'none'. stdout: 'RC 130'. stderr: 'pending-err-1' then 'pending-err-2'. Caveat: this exercised the headless runner directly, not the full uncle CLI wrapper. The status line was absent rather than present after the stderr output. |

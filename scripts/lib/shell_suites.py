@@ -13,8 +13,9 @@ import tempfile
 import threading
 import time
 from process_tree import bash_executable, start_check, finish_check, kill_tree
-from cpu_jobs import MAX_JOBS, default_jobs
+from cpu_jobs import MAX_JOBS, default_jobs, default_test_jobs
 from suite_split import expand
+from suite_tier import select
 
 
 def run(jobs, suites=()):
@@ -23,7 +24,7 @@ def run(jobs, suites=()):
     if any(not re.fullmatch(r'[a-z0-9][a-z0-9-]*', name) for name in suites):
         raise ValueError('Invalid shell suite name')
     files = ([f'scripts/tests/{name}-test.sh' for name in suites] if suites
-             else sorted(glob.glob('scripts/tests/*-test.sh')))
+             else select(sorted(glob.glob('scripts/tests/*-test.sh'))))
     files = [Path(path).as_posix() for path in files]
     if not files:
         print('FAIL: no shell test suites found', file=sys.stderr)
@@ -163,8 +164,24 @@ def report_timings(kind, durations, statuses, show=15):
                 out.write(f'{seconds:.2f}\t{statuses.get(path, "")}\t{path}\n')
 
 
+def lower_priority(amount=10):
+    """Run at a lower scheduling priority; every suite process started afterwards inherits it. Best effort, never fatal.
+    UNCLE_TESTS_NICE=0 leaves priority alone."""
+    try:
+        amount = int(os.environ.get('UNCLE_TESTS_NICE', amount))
+    except ValueError:
+        return
+    if amount > 0 and hasattr(os, 'nice'):
+        try:
+            os.nice(amount)
+        except OSError:
+            pass
+
+
 def run_commands(jobs, commands, kind='shell'):
     """Execute named isolated commands with shared progress and cleanup.
+
+    The runner lowers its own priority first, so every suite process inherits it (see lower_priority).
 
     The 1-8 range on run()'s own --jobs flag is a deliberate cap on the full
     ~70-file regression, so a developer's default run never oversubscribes
@@ -177,6 +194,7 @@ def run_commands(jobs, commands, kind='shell'):
     CLI's own limit."""
     if not 1 <= jobs <= max(32, len(commands)):
         raise ValueError(f'Worker count must be from 1 to {max(32, len(commands))}')
+    lower_priority()
     timeout = check_timeout('WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 600)
     guarded_before = guarded_snapshot()
     commands = ordered(commands, read_weights())
@@ -265,4 +283,6 @@ def run_commands(jobs, commands, kind='shell'):
 
 
 if __name__ == '__main__':
-    raise SystemExit(run(int(sys.argv[1]) if len(sys.argv) > 1 else default_jobs(), sys.argv[2:]))
+    from suite_tier import consume_all_flag
+    args = consume_all_flag(sys.argv[1:])
+    raise SystemExit(run(int(args[0]) if args else default_test_jobs(), args[1:]))

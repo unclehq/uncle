@@ -245,6 +245,8 @@ while [[ $# -gt 0 ]]; do
         --unattended)  UNCLE_FLAG_UNATTENDED=1; shift ;;
         --attended)    UNCLE_FLAG_ATTENDED=1; shift ;;
         --noui)        UNCLE_FLAG_NOUI=1; shift ;;
+        # Seen by the pre-scan above (it forces the curses UI even with no terminal); nothing more to record here.
+        --noinput)     shift ;;
         --change-request)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
                 printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2

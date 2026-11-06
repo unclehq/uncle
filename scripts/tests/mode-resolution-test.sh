@@ -178,6 +178,20 @@ rm -f "$R/mode"; echo x >"$T/tgt"; ln -s "$T/tgt" "$R/mode"; n=$((n+1))
 if w "$R" attended; then fails=$((fails+1)); echo "FAIL write followed symlink" >&2; fi
 [ "$(cat "$T/tgt")" = x ] || { fails=$((fails+1)); echo "FAIL symlink target overwritten" >&2; }
 
+# The 0/1 flag is not a mode: a file holding it made the run's own next resume refuse ("mode is not a regular file containing
+# exactly attended or unattended"), so the writer refuses anything but the two words and leaves the file alone.
+rm -rf "$R"; mkdir -p "$R"
+for bad in 1 0 "" yes; do
+  n=$((n+1))
+  if w "$R" "$bad"; then fails=$((fails+1)); echo "FAIL write accepted mode '$bad'" >&2; fi
+  [ ! -e "$R/mode" ] || { fails=$((fails+1)); echo "FAIL write left a file for mode '$bad'" >&2; }
+done
+# A run that wrote its mode resolves on resume: the writer and the reader agree.
+n=$((n+1))
+w "$R" unattended; echo started >"$R/state"
+run "$R" "$NOTTY"; resumed_rc=$rc; resumed_res=$res
+[ "$resumed_rc" = 0 ] && [ "${resumed_res%% *}" = 1 ] || { fails=$((fails+1)); echo "FAIL resume of a recorded unattended mode: rc=$resumed_rc res=$resumed_res" >&2; }
+
 # --- banner strings ---
 b() { env -i PATH="$PATH" HOME="$T" "$@" bash -c 'source "$MODE_SH"; uncle_mode_banner' MODE_SH="$MODE_SH" 2>&1 >"$T/bout"; }
 bn() { n=$((n+1)); [ "$(b "$@")" = "$WANT" ] && [ ! -s "$T/bout" ] || { fails=$((fails+1)); echo "FAIL banner: $WANT" >&2; }; }

@@ -1,5 +1,6 @@
 """Line-based interactive session for bare `uncle --noui` (no curses)."""
 import os
+import time
 import re
 import signal
 import sys
@@ -20,14 +21,14 @@ USAGE = {
     "mode": "usage: /mode [attended|unattended]",
     "issue": "usage: /issue N",
     "stop": "usage: /stop",
-    "resume": "usage: /resume",
+    "resume": "usage: /resume [N]",
     "clear": "usage: /clear",
     "triage": "usage: /triage",
     "do": "usage: /do",
     "settings": "usage: /settings",
 }
 HELP = ("Type a message to chat, or a request such as 'build issue 12'.\n"
-        "Commands: /help /mode [attended|unattended] /issue N /stop /resume /clear "
+        "Commands: /help /mode [attended|unattended] /issue N /stop /resume [N] /clear "
         "/triage /do /settings /quit\n")
 
 
@@ -109,13 +110,14 @@ class Session:
         self.reader = LineReader(self.in_fd, self.tty)
         self.root = self.env.get("UNCLE_PROJECT_ROOT") or os.getcwd()
         self.runtime = self.env.get("UNCLE_RUNTIME_ROOT") or self.env.get("UNCLE_RUNTIME") or self.root
-        attended = True
-        if "--attended" in argv:
-            attended = True
-        elif self.env.get("UNCLE_STARTUP_ATTENDED") == "1":
+        if "--attended" in argv or self.env.get("UNCLE_STARTUP_ATTENDED") == "1":
             attended = True
         elif self.env.get("UNCLE_STARTUP_UNATTENDED") == "1":
             attended = False
+        else:
+            # Plain `uncle --noui`: like the TUI, auto mode is the default and
+            # only an explicit `misc.auto_mode false` runs attended.
+            attended = self._config_auto_mode() is False
         self.attended = attended
         self.prompt_on = self.tty or self.env.get("UNCLE_REPL_PROMPT") == "1"
         self.code = 0
@@ -124,6 +126,7 @@ class Session:
         self.chat = None
         self.running = False
         self.last_action = None
+        self.started = time.time()
 
     # -- output helpers
     def say(self, text):
@@ -138,8 +141,25 @@ class Session:
         self.complain(text)
         self.code = 2
 
-    # -- confirmations: only user input on the REPL reader, y/yes consents
+    def _config_auto_mode(self):
+        path = self.env.get("UNCLE_CONFIG") or os.path.join(self.root, ".uncle", "config")
+        value = ""
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] == "misc.auto_mode":
+                        value = parts[1].lower()
+        except OSError:
+            pass
+        return value != "false"
+
+    # -- confirmations: only user input on the REPL reader, y/yes consents.
+    # An unattended session has no one to ask: every question is answered yes.
     def confirm(self, question):
+        if not self.attended:
+            self.say("Auto mode: " + question + " yes")
+            return True
         self.say(question + " [y/N]")
         try:
             status, line = self.reader.read("")
@@ -241,7 +261,10 @@ class Session:
             else:
                 self.say("no build running")
         elif name == "resume":
-            if args:
+            if len(args) == 1 and re.fullmatch(r"#?[1-9][0-9]*", args[0]):
+                self.execute({"uncle_action": "github_issue", "issue": args[0].lstrip("#"),
+                              "start": True, "message": ""}, line)
+            elif args:
                 self.complain(USAGE[name])
             else:
                 self.execute({"uncle_action": "resume_build"}, line)
@@ -284,9 +307,63 @@ class Session:
         if reply:
             self.history.append(("assistant", reply))
             self.say(reply)
-        if action:
+        for note in getattr(self.chat, "notes", []) or []:
+            self.say(note)
+        cwd = getattr(self.chat, "last_cwd", None)
+        if cwd is not None:
+            if not self.apply_cwd(cwd, action):
+                return None
+        elif action:
             self.execute(action, text)
         return None
+
+    # -- uncle_cwd: the TUI's _validate_agent_cwd / _agent_cwd, for the REPL
+    def validate_cwd(self, path):
+        if not (isinstance(path, str) and os.path.isabs(path)):
+            raise ValueError("path is not absolute")
+        resolved = os.path.realpath(path)
+        if not os.path.isdir(resolved):
+            raise ValueError("not a directory")
+        if resolved in (os.path.realpath(os.sep), os.path.realpath(os.path.expanduser("~"))):
+            raise ValueError("/ and the home directory are not allowed")
+        return resolved
+
+    def created_here(self, resolved):
+        try:
+            info = os.stat(resolved)
+        except OSError:
+            return False
+        return getattr(info, "st_birthtime", info.st_ctime) >= self.started - 1
+
+    def apply_cwd(self, path, action):
+        """Switch the session root; True when the same reply's action may still run."""
+        try:
+            resolved = self.validate_cwd(path)
+        except ValueError as exc:
+            self.say("Ignored uncle_cwd (%s).%s" % (exc, " The action in the same reply was cancelled." if action else ""))
+            return False
+        if resolved != os.path.realpath(self.root):
+            if not (self.created_here(resolved) or not self.attended):
+                if not self.confirm("The agent wants to work in %s, which it did not create this session. Switch?" % resolved):
+                    if action:
+                        self.say("The action in the same reply is cancelled.")
+                    return False
+            self.switch_root(resolved)
+        if action:
+            self.execute(action, "")
+        return True
+
+    def switch_root(self, path):
+        self._terminate_chat()
+        self.root = path
+        self.env["UNCLE_PROJECT_ROOT"] = path
+        self.env["UNCLE_CONFIG"] = os.path.join(path, ".uncle", "config")
+        os.environ["UNCLE_PROJECT_ROOT"] = path
+        os.environ["UNCLE_CONFIG"] = self.env["UNCLE_CONFIG"]
+        if not (self.env.get("UNCLE_RUNTIME_ROOT") or self.env.get("UNCLE_RUNTIME")):
+            self.runtime = path
+        self.chat = None
+        self.say("Working in " + path)
 
     def on_sigterm(self, signum, frame):
         self._terminate_chat()

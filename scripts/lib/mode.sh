@@ -152,6 +152,8 @@ uncle_mode_banner() {
 
 uncle_write_mode_file() {
   local dir=$1 mode=$2 f tmp
+  # The file holds the word the reader accepts. A caller that passed the 0/1 flag wrote a file its own next resume refused.
+  case "$mode" in attended|unattended) ;; *) uncle__err "uncle: refusing to record mode '$mode'; expected attended or unattended."; return 1 ;; esac
   f="$dir/mode"
   if [ -L "$f" ] || { [ -e "$f" ] && [ ! -f "$f" ]; }; then
     uncle__err "$(uncle_msg_refuse_mode_file "$f")"; return 1

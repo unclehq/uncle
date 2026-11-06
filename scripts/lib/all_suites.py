@@ -19,21 +19,22 @@ from pathlib import Path
 import sys
 import tempfile
 
-from cpu_jobs import default_jobs
+from cpu_jobs import default_test_jobs
 from gate_suites import gate_commands
 from process_tree import bash_executable
 from suite_split import expand
+from suite_tier import select
 from python_suites import suite_command
 from shell_suites import UNKNOWN_WEIGHT, WEIGHTS, isolate_git, ordered, read_weights, run_commands
 
 def build_commands():
     commands = {}
-    for path in sorted(glob.glob('scripts/tests/*-test.py')):
+    for path in select(sorted(glob.glob('scripts/tests/*-test.py'))):
         path = Path(path).as_posix()
         command = suite_command(path)
         plain = command[:2] == [sys.executable, '-B'] and os.environ.get('WORKFLOW_PYTHON_TESTS_RUNNER', 'python') == 'python'
         commands.update(expand(path, 'python', path, command) if plain else {path: command})
-    for path in sorted(glob.glob('scripts/tests/*-test.sh')):
+    for path in select(sorted(glob.glob('scripts/tests/*-test.sh'))):
         path = Path(path).as_posix()
         if path == 'scripts/tests/gates-test.sh':
             commands.update(gate_commands(path))
@@ -54,7 +55,10 @@ def shard_of(commands, weights, index, count):
 
 def run(jobs, shard=None, list_only=False):
     update = os.environ.get('UNCLE_UPDATE_SUITE_WEIGHTS') == '1'   # read before isolation clears UNCLE_* variables
+    chosen_tier = os.environ.get('WORKFLOW_TEST_TIER')            # likewise: isolation would silently turn `--all` off
     isolate_git()
+    if chosen_tier is not None:
+        os.environ['WORKFLOW_TEST_TIER'] = chosen_tier
     os.environ.setdefault('UNCLE_MODEL_REFRESH', '0')
     # Suites with a thread pool of their own (close-flow's PR-handoff cases, the gates groups) read this. Left at their defaults
     # (up to 16 threads each) they put far more than one process per core to work and slow every other suite in the pool: capped at 2
@@ -88,11 +92,13 @@ def run(jobs, shard=None, list_only=False):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    shard, list_only, jobs = None, False, default_jobs()
+    shard, list_only, jobs = None, False, default_test_jobs()
     while args:
         arg = args.pop(0)
         if arg == '--list':
             list_only = True
+        elif arg == '--all':
+            os.environ['WORKFLOW_TEST_TIER'] = 'all'
         elif arg == '--shard':
             index, _, count = args.pop(0).partition('/')
             shard = (int(index), int(count))

@@ -14,9 +14,10 @@ import re
 import shutil
 import sys
 
-from cpu_jobs import MAX_JOBS, default_jobs
+from cpu_jobs import MAX_JOBS, default_test_jobs
 from suite_split import expand
 from shell_suites import isolate_git, run_commands
+from suite_tier import consume_all_flag, select
 
 
 def suite_command(path):
@@ -42,7 +43,7 @@ def run(jobs, suites=()):
     if any(not re.fullmatch(r'[a-z0-9][a-z0-9-]*', name) for name in suites):
         raise ValueError('Invalid python suite name')
     files = ([f'scripts/tests/{name}-test.py' for name in suites] if suites
-             else sorted(glob.glob('scripts/tests/*-test.py')))
+             else select(sorted(glob.glob('scripts/tests/*-test.py'))))
     files = [Path(path).as_posix() for path in files]
     if not files:
         print('FAIL: no python test suites found', file=sys.stderr)
@@ -61,4 +62,5 @@ def run(jobs, suites=()):
 
 
 if __name__ == '__main__':
-    raise SystemExit(run(int(sys.argv[1]) if len(sys.argv) > 1 else default_jobs(), sys.argv[2:]))
+    args = consume_all_flag(sys.argv[1:])
+    raise SystemExit(run(int(args[0]) if args else default_test_jobs(), args[1:]))

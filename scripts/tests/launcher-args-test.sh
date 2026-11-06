@@ -42,7 +42,7 @@ done
 exec "$REAL_PYTHON3" "\$@"
 FAKE
 chmod +x "$TMP/bin/python3"
-(cd "$TMP" && PATH="$TMP/bin:$PATH" NO_COLOR=1 bash "$ROOT/uncle" --application 'build a groovy calculator' --unattended > "$TMP/out" 2> "$TMP/err"); RC=$?
+(cd "$TMP" && PATH="$TMP/bin:$PATH" NO_COLOR=1 bash "$ROOT/uncle" --noinput --application 'build a groovy calculator' --unattended > "$TMP/out" 2> "$TMP/err"); RC=$?
 check "--application launches the TUI"            test "$RC" -eq 0
 check "TUI receives the startup action"           grep -qxF "action=create_app" "$TMP/tui-env"
 check "TUI receives the description"              grep -qxF "text=build a groovy calculator" "$TMP/tui-env"
@@ -69,7 +69,7 @@ mkdir -p "$CR/bin"; cp "$CR/bin-python3" "$CR/bin/python3"; chmod +x "$CR/bin/py
 cr_run() { # input-command args...
     local feed="$1"; shift
     rm -f "$CR/tui-env" "$CR/tui-text"; rm -rf "$CR/proj"; mkdir -p "$CR/proj"
-    (cd "$CR/proj" && eval "${CR_PRE:-:}" && eval "$feed" | TMPDIR="$CR/tmp" PATH="$CR/bin:$PATH" NO_COLOR=1 UNCLE_STARTUP_TEXT_FILE=/etc/hostname bash "$ROOT/uncle" "$@" > "$CR/out" 2> "$CR/err"); RC=$?
+    (cd "$CR/proj" && eval "${CR_PRE:-:}" && eval "$feed" | TMPDIR="$CR/tmp" PATH="$CR/bin:$PATH" NO_COLOR=1 UNCLE_STARTUP_TEXT_FILE=/etc/hostname bash "$ROOT/uncle" --noinput "$@" > "$CR/out" 2> "$CR/err"); RC=$?
 }
 cr_clean() { check "$1: nothing left in TMPDIR" test -z "$(ls -A "$CR/tmp")"
              check "$1: nothing written to project" test -z "$(ls -A "$CR/proj")"; }

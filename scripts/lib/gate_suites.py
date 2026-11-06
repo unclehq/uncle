@@ -42,7 +42,21 @@ def gate_commands(script):
     if not completion_only:
         for group, name in extra_groups.items():
             add(f'gates-{name}', group)
-    return commands
+    return critical_groups(commands)
+
+
+# The groups the critical tier keeps (scripts/tests/critical-suites.txt names `gates`): the integrity of a signed gate, waivers, and
+# delivery. The other groups are the full tier, which was 1429 of the 4948 seconds of suite work on its own.
+CRITICAL_GROUPS = ('gates-baseline', 'gates-verification-integrity', 'gates-waiver-integrity', 'gates-waivers', 'gates-delivery',
+                   'gates-driver-syntax')
+
+
+def critical_groups(commands):
+    from suite_tier import MANIFEST, tier
+    if tier() == 'all' or not MANIFEST.is_file():
+        return commands
+    return {name: command for name, command in commands.items()
+            if any(name == group or name.startswith(group + '-') or name.startswith(group + '#') for group in CRITICAL_GROUPS)}
 
 
 if __name__ == '__main__':

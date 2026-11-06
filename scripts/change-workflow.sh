@@ -146,7 +146,7 @@ mode_flags=()
 [[ "$FLAG_UNATTENDED" != 1 ]] || mode_flags+=(--unattended)
 UNCLE_MODE_DIR="$STATE_DIR" uncle_resolve_mode ${mode_flags[@]+"${mode_flags[@]}"} || exit 1
 mkdir -p "$STATE_DIR"
-uncle_write_mode_file "$STATE_DIR" "$UNATTENDED" || exit 1
+uncle_write_mode_file "$STATE_DIR" "$UNCLE_MODE" || exit 1
 uncle_mode_banner >&2
 
 # An unattended run ledgers what enabled it, so a mode inherited from a wrapper is visible in the run's own record.

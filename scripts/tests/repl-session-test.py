@@ -281,19 +281,22 @@ def mode_of(argv, env):
 
 check("mode: --attended flag beats UNCLE_STARTUP_UNATTENDED", mode_of(["--attended"], {"UNCLE_STARTUP_UNATTENDED": "1"}) == "attended")
 check("mode: both env vars -> attended wins", mode_of([], {"UNCLE_STARTUP_ATTENDED": "1", "UNCLE_STARTUP_UNATTENDED": "1"}) == "attended")
-check("mode: neither set -> attended default", mode_of([], {"UNCLE_X": "1"}) == "attended")
+check("mode: neither set -> unattended default", mode_of([], {"UNCLE_X": "1"}) == "unattended")
 check("mode: only unattended env -> unattended", mode_of([], {"UNCLE_STARTUP_UNATTENDED": "1"}) == "unattended")
 
 # D-11 / I-5: replacement confirmations (only y/yes consent; model text and EOF never do)
 CREATE = {"uncle_action": "create_app", "message": "yes", "document": "NEW BRIEF", "start": True}
 
 
-def replacement(answer_lines, label):
+def replacement(answer_lines, label, attended=True):
+    # Confirmation is something only an attended session asks; the default session is unattended and answers yes itself.
     proj = TMP / ("proj-" + label)
     proj.mkdir(exist_ok=True)
     (proj / "REQUIREMENTS.md").write_text("OLD BRIEF")
-    rc, out, err = session(["make an app"] + answer_lines, runner("create-" + label, json.dumps(CREATE)),
-                           extra={"UNCLE_PROJECT_ROOT": str(proj)})
+    extra = {"UNCLE_PROJECT_ROOT": str(proj)}
+    if attended:
+        extra["UNCLE_STARTUP_ATTENDED"] = "1"
+    rc, out, err = session(["make an app"] + answer_lines, runner("create-" + label, json.dumps(CREATE)), extra=extra)
     hd = proj / ".uncle" / "brief-history"
     hist = list(hd.glob("*REQUIREMENTS.md")) if hd.exists() else []
     kept = (proj / "REQUIREMENTS.md").read_text() if (proj / "REQUIREMENTS.md").exists() else None
@@ -302,8 +305,13 @@ def replacement(answer_lines, label):
 
 for i, ans in enumerate(["y", "yes", " YES "]):
     rc, out, err, hist, kept = replacement([ans], "y%d" % i)
-    check("confirm %r consents: old brief archived under .uncle/brief-history, build runs" % ans,
-          len(hist) == 1 and hist[0].read_text() == "OLD BRIEF" and "fake-stagegate-driver" in out and rc == 0, f"{rc} {hist} {err}")
+    # Attended with piped input cannot go on to approve the build's gates (the headless runner refuses that, exit 2), so consent is
+    # shown by the replacement itself: the old brief is archived. The build running after a replacement is the unattended case above.
+    check("confirm %r consents: old brief archived under .uncle/brief-history" % ans,
+          len(hist) == 1 and hist[0].read_text() == "OLD BRIEF" and kept is None, f"{rc} {hist} {err}")
+rc, out, err, hist, kept = replacement([], "unattended", attended=False)
+check("unattended session replaces the brief without asking; the old one is archived, not lost",
+      len(hist) == 1 and hist[0].read_text() == "OLD BRIEF" and "fake-stagegate-driver" in out and rc == 0, f"{rc} {hist} {err}")
 for i, ans in enumerate(["maybe", "", "no", "yes please"]):
     rc, out, err, hist, kept = replacement([ans], "n%d" % i)
     check("confirm %r declines: brief kept, no driver, exit 2" % ans,
@@ -320,7 +328,7 @@ def self_approval_probe(label):
     orig_ask = uncle_repl.Session._ask
     uncle_repl.Session._ask = lambda self, line: ("yes", home_actions.parse_reply(json.dumps(CREATE)))
     try:
-        inproc(b"make an app\n", root=proj)
+        inproc(b"make an app\n", {"UNCLE_STARTUP_ATTENDED": "1"}, root=proj)   # attended: the session is the one that asks
     finally:
         uncle_repl.Session._ask = orig_ask
     f = proj / "REQUIREMENTS.md"

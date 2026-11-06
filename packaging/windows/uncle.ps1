@@ -25,12 +25,21 @@ $pythonCandidates = @($env:UNCLE_WINDOWS_PYTHON, (Join-Path $root 'venv\Scripts\
 foreach ($name in @('python.exe', 'python3.exe')) {
     $pythonCandidates += @(Get-Command $name -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
 }
+# Prefer an interpreter that can import curses: the full-screen UI needs it, and
+# the first Python found is often a different install (a private venv, a Scoop
+# Python) from the one the user installed windows-curses into. Fall back to the
+# first usable Python so Uncle still starts with the line menu.
 $python = $null
+$fallback = $null
 foreach ($candidate in $pythonCandidates) {
     if (!$candidate -or !(Test-Path $candidate) -or $candidate -match '[\\/]WindowsApps[\\/]') { continue }
     & $candidate -c 'import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)' 2>$null
+    if ($LASTEXITCODE -ne 0) { continue }
+    if (!$fallback) { $fallback = $candidate }
+    & $candidate -c 'import curses' 2>$null
     if ($LASTEXITCODE -eq 0) { $python = $candidate; break }
 }
+if (!$python) { $python = $fallback }
 if (!$bash -or !(Test-Path $bash) -or !$python) {
     throw 'Install Git for Windows and Python 3.9+ on PATH (or scoop install git python). Disable Microsoft Store Python aliases if they shadow Python.'
 }

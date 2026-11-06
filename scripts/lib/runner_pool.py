@@ -136,9 +136,16 @@ def connect(args, command):
     sys.stdout.flush()
 
     def send_input():
+        # Raw reads on fd 0, never `for line in sys.stdin.buffer`: this thread is a daemon and is usually still blocked in
+        # its read when the stage ends and the interpreter shuts down. A buffered reader's lock is held across that read, so
+        # closing stdin at shutdown found it busy and Python aborted (SIGABRT, "could not acquire lock for BufferedReader").
+        # Every abort raised a macOS "Python quit unexpectedly" dialog. A raw os.read holds no Python-level lock.
         try:
-            for line in sys.stdin.buffer:
-                sock.sendall(line)
+            while True:
+                chunk = os.read(0, 65536)
+                if not chunk:
+                    break
+                sock.sendall(chunk)
         except (BrokenPipeError, OSError):
             pass
         try:

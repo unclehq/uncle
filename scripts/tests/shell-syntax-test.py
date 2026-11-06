@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path, PureWindowsPath
 import subprocess
@@ -13,7 +14,10 @@ LOOP = 'for f in scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh; do bash -n "$
 
 class Tests(unittest.TestCase):
     def test_windows_discovery_uses_forward_slashes_for_suite_paths(self):
-        with patch.object(suites.glob, 'glob', return_value=[r'scripts/tests\sample-test.sh']), \
+        # This checks path normalisation of whatever discovery returns, so it runs the full tier: `sample` is not in the
+        # critical manifest, and the default tier would (correctly) drop it.
+        with patch.dict(os.environ, {'WORKFLOW_TEST_TIER': 'all'}), \
+             patch.object(suites.glob, 'glob', return_value=[r'scripts/tests\sample-test.sh']), \
              patch.object(suites, 'Path', PureWindowsPath), \
              patch.object(suites, 'bash_executable', return_value='bash'), \
              patch.object(suites, 'run_commands', return_value=0) as run:

@@ -21,14 +21,14 @@ USAGE = {
     "mode": "usage: /mode [attended|unattended]",
     "issue": "usage: /issue N",
     "stop": "usage: /stop",
-    "resume": "usage: /resume",
+    "resume": "usage: /resume [N]",
     "clear": "usage: /clear",
     "triage": "usage: /triage",
     "do": "usage: /do",
     "settings": "usage: /settings",
 }
 HELP = ("Type a message to chat, or a request such as 'build issue 12'.\n"
-        "Commands: /help /mode [attended|unattended] /issue N /stop /resume /clear "
+        "Commands: /help /mode [attended|unattended] /issue N /stop /resume [N] /clear "
         "/triage /do /settings /quit\n")
 
 
@@ -110,13 +110,14 @@ class Session:
         self.reader = LineReader(self.in_fd, self.tty)
         self.root = self.env.get("UNCLE_PROJECT_ROOT") or os.getcwd()
         self.runtime = self.env.get("UNCLE_RUNTIME_ROOT") or self.env.get("UNCLE_RUNTIME") or self.root
-        attended = True
-        if "--attended" in argv:
-            attended = True
-        elif self.env.get("UNCLE_STARTUP_ATTENDED") == "1":
+        if "--attended" in argv or self.env.get("UNCLE_STARTUP_ATTENDED") == "1":
             attended = True
         elif self.env.get("UNCLE_STARTUP_UNATTENDED") == "1":
             attended = False
+        else:
+            # Plain `uncle --noui`: like the TUI, auto mode is the default and
+            # only an explicit `misc.auto_mode false` runs attended.
+            attended = self._config_auto_mode() is False
         self.attended = attended
         self.prompt_on = self.tty or self.env.get("UNCLE_REPL_PROMPT") == "1"
         self.code = 0
@@ -140,8 +141,25 @@ class Session:
         self.complain(text)
         self.code = 2
 
-    # -- confirmations: only user input on the REPL reader, y/yes consents
+    def _config_auto_mode(self):
+        path = self.env.get("UNCLE_CONFIG") or os.path.join(self.root, ".uncle", "config")
+        value = ""
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] == "misc.auto_mode":
+                        value = parts[1].lower()
+        except OSError:
+            pass
+        return value != "false"
+
+    # -- confirmations: only user input on the REPL reader, y/yes consents.
+    # An unattended session has no one to ask: every question is answered yes.
     def confirm(self, question):
+        if not self.attended:
+            self.say("Auto mode: " + question + " yes")
+            return True
         self.say(question + " [y/N]")
         try:
             status, line = self.reader.read("")
@@ -243,7 +261,10 @@ class Session:
             else:
                 self.say("no build running")
         elif name == "resume":
-            if args:
+            if len(args) == 1 and re.fullmatch(r"#?[1-9][0-9]*", args[0]):
+                self.execute({"uncle_action": "github_issue", "issue": args[0].lstrip("#"),
+                              "start": True, "message": ""}, line)
+            elif args:
                 self.complain(USAGE[name])
             else:
                 self.execute({"uncle_action": "resume_build"}, line)

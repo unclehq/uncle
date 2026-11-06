@@ -59,6 +59,16 @@ Avoid:
 
 ## Testing
 
+**Two tiers.** The runners (`run-python-tests.sh`, `run-shell-tests.sh`, `run-all-tests.sh`) run the **critical tier** by
+default: the suites listed in `scripts/tests/critical-suites.txt`, which cover what must never break (gates, approvals,
+attestation, PR publishing, worktrees and git state, the driver's state and lock, completion and verification, entry
+points, process safety). Run everything with `--all` or `WORKFLOW_TEST_TIER=all`; run before a release or when you touch
+planning, prompts, the TUI, previews or self-hosted runners. Add a suite to the critical list only when its failure would let
+Uncle publish, approve or destroy something it must not, lose a run's state, or fail to start.
+
+**Load.** The runners use a third of the cores (at most four workers) at lowered priority (`UNCLE_TESTS_NICE=0` turns the
+priority change off), so a run in the background leaves the machine usable. `WORKFLOW_VERIFY_JOBS` overrides the worker count.
+
 Syntax-check every script, then run the suites in `scripts/tests/`:
 
 ```sh
@@ -71,7 +81,7 @@ print the reason and exit **77**. The runner reports this as SKIP, excludes it
 from the pass count, and continues. A skipped optional sub-check does not make
 an otherwise executed suite a whole-suite skip.
 
-The shell runner uses four workers, keeps each suite's output together, and
+The shell runner keeps each suite's output together, and
 returns a nonzero status if any suite fails. Set `WORKFLOW_VERIFY_JOBS` from 1
 to 8 to adjust concurrency, for example:
 

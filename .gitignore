@@ -43,3 +43,4 @@ scripts/tests/.uncle/
 
 # Temporary pieces of split test suites (scripts/lib/suite_split.py); removed when each piece ends
 scripts/tests/.part*
+.uncle

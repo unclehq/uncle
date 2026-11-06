@@ -1,42 +1,46 @@
 # Implementation notes
 
+## Step 1
+
 ### Files changed
 
-- `uncle` — Bare --noui / UNCLE_NOUI=1 execs scripts/lib/uncle_repl.py instead of refusing; usage text updated; launcher; SB-1, SB-11
-- `scripts/lib/uncle_repl.py` — Line REPL: banner, bounded fd line reader, slash commands, Ctrl-C policy, escape-filtered output, exit-code policy; builds only via repl_actions.execute; REPL loop; SB-1..SB-16, I-1, I-4
-- `scripts/lib/repl_actions.py` — Single validated executor: re-validates every action with home_actions.parse_reply, maps to allowlisted startup actions, calls uncle_headless.prepare_driver/run (signals installed so SIGINT/SIGTERM kill the build group); executor; I-2, I-3, I-4
-- `scripts/lib/repl_chat.py` — Synchronous chat adapter (ChatSession.ask -> reply + validated action); runner in own process group; UNCLE_REPL_RUNNER override for tests; chat adapter; SB-2, SB-3, I-6
-- `scripts/lib/home_actions.py` — ISSUE_REQUEST_RE moved here so the REPL and TUI share it; shared pieces; SB-4
-- `uncle_tui.py` — Imports ISSUE_REQUEST_RE from home_actions (definition removed); no behavior change; shared pieces; I-3
-- `scripts/lib/uncle_headless.py` — Extracted prepare_driver(root, err, env=None); _stream now ends when the driver's stdout hit EOF and the driver exited even if attended stdin is still open (previously waited for a keystroke); shared pieces; I-3, I-5
-- `scripts/tests/repl-session-test.py` — Pipe session tests with fake runner/drivers; SIGTERM process test; import test; I-2 defect injection; tests; AC-2,3,4,7,9, I-1, I-2, I-4, I-6
-- `scripts/tests/repl-pty-test.py` — pty tests: idle Ctrl-C, Ctrl-C during build, attended gate answered in session, escape byte scan; tests; AC-5, AC-6, I-1, I-5
-- `scripts/tests/headless-equivalence-test.py` — Adds a REPL run of the same fake driver and compares artifacts with the one-shot run; tests; AC-8, I-3
-- `scripts/tests/launcher-noui-test.sh` — Bare-refusal rows replaced by REPL rows; real launcher REPL rows; error-line-only comparison for unrecognized args; tests; AC-1
+- `scripts/lib/uncle_gitignore.py` — add ensure_exclude (marked canonical block in shared info/exclude, symlink/outside-common-dir refusal, atomic write, False-not-raise), tracked_needs_normalization and _exclude_text_current; S1 / D-1, D-1a; G-4, G-6, P-1, I-3
+- `uncle_tui.py` — _ensure_uncle_gitignored calls only ensure_exclude; one deferral notice per root per process, one warning per process when the exclude cannot be written; S2 / D-2; G-6, I-3
+- `scripts/lib/change-pr.sh` — add assert_tree_matches_attested (clean tracked status, attested-tree comparison, .uncle allowlist, ignored-docs check); call at publish before handoff and at the no-PR completion path; add commit-tree engine action; S3 / D-4, D-4a, D-6; G-1, G-2, G-5, I-1, I-2, I-4
+- `scripts/tests/gitignore-clean-end-test.py` — new: ensure_exclude table tests, symlink refusals, linked-worktree visibility, ensure() caller enumeration, TUI helper tests (incl. test_tui_reload_leaves_gitignore_unchanged), guard tests; S1-S3 (consolidated into one file); AC-1, AC-2, AC-4, AC-5, AC-7
+- `scripts/tests/pr-auto-publish-test.sh` — add clean-tree and dirty-tracked-file checks for auto_removal_content_refusal; S4; G-3, I-4
 
 ### Deviations
 
-- `scripts/lib/uncle_headless.py`: Besides the planned prepare_driver extraction, _stream's loop-exit condition was changed (EOF plus driver exited) because an attended session build otherwise hung after the driver finished until another key was typed; found by repl-pty-test.py.
+- `scripts/tests/gitignore-clean-end-test.py`: The plan splits tests across gitignore-clean-end-test.py, gitignore-tui-test.py and gitignore-publish-guard-test.py; all three groups are in the single first file. The two other files were not created.
+- `scripts/lib/change-pr.sh`: The attestation signature is not re-verified in the guard (R-2/AR-015) because attestation.py exposes no verify function. The guard compares to journal commit_tree, which validate() already binds to the audit. The legacy-snapshot strip_managed mode is not implemented; the guard always compares exact bytes. A file of the change that exists on disk but is untracked is not reported as a difference.
+- `.gitignore`: The checkout already held an uncommitted stray '.uncle' line appended by earlier bookkeeping, which is the bug's symptom. It was left untouched, not authored by this change.
+- `scripts/tests/gitignore-clean-end-test.py`: AC-6 mutations M-1 and M-2 were run in a throwaway copy at /tmp/m1 by hand, not by a committed S4 script. Results are in CHANGE_TEST_REPORT.json.
 
 ### Unresolved concerns
 
-- No live claude run was performed; chat is exercised only with a fake runner emitting stream-json. The real permission_denials fixture from the plan was not recorded.
-- Planned defect-injection runs for I-3 and I-5 were not executed; only I-2 (validation removed) is injected inside repl-session-test.py.
-- /triage and /do print a TUI-only notice; /resume and /clear report TUI-only; /stop reports no build running (builds are synchronous so a stop is Ctrl-C).
-- scripts/tests/no-housekeeping-test.py fails on prompts/home-agent.md, a file this change does not touch (treated as pre-existing).
-- readline is imported on a tty for line editing; the pty byte scan showed no alt-screen or cursor-addressing escapes.
+- Attestation signature verification in the guard is not implemented (no verify API in attestation.py).
+- Legacy-snapshot strip_managed tolerance mode at publish (R-5) is not implemented.
+- No live end-to-end change run was performed; the manual check (main checkout clean, worktree auto-removed after PR) is unobserved.
+- worktree-run-test.sh self-skips while an uncle build drives the checkout; run with UNCLE_TEST_ALLOW_NESTED=1 outside the build to cover worktree creation.
+- The change plan's frozen scope lists only .gitignore, but the real surface is the files above.
+
+## Driver-recorded scope deviations
+
+### Deviations
+
+- `scripts/lib/uncle_gitignore.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `scripts/tests/pr-auto-publish-test.sh`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+- `uncle_tui.py`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
 
 ## Acceptance delivery
 
 | ID | Status | Changed code | Observed targeted verification |
 |---|---|---|---|
-| AC-1 | IMPLEMENTED | uncle launcher branch execs scripts/lib/uncle_repl.py; launcher-noui-test.sh updated | bash scripts/tests/launcher-noui-test.sh: 36 ok, 0 FAIL (real bare --noui and UNCLE_NOUI=1 exit 0 with banner; --noui --noinput exits 2) |
-| AC-2 | IMPLEMENTED | scripts/lib/uncle_repl.py, repl_chat.py: reply printed, runner failure one line, session survives | python3 scripts/tests/repl-session-test.py exit 0 (free-form reply, runner failure rows pass) |
-| AC-3 | IMPLEMENTED | scripts/lib/repl_actions.py single executor with parse_reply validation | repl-session-test.py: issue and create_app builds run only through executor; smuggled field and unsupported action refused with no driver; validation-removed injection detected |
-| AC-4 | IMPLEMENTED | uncle_repl.py LineReader (1 MiB bound), Out (EscapeFilter), exit-code policy | repl-session-test.py: blank lines, long line rejected, order kept, attended piped refusal exit 2, no escapes; exit 0 |
-| AC-5 | IMPLEMENTED | uncle_repl.py Ctrl-C handling; repl_actions installs run() signal handling | python3 scripts/tests/repl-pty-test.py exit 0 (idle Ctrl-C cancel then quit, Ctrl-C during build returns to prompt with exit 130 and no child, no cursor/alt-screen bytes) |
-| AC-6 | IMPLEMENTED | uncle_repl.py passes stdin fd to run(); uncle_headless._stream exit fix | repl-pty-test.py: gate answer typed in the session reached the driver, UNCLE_ATTENDED_STDIN=1, session exits 0 |
-| AC-7 | IMPLEMENTED | repl_actions.py install_signals=True; uncle_repl.py SIGTERM handler | repl-session-test.py: SIGTERM mid-build exits 143 with no surviving child; pty test: no child after Ctrl-C |
-| AC-8 | IMPLEMENTED | headless-equivalence-test.py REPL run; prepare_driver shared | python3 scripts/tests/headless-equivalence-test.py exit 0 with no FAIL lines (REPL artifacts equal one-shot; no curses import) |
-| AC-9 | IMPLEMENTED | uncle_repl.py slash(): /help /quit /exit /stop /resume /clear /issue /triage /do /mode /settings | repl-session-test.py: help, usage errors, settings, quit stops reading, unknown command exit 2, /mode attended pass |
-| AC-10 | IMPLEMENTED | No change to existing behavior beyond the planned scope | Targeted: headless-run-test.py exit 0, launcher-noui-test.sh green; no-housekeeping-test.py fails on prompts/home-agent.md (untouched file). Full suites left to the driver. |
+| AC-1 | IMPLEMENTED | scripts/lib/change-pr.sh assert_tree_matches_attested, called at publish and at the no-PR completion path | python3 -B scripts/tests/gitignore-clean-end-test.py: 16 tests OK (Guard cases: clean passes silently, dirty tracked fails naming the file, untracked artifacts do not fail) |
+| AC-2 | IMPLEMENTED | scripts/lib/change-pr.sh assert_tree_matches_attested compares tracked paths to the attested tree and rejects non-allowlisted .uncle paths | gitignore-clean-end-test.py Guard tests: managed-line-only .gitignore difference fails; staged .uncle/secret and extra.txt both named on stderr; with the guard no-op'd (M-2) 4 Guard tests fail |
+| AC-3 | IMPLEMENTED | scripts/tests/pr-auto-publish-test.sh covers auto_removal_content_refusal; scripts/from-issue.sh is unchanged | bash scripts/tests/pr-auto-publish-test.sh: 10 checks passed |
+| AC-4 | IMPLEMENTED | scripts/lib/uncle_gitignore.py ensure_exclude; ensure() is kept for worktrees.sh:130 only | gitignore-clean-end-test.py test_cases_replace_with_one_block_and_keep_user_lines and test_only_worktree_creation_runs_ensure pass |
+| AC-5 | IMPLEMENTED | uncle_tui.py _ensure_uncle_gitignored uses ensure_exclude only, plus a once-per-root deferral notice | gitignore-clean-end-test.py test_tui_reload_leaves_gitignore_unchanged and test_deferral_notice_once_per_root pass; the helper is called directly, load_config/reload/project switch are not each driven separately |
+| AC-6 | IMPLEMENTED | no product change; defect injection in throwaway copy /tmp/m1 | M-1 (re-add uncle_gitignore.ensure in _ensure_uncle_gitignored): gitignore-clean-end-test.py FAILED (failures=5) incl. test_tui_reload_leaves_gitignore_unchanged; M-2 (guard return 0): FAILED (failures=9) |
+| AC-7 | IMPLEMENTED | ensure_exclude writes the unchanged CANONICAL block | gitignore-clean-end-test.py test_visibility_root_and_linked_worktree: .uncle/workflow ignored; .uncle/docs and attestation.json visible via git check-ignore in root and linked worktree; legacy bare .uncle hides docs (documented) |

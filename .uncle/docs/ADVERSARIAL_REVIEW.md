@@ -1,184 +1,176 @@
-## AR-001: SB-6 says lines typed during a build are held or consumed as the gate answer and never dropped, but D-3 says the REPL do
+## AR-001: AC-1/G-1 require a clean tree and a .gitignore byte-identical to the audited tree after the TUI runs, but a legacy track
 
 - Severity: HIGH
-- References: CHANGE_SPEC SB-6 vs CHANGE_PLAN D-3/D-2. Plan should say: 'During a build the REPL does not read stdin; unread lines stay buffered and run in order after the build returns; unattended drivers never read fd 0; an attended gate consumes exactly one line per gate.'
-- Failure: SB-6 says lines typed during a build are held or consumed as the gate answer and never dropped, but D-3 says the REPL does not read input during a build. Non-gate lines (and all lines in unattended mode) have no stated consumer, and piped lines could be eaten as gate answers.
+- References: CHANGE_PLAN D-2 and Risks (legacy bare `.uncle` remains in the main root) against CHANGE_SPEC AC-1/AC-5. Settle with: 'Legacy tracked managed lines in the main checkout are left untouched; AC-1 and AC-2 compare against the audited worktree tree, never the main root, and this case is not a failure.'
+- Failure: AC-1/G-1 require a clean tree and a .gitignore byte-identical to the audited tree after the TUI runs, but a legacy tracked managed line is left unnormalized in the main checkout. The plan never says whether a main-root run with such a line is compliant.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Exit-code policy is inconsistent.
+## AR-002: D-4 says the guard compares .gitignore bytes to the attested commit_tree entry, but AC-2 and I-1 say any tracked file mu
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-6, D-8; SB-10. Plan should say: 'Exit code is that of the most recent build or refusal, reset to 0 by a later successful non-build line; a Ctrl-C-stopped build counts as 130; /quit and EOF return that code; SIGTERM exits 143.'
-- Failure: Exit-code policy is inconsistent. SB-10/D-8 say last build result, 2 on refusal, else 0, but never say what a later successful chat or slash line does after a failed build. D-6 treats 130 as 'return to prompt', which is unclear against 'last build result' at quit.
+- References: CHANGE_PLAN D-4 (only `.gitignore` exact bytes, plus porcelain empty) against CHANGE_SPEC AC-2 ('or any tracked file'). Settle with: 'The guard compares every tracked file to the attested tree, with .gitignore compared byte for byte and no managed-line tolerance applied at publish.'
+- Failure: D-4 says the guard compares .gitignore bytes to the attested commit_tree entry, but AC-2 and I-1 say any tracked file must match. The scope of the byte comparison is ambiguous, and so is how it interacts with the tolerated snapshot managed lines (D-5).
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Confirmation prompts (SB-7 quit confirm, D-11 replacement) are unspecified for non-tty input, blank or unrecognized answ
+## AR-003: A runtime tracked-clean check conflicts with the shipped scenario where `.gitignore` is legitimately created or modified
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC SB-7, SB-16; CHANGE_PLAN D-11. Plan should say: 'Only y/yes (case-insensitive) consents; blank, other text, EOF or Ctrl-C declines; quit confirmation is asked only on attended tty and EOF during it quits and stops the build.'
-- Failure: Confirmation prompts (SB-7 quit confirm, D-11 replacement) are unspecified for non-tty input, blank or unrecognized answers, and Ctrl-C. EOF at the quit confirmation is not defined, which could conflict with I-4.
+- References: CHANGE_SPEC G-1 and I-4 ('no tracked modifications') against AC-4 (tracked edit allowed at worktree creation). Settle with: 'The clean-tree check runs only after the worktree edit is committed or included in the audited diff, and it is evaluated relative to the attested tree.'
+- Failure: A runtime tracked-clean check conflicts with the shipped scenario where `.gitignore` is legitimately created or modified at worktree creation. Whether the pre-audit worktree edit counts as 'clean' is not stated, and the plan does not say what happens when the TUI or a parallel session modifies the main checkout.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Over-long line handling is underspecified: the remainder of the line after 1 MiB may be processed as new commands, and i
+## AR-004: Failure behavior is unspecified when the exclude file cannot be written, is already present with partial or conflicting
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 8 and AC-4. Plan should say: 'A line over 1 MiB is discarded through its newline, one error is printed, it counts as a refused action, and the session continues.'
-- Failure: Over-long line handling is underspecified: the remainder of the line after 1 MiB may be processed as new commands, and it is unclear whether the rejection counts as a refusal for exit code 2. The two readers may differ.
+- References: CHANGE_SPEC §8 ('Unwritable info/exclude: warn') against CHANGE_PLAN §12 ('return False, run continues'). Settle with: 'ensure_exclude returns False on any OSError or non-git root, the TUI prints one warning line once per process, and a pre-existing partial block is replaced by the canonical block, never duplicated.'
+- Failure: Failure behavior is unspecified when the exclude file cannot be written, is already present with partial or conflicting blocks, or when the repo is not a git repo. The spec says 'warn, continue' and the plan says 'return False', which differ on whether a warning is printed.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Slash commands in odd states are unspecified: unknown commands, /stop or /resume with nothing to act on, /mode with no a
+## AR-005: AC-7 requires exclude-only rules to keep `.uncle/docs/` visible, but the plan itself concedes a legacy bare `.uncle` in
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC SB-14, AC-9; CHANGE_PLAN section 6-9. Plan should say: 'Lines starting with / are never sent to chat; unknown commands print an unknown-command message and count as refused; /stop and /resume with nothing to act on print a notice and do not change the exit code; /mode with no argument prints the current mode.'
-- Failure: Slash commands in odd states are unspecified: unknown commands, /stop or /resume with nothing to act on, /mode with no argument, and slash lines vs chat routing.
+- References: CHANGE_SPEC §15 assumption and CHANGE_PLAN alternative (b), against AC-7. Settle with: 'AC-7 is asserted only for a base .gitignore with no legacy bare `.uncle`; a legacy tracked line is expected to hide docs until worktree normalization and the test documents that.'
+- Failure: AC-7 requires exclude-only rules to keep `.uncle/docs/` visible, but the plan itself concedes a legacy bare `.uncle` in tracked .gitignore outranks exclude and hides them. No expected result is defined for that combination in the main root or in a linked worktree before normalization.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Ctrl-C handling during chat in flight or at a gate prompt is undefined against the D-7 consecutive counter.
+## AR-006: The 'no PR' completion path in G-5/AC-1 is covered by neither a named guard nor a test.
 
 - Severity: LOW
-- References: CHANGE_PLAN D-7 and section 11. Plan should say: 'Ctrl-C during chat cancels the request and counts as the first idle Ctrl-C; Ctrl-C at a gate prompt is handled by the driver and does not touch the counter.'
-- Failure: Ctrl-C handling during chat in flight or at a gate prompt is undefined against the D-7 consecutive counter.
+- References: CHANGE_SPEC G-5 and AC-1 ('with and without PR') against CHANGE_PLAN D-4 and §21. Settle with: 'The clean-tracked-tree check also runs at no-PR completion and is the last item dropped from scope.'
+- Failure: The 'no PR' completion path in G-5/AC-1 is covered by neither a named guard nor a test. D-4 only places the guard in change-pr.sh publish, and the cut list drops the post-publish check without saying what remains for the no-PR path.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan doesn't say `_driver_from_env` keeps its signature and error behavior once it wraps `prepare_driver`.
+## AR-007: Docs visibility in the main checkout is undefined when its tracked .gitignore holds a legacy bare `.uncle`, which outran
 
 - Severity: HIGH
-- References: CHANGE_PLAN s7.1 and step 1; `prepare_driver(..., err)` interface vs. unspecified wrapper.
-- Failure: Plan doesn't say `_driver_from_env` keeps its signature and error behavior once it wraps `prepare_driver`. Plan should say: the wrapper keeps its exact signature, and a test asserts byte-identical stderr and exit codes for each existing failure path.
+- References: CHANGE_PLAN §22 risk 2 against CHANGE_SPEC AC-7 and P-1.
+- Failure: Docs visibility in the main checkout is undefined when its tracked .gitignore holds a legacy bare `.uncle`, which outranks exclude. Add: 'With a legacy bare .uncle line in the root's tracked .gitignore, the TUI prints the deferral notice and AC-7 is asserted only for worktrees and for roots without legacy lines.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Launcher rows to replace are ambiguous ('rows 13-14' vs 'the two bare-refusal rows'), and other bare --noui combos are u
+## AR-008: D-3 keeps ensure() and the CLI main, but the plan never enumerates callers or says none can run after audit, which confl
 
 - Severity: HIGH
-- References: CHANGE_PLAN R-4, change-impact row for launcher-noui-test.sh; AC-1 names only bare, UNCLE_NOUI=1 and --noinput.
-- Failure: Launcher rows to replace are ambiguous ('rows 13-14' vs 'the two bare-refusal rows'), and other bare --noui combos are unspecified. Plan should say: bare --noui with any unrecognized argument keeps its current error and exit code, and only rows asserting bare refusal are replaced.
+- References: CHANGE_PLAN D-3 and S3 against CHANGE_SPEC I-1 and I-3.
+- Failure: D-3 keeps ensure() and the CLI main, but the plan never enumerates callers or says none can run after audit, which conflicts with I-1 and I-3. Add: 'The only permitted callers of ensure() are worktree creation; a test asserts no other call sites in scripts/ or uncle_tui.py.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: Moving ISSUE_REQUEST_RE may break code or tests that reference `uncle_tui.ISSUE_REQUEST_RE`.
+## AR-009: The publish guard's behavior is undefined when there is no attestation (G-5 no-PR run) or when approved artifacts are le
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-9 and s5.1.
-- Failure: Moving ISSUE_REQUEST_RE may break code or tests that reference `uncle_tui.ISSUE_REQUEST_RE`. Plan should say: `uncle_tui.ISSUE_REQUEST_RE` remains a valid name bound to the same compiled object.
+- References: CHANGE_PLAN D-4 against CHANGE_SPEC G-5 and risk of false positives (§22).
+- Failure: The publish guard's behavior is undefined when there is no attestation (G-5 no-PR run) or when approved artifacts are legitimately uncommitted. Add: 'The guard compares against the attested tree when one exists; otherwise only the clean tracked-status check applies.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Session SIGTERM handler and `run()`'s handler interplay is unspecified.
+## AR-010: Exact .gitignore bytes at publish (D-4, AC-2) contradict retained managed-line tolerance (D-5), so an in-flight run coul
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s8.1, D-6, R-3.
-- Failure: Session SIGTERM handler and `run()`'s handler interplay is unspecified. Plan should say: the session handler is saved before each `run()` and restored after, and `run()` leaves no changed handler or process-group state behind.
+- References: CHANGE_PLAN D-4 against D-5 and R-5; CHANGE_SPEC AC-2 says bytes, Compatibility keeps tolerance.
+- Failure: Exact .gitignore bytes at publish (D-4, AC-2) contradict retained managed-line tolerance (D-5), so an in-flight run could be refused. Add: 'The guard compares .gitignore by strip_managed equality for runs whose snapshot predates this change, and by exact bytes otherwise.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: D-8 exit code rules collide when a refusal follows a failed build or the reverse.
+## AR-011: ensure_exclude is unspecified for a partial or duplicated managed block in exclude, and for its return value when alread
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-8 vs AC-4/SB-10.
-- Failure: D-8 exit code rules collide when a refusal follows a failed build or the reverse. Plan should say: the exit code comes solely from the last executed action (refused=2, build=its code, else 0), and chat or slash lines don't reset it.
+- References: CHANGE_PLAN D-1 and §12 against AC-5 ('exclude contains canonical block once').
+- Failure: ensure_exclude is unspecified for a partial or duplicated managed block in exclude, and for its return value when already present. Add: 'ensure_exclude returns True only when it wrote; it rewrites exactly one canonical block, removing existing managed lines; it returns False without raising on non-git or OSError.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Plan never constrains model-supplied action fields (issue number, paths, stage names).
-
-- Severity: HIGH
-- References: CHANGE_SPEC section 10 says only 'rules as in TUI'; PLAN D-10 and the repl_actions step list no field-level constraints.
-- Failure: Plan never constrains model-supplied action fields (issue number, paths, stage names). Settle with: 'repl_actions.execute accepts only allowlisted action types, re-validates fields via parse_reply (integer issue N, fixed stage set, paths inside project root), and refuses anything else with exit 2 and no driver started.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-013: Unspecified whether model output or piped stdin lines can answer a gate or replacement prompt.
-
-- Severity: HIGH
-- References: PLAN D-3 (driver reads fd 0 during a build), D-11 (EOF/no declines); I-5 says only 'recorded human'. Piped scripts can pre-supply 'yes' lines.
-- Failure: Unspecified whether model output or piped stdin lines can answer a gate or replacement prompt. Settle with: 'Gate and replacement confirmations are read only from user input, never model output; EOF at a gate means decline/stop, never approve.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-014: Escape filtering is stated for build output only, not chat replies or errors.
-
-- Severity: MEDIUM
-- References: PLAN section 6-9 applies 'filtered output' to run(); SPEC section 10 and I-1 name EscapeFilter but repl_chat has no filter.
-- Failure: Escape filtering is stated for build output only, not chat replies or errors. Settle with: 'All REPL stdout/stderr text, including chat replies, runner errors, issue titles and exception messages, passes through EscapeFilter, which strips control bytes except newline and tab, and CSI/OSC sequences.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: The 1 MiB line bound has no defined overflow behavior on the os.read reader.
-
-- Severity: MEDIUM
-- References: SPEC section 8 says 'bounded (1 MiB) and rejected'; PLAN D-2 describes the reader but not overflow.
-- Failure: The 1 MiB line bound has no defined overflow behavior on the os.read reader. Settle with: 'A line over 1 MiB is discarded through the next newline or EOF, one error is printed, and the remainder is never run as a command or gate answer.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: SIGTERM handling covers only the build process group, not the chat runner subprocess.
-
-- Severity: MEDIUM
-- References: PLAN section 11 and R-3 reference only run() killpg; AC-7 and I-4 require no child left.
-- Failure: SIGTERM handling covers only the build process group, not the chat runner subprocess. Settle with: 'The SIGTERM handler terminates the chat runner subprocess group and the build group, then exits 143; the process inventory test covers both.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: Precedence and default for startup mode env vars are undefined.
+## AR-012: The deferral notice frequency is unspecified although the helper is called on every reload and project switch.
 
 - Severity: LOW
-- References: PLAN D-4 names the --attended flag and both env vars without precedence or default.
-- Failure: Precedence and default for startup mode env vars are undefined. Settle with: 'If both UNCLE_STARTUP_ATTENDED and UNCLE_STARTUP_UNATTENDED are set, attended wins; if neither is set, the default is attended.'
+- References: CHANGE_PLAN D-2 and CHANGE_SPEC G-6, AC-5.
+- Failure: The deferral notice frequency is unspecified although the helper is called on every reload and project switch. Add: 'The deferral notice is printed at most once per project root per process.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: Lines typed during a build (SB-6) are unspecified when the gate is unattended or stdin is piped; D-3 says no input is re
+## AR-013: No rule for a symlinked or shared info/exclude path from `git rev-parse --git-path`.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-3 vs CHANGE_SPEC SB-6, SB-10.
-- Failure: Lines typed during a build (SB-6) are unspecified when the gate is unattended or stdin is piped; D-3 says no input is read, SB-6 says held, never dropped. Settle: 'During a build the REPL reads no input; unread lines are processed as normal prompts after run() returns; attended gates consume exactly one line each.'
+- References: CHANGE_PLAN D-1 and section 12 say only 'return False'; ensure() in uncle_gitignore.py uses plain open(path,'w') with no symlink handling.
+- Failure: No rule for a symlinked or shared info/exclude path from `git rev-parse --git-path`. Say: 'ensure_exclude refuses to write if the resolved file or its parent is a symlink or outside the git common dir, writes atomically, else returns False.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: D-8 exit-code rule is ambiguous when refusals, builds, and chat lines interleave, and for 130/143.
+## AR-014: The guard checks only `.gitignore` bytes and uses --untracked-files=no, so extra files, including ignored `.uncle/*` sec
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-6, D-8; CHANGE_SPEC SB-10, AC-4.
-- Failure: D-8 exit-code rule is ambiguous when refusals, builds, and chat lines interleave, and for 130/143. Settle: 'Exit code is that of the most recent build-or-refusal event; chat and slash lines don't change it; a Ctrl-C-stopped build exits 130 at EOF.'
+- References: CHANGE_PLAN D-4 compares `.gitignore` bytes plus `git status --untracked-files=no`; uncle_gitignore.py header says .uncle holds API keys.
+- Failure: The guard checks only `.gitignore` bytes and uses --untracked-files=no, so extra files, including ignored `.uncle/*` secrets, could enter the PR. Say: 'Publish fails if the PR tree differs from the attested tree, and no path under .uncle/ outside the allowlist may be staged.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: Slash command behavior in odd states or args is unspecified (/stop with no build, bad /mode value, non-numeric /issue, e
+## AR-015: The attested commit_tree is the guard's trust anchor, but the plan never says it is verified.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC SB-14 'invalid usage prints usage'; CHANGE_PLAN D-10, D-12.
-- Failure: Slash command behavior in odd states or args is unspecified (/stop with no build, bad /mode value, non-numeric /issue, extra args, unknown command). Settle: 'Invalid or unknown commands print one usage line with no state change; /stop with no build prints "no build running".'
+- References: CHANGE_PLAN D-4 and R-2 reference the 'attested commit_tree entry' with no signature-verification step.
+- Failure: The attested commit_tree is the guard's trust anchor, but the plan never says it is verified. Say: 'The guard verifies the attestation signature against .uncle/allowed_signers before comparing; a missing or invalid signature fails publish.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: Over-long line and EOF edge cases are undefined: the 1 MiB boundary, whether the rest of the line is discarded, untermin
+## AR-016: The plan says nothing about info/exclude already holding user or partial `.uncle` rules, or a legacy bare `.uncle` that
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 8; CHANGE_PLAN D-2, D-11.
-- Failure: Over-long line and EOF edge cases are undefined: the 1 MiB boundary, whether the rest of the line is discarded, unterminated final line, EOF mid-gate. Settle: 'Lines over 1048576 bytes are discarded through the newline with "line too long"; an unterminated final line is processed; EOF at a gate or confirmation declines.'
+- References: CHANGE_PLAN D-1 'idempotently writes the CANONICAL block'; Risks: legacy bare `.uncle` remains until a worktree run.
+- Failure: The plan says nothing about info/exclude already holding user or partial `.uncle` rules, or a legacy bare `.uncle` that hides `.uncle/docs`. Say: 'ensure_exclude replaces only its own delimited block, and publish fails if any .uncle/docs artifact is ignored per git check-ignore.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: Ctrl-C is undefined during an in-flight chat reply, an attended gate prompt, and the replacement confirmation.
+## AR-017: AC-5 says load_config, reload and project switch never write tracked files, but D-2 changes only _ensure_uncle_gitignore
 
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-7, D-11, section 11; SB-8, SB-9.
-- Failure: Ctrl-C is undefined during an in-flight chat reply, an attended gate prompt, and the replacement confirmation. Settle: 'Ctrl-C during chat cancels the request and counts as one idle press; at a gate it goes to run() semantics; at a confirmation it declines.'
+- Severity: HIGH
+- References: CHANGE_SPEC AC-5 and the regression test test_tui_reload_leaves_gitignore_unchanged versus D-2/S2 (uncle_tui.py:281-292,1617).
+- Failure: AC-5 says load_config, reload and project switch never write tracked files, but D-2 changes only _ensure_uncle_gitignored. Plan should say: every TUI path that touched .gitignore must call only that helper, and the test drives each path.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-023: Banner and stream routing in piped runs is unspecified, so exact-stdout tests are underdetermined (D-1 vs SB-1/SB-13/AC-
+## AR-018: The D-4 guard lives in change-pr.sh but AC-1/AC-2 are verified from a Python test; the entry point, exit code and messag
+
+- Severity: HIGH
+- References: CHANGE_PLAN D-4 and S3 versus gitignore-clean-end-test.py; CHANGE_SPEC G-5 has no entry point.
+- Failure: The D-4 guard lives in change-pr.sh but AC-1/AC-2 are verified from a Python test; the entry point, exit code and message are unspecified, as is the no-PR path (G-5). Plan should say: the guard is a standalone function the test invokes in a fixture repo, exits nonzero naming files on stderr, and the no-PR path runs the same check.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-019: AC-6 defect injection is only a note in IMPLEMENTATION_NOTES, and the mutation is undefined.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1 vs CHANGE_SPEC SB-1, SB-13, AC-4.
-- Failure: Banner and stream routing in piped runs is unspecified, so exact-stdout tests are underdetermined (D-1 vs SB-1/SB-13/AC-4). Settle: 'The banner always prints to stdout, including piped runs; the prompt follows D-1; replies and progress go to stdout, errors to stderr.'
+- References: CHANGE_SPEC AC-6 verification; CHANGE_PLAN S4.
+- Failure: AC-6 defect injection is only a note in IMPLEMENTATION_NOTES, and the mutation is undefined. Plan should say: a named mutation re-adding ensure() after audit is applied in a throwaway copy, the new tests must fail, and the command and output are recorded.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: ensure_exclude behavior is unspecified for existing canonical, partial or legacy blocks, a missing trailing newline, a m
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-1 and section 12 versus AC-5/AC-7.
+- Failure: ensure_exclude behavior is unspecified for existing canonical, partial or legacy blocks, a missing trailing newline, a missing info/ dir, and a linked worktree. Plan should say: it replaces managed lines with one canonical block, preserves other lines, creates info/, and returns False without raising on failure.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: The guard's exact-bytes check conflicts with D-5 managed-line tolerance, and the post-publish check is the first cut in
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-4 vs D-5 and section 21; CHANGE_SPEC I-2.
+- Failure: The guard's exact-bytes check conflicts with D-5 managed-line tolerance, and the post-publish check is the first cut in scope cuts although D-4 requires it. Plan should say: the comparison has no managed-line tolerance, a difference only in managed lines fails, and the test asserts it.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: AC-5 requires a deferral notice, yet its text, stream and trigger are unspecified and it is cut early in scope cuts, so
+
+- Severity: LOW
+- References: CHANGE_SPEC AC-5/G-6 versus CHANGE_PLAN D-2 and section 21.
+- Failure: AC-5 requires a deferral notice, yet its text, stream and trigger are unspecified and it is cut early in scope cuts, so it cannot be asserted. Plan should say: one stderr line containing .gitignore and worktree, printed only when a tracked managed line differs from canonical; if cut, AC-5 drops that assertion.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

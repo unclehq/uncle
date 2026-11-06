@@ -1,48 +1,178 @@
 # Manual checklist
 
-### MC-103
+## Coverage
+
+### MC-101
+- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Start `uncle --noui` with the chat runner made unavailable (e.g. PATH without the runner CLI), type a free-form line, then `/help`, then `/quit`.
-- Expected result: One-line error for the failed chat line, the session survives and `/help` still answers, `/quit` exits cleanly.
+- Exact action: In a fixture git repo whose tracked .gitignore lacks the managed block, launch the Uncle TUI, let it load config, touch .uncle/config to trigger a config-stamp reload, then switch projects and back; run `git status --porcelain --untracked-files=no` and diff .gitignore after each step.
+- Expected result: Tracked status stays empty and .gitignore bytes never change; .git/info/exclude holds the canonical managed block exactly once.
+- Evidence to capture: Terminal output of git status after each step, the .gitignore checksum before and after, and the contents of .git/info/exclude.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-102
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In a fixture repo whose tracked .gitignore holds a legacy bare `.uncle` line, start the TUI, then reload config and switch projects twice for the same root; capture stderr.
+- Expected result: Exactly one stderr line naming `.gitignore` and `worktree` appears for that root in the process, no further notice on later reloads, and the tracked .gitignore is unchanged.
+- Evidence to capture: Captured stderr text showing one notice line, plus the .gitignore checksum before and after.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-104
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Run a real change request with no PR publish to completion, then run `git status --porcelain --untracked-files=no` in the checkout.
+- Expected result: The run reaches COMPLETE and tracked status is empty. The completion guard prints nothing on stderr.
+- Evidence to capture: Run completion output and the empty git status output.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-105
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: During a change run, after the audit and attestation, modify the worktree's tracked .gitignore (add a managed line) and also stage an extra file `.uncle/secret`, then attempt publish.
+- Expected result: Publish stops with a nonzero, non-COMPLETE result, and stderr names `.gitignore` and `.uncle/secret` with the reason; no PR is created from the altered tree.
+- Evidence to capture: The publish command output, exit status, and the stderr lines naming the offending paths.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-106
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: After a completed run's PR is published, make an unrelated tracked file dirty in the finished worktree and trigger automatic post-PR removal; then repeat with a clean worktree.
+- Expected result: Removal is refused and names the dirty tracked file in the dirty case; the clean worktree is removed.
+- Evidence to capture: The removal output for both cases and the worktree listing afterward.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-107
-- Exclusive resources: project-build-state
+- Required for acceptance: YES
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Start a build in a session, then type `/quit` (answer `n`, then repeat answering `y`); afterwards run `ps` to look for leftover driver or runner processes; also send SIGTERM to a session mid-chat.
-- Expected result: Declining keeps the build running; confirming stops it first and exits; SIGTERM exits 143; no child processes remain.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-108
-- Exclusive resources: project-build-state
-- Depends on: none
-- Exact action: With an existing brief, enter a natural-language create-app request and answer `maybe`, then repeat answering `yes`; also run `/mode unattended` and check `/mode` output.
-- Expected result: Junk declines replacement; `yes` archives the old brief under .uncle/brief-history and proceeds; `/mode` reflects the new mode for later builds.
+- Exact action: In a fixture repo with a linked worktree and no legacy bare `.uncle` line, create files under `.uncle/docs/`, `.uncle/workflow/` and `.uncle/attestation.json` after the TUI has run; run `git status` and `git check-ignore -v` for each path in the main root and in the linked worktree.
+- Expected result: `.uncle/docs/` and the attestation file show as visible (not ignored) in both checkouts, and `.uncle/workflow/` is ignored.
+- Evidence to capture: The git status and check-ignore output for each path in both checkouts.
 - Actual result: 
 - Status: NOT RUN
 
 ## Invariants
 
-### MC-203
+### MC-200
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Start an attended build in a pty session until a gate prompt appears. Type `yes` once, and in another run send EOF at the gate. Also pipe extra lines during a build.
-- Expected result: Exactly one typed line is consumed per gate and recorded as human (I-5); EOF at a gate declines/stops and never approves; later piped lines run as normal prompts in order after the build; model output never answers a gate.
-- Evidence to capture: Transcript plus the build's gate attestation record for each run.
+- Exact action: In a disposable fixture git repo with a tracked .gitignore lacking the managed block, launch the Uncle TUI on it, trigger a config-stamp reload by touching .uncle/config, then switch projects away and back; run `git status --porcelain --untracked-files=no` and compare .gitignore bytes after each step.
+- Expected result: Tracked status stays empty and .gitignore bytes are unchanged after startup, reload and project switch; the canonical managed block appears exactly once in .git/info/exclude.
+- Evidence to capture: Before/after checksums of .gitignore, porcelain output after each step, and the contents of .git/info/exclude.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-201
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In a fixture repo whose tracked .gitignore contains a legacy bare `.uncle` line, start the TUI, reload twice and switch projects away and back, noting stderr output and then `git status --porcelain --untracked-files=no`.
+- Expected result: The TUI prints at most one stderr line per project root that contains both `.gitignore` and `worktree`; no tracked file is modified and the run is not treated as a failure.
+- Evidence to capture: Captured stderr showing the single notice line, plus unchanged .gitignore checksum and empty porcelain output.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-203
+- Required for acceptance: YES
+- Exclusive resources: fixture:change-run-nopr
+- Depends on: none
+- Exact action: Complete a change run in a fixture project without creating a PR, then run `git status --porcelain --untracked-files=no` in the checkout.
+- Expected result: Tracked status is empty and the run reports completion; if any tracked file were dirty, the run would name it and not report COMPLETE.
+- Evidence to capture: Completion output and porcelain output.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-204
+- Required for acceptance: YES
+- Exclusive resources: fixture:change-run-publish
+- Depends on: none
+- Exact action: In a run that has been audited and attested, modify .gitignore (for example append a managed line) in the worktree after attest and then attempt to publish the PR.
+- Expected result: Publish stops with a nonzero exit and a stderr message naming .gitignore; no PR commit is created; the same refusal occurs for any other modified tracked file.
+- Evidence to capture: Publish command output including exit status and the offending path message.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-206
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Run `git check-ignore -v` against .uncle/docs/ files and .uncle/workflow/ files in a root without legacy lines and in a linked worktree after worktree creation, then in a root with a legacy bare `.uncle` line.
+- Expected result: In the no-legacy root and the linked worktree, .uncle/docs/ and attestation files are not ignored while .uncle/workflow/ is ignored; in the legacy root docs are reported hidden, which is the documented expected case.
+- Evidence to capture: check-ignore output for each location and path.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-207
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: fixture:change-run-pr
+- Depends on: MC-202
+- Exact action: After a completed PR run, let the post-PR automatic worktree removal proceed; then repeat in a second worktree with an extra tracked file modified.
+- Expected result: The clean finished worktree is removed automatically; the worktree with another dirty tracked file is refused and kept.
+- Evidence to capture: Removal command output and `git worktree list` before and after for both cases.
+- Actual result: 
+- Status: NOT RUN
+
+## resources
+
+### MC-300
+- Required for acceptance: YES
+- Exclusive resources: dir:fixture-repo-tui
 - Depends on: none
-- Exact action: Pipe sessions with a line of exactly 1048576 bytes, one of 1048577 bytes followed by a normal line, and `/quit`; also pipe a model-style/ESC-laden reply scenario if a fake runner is available.
-- Expected result: The over-long line yields exactly one 'line too long' error on stderr, its remainder is not run, the next line runs, exit code is 2 if last event; no raw escape bytes in output.
-- Evidence to capture: Separate stdout and stderr captures, and exit code.
+- Exact action: In a disposable fixture git repo whose tracked .gitignore lacks the managed block, start the Uncle TUI, then trigger a config-stamp reload (touch .uncle/config) and a project switch to another fixture repo and back. Afterwards run `git status --porcelain --untracked-files=no` and diff .gitignore against its original bytes in each repo.
+- Expected result: No tracked file is modified in either repo and .gitignore bytes are unchanged; .git/info/exclude holds the canonical managed block exactly once.
+- Evidence to capture: Terminal output of git status, a diff/checksum of .gitignore before and after, and the contents of .git/info/exclude.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-301
+- Required for acceptance: YES
+- Exclusive resources: dir:fixture-repo-legacy
+- Depends on: none
+- Exact action: In a disposable fixture repo whose tracked .gitignore holds a legacy bare `.uncle` line, start the TUI and reload the project twice. Observe stderr/terminal output and run `git status --porcelain --untracked-files=no`.
+- Expected result: Exactly one deferral notice line mentioning .gitignore and worktree appears for that root in the process; no tracked file is modified.
+- Evidence to capture: Captured terminal output showing a single notice line, plus git status and .gitignore checksum.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-303
+- Required for acceptance: YES
+- Exclusive resources: dir:fixture-repo-run
+- Depends on: MC-302
+- Exact action: After the run in a fixture repo reaches attestation but before publish, append a line to a tracked file (and separately to .gitignore, only a managed line), then resume publish each time.
+- Expected result: Publish refuses and exits non-COMPLETE, printing each offending file name and reason on stderr; no PR commit includes the altered content.
+- Evidence to capture: Stderr output naming the files, the exit status, and the absence of the altered content in the commit tree.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-304
+- Required for acceptance: YES
+- Exclusive resources: dir:fixture-repo-removal
+- Depends on: none
+- Exact action: After a PR is published from a finished run worktree, let auto-removal run; then repeat in another fixture where a tracked file is left dirty in the worktree.
+- Expected result: The clean worktree is removed automatically; the worktree with a dirty tracked file is refused removal with a message naming the dirty file.
+- Evidence to capture: Terminal output for both cases and `git worktree list` afterward.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-305
+- Required for acceptance: YES
+- Exclusive resources: dir:fixture-repo-ignore
+- Depends on: none
+- Exact action: In a fixture repo, create a linked worktree after the TUI has written the exclude block, add files under .uncle/docs/, .uncle/workflow/ and .uncle/attestation.json, and run `git status --short` and `git check-ignore -v` on each from both the main checkout and the linked worktree.
+- Expected result: .uncle/workflow/ is ignored; .uncle/docs/ and attestation files appear as untracked and are not reported ignored, in both checkouts.
+- Evidence to capture: git status and check-ignore output from both checkouts.
 - Actual result: 
 - Status: NOT RUN
 
@@ -52,9 +182,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run `uncle --noui --noinput` and then `uncle --noui --bogus-arg` in a scratch project; note stderr and exit code of each.
-- Expected result: `--noui --noinput` prints its existing error and exits 2; bare `--noui` with an unrecognized argument keeps its current error and exit code, and neither starts the REPL.
-- Evidence to capture: Terminal transcript with stderr text and `echo $?` for both commands.
+- Exact action: In a throwaway git repo whose tracked .gitignore lacks the managed block, launch the Uncle TUI against it, switch config (touch .uncle/config), switch projects and back, then run `git status --porcelain --untracked-files=no` and `git diff -- .gitignore`.
+- Expected result: No tracked file is modified and .gitignore bytes are unchanged; `.uncle/docs/` files still appear in `git status` while `.uncle/workflow/` stays ignored.
+- Evidence to capture: Terminal transcript of the git status/diff output and `git status --porcelain --ignored` showing docs visible and workflow ignored.
 - Actual result: 
 - Status: NOT RUN
 
@@ -62,19 +192,9 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run a one-shot form (`uncle --noui --application <small fixture brief>` with a fake or available runner, unattended) and watch it to completion.
-- Expected result: A single headless run prints plain progress with no REPL banner or `uncle> ` prompt, then exits with the usual code (0 on success, 1/2/3 on failure/refusal/gate stop).
-- Evidence to capture: Captured stdout/stderr and exit code; confirm no banner or prompt text appears.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-403
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run `uncle --noui --attended` with stdin redirected from a non-tty (e.g. `echo | uncle --noui --attended --application <brief>`) and observe.
-- Expected result: The existing refusal message is printed and the exit code is 2, unchanged from before.
-- Evidence to capture: Stderr text and exit code.
+- Exact action: In a throwaway repo whose tracked .gitignore has a legacy bare `.uncle` line, start the TUI, reload config and switch projects twice, and watch stderr and the TUI output.
+- Expected result: The tracked .gitignore is untouched; exactly one deferral notice mentioning .gitignore and worktree appears per project root per process, and no repeat on later reloads.
+- Evidence to capture: Captured stderr/TUI text showing a single notice, plus unchanged .gitignore bytes.
 - Actual result: 
 - Status: NOT RUN
 
@@ -82,8 +202,38 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Launch the normal curses TUI (`uncle` without --noui) in a pty, open the home chat, type `build issue 1` style request and a slash command such as /help, then quit.
-- Expected result: TUI renders normally with curses, home chat replies, and the issue request is still recognized as before; no import or startup errors appear.
-- Evidence to capture: Screenshot or terminal capture of the TUI home screen and chat response.
+- Exact action: Complete a real change request end to end with PR publication, then in the main checkout and the finished worktree run `git status --porcelain --untracked-files=no`; confirm the worktree is auto-removed after the PR.
+- Expected result: Both checkouts report empty tracked status, the PR .gitignore equals the audited one, and the worktree is removed without a refusal.
+- Evidence to capture: Run completion log, git status output, and worktree list after removal.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-405
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: After audit/attest in a fixture run, modify .gitignore (add one line) and separately stage a file under .uncle/ (e.g. .uncle/secret), then attempt to publish each time.
+- Expected result: Publish exits non-COMPLETE each time, with stderr naming .gitignore or .uncle/secret as the offending path, and no PR commit is created.
+- Evidence to capture: Publish command output with exit codes and stderr text.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-406
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Complete a change run with no PR in a fixture repo and check `git status --porcelain --untracked-files=no`; then repeat after dirtying another tracked file before completion.
+- Expected result: The clean run completes with empty tracked status; the dirty run is not reported COMPLETE and names the dirty file.
+- Evidence to capture: Completion output for both runs and the git status output.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-407
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: With a finished worktree after PR, dirty an unrelated tracked file and trigger post-PR auto-removal; then revert it and trigger removal again.
+- Expected result: Removal is refused while the unrelated tracked file is dirty and succeeds once the worktree is clean.
+- Evidence to capture: Removal output for both attempts and the worktree list.
 - Actual result: 
 - Status: NOT RUN

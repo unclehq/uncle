@@ -289,7 +289,21 @@ def _ensure_uncle_gitignored(project_root):
         import uncle_gitignore
     except ImportError:
         return
-    uncle_gitignore.ensure(project_root)
+    # Never a tracked write: the untracked info/exclude carries the rules; a
+    # run's worktree is normalized before audit (worktrees.sh).
+    wrote = uncle_gitignore.ensure_exclude(project_root)
+    if not wrote and os.path.exists(os.path.join(project_root, ".git")):
+        if not uncle_gitignore._exclude_text_current(project_root) and not _GITIGNORE_WARNED:
+            _GITIGNORE_WARNED.append(1)
+            print("uncle: could not update .git/info/exclude; continuing", file=sys.stderr)
+    if project_root not in _GITIGNORE_NOTICED and uncle_gitignore.tracked_needs_normalization(project_root):
+        _GITIGNORE_NOTICED.add(project_root)
+        print("uncle: tracked .gitignore has legacy Uncle entries; they are normalized in the run worktree, not here",
+              file=sys.stderr)
+
+
+_GITIGNORE_WARNED = []
+_GITIGNORE_NOTICED = set()
 
 
 CONFIG_PATH = os.environ.get("UNCLE_CONFIG", _default_config_path())

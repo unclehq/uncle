@@ -1,71 +1,77 @@
-# Baseline report: issue 165 (bare `uncle --noui` REPL)
+# Baseline Report (Issue 149)
 
-Omitted sections: Reproduction (feature, not a bug); Baseline test results as run output (the driver supplies them)
+Omitted sections: Reproduction (not run; trigger traced statically); Areas outside change merged into 14
 
 ## 1. Change-request summary
-See .uncle/docs/CHANGE_REQUEST.md. Bare `--noui` (no startup action) currently refused with exit 2; it must start a plain-text interactive chat that can start builds via the validated home actions. One-shot forms unchanged.
+See .uncle/docs/CHANGE_REQUEST.md (Issue 149): Uncle must make no tracked-file edit (esp. `.gitignore`) after the final audit snapshot; checkout/worktree clean at PR publish.
 
 ## 2. Repository architecture
-- `uncle` (bash launcher, 1001 lines): parses flags, resolves attended/unattended, execs TUI (`uncle_tui.py`, 8367 lines, curses) or headless runner.
-- `scripts/lib/uncle_headless.py` (378 lines): `run()` streams a driver with an escape filter, signal forwarding, attended gate pass-through on stdin; `main()`/`_driver_from_env()` build driver argv from `UNCLE_STARTUP_*`.
-- `scripts/lib/run_duties.py`: shared TUI/headless duties (`build_driver_command`, banners, `startup_brief_document`, `write_change_request`).
-- `scripts/lib/home_actions.py` (`prompt`, `parse_reply`, action schema), `home_chat.py`, `home_agent_session.py` (persistent home agent), `supervisor_chat.py`, `supervisor_runner.py`.
-- Home-action *execution* (`_home_action`, `_stop_build`, `_resume_build`, `_clear_build`, `run_named_stage`) lives inside `uncle_tui.py` class methods, not in a shared module.
+Python TUI (`uncle_tui.py`) + bash/python drivers under `scripts/` and `scripts/lib/`. Ignore-rule normalizer is `scripts/lib/uncle_gitignore.py`. PR publish engine is embedded Python in `scripts/lib/change-pr.sh`. Worktree lifecycle is `scripts/lib/worktrees.sh`; post-PR removal guard in `scripts/from-issue.sh`.
 
 ## 3. Relevant code paths
-- `uncle:232-233` --noui + --noinput refusal; `uncle:208-212` refusal exit code 2 under --noui; `uncle:385-413` mode resolution; `uncle:415-425` bare-noui refusal (`exit 2`) and exec of headless.
-- `uncle_headless.py:137-175` `run()` (refuses attended without tty; SIGINT/SIGTERM -> 128+n); `:293-316` `main`; `:319-367` `_driver_from_env`.
-- `uncle_tui.py:153` `ISSUE_REQUEST_RE`; `:3603` `send_home_chat`; `:3412` `_agent_turn`; `:4304` `_apply_home_action`; `:4360` `_home_action`; `:5148` `run_named_stage`; `:5201/5220/5352` stop/resume/clear; `:6377-6521` slash command handling.
-- `home_actions.py:73` `parse_reply` (ACTIONS allowlist, strict schema).
+| Path | Role |
+|---|---|
+| uncle_tui.py:281-292 `_ensure_uncle_gitignored` | calls `uncle_gitignore.ensure(root)` |
+| uncle_tui.py:1617 in `load_config` | calls it on EVERY load_config |
+| uncle_tui.py:1708-1714 | load_config re-run whenever `.uncle/config` stamp changes (mid-run reload) |
+| uncle_tui.py:3500-3510 | load_config on project switch |
+| scripts/lib/uncle_gitignore.py:80-123 `ensure` | rewrites/appends tracked `.gitignore` |
+| scripts/lib/uncle_gitignore.py:126-128 | CLI main calls ensure |
+| scripts/lib/worktrees.sh:130 | runs the CLI on each new worktree (pre-run) |
+| scripts/lib/change-pr.sh:508-620 `snapshot` | non-audit snapshots strip managed lines from `.gitignore` (:595-612); audit=True keeps exact bytes |
+| scripts/lib/change-pr.sh:384,435,704-720 | attest records `reviewed_tree` (tolerant) and `commit_tree` (exact); `validate` compares both |
+| scripts/lib/change-pr.sh:22-73 `change_pr_complete/publish` | completion/publish entry |
+| scripts/from-issue.sh:316-345 `auto_removal_content_refusal` | refuses removal on any tracked-file porcelain entry |
+| tree_fingerprint.py:21, approval_snapshot.py:7, triage_guard.py:40, parallel_steps.py:34 | consumers of `strip_managed`/`only_adds_managed` |
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `uncle --noui --application T` / `--issue` / `--change-request` | One headless run, plain output, exit 0/1/2/3/128+n | uncle_headless.py:1-8; headless-run-test.py | Yes |
-| B-2 | `uncle --noui` bare, or `UNCLE_NOUI=1 uncle` | stderr error + usage, exit 2 | uncle:419-424; launcher-noui-test.sh:13-14 | No (MODIFY) |
-| B-3 | `--noui --noinput` | Error, exit 2 | uncle:232; launcher-noui-test.sh:15 | Yes |
-| B-4 | `--noui --attended` with non-tty stdin | exit 2 | uncle_headless.py:142; launcher-noui-test.sh | Yes |
-| B-5 | TUI home chat | Curses chat; NL requests -> validated actions; slash commands | uncle_tui.py:3603-4360, 6377+ | Yes |
-| B-6 | Multiple startup actions | exit 1 | launcher-noui-test.sh:19 | Yes |
-| B-7 | Headless vs TUI equivalence | Same artifacts/attestation fields | headless-equivalence-test.py | Yes |
+| B-1 | TUI start / config-stamp change / project switch | `.gitignore` of project root normalized (may become ` M`) | uncle_tui.py:1617,1708-1714 | Normalization of ignore coverage: yes; tracked write: no |
+| B-2 | New worktree created | worktree `.gitignore` normalized before the run | worktrees.sh:130 | yes (pre-audit, in diff) |
+| B-3 | Comparison snapshots | managed `.gitignore` lines ignored | change-pr.sh:595 | until in-flight runs drain |
+| B-4 | commit tree | exact `.gitignore` bytes at attest | change-pr.sh:435,717 | yes |
+| B-5 | Post-PR removal | refused if tracked modification | from-issue.sh:325 | yes |
+| B-6 | Canonical block | `.uncle/*`, `!.uncle/docs/`, 3 attestation negations | uncle_gitignore.py:53 | yes (non-goal to change) |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| EI-1 | --noui never imports curses | headless module imports no curses | headless-run-test.py | Medium |
-| EI-2 | Model cannot start a driver; only validated actions | `parse_reply` allowlist; TUI `_apply_home_action` requires home intent | home-actions-test.py, tui-home-agent-test.py | High |
-| EI-3 | Child driver not left behind on exit/signal | `run()` killpg with grace | headless-run-test.py | Medium |
-| EI-4 | Output has only printable text, TAB, LF | `EscapeFilter` | headless-run-test.py | High |
-| EI-5 | Gate answers via stdin recorded as human | UNCLE_ATTENDED_STDIN path in `_stream` | headless-run-test.py | Medium |
+| EI-1 | commit tree equals attested commit_tree | change-pr.sh validate :717 | pr-*-test.py/sh | High |
+| EI-2 | `.uncle/docs` visible to git via negation | CANONICAL block | gitignore tests | Medium |
+| EI-3 | removal refuses tracked changes | from-issue.sh:325 | pr-auto-publish-test.sh | Medium |
+| EI-4 | only Uncle-managed lines tolerated in guards | only_adds_managed | scripts/tests/gitignore-tolerance-test.py | High |
 
 ## 6. Interface contracts
-Launcher env: `UNCLE_NOUI`, `UNCLE_STARTUP_ACTION/TEXT/TEXT_FILE`, `UNCLE_STARTUP_ATTENDED/UNATTENDED`, `UNCLE_PROJECT_ROOT`, `UNCLE_RUNTIME_ROOT`. Headless exit codes: 0 completed, 1 failure, 2 refusal, 3 stopped at gate, 128+n signal. Action schema: `home_actions.ACTIONS` with `uncle_action`, `message`, `document`, `start`, `issue`.
+`uncle_gitignore.ensure(root)->bool`, `strip_managed`, `only_adds_managed`, CLI `uncle_gitignore.py [root]`. `_ensure_uncle_gitignored(root)` in TUI.
 
 ## 7. Existing automated-test coverage
-`scripts/tests/`: `launcher-noui-test.sh`, `headless-run-test.py`, `headless-equivalence-test.py`, `home-actions-test.py`, `home-chat-test.py`, `home-agent-session-test.py`, `tui-home-agent-test.py`. The shell and Python runners use separate temp dirs and bind no shared ports, so they form one parallel group (per runner docs: run-python-tests.sh does not overlap run-shell-tests.sh).
+scripts/tests/gitignore-tolerance-test.py (tolerance); pr-auto-commit-test.py, pr-reconcile-test.py, pr-signing-test.py, pr-auto-publish-test.sh (publish). No test asserts clean `git status` after COMPLETE or that TUI reload leaves tracked files untouched. Shell and Python runners use separate temp dirs and no shared ports, so they run in parallel.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (repository runners, CLAUDE.md-mandated). Not run here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Known: some Python suites already fail on a clean checkout (per runner guidance).
+Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (CLAUDE.md/Uncle task contract). Not run here; driver baseline in `.uncle/workflow/green-check.baseline.tsv` is authoritative. Some Python suites may already fail on a clean checkout.
 
 ## 10. Existing failures/flakiness
-None documented in-repo beyond the note above. UNRESOLVED until driver baseline lands.
+None documented in repository for this surface; UNRESOLVED until driver baseline.
+
+## 11. Reproduction
+Not executed. Static trace: `load_config` unconditionally calls `ensure` (uncle_tui.py:1617) and is re-invoked on config-stamp change (:1708-1714), so a TUI session that sees `.uncle/config` change near end of a run rewrites the main checkout's `.gitignore` (matches reported ` M .gitignore`). Worktree.sh:130 is pre-run. Snapshot tolerance (change-pr.sh:595) hides the edit from `reviewed_tree` comparison, so an edit between audit and attest enters the PR via exact-bytes commit_tree. Exact end-of-run call not live-confirmed.
 
 ## 12. Likely change surface
-`uncle` (bare-noui branch, usage text); new `scripts/lib/uncle_repl.py` (loop + I/O), new REPL action/chat modules; `uncle_headless.py` (extract `prepare_driver`); `home_actions.py` + one import line in `uncle_tui.py` (shared `ISSUE_REQUEST_RE`); `launcher-noui-test.sh` rows B-2 (request explicitly changes #160 N-6); new tests.
+uncle_gitignore.py, uncle_tui.py (:281-292, :1617), worktrees.sh:130, change-pr.sh (validate/complete), tests.
 
 ## 13. Regression-sensitive components
-`uncle` launcher arg parsing and mode resolution; `uncle_headless.run` signal handling; TUI home chat issue-regex handling.
+Attestation negations (EI-2), guards using strip_managed, worktree creation, existing gitignore-tolerance test.
 
 ## 14. Outside the change
-Curses TUI behavior, driver scripts, gates, verification, PRs, supervisor tool capabilities (#164), machine protocol, `/set` editing.
+Canonical block contents; `.uncle/workflow/` snapshot treatment; stale `parallel/step-*` worktree cleanup.
 
 ## 15. Unknowns and assumptions
-- A1: `/date` and `/mode` do not exist in the TUI (grep: no `/mode` handler); REPL defines `/mode`; `/date` is omitted.
-- A2: HomeAgentSession/SupervisorRequest threading APIs are driven synchronously by the REPL; exact binding confirmed at implementation.
-- A3: TUI-only `/triage` and `/do` depend on TUI triage state; REPL maps them to the same stage rerun/resume driver paths or prints that they need the TUI.
+- Exact live trigger unconfirmed (see 11); plan removes all end-of-run tracked writes regardless.
+- `.git/info/exclude` is shared by linked worktrees via the common git dir (assumed standard git behavior; verified by test in plan).
 
 ## 16. Initial risk
-Medium-high: action execution is TUI-embedded, so extraction must not alter TUI behavior; stdin sharing between REPL and attended gates; Ctrl-C semantics across child process groups.
+Medium: ignore coverage regressions could hide `.uncle/docs` from PR; tolerance removal could break in-flight runs.
 
 ## Exact build and test commands executed
 

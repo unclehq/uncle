@@ -19,7 +19,11 @@ $bash = $null
 $python = $null
 if (Get-Command scoop -ErrorAction SilentlyContinue) {
     try { $gitRoot = (& scoop prefix git 2>$null | Out-String).Trim() } catch { $gitRoot = $null }
-    try { $pythonRoot = (& scoop prefix python 2>$null | Out-String).Trim() } catch { $pythonRoot = $null }
+    # Uncle's Python is pinned to 3.13: windows-curses has no wheel for newer releases.
+    try { $pythonRoot = (& scoop prefix python313 2>$null | Out-String).Trim() } catch { $pythonRoot = $null }
+    if (!$pythonRoot -or !(Test-Path (Join-Path $pythonRoot 'python.exe'))) {
+        try { $pythonRoot = (& scoop prefix python 2>$null | Out-String).Trim() } catch { $pythonRoot = $null }
+    }
     if ($gitRoot) { $bash = Join-Path $gitRoot 'bin\bash.exe' }
     if ($pythonRoot) { $python = Join-Path $pythonRoot 'python.exe' }
 }

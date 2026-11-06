@@ -3960,6 +3960,23 @@ while true; do
 
         ADVERSARIAL_REVIEW)
 
+            # A plan classified as needing no review gets a visible stub instead of a panel; a declined skip reruns as a full review.
+            if [[ -e "$STATE_DIR/review-skip-declined" ]]; then
+                rm -f "$STATE_DIR/review-skipped" "$STATE_DIR/review-skip-declined"
+            elif change_class_review_skipped .uncle/docs/CHANGE_PLAN.md; then
+                if python3 -B "$CHANGE_CLASS_PY" skip-review change . .uncle/docs/CHANGE_PLAN.md; then
+                    : > "$STATE_DIR/review-skipped"
+                    record_cost review-skip 0 - - - - -
+                    echo "Adversarial review skipped: class $(python3 -B "$CHANGE_CLASS_PY" get . class), no risk hits"
+                    set_state VALIDATE_ADVERSARIAL_REVIEW
+                    continue
+                fi
+                echo "Review skip could not be applied; running the full review." >&2
+                rm -f "$STATE_DIR/review-skipped"
+            else
+                rm -f "$STATE_DIR/review-skipped"
+            fi
+
             # Written before the reviewer runs: a reviewer that never returns
             # leaves the reason nothing was verified, and blocks release.
             envelope_write --stage review --result unavailable --reason 'reviewer did not complete'

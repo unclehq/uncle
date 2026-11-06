@@ -4,157 +4,229 @@
 
 ### MC-101
 
-- **Action:** Ran `printf '/q\n' | ./uncle --noui` from the worktree (piped stdin, not a TTY) and read the exit status.
-- **Expected result:** The session quits and the process exit status is 0.
-- **Actual result:** Session started, printed the banner, and exited with status 0.
-- **Defects:** None
+- **Action:** Read the checklist row only. Did not launch change-workflow.sh: the row requires a full end-to-end run with a real classifier model (WORKFLOW_SKIP_REVIEW unset) through the review stage, which this isolated worker (no repo exploration, no starting other agents or model runs, small budget) cannot perform.
+- **Expected result:** No review panel launched; console prints `Adversarial review skipped: class docs, no risk hits`; run proceeds to validation and approval gate.
+- **Actual result:** Not executed live. No console transcript was captured.
+- **Defects:** None. Setup needed: an operator runs a docs-only change through change-workflow.sh in a scratch project with a real classifier configured, then reruns this lane.
 
 ### MC-102
 
-- **Action:** Ran `printf '/s\n/S\n/s extra\n/mode\n/quit\n' | ./uncle --noui` from the worktree (piped stdin).
-- **Expected result:** Each of /s, /S and /s extra is refused with `ambiguous command: /s (matches: /settings, /stop)`, no command runs, and /mode still answers.
-- **Actual result:** All three inputs printed `ambiguous command: /s (matches: /settings, /stop)`. The session continued and `/mode` answered `mode: unattended`. The process exit status was 2 after /quit. The check does not specify an exit status, and the likely cause is the earlier refused commands, but I did not investigate.
-- **Defects:** None
+- **Action:** Not performed. Depends on the skipped run from MC-101, which did not occur, so there is no review gate, rendered ADVERSARIAL_REVIEW.md, change-class.json or review-skipped marker to inspect.
+- **Expected result:** Rendered review shows zero findings and `skipped: class <class>, no risk hits`; change-class.json records review=skip with review_reason; marker exists.
+- **Actual result:** Not executed; prerequisite MC-101 blocked.
+- **Defects:** None. Setup needed: complete MC-101 and stop at the review approval gate.
 
 ### MC-103
 
-- **Action:** Piped `/qu`, `/frob`, `/x`, `/1`, `/?`, `/` (one per line) then `/mode` into `uncle --noui` from /tmp/mcw (non-TTY stdin).
-- **Expected result:** Each line refused with `unknown command: /<name>`, nothing expands or runs, session continues and `/mode` answers.
-- **Actual result:** All six lines printed `unknown command: /qu`, `/frob`, `/x`, `/1`, `/?`, and `/` (bare slash), each followed by the command list. Nothing expanded. `/mode` then answered `mode: unattended`.
-- **Defects:** None
+- **Action:** Not performed. Declining a skipped review as a human needs the live gate from MC-102, which is unavailable.
+- **Expected result:** Run does not stop; ADVERSARIAL_REVIEW reruns as a full panel; stub and marker removed before the panel starts; skip not re-applied.
+- **Actual result:** Not executed; prerequisite MC-102 blocked. This check also needs a human decline action at the gate.
+- **Defects:** None. Setup needed: reach the skipped-review gate (MC-101/MC-102), then a human declines it.
 
 ### MC-105
 
-- **Action:** Piped `/q now`, `/e foo`, `/mode`, `/Q` into `uncle --noui` and captured exit status.
-- **Expected result:** `usage: /quit` and `usage: /exit` printed, neither quits, `/mode` answers, `/Q` quits with exit 0.
-- **Actual result:** Output was `usage: /quit`, `usage: /exit`, `mode: unattended`; session then ended on `/Q` with EXIT=0.
+- **Action:** Ran the narrow script scripts/tests/review-skip-test.sh once and inspected its WORKFLOW_SKIP_REVIEW and WORKFLOW_CLASSIFY cases. I did not launch a live driver review.
+- **Expected result:** Every one of these runs launches a full review panel and prints no skip line.
+- **Actual result:** The skip-decision helper change_class_review_skipped returned 'full review' (rc 1) for WORKFLOW_SKIP_REVIEW=0, empty, false, no and 2, and for WORKFLOW_CLASSIFY=0. Unset and =1 still honored the skip. The script ended with 36 passed, 0 failed, and the runner-calls file confirmed zero runner invocations. No live docs-only driver run was made, so I did not observe a console transcript showing the panel launching and no skip line. That needs a real reviewer panel run (agent/Codex invocation) that this lane cannot start.
+- **Defects:** None
+
+### MC-106
+
+- **Action:** Read scripts/tests/review-skip-test.sh to see what it covers for editing the plan after a skip stub is written. I did not run a live ADVERSARIAL_REVIEW re-entry.
+- **Expected result:** The stale stub, its rendered md and the marker are discarded and the skip decision is recomputed against the new plan; a stale or missing plan sha yields a full panel review.
+- **Actual result:** The stale or missing plan sha half is covered at helper level: sha-mismatch-full and sha-empty-full both returned full review, and sha-match returned skip. Discarding the stale stub, its rendered md and the marker on re-entry was NOT observed. The script only greps the drivers for the 'review-skipped' marker and has no behavioral test for the discard. Doing it live needs a driver run to the review stage, an edit of the plan, and re-entry, which this lane cannot do.
+- **Defects:** None
+
+### MC-107
+
+- **Action:** Read the checklist row and the driver green-check; did not run the live driver flow.
+- **Expected result:** Run stops immediately with nonzero exit, no retry, no model invocation, no fallback to full review when the skip stub is corrupt.
+- **Actual result:** Not executed. Reaching the driver's validation state with a corrupted stub requires a live stagegate.sh run with an approved plan and a classifier outcome, which was not set up in this worker.
+- **Defects:** None
+
+### MC-108
+
+- **Action:** Read the checklist row; did not run the end-to-end stagegate.sh flow.
+- **Expected result:** Review panel not launched, skip line shown, human gate appears, and the updated-plan stage accepts the zero-finding review and continues.
+- **Actual result:** Not executed. The row needs a real classifier model answering review: skip and an interactive human approval gate, which are not available to this isolated worker.
 - **Defects:** None
 
 ### MC-200
 
-- **Action:** Piped '/s', '/s extra', '/S', '/h', '/q' into `./uncle --noui` (stdin not a TTY), captured output and exit status. Also ran '/q' and '/quit' alone.
-- **Expected result:** Each of /s, /s extra, /S prints 'ambiguous command: /s (matches: /settings, /stop)' and runs nothing; /h shows help; /q exits with status 0.
-- **Actual result:** The three refusals printed exactly 'ambiguous command: /s (matches: /settings, /stop)', nothing ran, and /h printed help. But after the refusals, /q exited with status 2, not 0. A lone '/q' or '/quit' exits 0. Running python3 scripts/lib/uncle_repl.py directly with '/x' then '/q' exited 0, so the 2 comes from running through ./uncle. I did not find the cause.
-- **Defects:** Observed defect: ./uncle --noui exits 2 on /q or /quit after an earlier refusal; expected 0. Not yet logged in DEFECTS.md (worker may not edit it).
+- **Action:** None. Read the checklist row only. The row needs a live change-workflow.sh run with a real classifier and a real reviewer panel on a risky docs-only plan. That cannot be done within this worker's compact policy and budget.
+- **Expected result:** Full adversarial review panel runs; no 'Adversarial review skipped' line appears and no review-skipped marker exists (SI-1).
+- **Actual result:** Not executed. No console output or marker state was observed.
+- **Defects:** None
 
 ### MC-201
 
-- **Action:** Piped '/qu', '/x', '/1', '/?', '/', '/q' into `./uncle --noui` and captured output and exit status.
-- **Expected result:** Each of /qu, /x, /1, /?, / is refused as an unknown command, nothing expands or runs, and /q exits with status 0.
-- **Actual result:** All five were refused with 'unknown command: /<token>' followed by the Commands line, and nothing ran or expanded. The session continued to /q, but the final exit status was 2, not 0.
-- **Defects:** Same defect as MC-200: exit status 2 after /q following refusals, expected 0.
+- **Action:** Ran scripts/tests/review-skip-test.sh (narrow, stub-level check). Did not run a live change-workflow.sh with a real classifier through the review gate.
+- **Expected result:** Console shows skip line; no panel; gate shows zero-finding stub with 'skipped: class <class>, no risk hits'; change-class.json review=skip; marker exists.
+- **Actual result:** Helper/CLI-level test passed 36/0 (stub written only for verified skip, exact overall_assessment, zero runner invocations, drivers reference the helper and marker). The live end-to-end driver run with a real classifier was not performed in this worker.
+- **Defects:** None
 
 ### MC-202
 
-- **Action:** Ran `uncle --noui` (worktree ./uncle) in /tmp/mc2 with piped stdin: `/q now`, `/e foo`, `/Q`; captured output and exit status.
-- **Expected result:** `/q now` prints `usage: /quit`, `/e foo` prints `usage: /exit`, session does not quit on either; `/Q` quits with status 0.
-- **Actual result:** Output: banner, `usage: /quit`, `usage: /exit`. Session continued past both (the subsequent commands were processed) and `/Q` ended it with exit=0.
+- **Action:** None live. Declining a review at the gate is a human action, and MC-201 was not run live.
+- **Expected result:** Run continues; stub and marker removed; full panel review runs; skip never re-applied.
+- **Actual result:** Not executed. The test script only partly covers the stale/marker handling.
 - **Defects:** None
 
 ### MC-203
 
-- **Action:** Ran `uncle --noui` with piped stdin: `/m unattended`, `/mode`, `/M attended`, `/mode`, `/q`.
-- **Expected result:** `/m unattended` acts like `/mode unattended` (mode: unattended), `/mode` reports unattended, `/M attended` gives mode: attended.
-- **Actual result:** Output lines in order: `mode: unattended`, `mode: unattended`, `mode: attended`, `mode: attended`. Uppercase /M expanded and argument was kept.
+- **Action:** None. Read the checklist row only. The row needs live change-workflow.sh runs with WORKFLOW_SKIP_REVIEW set to 0, empty and false against a real classifier and reviewer panel. This worker did not perform them.
+- **Expected result:** Each run performs a full review; skip is honored only when the variable is unset or exactly 1 (SI-4).
+- **Actual result:** Not executed. No console output was observed for any of the three values.
 - **Defects:** None
 
 ### MC-204
 
-- **Action:** Ran repo ./uncle --noui (and installed uncle for the first pass) feeding /h, /i, /c, /t, /d, /r each followed by /e, and /e alone followed by /h, piping output through cat -v.
-- **Expected result:** Each one-letter command behaves as its full command; usage complaints are the full command's own; /e ends the session.
-- **Actual result:** /h printed the help text and command list; /i printed 'usage: /issue N' (the /issue command's own usage); /c printed 'clear_build is available in the full-screen UI only'; /t printed '/triage needs the TUI'; /d printed '/do needs the TUI'; /r printed 'resume_build is available in the full-screen UI only' (all are the full commands' own noui messages, none say unknown or ambiguous); /e ended the session (the following /h produced no output, exit code 0).
+- **Action:** Not run live. The review-skip-test.sh stale-plan sha cases passed as part of the 36 checks.
+- **Expected result:** Stale stub, rendered md and marker discarded after a plan edit; decision recomputed against the new plan.
+- **Actual result:** Not executed end to end in the driver; depends on MC-201 live state.
 - **Defects:** None
 
 ### MC-205
 
-- **Action:** Ran: printf '/\033[31mred\n/q\n' | ./uncle --noui | cat -v
-- **Expected result:** Unknown-command refusal appears without the raw escape byte (no ^[[31m in cat -v), then the session quits on /q.
-- **Actual result:** Output was 'unknown command: /red' followed by the command list; no ^[ or [31m sequence appeared; the session terminated on /q without hanging.
+- **Action:** Not run live in either driver. The review-skip-test.sh wiring checks passed (both drivers reference the helper, marker and skip-review).
+- **Expected result:** Each driver stops immediately with nonzero exit on a corrupt stub, with no retry, no fallback and no model call.
+- **Actual result:** Not executed against stagegate.sh or change-workflow.sh with a corrupted stub.
+- **Defects:** None
+
+### MC-206
+
+- **Action:** Ran bash scripts/tests/review-skip-test.sh, which exercises the shared change_class_review_skipped helper (the function the drivers call) for WORKFLOW_CLASSIFY=0, a forced WORKFLOW_CHANGE_CLASS=docs, and the path-floor cases. Read review-skip-test.py, which covers driver/gate/auth/secret script paths (scripts/stagegate.sh, scripts/change-workflow.sh, src/auth.py, etc.). I did not run the full workflow end to end.
+- **Expected result:** All three scenarios run a full review with no skip (SI-4, SI-5 path floor).
+- **Actual result:** 36 passed, 0 failed. The classify-off-full and forced-class-full cases return 1 (not skipped). The path-floor test list includes driver and gate script paths. The driver green-check reports no regressions.
+- **Defects:** None
+
+### MC-207
+
+- **Action:** Not run. This needs both drivers taken through the human approval gate and the final audit, which needs a human and a real reviewer.
+- **Expected result:** Plan approval gate and final audit run normally on the zero-finding stub; updated-plan stage accepts it.
+- **Actual result:** Not executed.
+- **Defects:** None
+
+### MC-300
+
+- **Action:** Read the checklist row only. Did not launch change-workflow.sh in a scratch project.
+- **Expected result:** No review panel runs; console shows `Adversarial review skipped: class docs, no risk hits`; the human review gate shows the stub with that reason and zero findings.
+- **Actual result:** Not executed. The check needs a full change-workflow.sh run with a real model classifier in a scratch project, taken to an interactive human review gate. A compact worker has no budget or gate access for that.
 - **Defects:** None
 
 ### MC-301
 
-- **Action:** Ran `printf '/q\n' | env -u UNCLE_RUNTIME_ROOT ./uncle --noui; echo EXIT=$?` from the worktree. The ambient UNCLE_RUNTIME_ROOT points at the installed brew build, so I unset it to exercise the worktree's scripts/lib/uncle_repl.py. Input was piped, not typed in a TTY.
-- **Expected result:** The session quits and the process exit status is 0.
-- **Actual result:** The session printed its banner and quit with no error. EXIT=0.
+- **Action:** Not performed. It depends on the MC-300 gate, which was not reached.
+- **Expected result:** Declining the skipped review at the gate reruns ADVERSARIAL_REVIEW as a full panel review, removes the stub and review-skipped marker before the panel starts, and does not re-take the skip.
+- **Actual result:** Not executed. It needs the MC-300 gate state and a human decline action at an interactive approval gate.
 - **Defects:** None
 
 ### MC-302
 
-- **Action:** Ran `printf '/s\n/qu\n/frob\n/1\n/q extra\n/q\n' | env -u UNCLE_RUNTIME_ROOT ./uncle --noui; echo EXIT=$?` from the worktree, so the worktree's uncle_repl.py was used. The 'Commands:' hint lines that follow each unknown-command message were filtered out of the transcript.
-- **Expected result:** /s prints the ambiguous message. /qu, /frob and /1 each print 'unknown command: /<name>'. '/q extra' prints 'usage: /quit' and does not quit. Every refusal leaves the session running, and the final /q quits.
-- **Actual result:** All messages matched. /s gave 'ambiguous command: /s (matches: /settings, /stop)'. /qu, /frob and /1 each gave 'unknown command: /<name>'. '/q extra' gave 'usage: /quit' without quitting. The session stayed alive through every refusal, and the final /q quit with EXIT=0. The installed brew build (older, 41398a8) returned EXIT=2 after refusals followed by /q. That is a stale-install difference. The worktree code (scripts/lib/uncle_repl.py loop) returns 0 on an explicit /quit.
+- **Action:** Did not execute. The check needs a scratch project plus a full change-workflow.sh run with a real classifier agent CLI and reviewer panel. I judged that too costly for this compact worker, and the budget is limited.
+- **Expected result:** Full adversarial review runs with no skip stub and no review-skipped marker.
+- **Actual result:** Not performed. Related automated coverage of risky-path floors is in review-skip-test.py, but it does not substitute for the live transcript this check requires.
 - **Defects:** None
 
 ### MC-303
 
-- **Action:** Piped `/m`, `/m unattended`, `/mode`, `/h`, `/S`, `/Q` into `./uncle --noui` from the worktree (non-tty, piped stdin) and captured output and exit status.
-- **Expected result:** /m prints current mode; /m unattended prints `mode: unattended`; /mode reports unattended; /h prints help; /S refused as ambiguous with same message as /s; /Q quits.
-- **Actual result:** Output: `mode: unattended` (/m), `mode: unattended` (/m unattended), `mode: unattended` (/mode), help text (`Type a message to chat...` and `Commands: /help /mode [attended|unattended] /issue N /stop /resume [N] /clear /triage /do /settings /quit`), `ambiguous command: /s (matches: /settings, /stop)` for /S, then the session ended on /Q. Process exit status was 2 in that run (the status of the earlier refusal carried through; `/Q` alone exits 0, and `/S` then `/Q` also exits 2). The check does not assert an exit status, so this is noted only as an observation relevant to MC-402/MC-403 style exit-status expectations.
+- **Action:** Ran scripts/tests/review-skip-test.sh (narrow check) and inspected its WORKFLOW_SKIP_REVIEW value matrix. Did not run change-workflow.sh end-to-end in a scratch project, because that needs a live reviewer panel.
+- **Expected result:** Both runs (WORKFLOW_SKIP_REVIEW=0 and =false) perform a full panel review with no skip stub, even if the classifier answered skip.
+- **Actual result:** At the helper level, with a stored class review=skip and a matching plan sha, WORKFLOW_SKIP_REVIEW=0 and =false both return 1 (full review); only unset and =1 honor the skip. The suite reported 36 passed, 0 failed. No full-driver transcript showing the panel being invoked was captured.
 - **Defects:** None
 
 ### MC-304
 
-- **Action:** Piped `/<ESC>[31mx`, `/?`, `/mode`, `/q` into `./uncle --noui`, captured output to a file, inspected with `cat -v` and counted ESC bytes.
-- **Expected result:** Both inputs refused as unknown commands; no raw escape byte emitted; terminal colour not changed; session keeps running.
-- **Actual result:** Output `unknown command: /x` and `unknown command: /?`, each followed by the commands help line; `/mode` still answered `mode: unattended`, so the session kept running. ESC byte count in the output was 0 and `cat -v` showed no `^[` sequence. Terminal colour was not changed (output was captured to a file, so a live terminal colour was not watched). Exit status was 2, which this check does not assert.
+- **Action:** Inspected review-skip-test.sh and ran it. Did not edit a plan after a stub was written or re-enter ADVERSARIAL_REVIEW in a scratch project.
+- **Expected result:** After the plan is edited, the stale stub, its rendered md and the marker are discarded, and the skip decision is recomputed against the new plan.
+- **Actual result:** The suite covers sha-mismatch, sha-empty and mismatched-sha skip-review, and each gives a full review with no stub written. It does not cover removal of an existing stub, its rendered md or the marker after a plan edit. The required before/after file listing was not produced.
+- **Defects:** None
+
+### MC-305
+
+- **Action:** Read the checklist row. No live run: it needs two interactive drivers with a skip stub in a fifth scratch project, and this worker has no scratch project or driver session assigned.
+- **Expected result:** Each driver stops immediately with nonzero exit, no retry, no model invocation, and no fallback to a full review.
+- **Actual result:** Not performed. No live observation of either driver's behavior on a corrupted ADVERSARIAL_REVIEW.json.
+- **Defects:** None
+
+### MC-306
+
+- **Action:** Read the checklist row. No live run: it needs stagegate.sh on a new small app project with a real classifier answering skip, through to the human approval gate. No real classifier session or scratch-app-small project was available to this worker.
+- **Expected result:** No panel runs; the stub shows `skipped: class small, no risk hits` at the gate; the marker is written; the human approval gate still appears.
+- **Actual result:** Not performed. No gate transcript or marker listing was captured.
 - **Defects:** None
 
 ### MC-401
 
-- **Action:** Piped '/help', '/mode', '/mode unattended', '/mode attended', '/quit' into `./uncle --noui` (worktree launcher) and captured transcript and exit status.
-- **Expected result:** Full commands behave as before: help lists commands, mode reports and switches, /quit exits 0.
-- **Actual result:** Banner and command list printed; '/mode' reported 'mode: unattended'; '/mode unattended' -> 'mode: unattended'; '/mode attended' -> 'mode: attended'; session ended with exit status 0.
+- **Action:** Did not launch a fresh change-workflow.sh run with a real classifier (requires a full multi-agent workflow run, outside this worker's scope). Inspected the current run's own artifacts: change-class.json (class risky, 4 lenses), adversarial-review-panel directory, and workflow dir for skip markers.
+- **Expected result:** Full reviewer panel runs as before; no skip stub is written and no review-skipped marker exists.
+- **Actual result:** Observed only for this run: the classifier labelled the plan risky, all four lens packets (requirements, regression, security, testability) exist plus a synthesis, and no skip marker file is in .uncle/workflow. This is incidental evidence, not the dedicated risky-plan scenario with the plan text the check names (data deletion / auth-secret path). Not independently exercised.
 - **Defects:** None
 
 ### MC-402
 
-- **Action:** Piped '/qu', '/frob', '/x', '/', '/?', '/1', then '/q' into `./uncle --noui`; captured transcript and exit status. Also ran '/q' alone, '/frob' then '/quit', and '/frob' then EOF.
-- **Expected result:** First six each print 'unknown command: /<name>' with refusal status 2, nothing expands, session stays open until '/q' quits with exit status 0.
-- **Actual result:** All six printed 'unknown command: /qu', '/frob', '/x', '/', '/?', '/1' (followed by the command list) and nothing expanded; session stayed open and /q quit silently. However the final process exit status was 2, not 0. '/q' alone exits 0. '/frob' then '/quit' via ./uncle also exits 2. Running scripts/lib/uncle_repl.py directly (also with UNCLE_NOUI=1) with '/frob' then '/quit' exits 0, so the code comment 'explicit /quit is a clean exit' holds in the module but not via the ./uncle --noui launcher path; cause not determined.
-- **Defects:** Unrecorded: exit status 2 instead of 0 after /q following refusals when launched via ./uncle --noui (module-direct run returns 0)
+- **Action:** Did not run stagegate.sh with a standard/large-class change, nor a docs-class change with WORKFLOW_CLASSIFY=0. Each needs a full live driver run with the reviewer panel.
+- **Expected result:** Both runs launch the full review panel with every lens; disabled classification or a non-reducible class never skips.
+- **Actual result:** Not performed; no observation was made of either scenario.
+- **Defects:** None
 
 ### MC-403
 
-- **Action:** Piped '/s','/S','/s extra','/q extra','/q' into `uncle --noui` from /tmp/mc4 and captured output and exit status; then isolated with '/q' alone, '/s' then '/q', '/s' then '/quit', '/q extra' then '/q'.
-- **Expected result:** First three print exactly `ambiguous command: /s (matches: /settings, /stop)`, run nothing. `/q extra` prints `usage: /quit` and does not quit. Bare `/q` then quits with exit status 0.
-- **Actual result:** Output matched for the first three (identical ambiguous line x3) and `/q extra` printed `usage: /quit` without quitting; session then quit on `/q`. But the process exit status was 2, not 0. Isolation: '/q' alone -> 0; '/q extra' then '/q' -> 0; any prior ambiguous command ('/s' then '/q' or '/quit') -> exit 2. The ambiguous status 2 is carried into the final exit code of the quit.
-- **Defects:** New: bare /q (or /quit) after an ambiguous slash command exits with status 2 instead of 0 (last-command status leaks into quit exit code). Not recorded in DEFECTS.md by this worker.
-
-### MC-404
-
-- **Action:** Piped '/m','/m unattended','/m','/mode','/h','/Q' into `uncle --noui`; separately ran '/help','/mode unattended','/q' as reference.
-- **Expected result:** `/m` and `/mode` print the same mode line, `/m unattended` switches the mode as `/mode unattended` does, `/h` prints same help as `/help`, `/Q` quits with exit 0.
-- **Actual result:** `/m`, `/m unattended`, `/m`, `/mode` all printed `mode: unattended`; `/h` printed the same two-line help text as `/help` in the reference run; `/mode unattended` in reference printed `mode: unattended` same as `/m unattended`; `/Q` quit with EXIT=0. Note: the starting mode was already unattended so a real switch was not distinguishable from a no-op.
+- **Action:** Did not run a full change-workflow.sh pass. Ran the narrow scripts/tests/review-skip-test.sh, whose value matrix drives the shared skip-decision helper with WORKFLOW_SKIP_REVIEW unset, 1, 0, empty, false, no and 2 against a plan classified review=skip. Also read the ADVERSARIAL_REVIEW state in scripts/change-workflow.sh.
+- **Expected result:** Every run with WORKFLOW_SKIP_REVIEW=0, empty or false performs a full panel review and writes no stub, even when the classifier answered review: skip.
+- **Actual result:** The helper returned 'full review' (rc 1) for 0, empty, false, no and 2, and 'skip' only for unset and 1. No runner calls were made. The helper-level suite passed 36 of 36. The end-to-end driver run was not executed, so the no-stub outcome is shown only through the decision helper and the driver wiring.
 - **Defects:** None
 
 ### MC-405
 
-- **Action:** Piped printf '/\x1b[31mred\n/q\n' (real ESC byte) into `./uncle --noui` and captured the raw output through xxd.
-- **Expected result:** Unknown-command refusal does not emit a raw ESC byte; session continues until /q quits it.
-- **Actual result:** Output was 'unknown command: /red' followed by the commands help line; the ESC byte and the '[31m' sequence were stripped. No 0x1b byte appears in the hex dump. /q then ended the session cleanly with no further unknown-command message and exit code 0.
+- **Action:** Read the decline and stale-plan handling in change-workflow.sh and stagegate.sh. Ran review-skip-test.sh, which covers a plan edited after the decision. Did not run a live driver at a review gate.
+- **Expected result:** Declining a skipped review reruns ADVERSARIAL_REVIEW as a full panel review with the stub and review-skipped marker removed. A plan edit discards the stale stub and recomputes the decision.
+- **Actual result:** Plan-edit half: the test passed (plan-edited-after-decision-full and sha-mismatch-full both force a full review). Decline half: the code removes the review-skipped and review-skip-declined markers and falls through to the panel. I found no code removing the stub ADVERSARIAL_REVIEW.json on decline, and the decline gate was not exercised live, so that half is unverified.
+- **Defects:** None
+
+### MC-406
+
+- **Action:** Read the checklist row and inspected scripts/tests/review-skip-test.sh to see what is covered. Did not run stagegate.sh end to end.
+- **Expected result:** Same skip text appears at the gate, the review-skipped marker exists, and the remaining stages and human gates behave unchanged.
+- **Actual result:** Not executed. A live run through stagegate.sh needs the approval gates signed by a person and the downstream stages run with a model. The existing test only greps the drivers for the helper, marker and skip-review references, which is not behavioral evidence.
+- **Defects:** None
+
+### MC-407
+
+- **Action:** Read the checklist row and inspected scripts/tests/review-skip-test.sh. Did not corrupt the stub or resume either driver.
+- **Expected result:** The run stops immediately with a nonzero exit, with no retry, no model invocation, and no fallback to full review.
+- **Actual result:** Not executed. It needs a staged run in each of change-workflow.sh and stagegate.sh with a skip stub, which needs an approved earlier gate that only a person can supply. The test suite only greps for the helper, marker and skip-review references. The 'no-runner-calls' check covers the helper's value matrix, not a driver resume.
 - **Defects:** None
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-101 | YES | PASS | Transcript: 'uncle --noui interactive session. Type /help for commands, /quit to exit.' exit=0. Run used piped stdin rather than an interactive terminal. |
-| MC-102 | YES | PASS | Transcript: three identical ambiguous-command lines, then 'mode: unattended'. |
-| MC-103 | YES | PASS | Transcript: 'unknown command: /qu' ... 'unknown command: /' then 'mode: unattended'. Note: in a combined run, process exit status was 2 after unknown commands (not asserted by this check). |
-| MC-105 | YES | PASS | Transcript: 'usage: /quit' / 'usage: /exit' / 'mode: unattended' / EXIT=0. Standalone `/Q` also gave EXIT=0. |
-| MC-200 | YES | FAIL | Transcript: 'ambiguous command: /s (matches: /settings, /stop)' x3, then the help line, then exit status 2 (`echo $?` after the run). Source comment at scripts/lib/uncle_repl.py:387 says an explicit /quit after a refusal should return 0, but via ./uncle --noui the status was 2. Same exit 2 for '/x' then '/quit' and for '/h', '/x', '/q'. |
-| MC-201 | YES | FAIL | Transcript: 'unknown command: /qu', '/x', '/1', '/?' and '/', each followed by the Commands line. `echo $?` printed 2. |
-| MC-202 | YES | PASS | Transcript: 'uncle --noui interactive session. Type /help for commands, /quit to exit.' / 'usage: /quit' / 'usage: /exit'; exit=0. Piped stdin rather than a TTY. |
-| MC-203 | YES | PASS | Transcript after banner: mode: unattended / mode: unattended / mode: attended / mode: attended. Piped stdin rather than a TTY. |
-| MC-204 | YES | PASS | Terminal transcript: '/h' -> 'Commands: /help /mode ... /quit'; '/i' -> 'usage: /issue N'; '/t' -> '/triage needs the TUI; run uncle without --noui.'; '/e' then '/h' -> only the banner line. |
-| MC-205 | YES | PASS | cat -v output: 'unknown command: /red' / 'Commands: /help /mode [attended/unattended] /issue N /stop /resume [N] /clear /triage /do /settings /quit' |
-| MC-301 | YES | PASS | Transcript: 'uncle --noui interactive session. Type /help for commands, /quit to exit.' then 'EXIT=0'. The installed brew build also gave EXIT=0 for bare /q. |
-| MC-302 | YES | PASS | Transcript: ambiguous command: /s (matches: /settings, /stop) / unknown command: /qu / unknown command: /frob / unknown command: /1 / usage: /quit / EXIT=0. |
-| MC-303 | YES | PASS | Captured transcript of the run in a temp dir; separate runs: `printf '/Q\n' / uncle --noui` -> exit 0; `printf '/S\n/Q\n' / uncle --noui` -> `ambiguous command: /s (matches: /settings, /stop)`, exit 2. |
-| MC-304 | YES | PASS | `cat -v b.out` showed no `^[`; `grep -c $'\x1b' b.out` -> 0. |
-| MC-401 | YES | PASS | Transcript: 'Commands: /help /mode [attended/unattended] /issue N /stop /resume [N] /clear /triage /do /settings /quit', 'mode: unattended', 'mode: unattended', 'mode: attended'; exit=0. |
-| MC-402 | YES | FAIL | Transcript in /tmp/mc402.txt; `printf '/qu\n/frob\n/x\n/\n/?\n/1\n/q\n' / ./uncle --noui` -> exit=2; `printf '/frob\n/quit\n' / ./uncle --noui` -> exit=2; same input to python3 scripts/lib/uncle_repl.py -> exit=0. |
-| MC-403 | YES | FAIL | Transcript: 'ambiguous command: /s (matches: /settings, /stop)' x3, 'usage: /quit', EXIT=2. Isolation runs: '/s\n/q' EXIT=2; '/s\n/quit' EXIT=2; '/q' EXIT=0. |
-| MC-404 | YES | PASS | Run 1 output: 'mode: unattended' x4, then 'Type a message to chat...' / 'Commands: /help /mode [attended/unattended] /issue N /stop /resume [N] /clear /triage /do /settings /quit', EXIT=0. Reference run help text identical. |
-| MC-405 | YES | PASS | xxd offsets 0x4a-0x5b: '756e 6b6e 6f77 6e20 636f 6d6d 616e 643a 202f 7265 640a' = 'unknown command: /red\n'. Full dump (0x00-0xcb) contains no 0x1b byte. |
+| MC-101 | YES | BLOCKED-SETUP | None captured. Automated skip-path coverage, if any, belongs to the driver green-check and is not claimed here. |
+| MC-102 | YES | BLOCKED-SETUP | None. |
+| MC-103 | YES | BLOCKED-SETUP | None. |
+| MC-105 | YES | NOT RUN | review-skip-test: 36 passed, 0 failed (env-[0]/[]/[false]-full-review and classify-off-full checks). The script is not in green-check.commands or green-check.md, so this was a narrow run, not a cited driver result. |
+| MC-106 | YES | NOT RUN | review-skip-test.sh lines 65-68 (sha cases) pass. Lines 114-120 only grep for marker references. No before/after listing of artifacts was captured. |
+| MC-107 | YES | NOT RUN | The green-check shows no regressions (bash scripts/run-shell-tests.sh and run-python-tests.sh, PREEXISTING). The review-skip-test.sh corrupt-json-full check covers only a corrupt change-class.json, not the corrupted ADVERSARIAL_REVIEW.json stub. No live evidence exists for this row. |
+| MC-108 | YES | BLOCKED-HUMAN | No live transcript was captured. Automated coverage is limited to the driver green-check, which reports no regressions. |
+| MC-200 | YES | NOT RUN | None. The driver green-check and scripts/tests/review-skip-test.sh may cover the skip logic with stubs, but this worker did not run or read them. They are not a substitute for the live run the row requires. |
+| MC-201 | YES | NOT RUN | review-skip-test: 36 passed, 0 failed; driver green-check reports no regressions. This is not a substitute for the live console transcript. |
+| MC-202 | YES | BLOCKED-HUMAN | No transcript. Depends on MC-201 live run, and on a person declining the gate. |
+| MC-203 | YES | NOT RUN | None. Nothing was run or inspected for this row, so there is no evidence of the behavior either way. |
+| MC-204 | YES | NOT RUN | review-skip-test: 36 passed (includes plan sha mismatch/edit cases), cited as partial only. |
+| MC-205 | YES | NOT RUN | Static wiring grep checks passed in review-skip-test.sh; no runtime exit-code observation. |
+| MC-206 | YES | PASS | review-skip-test: 36 passed, 0 failed; helper cases at review-skip-test.sh lines 55-56; path-floor list at review-skip-test.py line 149; .uncle/workflow/green-check.md. Scope limit: this is helper-level evidence, not console output from three full change-workflow.sh runs. The mapping of 'a plan owning a driver/gate script classified small' to the floor test rests on my reading of the test list at review-skip-test.py line 149; I did not run that case individually. |
+| MC-207 | YES | BLOCKED-HUMAN | No transcript. Depends on MC-201 live run and on human gate approvals. |
+| MC-300 | YES | NOT RUN | None. No runtime observation was made, and the driver green-check does not cover this live end-to-end behavior. |
+| MC-301 | YES | NOT RUN | None. The MC-300 prerequisite was not run, so there was nothing to decline. |
+| MC-302 | YES | NOT RUN | None for the live run. |
+| MC-303 | YES | NOT RUN | review-skip-test: 36 passed, 0 failed. Cases env-[0]-full-review and env-[false]-full-review pass. |
+| MC-304 | YES | NOT RUN | Cases sha-mismatch-full, sha-empty-full and skip-review-mismatch-no-stub pass in the 36/36 run. There is no stale-stub removal evidence. |
+| MC-305 | YES | NOT RUN | I did not run scripts/tests/review-skip-test.sh. The driver green-check owns automated commands, and I did not read it, so I make no claim that it covers this row. |
+| MC-306 | YES | BLOCKED-SETUP | None. The human approval gate cannot be signed or observed by this worker. Setup needed: a real classifier and a scratch-app-small project, plus a person to reach the gate. |
+| MC-401 | YES | NOT RUN | change-class.json class=risky; adversarial-review-panel/{requirements,regression,security,testability}.json; ls .uncle/workflow / grep -i skip returned nothing. scripts/tests/review-skip-test.sh covers the helper and CLI refusal logic, but I did not run it and the driver green-check is not cited here. |
+| MC-402 | YES | NOT RUN | None. scripts/tests/review-skip-test.sh has a value-matrix section for the disabling switches, but I did not execute it. |
+| MC-403 | YES | PASS | review-skip-test: 36 passed, 0 failed; checks env-[0]-full-review, env-[]-full-review and env-[false]-full-review. change-workflow.sh:3964-3979 only calls skip-review when change_class_review_skipped succeeds. |
+| MC-405 | YES | NOT RUN | change-workflow.sh:3964-3965 removes only the markers; the stagegate.sh:5480 path looks similar. The human decline interaction was not performed. |
+| MC-406 | YES | BLOCKED-HUMAN | scripts/tests/review-skip-test.sh lines 114-120 are static greps of the drivers. No live run was performed. |
+| MC-407 | YES | BLOCKED-HUMAN | scripts/tests/review-skip-test.sh line 63 (corrupt-json-full covers change-class.json, not the review stub) and lines 111 and 114-120 (static greps). No live resume was performed. |

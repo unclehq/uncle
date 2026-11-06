@@ -153,6 +153,27 @@ change_class_panel_subset() {
     printf '%s' "${kept:-$default}"
 }
 
+# change_class_review_skipped <plan.md> -- succeeds only when the stored classification says review=skip and still matches this
+# plan. A missing plan_sha, plan, or change-class.json is a mismatch (fail closed). WORKFLOW_SKIP_REVIEW=0, WORKFLOW_CLASSIFY=0
+# and a forced class all disable it. skip-review re-verifies everything again before it writes the stub.
+change_class_review_skipped() {
+    local plan="${1:-}"
+    [[ "${WORKFLOW_SKIP_REVIEW-1}" == 1&& "${WORKFLOW_CLASSIFY:-1}" != 0 && -z "${WORKFLOW_CHANGE_CLASS:-}" ]] || return 1
+    [[ -s "$plan" && -s "$STATE_DIR/change-class.json" ]] || return 1
+    python3 -B - "$STATE_DIR/change-class.json" "$plan" <<'PY' 2>/dev/null
+import hashlib, json, sys
+try:
+    stored = json.load(open(sys.argv[1], encoding='utf-8'))
+    text = open(sys.argv[2], encoding='utf-8', errors='replace').read()
+    sha = stored.get('features', {}).get('plan_sha')
+    ok = stored.get('review') == 'skip' and bool(sha) \
+        and sha == hashlib.sha256(text.encode('utf-8', 'replace')).hexdigest()
+except Exception:
+    ok = False
+sys.exit(0 if ok else 1)
+PY
+}
+
 # change_class_lenses <default list> -- the adversarial review lenses to run; WORKFLOW_ADVERSARIAL_LENSES wins.
 change_class_lenses() {
     local explicit="${WORKFLOW_ADVERSARIAL_LENSES:-}" classified

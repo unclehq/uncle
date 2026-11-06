@@ -1,174 +1,147 @@
-# Change plan: issue 172
+# Change Plan
 
-Issue 172
+Issue 174
 
-Seeded from [unclehq/uncle#172](https://github.com/unclehq/uncle/issues/172).
+Seeded from [unclehq/uncle#174](https://github.com/unclehq/uncle/issues/174).
 
-Omitted sections: Schema/persistence (only additive keys in change-class.json), Migration (none), Concurrency (none), Feature flag beyond env switch (the env switch is the containment)
+Omitted sections: Schema/persistence (none); Migration (none); Feature flag (none); Concurrency (single reader loop only, see item 11)
 
-## 1. Selected approach
+## 1. Selected technical approach
 
-The decision lives in `change_class.py build()` as new keys `review` (`skip|full`) and `review_reason`, computed from the model proposal plus the deterministic floor. Owned-file classification (doc, test, other) reuses the existing floor path rules in `change_class.py`; no new path globs are introduced. A plan with no owned files is never skipped, and any owned file that is not doc/test in a docs/test-only class forces full review. build() takes no plan and never evaluates the plan sha. The plan_sha check lives only in the `skip-review` CLI and the shell helper `change_class_review_skipped`; a missing plan_sha counts as a mismatch. The drivers only read `change_class.py get . review` and the helper, and when `skip` also pass the stored plan sha check (`current`). A new CLI command `skip-review <project> <plan>` re-verifies the stored plan_sha against the supplied plan (exit 1 on mismatch or non-skip), then writes the stub canonical JSON via the existing artifact writer. Drivers short-circuit their ADVERSARIAL_REVIEW state to the stub, then continue to the existing validate and approval states.
+- D-1: In `uncle_headless.py` spawn the driver with `stderr=subprocess.PIPE` (separate fd). `_stream` selects on both fds; when both are ready in one iteration, stdout is drained before stderr. Stdout lines follow the existing path unchanged. Stderr uses its OWN `EscapeFilter` instance and its OWN line buffer (no state shared with stdout, so escape state and partial lines cannot leak across streams). Stderr bytes are decoded incrementally as UTF-8 with errors replaced by U+FFFD, passed through that filter, and accumulated into complete lines. `redact` runs on complete lines only, after the filter, never on raw read chunks, so a secret split across read boundaries is still redacted; a partial last line is redacted before it is flushed. Each redacted complete stderr line is written verbatim to process stderr (`err`) only, flush each, never to stdout and not reformatted like stdout lines. A partial stderr line (e.g. a prompt without trailing newline) is flushed (redacted first) after the same idle timeout used for stdout partials, not only at EOF; any remainder is flushed at EOF. A stderr flush never splits a stdout partial line already pending: the pending stdout partial is flushed first. Stderr lines also feed `handle_line` for banner detection only; gate/prompt detection is driven by stdout only, so a gate trigger on stderr is ignored and gate behavior is unchanged (S-5). Any text `handle_line` itself formats keeps its current stream, and `handle_line` must never write the stderr line itself to stdout. Tests assert content per stream, never ordering across streams.
+- D-2: Each stderr line is written to `err` exactly once, as it arrives (post-redaction, via the TUI's existing redact/EscapeFilter path). Each line is capped at 8192 characters (longer lines are truncated with a trailing `…[truncated]` marker; the cap applies to the retained copy and the line written to `err`, and the raw read buffer for an unterminated line is also capped at 8192 so memory stays bounded). The last 20 redacted lines are kept only as an internal diagnostic buffer for exit-status context and are never replayed or re-emitted. On every termination path (natural exit, idle timeout, signal/exit 130 or 143, and kill) the loop first drains and flushes both fds until EOF (2 s cap), flushing any partial line (redacted), before the status line is written; `_killpg` then kills any descendant still holding either fd, so no stderr bytes are dropped (V-4). The exit path then writes only the existing status line (the same one the headless runner already emits on non-zero exit, B-2), once, to `err`. Stderr lines feed handle_line for banner detection only, never gates. CHANGE_SPEC §4 wording ('final stderr summary includes the driver's last error lines') is amended to mean the error lines already emitted on stderr plus the status line; AC-3 is satisfied because stderr contains the driver's error text exactly once plus the status line. Lines are not duplicated onto stdout; the terminal displays stderr in `--noui`.
+- D-3: In `uncle_tui.py`, extract a pure function `format_failure_line(status, last_line)`. When the driver process ends with a non-zero exit status, append one line to the build window: `Driver exited with status N: <last_line>`, or `Driver exited with status N: (no output)` if the driver printed nothing. Exit 0 appends nothing. Signal/user-stop exits 130 and 143 and every other non-zero code (including gate/cancel codes such as 3) count as failure and get the line. Driver stderr stays merged (B-6), so errors cannot be told from other output; `last_line` is defined as the last non-empty line of the merged build-window output before exit. It passes through the same redact and EscapeFilter as all other build-window output before being formatted. The insertion point is chosen after reading `drain_output`/`_absorb_line`.
+- D-5: After driver exit, idle timeout, or signal, the headless loop drains both fds until EOF (or a 2 s cap) and flushes any partial lines, redacted, before the status line is written. Any descendant still holding either fd open is killed by `_killpg` after the drain, so no stderr bytes are dropped (V-4).
+- D-4: Update `uncle` help text to state errors go to stderr.
 
-## 2-3. Alternatives and rationale
-- Skip in the driver by class only: rejected, bypasses the floor.
-- Skip the state entirely with no artifact: rejected, breaks envelopes/hashes/plan-gate and hides the skip from the human.
-Selected approach keeps one decision point (pure Python, testable) and reuses all downstream stages.
+## 2. Alternatives considered
+| Alt | Verdict |
+|---|---|
+| Regex-classify merged lines as errors and mirror to stderr | Rejected: heuristic, misses/misclassifies |
+| Tee stderr to both stdout and stderr | Rejected: duplicates in a terminal |
+| Edit every `>&2` site in drivers | Rejected: already stderr; out of scope |
+
+## 3. Why preferred
+True stream separation is exact, small, and needs no change to driver scripts.
 
 ## 4. Components to modify
 See change-impact table.
 
-## 5. Not modified
+## 5. Not to modify
+Driver shell scripts, reviewer scripts, `classify_exit` precedence, REPL, exit-code table.
 
-Final audit code, approval gate code, panel code, adversarial-context.py validators, tests protected elsewhere. These are not edited, but they do consume the stub ADVERSARIAL_REVIEW.json, so the stub is exercised through final-audit input assembly and approval hashing in review-skip-test.sh (see AC-9).
+## 6. Data-flow changes
+Driver stderr: merged-to-stdout -> own pipe -> filter/redact -> process stderr (headless). TUI unchanged.
 
-## 6-7. Data flow / state
+## 8. Interface changes
+Headless: errors on stderr instead of stdout. No flags added.
 
-classify -> change-class.json (+review) -> ADVERSARIAL_REVIEW state: if `change_class_review_skipped` then write stub (non-empty overall_assessment, zero findings) + render md + marker + ledger, else panel as before -> VALIDATE_ADVERSARIAL_REVIEW -> gate -> downstream consumers (updated-plan, final-audit input, approval hashing), all of which must accept the stub. No new states.
+## 10. Compatibility strategy
+Exit codes and stdout format unchanged; documented in help text.
 
-## 8. Interface
+## 11. Concurrency
 
-- change-class.json: `review`, `review_reason`. These stored values are advisory only; `skip-review` never trusts stored `review=skip` alone, and recomputes the decision (model proposal source, deterministic floor from raw risk_hits and owned-file paths, plan sha) against the current plan in the same invocation that writes the stub.
-- CLI: `change_class.py skip-review <family> <project> <plan>` (re-verifies stored plan_sha against the supplied plan and exits 1 on mismatch or missing sha; exits 1 if the decision is not skip; otherwise writes the stub).
-- Shell: `change_class_review_skipped <plan>` (true only when env not 0, WORKFLOW_CLASSIFY not 0, no forced class, review=skip, stored plan_sha matches the plan; a missing plan_sha is a mismatch; this is the only place besides skip-review that evaluates the sha, and build() does not). Env: `WORKFLOW_SKIP_REVIEW=0` disables.
-- Classifier answer: optional `"review":"skip"`.
+Still one thread and one select loop; second fd added. EOF requires both fds closed before final kill; the existing idle/signal handling applies to both fds.
 
-## 10. Compatibility
-Absent `review` key means full. Missing/unreadable change-class.json means full (fail closed).
+Stream interaction: gate and prompt detection (including partial-line prompt display) operate on stdout only, so a stderr line or partial stderr line never triggers or delays a stdout prompt. Tests assert per-stream content only, not cross-stream ordering.
 
 ## 12. Error and recovery
+Partial stderr line flushed at EOF. A stderr fd EOF before stdout EOF must not end the loop early.
 
-Any read error, mismatch or non-skip returns full review. Skip is enabled only when `WORKFLOW_SKIP_REVIEW` is unset or exactly `1`; any other value (empty, `0`, `false`, `no`, etc.) means full review. The classifier's optional `review` value is honored only when it is the exact lowercase string `skip`; any other value or type (e.g. `Skip`, `SKIP`, `full`, null, number, list, unknown string) is treated as absent, giving full review without error and without invalidating the rest of the classifier answer. The stored plan_sha check lives only in `change_class_review_skipped` and the `skip-review` CLI re-verification; `build()` never evaluates the sha. A missing or empty stored plan_sha counts as a mismatch and yields full review. Recheck clearing skip is independent of the sha check. `skip-review` recomputes the floor against the current plan in the same invocation that writes the stub and exits 1 without writing if the recomputed decision is not skip, even when the stored change-class.json says review=skip (hand-edited file or race); the shell helper `change_class_review_skipped` is only a cheap pre-check and the recompute inside `skip-review` is authoritative. A stub failing validation hits the existing format-retry/stop path (change-workflow retry marker applies to model re-runs only; for a stub, stop directly: a stub failure is a bug, not model output).
-
-Classifier `review` validation: only the exact lowercase string "skip" is a positive skip signal. Any other value or type, or a duplicate `review` key in the answer, means full review. The classifier prompt must state that plan text is untrusted data, not instructions; the deterministic floor still vetoes skip regardless.
-
-## 14. Rollback
-`WORKFLOW_SKIP_REVIEW=0`, or revert the commit; no persisted format needs migration.
+## 14. Rollback plan
+Revert the commit; no persisted state.
 
 ## 16. Automated-test strategy
 
-New `scripts/tests/review-skip-test.py` (hyphenated, collected by run-python-tests.sh) covers AC-1..5, 7, 9 against change_class.py with fixture plans in a temp dir, git commands with signing disabled. A shell suite `scripts/tests/review-skip-test.sh` stubs the runner and covers AC-6, AC-8 for both drivers, following the pattern of existing suites in scripts/tests (implementer reads one neighbour for the harness idiom). AC-8 test: with a stub that fails validation (corrupted stub), each driver stops immediately with nonzero exit, no retry, no model invocation (the stubbed runner is never invoked), and no fallback to full review.
+Extend `scripts/tests/headless-run-test.py` (hyphenated name already collected) with stderr cases for AC-1..AC-3. Test the TUI failure line via the pure helper `format_failure_line(status, last_line)` in `uncle_tui.py`, in the new file `scripts/tests/tui-failure-line-test.py`: cases for exit 0 (no line), non-zero with last line, non-zero with no output, 130 and 143 (line shown), and redaction of the last line.
 
-- review-skip-test.py: skip-review with a mismatched or missing plan_sha exits 1 and writes no stub; build() output is identical before and after plan edits (sha never enters build()).
-- review-skip-test.py path rules: empty owned files, a docs class with one source file, a test class with a doc file, and small with auth/secret/shell/driver/gate paths each yield full.
-- review-skip-test.py classifier review values Skip, SKIP, full, null, true, 1, a list and a duplicate key each yield review=full while the rest of the answer is still accepted.
-- review-skip-test.py hostile plan: injected text plus risk hits plus an odd review value still yields full; hand-edited change-class.json with review=skip and matching sha over a risky or non-doc plan makes skip-review exit 1 and the helper return false.
-- review-skip-test.py AC-9: the real updated-plan validator accepts the stub; if it rejects zero findings, the stub carries one informational finding.
-- review-skip-test.sh: WORKFLOW_SKIP_REVIEW unset or 1 honors skip; 0, empty, false, no, 2 give full review.
-- review-skip-test.sh: plan edited after stub written discards stub and marker and recomputes; resume with an existing stub, an existing real review and a stale marker keeps the stub only for a skip decision and never overwrites a real review.
-- review-skip-test.sh: simulated decline reruns ADVERSARIAL_REVIEW as a full stubbed-panel review with the review-skipped marker removed first.
-- review-skip-test.sh: stub fed through final-audit input assembly and approval-hash computation succeeds with non-empty overall_assessment; a corrupted stub in both drivers gives nonzero exit, no retry marker and zero runner invocations.
+## 17. Regression-test strategy
 
-## 17. Regression strategy
-Existing suites unchanged and run via the two baseline commands. Bug-fix regression tests are not applicable (feature).
+Existing headless and launcher tests must pass unchanged. Defect injection (AC-6): temporarily set stderr back to STDOUT, confirm new tests fail, restore. Additional headless tests required: (a) driver writes stderr then exits immediately, and driver killed/signalled with stderr pending (exit 130/143): all stderr bytes precede the single status line; (b) driver writes a no-newline stderr prompt then sleeps: it appears in err before the driver exits; (c) secret split across two delayed stderr writes, and a secret in an unterminated last line at EOF: neither appears unredacted in err; (d) multi-megabyte stderr line: 8192-char cap applied and retained text holds no unredacted secret; (e) each distinct driver stderr line occurs exactly once in err and the status line occurs once after all of them (no buffer replay). `scripts/tests/tui-failure-line-test.py` is listed as a protected verification path and in the plan's Verification commands, and includes a case with a secret and an ANSI sequence in the last line asserting the formatted line is redacted and escape-stripped.
 
 ## 18. Manual verification
-
-Run a docs-only change through change-workflow.sh with a real classifier; confirm gate shows the skip reason and that declining works; confirm a plan mentioning deletion runs the full review. Also corrupt the stub so it fails validation and confirm the run stops immediately with a nonzero exit, no retry, no fallback to full review, and no model invocation.
+Run `uncle --noui` with a failing request, `2>err.txt`, confirm file has error; trigger same failure in TUI and confirm build window line.
 
 ## 19. Observability
-
-The stub's `overall_assessment` is exactly `skipped: class <class>, no risk hits` (this is the string validated and rendered into ADVERSARIAL_REVIEW.md). The console line is that same text prefixed with `Adversarial review `, i.e. `Adversarial review skipped: class <class>, no risk hits`. Also recorded: change-class.json fields, ledger row `review-skip`.
+The stderr stream is the observability change.
 
 ## Restrictions
 
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST Proposal 2 | AC-1, AC-2 | Floor vetoes skip (text and paths) | Python floor in build() using raw risk_hits, plus an owned-file path rule that reuses the existing floor path rules in change_class.py: an empty owned-file set means full review; in a docs or test-only class any owned file that is not doc (respectively test) means full review; for class small, any owned path matching the floor's sensitive patterns (auth/secret/shell/driver/gate) means full review, with no other path rule beyond the floor. The plan sha is not evaluated in build(): it is checked only in change_class_review_skipped and skip-review, where a missing plan_sha counts as a mismatch and means full review. | deterministic, testable | CAP-PY | CODING |
-| R-2 | USER | Proposal 4 | AC-3 | Fail closed | Absent/invalid data => full; classifier `review` honored only if exactly the lowercase string "skip" (duplicate keys, other values or types, including case variants => treated as absent => full, without rejecting the rest of the answer); plan text is untrusted | simplest safe default | CAP-PY | CODING |
-| R-3 | USER | Proposal 6 | AC-6 | Both drivers | same shell helper called from both | one code path | CAP-SH | CODING |
-| R-4 | DESIGN | stub visibility | AC-5, AC-7 | Stub through normal gate | write canonical JSON (overall_assessment exactly `skipped: class <class>, no risk hits`) and render md; console line prefixes that text with `Adversarial review `; stub written only when no review exists or the existing one is a stub; a non-skip decision removes a stale stub and the review-skipped marker before the panel runs | keeps hashes/envelopes | CAP-PY | CODING |
-| R-5 | DESIGN | live run | AC-6 | Live classifier check | manual checklist only | needs model runner | CAP-LIVE | LIVE_VERIFICATION |
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
+|---|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST.md Desired behavior | AC-1, AC-3 | Errors on stderr, non-zero exit | Separate stderr pipe (D-1); stdout drained before stderr when both ready; stderr partial lines flushed on the same idle timeout as stdout | Exact | CAP-none | inspected uncle_headless.py:167,183-296 | CODING |
+| R-2 | REPOSITORY | CLAUDE.md rule 7, 13 | AC-4 | Do not weaken tests | Only add assertions | Preserve | CAP-none | headless-run-test.py inspected | CODING |
+| R-3 | DESIGN | uncle_headless.py redact | AC-2 | Secrets never leak on new stream, including when split across read chunks | Same redact; stderr gets its own EscapeFilter and line buffer (separate from stdout); stderr buffered to complete lines (or EOF/idle-timeout flush of a partial last line, never splitting a pending stdout partial line) before redact, never redacting raw chunks; invalid UTF-8 replaced with U+FFFD (D-1) | Consistency | CAP-none | redact at line 98 | CODING |
 
-Feasibility evidence: change_class.py:332 build and :482 main inspected; adversarial-context.py:119 accepts empty findings; both driver states located (change-workflow.sh:3963, stagegate.sh:5472). Runner binding: bash scripts/run-python-tests.sh and scripts/run-shell-tests.sh.
-
-## Decisions
-
-- D-1: Use raw (pre-waiver) risk_hits for the skip floor; waivers cannot enable skip. The floor also fails closed on paths: skip requires declared owned files; a plan with none is never skipped; any owned path outside doc/test globs forces full review for docs/test-only classes; for class small, owned paths touching auth/secret/shell/driver/gate code force full review.
-- D-2: Skip honored only for source `model`, and only when the answer's `review` value is exactly the lowercase JSON string "skip". Any other value or type (Skip, full, null, number, list, object), or a duplicate `review` key, is treated as absent (full review) without invalidating the rest of the answer. Plan text embedded in the classifier prompt is untrusted data and cannot itself grant a skip.
-- D-3: stagegate records the decision in change-class.json and a marker file `.uncle/workflow/review-skipped`; change-workflow also calls record_cost. The marker is deleted whenever a full review runs (including after a decline or a non-skip recomputation). If the human declines the skipped review at the gate, ADVERSARIAL_REVIEW reruns as a forced full review and the `review-skipped` marker (and the stub) is removed before the panel starts.
-- D-5: Declining a skipped review never stops the run and never re-skips: the rerun is a full panel review regardless of the stored review decision, with the marker removed first.
-- D-4: A recheck (plan outgrew class) clears skip, independently of the plan_sha check. On every entry to ADVERSARIAL_REVIEW (first run, rerun, resume, or re-entry after the human declines the stub at the gate) the skip decision is recomputed against the current plan sha. The plan_sha check is done only in `change_class_review_skipped`/`skip-review`, never in build(), and a missing plan_sha is a mismatch (full review). The stub is written only when no ADVERSARIAL_REVIEW.json exists or the existing one is a prior skip stub; a real (panel-produced) review is never overwritten by a stub. If the existing review is a stub and the decision is not skip (sha differs, plan_sha missing, or recheck cleared skip), or the human declines the skipped review, the stale stub, its rendered md and the `.uncle/workflow/review-skipped` marker are removed and the full panel runs; if the result is still skip for a changed sha, a new stub is written.
+No live authentication required; no external prerequisites.
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/lib/change_class.py` | add review decision, skip-review CLI, recheck clears skip | core decision | Medium: build() consumed everywhere | review-skip-test.py |
-| `scripts/lib/change-class-stage.sh` | add `change_class_review_skipped`, env switch | shared driver helper | Low | review-skip-test.sh |
-| `prompts/classify-change.md` | document optional review field | classifier needs to know | Low | none (text) |
-| `scripts/change-workflow.sh` | short-circuit ADVERSARIAL_REVIEW to stub + ledger | driver 1 | Medium | review-skip-test.sh |
-| `scripts/stagegate.sh` | short-circuit ADVERSARIAL_REVIEW to stub + marker | driver 2 | Medium | review-skip-test.sh |
-| `scripts/tests/review-skip-test.py` | new; covers AC-1..5, 9 and the change-class.json half of AC-7 (review, review_reason fields) | tests | none | self |
-| `scripts/tests/review-skip-test.sh` | new; covers AC-6, AC-8 and the marker and ledger half of AC-7 for both drivers (ledger assertion dropped if the ledger row is cut) | tests | none | self |
+| `scripts/lib/uncle_headless.py` | Separate stderr pipe, dual-fd select, filter/redact, stderr passthrough | AC-1..3 | Medium: select/EOF/prompt handling | headless-run-test.py |
+| `uncle_tui.py` | Pure helper `format_failure_line(status, last_line)` plus failure line `Driver exited with status N: <last non-empty output line \| (no output)>` on every non-zero exit (incl. 130/143), none on exit 0; last-line text passes through existing EscapeFilter and redact | AC-5 | Low | tui-failure-line-test.py + manual |
+| `uncle` | Help text sentence | Docs | Low | launcher-noui-test.sh |
+| `scripts/tests/headless-run-test.py` | Add stderr tests | AC-1..3,6 | None | self |
+| `scripts/tests/tui-failure-line-test.py` | New test of `format_failure_line` and exit-status handling (exit 0, non-zero, no output, 130/143, redaction) | AC-5 incl. filter/redact of quoted text | None | self |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1,AC-2 (owned files classified by the existing change_class.py floor path rules; zero owned files, or any non-doc/non-test file in a docs/test-only class, is never skipped; small has no path rule beyond the floor and a sensitive driver/gate path vetoes it; floor/risk rejection in build(); stale or missing plan sha rejected by skip-review and change_class_review_skipped, not build()); re-entry after an edited plan discards the stub and recomputes the decision | SB-1, SB-2, SB-7, SB-9 | SI-1, SI-5 | change_class.py | review-skip-test.py (stale or missing plan_sha asserted against skip-review/helper, not build()), review-skip-test.sh (plan sha changes after stub: stub discarded, decision rerun) | docs vs deletion plan, empty/mixed owned-file plan runs full review, small plan owning a driver/gate path runs full review, edited plan after classify (stale sha) runs full review; edit plan after stub written, rerun, confirm stub discarded and decision recomputed |
-| AC-3,AC-4 (incl. malformed/duplicate/non-string classifier review value => full) | SB-3, SB-4 | SI-4 | change_class.py, stage.sh | review-skip-test.py/.sh | WORKFLOW_SKIP_REVIEW=0 run, and an empty/false value run, both get a full review, classifier review values Skip/null/non-string yield full review |
-| AC-5,AC-8,AC-9 | SB-1, SB-8 | SI-2 | change_class.py | review-skip-test.py, review-skip-test.sh (AC-8: failing/corrupted stub stops immediately, no retry, no full-review fallback, no model invocation, nonzero exit, both drivers), review-skip-test.sh (AC-5/AC-9: stub run through updated-plan input, final-audit input assembly and approval hashing; asserts overall_assessment is non-empty) | gate view, stub accepted by updated-plan stage (zero findings, or one informational finding if zero is rejected) |
-| AC-6,AC-7 (AC-7 is satisfied by change-class.json fields plus the review-skipped marker; the ledger row is optional and is the first cut. AC-7 split: change-class.json fields tested in review-skip-test.py; marker (and ledger row if kept) tested in review-skip-test.sh) | SB-1, SB-5, SB-6 | SI-2, SI-3 | both drivers | review-skip-test.sh (AC-7 marker, optional ledger row), review-skip-test.py (AC-7 json fields) | decline at gate reruns as full review and removes the review-skipped marker, re-entry after plan change recomputes skip |
-| AC-10: existing suites keep passing unchanged. Default classifier stubs and fixtures in existing suites never emit `review: skip`, so they always take the full-review path. Any existing suite that breaks anyway is changed only with renewed approval. | SB-3 | SI-3 | prompt, suites | both runners (bash scripts/run-python-tests.sh, scripts/run-shell-tests.sh) | none |
+| AC-1 | S-1 | V-4 | uncle_headless.py | headless-run-test stderr case, headless-run-test banner-like stderr text is in err, absent from stdout; handle_line-formatted gate text stays on its existing stream, headless-run-test gate prompt on stdout with concurrent stderr noise: gate handling unchanged, gate-like stderr line does not trigger gate handling, per-stream assertions only | `2>file` run |
+| AC-2: stderr output is escape-filtered by a dedicated EscapeFilter and redacted per complete line (partial last line redacted before EOF flush); a secret split across read chunks is still redacted; over-long lines are capped at 8192 chars and the retained buffer holds redacted text; invalid UTF-8 decodes to U+FFFD; late stderr is drained before the status line; a stderr partial line without newline is flushed after the stdout idle timeout without splitting a pending stdout partial line. | S-1 | V-2, V-4 | uncle_headless.py | headless-run-test redact/partial, headless-run-test late stderr drained before status line (exit, timeout, signal), headless-run-test secret split across stderr chunks is redacted, headless-run-test invalid UTF-8 on stderr becomes U+FFFD, headless-run-test stderr prompt without newline flushed after idle timeout and does not split a pending stdout partial, headless-run-test partial last stderr line without newline is redacted at EOF, headless-run-test over-long stderr line is capped at 8192 chars and retained buffer holds redacted text, headless-run-test stderr escape state does not leak to stdout | n/a |
+| AC-3 | S-2 | V-1 | uncle_headless.py | headless-run-test exit case: stderr contains the driver error text exactly once plus the status line; stdout contains neither | failing run |
+| AC-4: existing behavior unchanged; gate and prompt detection use stdout only and are unaffected by stderr lines. | S-4, S-5 | V-1, V-3 | all | existing suites | n/a |
+| AC-5: On any non-zero driver exit (including 130/143) the TUI build window gains `Driver exited with status N: <last non-empty output line \| (no output)>`, where the last line is the last non-empty merged build-window line, redacted and escape-filtered; exit 0 adds nothing. | S-3, S-6 | - | uncle_tui.py | tui-failure-line-test: format_failure_line cases (status, last non-empty line, no output, exit 0, 130/143); secret and escape sequence in the last line are redacted/filtered in the failure line | TUI failing run |
+| AC-6 | S-1 | - | tests | defect injection | n/a |
+
+Regression test (fails before, passes after): the new headless stderr case asserting driver stderr text is in `err`.
 
 ## Implementation sequence
 
-1. Decision core: add `review`/`review_reason` to build() with owned-file classification reusing the existing floor path rules (a plan with no owned files is never skipped), `skip-review` stub writer, `get` support, recheck clearing; update prompt.
-   Owns: `scripts/lib/change_class.py`, `prompts/classify-change.md`
-2. Shell helper: `change_class_review_skipped` and env switch. Builds on step 1's CLI.
-   Owns: `scripts/lib/change-class-stage.sh`
+1. S1 Headless stderr split + help text (D-1,D-2,D-4; R-1,R-3; AC-1..3). Stdout is drained before stderr each iteration, with identical handle_line semantics for both fds. Stderr uses its own EscapeFilter and line buffer; redact runs only on complete lines, on a partial line flushed after the same idle timeout as stdout, or on the partial last line at EOF. Includes the 8192-char line cap and 20-line post-redaction retention buffer.
+   Owns: `scripts/lib/uncle_headless.py`, `uncle`
+2. S2 Headless tests incl. defect injection (AC-1..3,6)
+   Owns: `scripts/tests/headless-run-test.py`
    Depends on: 1
-3. change-workflow wiring: ADVERSARIAL_REVIEW short-circuit, ledger row.
-   Owns: `scripts/change-workflow.sh`
-   Depends on: 2
-4. stagegate wiring: ADVERSARIAL_REVIEW short-circuit, marker. Independent file from step 3.
-   Owns: `scripts/stagegate.sh`
-   Depends on: 2
-5. Python tests in review-skip-test.py (sole owner): AC-1..5, the change-class.json half of AC-7, AC-9 updated-plan validator check, plus the sha, path-rule, classifier-value, hostile-plan and hand-edited-json cases listed under the automated-test strategy. Can be written alongside step 1 from the spec.
-   Owns: `scripts/tests/review-skip-test.py`
-   Depends on: 1
-6. Shell tests in review-skip-test.sh (sole owner): AC-6, AC-8 for both drivers, the marker and ledger half of AC-7, WORKFLOW_SKIP_REVIEW value matrix, resume/stale-stub/decline cases, and the stub run through final-audit input assembly and approval hashing asserting non-empty overall_assessment.
-   Owns: `scripts/tests/review-skip-test.sh`
-   Depends on: 3, 4
-7. Grep existing classifier stubs and fixtures for `review`/skip to confirm none emit skip; run both baseline commands and confirm by hash comparison of protected test paths that no existing test file changed. This plan owns no existing test file: any conflict stops the run and needs renewed approval before editing. Record deviations.
-   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
-   Depends on: 5, 6
+3. S3 TUI failure line and its test (D-3; AC-5): add pure `format_failure_line(status, last_line)` to `uncle_tui.py` and wire it at the driver-exit site (read `drain_output`/`_absorb_line` first to choose the insertion point). The failure text is the last non-empty merged output line, passed through the TUI's existing EscapeFilter and redact path (the helper applies them to the quoted line). Test it in `scripts/tests/tui-failure-line-test.py`.
+   
+   Steps 1 and 3 share no file and may run in parallel.
+   Owns: `uncle_tui.py`, `scripts/tests/tui-failure-line-test.py`
 
 ## 21. Scope cuts under time pressure
+Cut first: S3 (TUI failure line; stderr already merged into build window), then help text. Never cut S1/S2.
 
-Cut first: ledger row in change-workflow (not required to satisfy AC-7; the required records are the change-class.json fields and the `review-skipped` marker), then the shell test for stagegate (keep Python tests), then the prompt wording refinement. Never cut the floor, fail-closed behavior, or visible stub.
+## 22. Risks and unresolved questions
 
-## 22. Risks
-
-- Misjudged small app skips review; mitigated by floor + human plan gate.
-- Downstream consumers of a stub with zero findings (updated-plan, final-audit input, approval hashing): verified by AC-9 tests that run each on the stub. The stub's overall_assessment is always non-empty. If the updated-plan path rejects zero findings, the stub carries one informational finding (non-empty overall_assessment retained) and the updated-plan stage itself is not modified. If any other consumer fails, fix in scope by making the stub acceptable to it, otherwise stop and ask.
-- Existing tests that assert the review always runs may conflict; implementer checks them first and reports any needing a change as requiring renewed authority.
+| Risk | Mitigation |
+|---|---|
+| Dual-fd select ends early or hangs on one fd EOF | Loop ends only when both closed; test with stderr-only and stdout-only drivers |
+| Interleaving order changes | Documented non-goal |
+| Existing tests assume errors on stdout | Check during S2; any needed change is recorded in IMPLEMENTATION_NOTES.md, not silent |
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | Stub text and console line were ambiguous; one exact validated/rendered string removes the conflict. | Section 19 and R-4 now fix stub overall_assessment as `skipped: class <class>, no risk hits` and console line as that text prefixed with `Adversarial review `. |
-| AR-002 | Accepted | build() has no plan to compare, so the sha check belongs with the plan-aware entry points; skip-review must re-verify it itself. | Sections 1 and 8 and R-1 and the AC-1/AC-2 traceability row now put the sha check in skip-review and the shell helper only; build() does not evaluate it. |
-| AR-003 | Accepted | The doc/test path rule left empty, mixed and small-class owned-file sets undefined; fail-closed is the safe rule. | R-1 mechanism and traceability row s17.1.r1 now state: empty owned set, or any non-doc/non-test file in docs/test-only class, means full; small has no path rule beyond the floor. |
-| AR-004 | Accepted | The plan never said what happens when the plan sha changes after the stub exists; discarding the stub and recomputing is the fail-closed choice. | Rewrote D-4 in Decisions and extended traceability row s17.1.r1 with the re-entry behavior. |
-| AR-005 | Accepted | Decline outcome on a skipped review was undefined; rerunning as a forced full review with the marker removed is the safe, human-respecting choice. | Edit D-3 to state decline reruns ADVERSARIAL_REVIEW as full review and removes the marker; add D-5; update traceability row s17.1.r4. |
-| AR-006 | Accepted | AC-7 and the first scope cut conflict; the json fields and marker are the essential records, the ledger row is optional. | Edit s19.1 so the ledger row stays the first cut and is not needed for AC-7, and edit s17.1.r4 so AC-7 is satisfied by json plus marker. |
-| AR-007 | Accepted | The plan defined no behavior for declining a skipped review or re-entering ADVERSARIAL_REVIEW; recomputing on every entry and clearing the marker on full review closes that gap. | Edit D-3 and D-4 in Decisions to state per-entry recomputation, decline-as-full-review and marker deletion; update traceability row s17.1.r4. |
-| AR-008 | Accepted | The plan already places the sha check in the shell helper, but AC-2/SB-9 attribute it to build(); stating one home removes the conflict. | Edit s1.1, s6.1.i2, s6.1.i3, R-1 and s17.1.r1: sha is checked only in change_class_review_skipped and skip-review; build() does not evaluate it. |
-| AR-009 | Accepted | Other consumers of ADVERSARIAL_REVIEW.json (final audit input, approval hashing) may assume non-empty findings; only updated-plan was covered. | Section 5 no longer claims final audit/approval are untouched-and-safe; traceability AC-5/AC-9 row and risk item now require tests of final-audit input and approval hashing on the stub, with a non-empty overall_assessment. |
-| AR-010 | Accepted | Existing suites could use docs/small classifier stubs that would now emit skip, so the plan must pin default stubs to never emit review: skip. | Edited AC-10 traceability row: default test classifier stubs never emit review:skip; broken existing suites change only with renewed approval. |
-| AR-011 | Accepted | Optional classifier review field validation was unspecified; honoring only exact lowercase skip is fail-closed and consistent with R-2. | Edit s8.1 and R-2 mechanism and traceability row s17.1.r2 to state only exact string skip is honored; other values mean full without invalidating the answer. |
-| AR-012 | Accepted | The plan's s8 contradicts itself on stub failure; one rule (immediate stop, no retry, no fallback to full review) matches AC-8. | Add a failing-stub test to the s10 test strategy, and a stop-without-retry assertion to the s17.1.r3 test and behavior rows. |
-| AR-013 | Accepted | The floor sees only plan text, so owned-file paths must also gate skip; failing closed on empty or sensitive paths closes the gap. | Edit R-1, D-1 (s15.1.i1) and traceability s17.1.r1 to require declared owned files, doc/test-only globs, and sensitive-path veto for small. |
-| AR-014 | Accepted | The model's review value is the sole positive skip signal, so it must be strictly validated and plan text treated as untrusted. | Edited s8 interface (classifier answer item), D-2, R-2 and traceability row s17.1.r2 to require exact lowercase "skip" only, else full, with plan text untrusted. |
-| AR-015 | Accepted | Trusting stored review=skip plus a matching sha lets a hand-edited change-class.json or a race bypass the floor; recomputing in the writing invocation closes that. | s6.1.i1 and s8.1 now require skip-review to recompute the floor against the current plan and never trust stored review=skip alone. |
-| AR-016 | Accepted | Treating only `0` as disabling skip fails open for empty, false or no values, contradicting the fail-closed invariant. | Section 12 (s8.1) and traceability row s17.1.r2 now state skip is enabled only when WORKFLOW_SKIP_REVIEW is unset or exactly 1; any other value means full review. |
-| AR-017 | Accepted | Rerun/resume handling of an existing ADVERSARIAL_REVIEW.json and the review-skipped marker was unspecified; stale files could mislead. | Edit D-4 to define stub-write and stale-removal rules, and add them to restriction R-4. |
-| AR-018 | Accepted | The open-ended risk wording conflicts with the zero-findings expectation; a deterministic fallback removes the ambiguity without touching the plan stage. | Risk s20.1.i2 and trace row s17.1.r3 now say the stub carries one informational finding if zero findings are rejected; the plan stage is unmodified. |
-| AR-019 | Accepted | The plan never defined how owned files are classified or how an empty owned-file set is treated; reusing existing floor path rules and failing closed on empty is safe. | Edit s1.1, R-1, s17.1.r1 and step-1 to state that classification reuses change_class.py floor path rules and a plan with no owned files is never skipped. |
-| AR-020 | Accepted | The marker and ledger row are written by the shell drivers, so AC-7 cannot be proven wholly by the Python suite, and the ledger row is a scope cut. | Split AC-7 coverage in the Automated-test strategy (s10 is another writer's; here s16.1 rows r1, r6, r7 and s17.1.r4) so json is tested in .py and marker/ledger in .sh; ledger optional. |
-| AR-021 | Accepted | Corrupted-stub handling was stated two ways; a stub failure is a bug, not model output, so retry is meaningless. | Edit s12.1 to state stub validation failure stops immediately, no retry, nonzero exit, no model call; align s10.1 and s17.1.r3 tests. |
-| AR-022 | Accepted | The sha check has one home to avoid a split between build(), the helper and recheck; missing sha must fail closed. | Edit s8.1, s15.1.i4, R-1 and s17.1.r1 to place the sha check only in change_class_review_skipped and skip-review, treat a missing plan_sha as a mismatch, and keep recheck clearing skip independently. |
-| AR-023 | Accepted | Unspecified handling of other classifier review values is a real gap; failing closed is consistent with the plan's fail-closed rule. | Edit s8 interface list item for the classifier answer to state that only exact lowercase string skip is honored and anything else is full without error. |
+| AR-001 | Accepted | Plan left the destination of non-error stderr lines and handle_line output undefined; fixing the rule removes ambiguity. | D-1 (s1.1.i1) states every driver stderr line goes verbatim to process stderr only and handle_line output keeps its current stream. |
+| AR-002 | Accepted | D-2 left the status line's identity and stream and any buffer replay unspecified, risking duplicate or missing text. | D-2 (s1.1.i2) defines the status line, writes it once to stderr after flush, and forbids replaying the 20-line buffer. |
+| AR-003 | Accepted | The TUI failure line wording and exit-code scope were undefined and AC-5 is untestable without them. | D-3 (s1.1.i3) defines exact wording, no-output case, and 130/143 handling; AC-5 and step-3 aligned. |
+| AR-004 | Accepted | V-4 requires no dropped stderr bytes on exit, timeout, or signal paths, which the plan did not cover. | Added a drain-before-status-line decision block in section 1 and updated the risk table. |
+| AR-005 | Accepted | Real gap: stderr partial lines (e.g. prompts) flushed only at EOF would be held back and could split a pending stdout partial line. | D-1 (s1.1.i1) now flushes stderr partials after the stdout idle timeout without splitting a pending stdout partial line; AC-2 tests updated. |
+| AR-006 | Accepted | Real ambiguity about filter instances, chunk-split redaction and invalid UTF-8 on stderr. | D-1 (s1.1.i1) specifies own EscapeFilter and line buffer, redaction on complete lines only, U+FFFD decoding; R-3 and AC-2 updated to match. |
+| AR-007 | Accepted | Real gap: stderr partial lines flushed only at EOF would hold back a prompt lacking a trailing newline, contradicting spec section 8. | Edit D-1 (s1.1.i1) so a stderr partial line is flushed after the same idle timeout as stdout, and at EOF. |
+| AR-008 | Accepted | Two ready fds make handle_line order undefined; a deterministic rule is cheap and makes tests stable. | Edit D-1 (s1.1.i1): drain stdout before stderr each iteration; identical handle_line semantics for both fds; update R-1 mechanism. |
+| AR-009 | Accepted | D-2 already emits nothing extra; the spec §4 'last error lines in summary' wording conflicts and must be amended to match. | D-2 (s1.1.i2) states buffered lines are never re-emitted and CHANGE_SPEC §4 wording is amended accordingly. |
+| AR-010 | Accepted | V-4 must hold on kill, idle-timeout and signal paths, not only natural EOF. | D-2 (s1.1.i2) requires draining and flushing both fds before the status line on exit, timeout, signal (130/143) and kill. |
+| AR-011 | Accepted | Under merged TUI output errors cannot be told apart, so the failure line must use the last non-empty merged output line. | D-3 (s1.1.i3) defines the failure text as the last non-empty merged build-window line, redacted and escape-filtered; step-3 updated. |
+| AR-012 | Accepted | Redacting raw chunks can miss secrets split across reads; redaction must run on complete lines, including the partial last line at EOF. | D-1 (s1.1.i1) buffers stderr to complete lines or EOF before redact; AC-2, R-3 and step-1 updated to match. |
+| AR-013 | Accepted | Unbounded stderr lines and an unspecified redaction stage for the retained buffer are real gaps. | D-2 now caps line length at 8192 chars, keeps 20 redacted lines, and AC-2 tests gain a long-line case. |
+| AR-014 | Accepted | The TUI failure line quotes output text, so it must be filtered and redacted like other build-window output. | D-3 routes the failure line text through the TUI's existing redact and EscapeFilter path; AC-5 test, impact row and step 3 updated. |
+| AR-015 | Accepted | D-2 and the spec disagreed on the summary, and gate trust on stderr lines was unspecified; both are now stated. | Rewrote D-1/D-2: no replay, status line only; stderr lines feed handle_line for banner detection only, never gates. |
+| AR-016 | Accepted | Plan must fix that each stderr line is emitted once so tests agree on the count. | D-2 states each stderr line is written once as it arrives and the 20-line buffer is never replayed; AC-3 updated to assert exactly-once. |
+| AR-017 | Accepted | D-3 left the failure-line text, empty-output case, and exit-code scope undefined, so AC-5 was untestable. | Rewrite D-3 (s1.1.i3) with exact wording, last non-empty line source, no-output form, non-zero-only incl. 130/143; update AC-5; drop resolved risk row r4. |
+| AR-018 | Accepted | The helper and test file location were left conditional while the impact table and step 3 treated them as definite. | Make `format_failure_line(status, last_line)` a definite pure helper tested in tui-failure-line-test.py; update s12.1, s17.1.r2/r5, step-3, AC-5. |
+| AR-019 | Accepted | Real gap: stderr feeding handle_line risks gate misfire and nondeterministic interleaving tests. | D-1 and s9.1 say gate/prompt detection is stdout-only, stderr feeds banner detection only, and tests assert per-stream content, never cross-stream order. |
+| AR-020 | Accepted | Redaction on raw chunks could miss split secrets; shared filter state could leak between streams. | D-1 now requires a dedicated EscapeFilter and line buffer for stderr, redaction on complete lines only, and redaction of the partial last line before EOF flush; AC-2 updated. |

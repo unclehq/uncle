@@ -47,7 +47,7 @@ class ProjectGitTests(unittest.TestCase):
             (workflow/'state').write_text(state+'\n')
             (project/document).write_text('# Project\nFixture brief.\n')
             result=subprocess.run(['bash',str(ROOT/'scripts'/driver)],cwd=project,
-                env=dict(self.env,UNCLE_PROJECT_ROOT=str(project),WORKFLOW_CLOSE_ISSUE='0'),
+                env=dict(self.env,UNCLE_PROJECT_ROOT=str(project),WORKFLOW_CLOSE_ISSUE='0',UNCLE_ATTENDED='1',UNCLE_ATTENDED_STDIN='1'),
                 capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertTrue((project/'.git').is_dir())

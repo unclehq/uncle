@@ -10,6 +10,7 @@ ALLOWED = {
     'scripts/tests/no-housekeeping-test.py',
     'scripts/tests/launcher-removed-flag-test.sh',
     'scripts/tests/tui-home-agent-test.py',
+    'scripts/tests/critical-suites.txt',   # lists the suite named after this one
 }
 SKIP_FILES = {'FINAL_AUDIT.md'}
 SKIP_DIRS = {'.git', '.uncle', 'node_modules', '__pycache__', '.pytest_cache', '.venv'}

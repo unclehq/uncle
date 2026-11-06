@@ -2,6 +2,7 @@
 supervisor, whose brief starts the build; anything short of that falls back to
 starting from the description as written, so an unattended launch never stalls."""
 import json
+import os
 import queue
 import sys
 import tempfile
@@ -11,6 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / 'scripts/lib')]
+os.environ.setdefault('UNCLE_HOME_AGENT', '0')  # these tests exercise the supervisor chat, not the home agent
 import uncle_tui as tui  # noqa: E402
 from chat import Conversation  # noqa: E402
 from generated_input import generated_input_path  # noqa: E402

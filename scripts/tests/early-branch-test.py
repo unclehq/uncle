@@ -83,7 +83,8 @@ class EarlyBranchFixture(unittest.TestCase):
                                 GIT_CONFIG_GLOBAL=str(self.root / 'gitconfig'),
                                 GIT_CALLS=str(self.root / 'git.log'), SIGNER_CALLS=str(self.root / 'signer.log'),
                                 GH_CALLS=str(self.root / 'gh.log'), MARKER=str(self.marker),
-                                UNCLE_LIB_DIR=str(ROOT / 'scripts/lib'))
+                                UNCLE_LIB_DIR=str(ROOT / 'scripts/lib'),
+                                UNCLE_ATTENDED='1', UNCLE_ATTENDED_STDIN='1')
         subprocess.run([REAL_GIT, 'init', '--bare', '-q', str(self.bare)], check=True, env=self.env)
         self.git('init', '-q', '-b', 'main')
         self.git('config', 'user.name', 'Fixture')

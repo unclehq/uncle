@@ -43,7 +43,7 @@ run_uncle() {
     local in="$1"; shift
     rm -rf "$TMP/tmpdir" "$TMP/tui-env" "$TMP/tui-file-content"; mkdir -p "$TMP/tmpdir"
     (cd "$TMP/work" && TMPDIR="$TMP/tmpdir" UNCLE_SKIP_UPGRADE=1 PATH="$TMP/bin:$PATH" NO_COLOR=1 \
-        bash "$ROOT/uncle" "$@" < "$in" > "$TMP/out" 2> "$TMP/err"); RC=$?
+        bash "$ROOT/uncle" --noinput "$@" < "$in" > "$TMP/out" 2> "$TMP/err"); RC=$?
 }
 residue() { test -z "$(find "$TMP/tmpdir" -mindepth 1 2>/dev/null)"; }
 envval() { grep "^$1=" "$TMP/tui-env" | head -1 | cut -d= -f2-; }
@@ -108,7 +108,7 @@ for pair in application:create_app; do
     # both set (caller-exported env, stdin case): the file wins, text stays as exported
     rm -rf "$TMP/tmpdir" "$TMP/tui-env"; mkdir -p "$TMP/tmpdir"
     (cd "$TMP/work" && UNCLE_STARTUP_TEXT=ignored TMPDIR="$TMP/tmpdir" UNCLE_SKIP_UPGRADE=1 PATH="$TMP/bin:$PATH" \
-        bash "$ROOT/uncle" "--$OPT" < "$TMP/in-line" > "$TMP/out" 2> "$TMP/err"); RC=$?
+        bash "$ROOT/uncle" --noinput "--$OPT" < "$TMP/in-line" > "$TMP/out" 2> "$TMP/err"); RC=$?
     check "$OPT both set: file present for TUI to prefer" test "$(envval file_exists)" = 1
     check "$OPT both set: launcher still hands over the file" content_is 'build a calculator'
 

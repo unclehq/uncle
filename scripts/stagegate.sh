@@ -135,7 +135,7 @@ fi
 python3 "$ROOT/scripts/lib/workflow_family.py" app
 # Record the resolved mode in the owning run directory, only now that resolution succeeded.
 if declare -F uncle_write_mode_file >/dev/null; then
-    uncle_write_mode_file "$ROOT/.uncle/workflow" "$UNATTENDED" || exit 1
+    uncle_write_mode_file "$ROOT/.uncle/workflow" "$UNCLE_MODE" || exit 1
 fi
 # From here the driver is the process that will run the whole workflow (the lock wrapper above re-executed it), so this is where its
 # Python host starts: helper calls are served by a warm interpreter instead of starting one each (docs/driver-cutover-plan.md).

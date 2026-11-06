@@ -123,6 +123,130 @@ def ensure(project_root):
     return True
 
 
+BLOCK_START = '# >>> uncle managed >>>'
+BLOCK_END = '# <<< uncle managed <<<'
+
+
+def _git_path(root, *args):
+    import subprocess
+    try:
+        out = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0 or not out.stdout.strip():
+        return None
+    path = out.stdout.strip().splitlines()[0]
+    return path if os.path.isabs(path) else os.path.join(root, path)
+
+
+def _exclude_path(root):
+    """The shared info/exclude path when it is safe to write, else None."""
+    path = _git_path(root, 'rev-parse', '--git-path', 'info/exclude')
+    common = _git_path(root, 'rev-parse', '--git-common-dir')
+    if not path or not common:
+        return None
+    info = os.path.dirname(path)
+    if os.path.islink(path) or os.path.islink(info):
+        return None
+    real_common = os.path.realpath(common)
+    if os.path.commonpath([real_common, os.path.realpath(info)]) != real_common:
+        return None
+    return path
+
+
+def _exclude_text(existing):
+    """`existing` with exactly one canonical block: placed where a marked block was, else appended."""
+    lines = existing.splitlines()
+    out, placed, skipping = [], False, False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == BLOCK_START:
+            skipping = True
+            if not placed:
+                out.append(None)
+                placed = True
+            continue
+        if skipping:
+            if stripped == BLOCK_END:
+                skipping = False
+            elif stripped not in MANAGED:
+                # An unterminated block: lines that are not ours end it.
+                skipping = False
+                out.append(line)
+            continue
+        if stripped == BLOCK_END or stripped in MANAGED:
+            continue
+        out.append(line)
+    block = [BLOCK_START, *CANONICAL, BLOCK_END]
+    if None in out:
+        merged = []
+        for line in out:
+            merged.extend(block if line is None else [line])
+        out = merged
+    else:
+        out.extend(block)
+    return '\n'.join(out) + '\n'
+
+
+def ensure_exclude(project_root):
+    """Write the canonical block into the shared info/exclude, never a tracked file.
+
+    True only when the file was written; False when already canonical, not a git repository, the path is a symlink or outside the
+    git common dir, or on any OSError."""
+    try:
+        path = _exclude_path(project_root)
+        if path is None:
+            return False
+        try:
+            with open(path, encoding='utf-8') as fh:
+                existing = fh.read()
+        except FileNotFoundError:
+            existing = ''
+        new = _exclude_text(existing)
+        if new == existing:
+            return False
+        import tempfile
+        directory = os.path.dirname(path)
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix='.exclude-')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write(new)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _exclude_text_current(project_root):
+    """True when info/exclude already holds the canonical block (so a False from ensure_exclude is benign)."""
+    path = _exclude_path(project_root)
+    if path is None:
+        return False
+    try:
+        with open(path, encoding='utf-8') as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    return _exclude_text(text) == text
+
+
+def tracked_needs_normalization(project_root):
+    """True when the tracked .gitignore holds Uncle entries that differ from the canonical block."""
+    try:
+        with open(os.path.join(project_root, '.gitignore'), encoding='utf-8') as fh:
+            managed = [l.strip() for l in fh.read().splitlines() if l.strip() in MANAGED]
+    except OSError:
+        return False
+    return bool(managed) and managed != CANONICAL
+
+
 if __name__ == '__main__':
     # Best effort: a project that cannot be normalized still runs.
     ensure(sys.argv[1] if len(sys.argv) > 1 else '.')

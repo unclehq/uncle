@@ -1,0 +1,109 @@
+# The critical tier: the suites `run-python-tests.sh`, `run-shell-tests.sh` and `all_suites.py` run by default.
+# One suite name per line (the file name without its -test.py / -test.sh suffix). `#` starts a comment.
+# Run everything with `--all` or WORKFLOW_TEST_TIER=all; nothing here deletes a suite.
+#
+# Criterion: a suite is critical when its failure means Uncle could publish, approve or destroy something it must not, lose or
+# corrupt a run's state, or fail to start. Prompt wording, screen layout, timing/performance figures, planning-stage variants,
+# one-off regression pins and optional features are in the full tier.
+
+# Gates, approvals, attestation, verdicts: what a human or the audit actually signed off on.
+gates
+gate-prompt
+approval-export
+envelope
+envelope-protection
+attestation
+attestation-statement
+audit-verdict
+final-audit-verdict
+verification-integrity
+human-input
+write-once
+unattended
+unattended-release
+unattended-scope-deviations
+
+# Publishing a PR: the only outward-facing action. (close-flow, issue closing, is in the full tier: 386s of work.)
+pr-auto-commit
+pr-auto-publish
+pr-reconcile
+pr-signing
+pr-verdict-binding
+pr-snapshot-managed-ignore
+manual-signing
+
+# Worktrees, branches and what git is allowed to see.
+worktree-run
+worktree-branch
+worktree-auto-seed
+worktree-runs
+early-branch
+project-git
+uncle-gitignore
+gitignore-tolerance
+snapshot-excludes-history
+
+# The driver's state machine, lock and stop reasons.
+driver
+driver-graph
+nested-run-guard
+cancel-stop-reason
+workflow-family
+tree-fingerprint
+
+# Did the implementation deliver, and did the checks run: completion, notes, green check, repair limits.
+implementation-completion
+implementation-completion-duplicate-stop
+implementation-notes
+implementation-handoff-schema
+implementation-reapproval
+implementation-review
+acceptance
+green-check
+green-check-vacuous
+test-report
+failure-severity
+test-failure-disposition
+verification-steps
+verification-step-skip
+repair-limit
+repair-exhausted-route
+plan-disposition-gate
+change-contract-unevaluated
+
+# The manual checklist: evidence is kept, a failing check routes, a report is written.
+checklist-evidence-preserved
+checklist-failure-route
+checklist-execution-delivered
+execute-checklist-reports
+
+# Entry points: launcher flags, startup text, mode resolution, headless and REPL runs.
+launcher-args
+launcher-noui
+launcher-stdin-text
+launcher-removed-flag
+startup-action
+startup-text-input
+mode-resolution
+no-housekeeping
+home-actions
+run-duties
+headless-run
+repl-session
+
+# Process and runner safety: no orphans, no leaks, timeouts and ports honoured.
+runner-pool
+check-timeout
+parallel-checks
+parallel-leak-detector
+parallel-worker-exception-safety
+port-guard
+
+# Supervision, triage and install safety.
+supervisor
+triage-guard
+stage-network
+install-safety
+shell-syntax
+json-field-helpers
+suite-tier

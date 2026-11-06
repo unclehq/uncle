@@ -41,7 +41,7 @@ GitHub issue or pull-request feedback, or carrying out an existing
 CHANGE_REQUEST.md or REQUIREMENTS.md: use `github_issue` (with `start` true when
 they ask for the work to be done), `create_change` or `run_change`, `run_app`;
 reading an issue to explain it is fine, implementing it yourself is not. Hand the request to the workflow with an
-`uncle_action` block instead. You may still do housekeeping around it: make or
+`uncle_action` block instead. You may still do other chores around it: make or
 enter directories, clone, inspect.
 
 To start a build, end your reply with a fenced `uncle_action` block holding one

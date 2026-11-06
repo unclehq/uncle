@@ -36,5 +36,16 @@ check "draft true loads" "ok" "$(load_journal true)"
 check "draft false loads" "ok" "$(load_journal false)"
 check "non-boolean draft is rejected" "rejected" "$(load_journal '"yes"')"
 
+# AC-3: auto_removal_content_refusal. A finished worktree with a clean tracked tree is not refused for tracked changes; another dirty tracked file still is.
+(
+    cd "$TMP" && rm -rf rem && mkdir rem && cd rem && git init -q && git config commit.gpgsign false
+    printf 'a\n' > a.txt && printf 'node_modules/\n' > .gitignore && git add -A && git -c commit.gpgsign=false commit -q --no-gpg-sign -m i \
+        -c user.name=t -c user.email=t@t 2>/dev/null || git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --no-gpg-sign -m i
+) >/dev/null 2>&1
+removal_reason() { ( export STAGEGATE_FROM_ISSUE_SOURCE_ONLY=1; . "$HERE/../from-issue.sh" >/dev/null 2>&1; auto_removal_content_refusal "$TMP/rem" "$TMP/rem" ); }
+check "clean tracked tree is not refused for tracked changes" "0" "$(removal_reason | grep -c 'uncommitted changes to tracked files')"
+printf 'dirty\n' >> "$TMP/rem/a.txt"
+check "another dirty tracked file is refused" "the worktree has uncommitted changes to tracked files" "$(removal_reason)"
+
 if [[ "$FAILED" -ne 0 ]]; then echo "pr-auto-publish-test.sh: $FAILED of $COUNT checks failed"; exit 1; fi
 echo "pr-auto-publish-test.sh: $COUNT checks passed"

@@ -83,7 +83,8 @@ class Fixture(unittest.TestCase):
             PATH=str(self.bin) + os.pathsep + os.environ['PATH'], REAL_GIT=fixture_repo.REAL_GIT,
             SERVER=str(self.root / 'server.json'), GH_CALLS=str(self.root / 'gh.jsonl'),
             BASE_BARE=str(self.bare), HOME=str(self.root / 'home'), UNCLE_APPROVAL_NAME='Brian',
-            UNCLE_LIB_DIR=str(ROOT / 'scripts/lib'), UNCLE_VERSION='0.1.0-test', STAGEGATE_RUN_ID='run-59')
+            UNCLE_LIB_DIR=str(ROOT / 'scripts/lib'), UNCLE_VERSION='0.1.0-test', STAGEGATE_RUN_ID='run-59',
+            UNCLE_ATTENDED='1', UNCLE_ATTENDED_STDIN='1')
         (self.root / 'home').mkdir()
         for name, text in (('git', GIT_SHIM), ('gh', GH_FAKE)):
             (self.bin / name).write_text(text)

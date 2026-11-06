@@ -572,6 +572,15 @@ gate_input() {
     printf '%s' "$CASE/gate-input"
 }
 
+# These fixtures answer the gates by piping text on stdin: attended mode with its stdin waiver (the default is now unattended). A case
+# that asks for an unattended run says so in its own arguments or environment, and then only the waiver is set.
+fixture_mode_env() {
+    case " $* " in
+        *DRIVER_ARGS=*--unattended*|*UNATTENDED=1*) printf '%s\n' UNCLE_ATTENDED_STDIN=1 ;;
+        *) printf '%s\n%s\n' UNCLE_ATTENDED=1 UNCLE_ATTENDED_STDIN=1 ;;
+    esac
+}
+
 run_driver() {
     run_driver_stdin /dev/null "$@"
 }
@@ -590,6 +599,7 @@ run_driver_stdin() {
         WORKFLOW_CLAUDE_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_PARALLEL_CHECKLIST=0 \
         UNCLE_SUPERVISION_HOST=gates-test \
+        $(fixture_mode_env "$@") \
         "$@" \
         bash -c 'cd "${1:?scratch repo is not set}" || exit 1; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/change-workflow.sh ${DRIVER_ARGS:-}' _ "$REPO" \
         < "$stdin_file" > "$OUT" 2>&1
@@ -796,6 +806,7 @@ run_stagegate_stdin() {
         WORKFLOW_CLAUDE_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_SPECULATE=0 FAKE_WORKFLOW=stagegate WORKFLOW_REPAIR=1 \
         UNCLE_SUPERVISION_HOST=gates-test \
+        $(fixture_mode_env "$@") \
         "$@" \
         bash -c 'cd "${1:?scratch repo is not set}" || exit 1; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/stagegate.sh' _ "$REPO" \
         < "$stdin_file" > "$OUT" 2>&1

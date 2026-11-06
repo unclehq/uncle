@@ -45,16 +45,22 @@ run_timeout() {
 # through needs only a couple of seconds -- not a full battery run, which would
 # call a loaded machine a failure.
 verdict() {
-    local code
+    local code out="$(mktemp "$work/out.XXXXXX")"     # own file: the "ran" cases below run concurrently
     env -u UNCLE_UNATTENDED -u UNCLE_STATUS_STAGE -u UNCLE_TEST_ALLOW_NESTED "$@" \
-        python3 "$ROOT/scripts/tests/run_with_timeout.py" 6 bash "$SUITE" > "$work/out" 2>&1
+        python3 "$ROOT/scripts/tests/run_with_timeout.py" 6 bash "$SUITE" > "$out" 2>&1
     code=$?
     case "$code" in
         77) echo skipped ;;
         0|124) echo ran ;;
-        *) cat "$work/out" >&2; echo "unexpected-exit-$code" ;;
+        *) cat "$out" >&2; echo "unexpected-exit-$code" ;;
     esac
 }
+
+# The three "ran" verdicts each wait out the whole 6s timeout (the suite is genuinely running), so start them together
+# instead of one after another; their results are read where each case is asserted below.
+(verdict UNCLE_UNATTENDED=0 UNCLE_TEST_ALLOW_NESTED=1 > "$work/v-override") &
+(verdict > "$work/v-plain") &
+(verdict UNCLE_LIB_DIR=/tmp/whatever > "$work/v-unrelated") &
 
 # Set by both drivers, unconditionally, for the life of a build.
 [[ "$(verdict UNCLE_UNATTENDED=0)" == skipped ]] \
@@ -78,17 +84,17 @@ grep -q 'mean nothing' "$work/out" \
     && note 'the message says why, not just that' || fail 'message gives no reason'
 
 # The override wins over both signals.
-[[ "$(verdict UNCLE_UNATTENDED=0 UNCLE_TEST_ALLOW_NESTED=1)" == ran ]] \
+wait; [[ "$(cat "$work/v-override")" == ran ]] \
     && note 'UNCLE_TEST_ALLOW_NESTED=1 forces a run' || fail 'the override did not force a run'
 
 # A developer's shell has no UNCLE_ variables, and must not be skipped -- a
 # suite that skips when it could have run stops testing anything, quietly.
-[[ "$(verdict)" == ran ]] \
+[[ "$(cat "$work/v-plain")" == ran ]] \
     && note 'a plain shell runs the suite' || fail 'a plain shell was skipped'
 
 # Neither signal can be left behind by a killed run: both live in the process
 # environment. An unrelated UNCLE_ variable is not evidence of a live build.
-[[ "$(verdict UNCLE_LIB_DIR=/tmp/whatever)" == ran ]] \
+[[ "$(cat "$work/v-unrelated")" == ran ]] \
     && note 'an unrelated UNCLE_ variable does not skip' || fail 'skipped on an unrelated variable'
 
 if [[ "$FAILED" == 0 ]]; then

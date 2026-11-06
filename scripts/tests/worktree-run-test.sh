@@ -629,6 +629,7 @@ expect_out "Removed worktree"
 check "y removes the dir" test ! -e "$W42"
 check "branch kept after y" branch_exists feat/add-widget-42
 
+# split:end -- shared setup: every piece of a split run needs this, not just the case above
 cat > "$TMP/pty-run.py" <<'PTY'
 import os, pty, select, sys, time
 pid, fd = pty.fork()
@@ -983,6 +984,7 @@ check "no remote refs in the fixture" test -z "$(g -C "$CASE/proj-issue-42" for-
 # Issue 141: no-PR finalization (S-1..S-9). Fake driver leaves state COMPLETE.
 # ---------------------------------------------------------------------------
 
+# split:end -- shared setup for the cases below
 NW="proj-issue-42"
 RB=feat/add-widget-42
 src_branch() { g -C "$PROJ" branch --show-current; }

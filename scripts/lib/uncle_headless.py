@@ -234,6 +234,19 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
                 writer.emit(redact(acc, env))
                 handle_line(acc)
                 acc = ""
+        elif not eof and proc.poll() is not None:
+            # The driver is gone and nothing is left to read. A descendant that kept the pipe open must not hold us here
+            # until it exits on its own: treat this as EOF so the group kill below can reap it.
+            eof = True
+            acc += flt.feed(b"", True)
+            while "\n" in acc:
+                line, acc = acc.split("\n", 1)
+                handle_line(line)
+                writer.emit(redact(line, env) + "\n")
+            if acc:
+                writer.emit(redact(acc, env))
+                handle_line(acc)
+                acc = ""
         elif acc and (time.monotonic() - last_data >= idle):
             # prompt without newline (or idle pipe): never withhold it
             writer.emit(redact(acc, env))

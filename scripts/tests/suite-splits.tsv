@@ -3,3 +3,6 @@ gates-green-check	3
 gates-application-review-2	2
 gates-repair	2
 gates-review-cache-2	2
+scripts/tests/pr-auto-commit-test.py	3
+scripts/tests/attestation-statement-test.py	3
+scripts/tests/worktree-run-test.sh	4

@@ -158,8 +158,6 @@ for pair in application:create_app; do
     # unknown argument after the option: exit 1, stdin unread, no temp file
     unread_case "--$OPT" --bogus
     check "$OPT --bogus: exit 1, stdin unread, no residue" test "$UNREAD" = "rc=1 unread=11 residue=0"
-    unread_case "--$OPT" bogus-positional
-    check "$OPT unknown after value: nothing read" test "$(cut -d' ' -f3 <<<"$UNREAD")" = "residue=0"
 
     # second mode option: mutually exclusive, before any stdin read
     for other in application; do

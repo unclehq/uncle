@@ -4576,12 +4576,17 @@ class UncleTUI:
         try:
             parent = os.lstat(os.path.dirname(path))
             info = os.lstat(path)
-            safe = (stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid()
-                    and not parent.st_mode & 0o077
-                    and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid())
+            if hasattr(os, 'getuid'):
+                safe = (stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid()
+                        and not parent.st_mode & 0o077
+                        and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid())
+            else:
+                # Windows has no uid or 0700 modes; keep the regular-file and
+                # no-symlink checks (a reparse point is not S_ISREG via lstat).
+                safe = stat.S_ISDIR(parent.st_mode) and stat.S_ISREG(info.st_mode)
             if not safe:
                 raise OSError
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
             with os.fdopen(fd, 'r', encoding='utf-8', newline='') as stream:
                 text = stream.read()
         except (OSError, UnicodeDecodeError):
@@ -8364,7 +8369,10 @@ if __name__ == "__main__":
     os.environ.setdefault('ESCDELAY', '25')  # D-1: fast single Esc, user value wins
     _stub_mode = os.environ.get('UNCLE_TUI_TEST_MAIN')
     _title_session_begin()
-    for _sig in (signal.SIGTERM, signal.SIGHUP):
+    # SIGHUP does not exist on Windows.
+    for _sig in (signal.SIGTERM, getattr(signal, 'SIGHUP', None)):
+        if _sig is None:
+            continue
         try:
             signal.signal(_sig, _title_signal_exit)
         except (ValueError, OSError):

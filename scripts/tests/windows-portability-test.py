@@ -296,5 +296,16 @@ class Portability(unittest.TestCase):
         self.assertEqual(result.stdout.replace(b'\r\n',b'\n'), b'hello\n')
 
 
+class TuiPosixOnlyNamesTests(unittest.TestCase):
+    """Names Windows' stdlib lacks must never be read bare at TUI startup."""
+
+    def test_tui_never_reads_posix_only_names_unguarded(self):
+        import re
+        source = (Path(__file__).resolve().parents[2] / 'uncle_tui.py').read_text(encoding='utf-8')
+        for name in ('SIGHUP', 'SIGQUIT', 'SIGTSTP', 'SIGUSR1', 'SIGUSR2'):
+            self.assertIsNone(re.search(r'\bsignal\.' + name + r'\b', source),
+                              'signal.%s does not exist on Windows; use getattr(signal, %r, None)' % (name, name))
+
+
 if __name__ == '__main__':
     unittest.main()

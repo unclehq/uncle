@@ -13,8 +13,8 @@ setup() {  # $1 = verdict ; leaves cwd in the worktree
     echo old > main.c && git add -A && git commit -q -m base
     git worktree add -q -b uncle/change-it "$TMP/src-wt" && cd "$TMP/src-wt"
     mkdir -p .uncle/workflow && : > .uncle/workflow/worktree-owned && printf 'r\t%s\th\n' "$1" > .uncle/workflow/audit-verdict
-    echo new > main.c && echo audit > FINAL_AUDIT.md
-    TREE="$(GIT_INDEX_FILE="$TMP/idx" git add -A -f . 2>/dev/null; GIT_INDEX_FILE="$TMP/idx" git write-tree)"; rm -f "$TMP/idx"
+    echo new > main.c && echo audit > FINAL_AUDIT.md && mkdir -p .uncle/docs && echo audit > .uncle/docs/FINAL_AUDIT.md
+    TREE="$(GIT_INDEX_FILE="$TMP/idx" git add -A . 2>/dev/null; GIT_INDEX_FILE="$TMP/idx" git write-tree)"; rm -f "$TMP/idx"
     git reset -q; rm FINAL_AUDIT.md
 }
 run() {

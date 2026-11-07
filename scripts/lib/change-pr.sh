@@ -29,7 +29,7 @@ change_pr_extras_reason() {
 # $2 = pre: the call is made before `handoff`, which is what commits the audited tree. The change is still uncommitted then, so
 # modified tracked files are expected and the clean-status check does not apply (it is the post-commit check, and applying it here
 # refused every run whose change edits a tracked file). The audit's root FINAL_AUDIT.md is written by the handoff, so its absence
-# from disk is not a difference either. Content drift from the attested tree and ignored artifacts still refuse.
+# (or a stale copy an earlier run left tracked) is not a difference either, provided the attested copy is this run's audit. Content drift from the attested tree and ignored artifacts still refuse.
 assert_tree_matches_attested() {
     local tree="${1:-}" when="${2:-}" bad=0 line path
     local allow='^\.uncle/(docs/.*|attestation\.json|attestation\.sig|allowed_signers)$'
@@ -51,7 +51,11 @@ assert_tree_matches_attested() {
             # An approved artifact that is merely untracked is not a difference.
             # Likewise a file of the change that is not yet tracked: present on disk, absent from the index.
             if [[ "$status" == D && ( "$path" =~ $allow || -e "$path" ) ]]; then continue; fi
-            if [[ "$when" == pre && "$status" == D && "$path" == FINAL_AUDIT.md ]]; then continue; fi
+            # The root FINAL_AUDIT.md is the audit copy the handoff writes (sync_audit_copy). Before it runs the disk copy is absent
+            # (D) or, when an earlier run's merge left one tracked, stale (M). Either is fine when the attested tree's copy is
+            # exactly the audit this run produced in .uncle/docs/.
+            if [[ "$when" == pre && "$path" == FINAL_AUDIT.md && ( "$status" == D || "$status" == M ) ]] \
+               && git show "$tree:FINAL_AUDIT.md" 2>/dev/null | cmp -s - .uncle/docs/FINAL_AUDIT.md; then continue; fi
             echo "path differs from the attested tree ($status): $path" >&2; bad=1
         done < <(git diff --name-status --no-renames "$tree" 2>/dev/null)
         while IFS= read -r line; do

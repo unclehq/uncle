@@ -85,6 +85,8 @@ class PrePublishAssertion(unittest.TestCase):
             sh('git add . && git commit -q -m base')
             Path(tmp, 'main.c').write_text('new\n')
             Path(tmp, 'FINAL_AUDIT.md').write_text('audit\n')
+            Path(tmp, '.uncle/docs').mkdir(parents=True)
+            Path(tmp, '.uncle/docs/FINAL_AUDIT.md').write_text('audit\n')
             sh('git add -A && git write-tree > /tmp/.tree_x')
             tree = sh('git write-tree')
             sh('git reset -q && rm FINAL_AUDIT.md')
@@ -95,6 +97,28 @@ class PrePublishAssertion(unittest.TestCase):
     def test_uncommitted_change_and_unwritten_audit_copy_pass_before_handoff(self):
         rc, err = self.run_assert('pre')
         self.assertEqual(rc, 0, err)
+
+    def test_a_stale_tracked_root_audit_copy_passes_when_the_attested_copy_is_this_runs_audit(self):
+        src = (ROOT / 'scripts/lib/change-pr.sh').read_text()
+        func = src.split('assert_tree_matches_attested() {', 1)[1].split('\n}\n', 1)[0]
+        for audit, expect_ok in (('new audit\n', True), ('something else\n', False)):
+            with tempfile.TemporaryDirectory() as tmp:
+                sh = lambda c: subprocess.run(c, shell=True, cwd=tmp, check=True, capture_output=True, text=True).stdout.strip()
+                sh('git init -q && git config user.email a@b.c && git config user.name a && git config commit.gpgsign false')
+                Path(tmp, 'FINAL_AUDIT.md').write_text('earlier run\n')
+                Path(tmp, '.gitignore').write_text('.uncle/*\n!.uncle/docs/\n')
+                sh('git add . && git commit -q -m base')
+                Path(tmp, '.uncle/docs').mkdir(parents=True)
+                Path(tmp, '.uncle/docs/FINAL_AUDIT.md').write_text('new audit\n')
+                Path(tmp, 'FINAL_AUDIT.md').write_text(audit)
+                sh('git add -A -f . && git write-tree > /tmp/.t2')
+                tree = sh('git write-tree')
+                sh('git reset -q')
+                Path(tmp, 'FINAL_AUDIT.md').write_text('earlier run\n')   # stale tracked copy on disk
+                res = subprocess.run(['bash', '-c', 'assert_tree_matches_attested() {' + func + '\n}\nassert_tree_matches_attested ' + tree + ' pre'],
+                                     cwd=tmp, capture_output=True, text=True)
+                self.assertEqual(res.returncode == 0, expect_ok, (audit, res.stderr))
+        os.path.exists('/tmp/.t2') and os.unlink('/tmp/.t2')
 
     def test_the_post_commit_check_still_refuses_dirty_tracked_files(self):
         rc, err = self.run_assert('')

@@ -1944,10 +1944,41 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
             raise wrapped from None
 
 
-def profile_menu(config, choose=False):
+APPLY_ALL_STAGES = ('requirements change-spec project-plan change-plan adversarial-review updated-plan '
+                    'updated-change-plan preflight implementation repair test-review manual-checklist '
+                    'execute-checklist final-audit').split()
+
+
+def validate_profile(value=None):
+    """The one profile check for models, choose-model, set-key and apply-all: absent or aws-bedrock only."""
+    if value is None or value == '':
+        return SELF_HOSTED if value is None else None
+    return BEDROCK if value == BEDROCK else None
+
+
+def profile_menu(config, choose=False, profile=SELF_HOSTED):
     import getpass
-    keys = read_keys(config)
+    bedrock = profile == BEDROCK
+    keys = read_keys(config, profile)
     profiles = keys.setdefault('__opencode_models__', {})
+    if choose and bedrock:
+        names = sorted(profiles)
+        if not names:
+            print('No AWS Bedrock models are configured; add models in Configure → AWS Bedrock', file=sys.stderr)
+            return 1
+        for name in names:
+            print('  ' + name, file=sys.stderr)
+        print('AWS Bedrock model name: ', end='', file=sys.stderr, flush=True)
+        try:
+            name = input().strip()
+        except EOFError:
+            name = ''
+        key = name if name in profiles else local_model(name) if name else ''
+        if key not in profiles:
+            print('Choose a configured AWS Bedrock model; add models in Configure → AWS Bedrock', file=sys.stderr)
+            return 1
+        print(profiles[key].get('model') or key.removeprefix('local/'))
+        return 0
     if choose:
         for name in sorted(profiles):
             print('  ' + name, file=sys.stderr)
@@ -1962,23 +1993,49 @@ def profile_menu(config, choose=False):
     key = getpass.getpass('API key (hidden; blank keeps existing): ').strip() or old.get('api_key', '')
     print('Discovering OpenCode models…', flush=True)
     names = refresh_models(keys, url, key)
-    save_keys(config, keys)
-    print(f'Loaded {len(names)} OpenCode models: ' + ', '.join(names))
+    save_keys(config, keys, profile)
+    print(f'Loaded {len(names)} {"AWS Bedrock" if bedrock else "OpenCode"} models: ' + ', '.join(names))
     return 0
 
 
 def main(side, args):
     started = time.monotonic()
+    if side in ('models', 'choose-model', 'set-key', 'apply-all'):
+        position = 2 if side == 'set-key' else 1
+        raw = args[position] if len(args) > position else None
+        profile = validate_profile(raw)
+        if profile is None:
+            print('Unsupported profile %r; only aws-bedrock is accepted' % raw, file=sys.stderr)
+            return 2
+        if side == 'apply-all' and raw is None:
+            print('apply-all requires the aws-bedrock profile', file=sys.stderr)
+            return 2
     if side in ('models', 'choose-model'):
-        return profile_menu(args[0], side == 'choose-model')
+        return profile_menu(args[0], side == 'choose-model', profile)
+    if side == 'apply-all':
+        if len(args) < 3:
+            print('apply-all requires a source stage', file=sys.stderr)
+            return 2
+        keys = read_keys(args[0], profile)
+        token = keys.get(args[2])
+        if not isinstance(token, str) or not token:
+            print('AWS Bedrock token for the source stage is not set', file=sys.stderr)
+            return 1
+        targets = args[3:] or APPLY_ALL_STAGES
+        for target in targets:
+            keys[target] = token
+        save_keys(args[0], keys, profile)
+        return 0
     if side == 'set-key':
-        keys = read_keys(args[0])
+        keys = read_keys(args[0], profile)
         key = sys.stdin.read().strip()
         if key:
             keys[args[1]] = key
+        elif args[1] in keys:
+            keys.pop(args[1])
         else:
-            keys.pop(args[1], None)
-        save_keys(args[0], keys)
+            return 0  # nothing stored: leave the file byte-identical
+        save_keys(args[0], keys, profile)
         return 0
     if side not in ('agent','reviewer'):
         raise ValueError('Invalid runner side')

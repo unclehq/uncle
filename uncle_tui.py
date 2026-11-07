@@ -1415,10 +1415,12 @@ class UncleTUI:
         """Use the selected stage's connection throughout the workflow."""
         self.maybe_reload()
         source = self.stage_target
-        if self.stage_runner(source) != "self-hosted":
-            self.notice = "Select Self hosted and configure its connection first."
+        runner = self.stage_runner(source)
+        if runner not in HTTP_RUNNERS:
+            self.notice = "Select Self hosted or AWS Bedrock and configure its connection first."
             return
-        for store in (self.stage_models, self.stage_base_urls, self.stage_api_keys):
+        display = PROFILES[runner]["display"] if runner in PROFILES else runner
+        for store in (self.stage_models, self.stage_base_urls, self._keys_for(runner)):
             value = store.get(source, "")
             for stage in CONFIG_STAGES:
                 if value:
@@ -1426,9 +1428,9 @@ class UncleTUI:
                 else:
                     store.pop(stage, None)
         for stage in CONFIG_STAGES:
-            self.stage_runners[stage] = "self-hosted"
+            self.stage_runners[stage] = runner
         self.save_config()
-        self.notice = "Self hosted and this LLM connection selected for all stages."
+        self.notice = "%s and this LLM connection selected for all stages." % display
 
     def _config_items(self):
         section = getattr(self, "config_section", "")
@@ -7397,7 +7399,7 @@ class UncleTUI:
                 return "Recovery model — Enter: change, d: default, q back"
             if self.stage_target.startswith("@"):
                 return "Connection — Enter: edit, q back"
-            return "%s — Enter: change, a: use Self hosted for all stages, d: default, q back" % self.stage_target
+            return "%s — Enter: change, a: use this connection for all stages, d: default, q back" % self.stage_target
         title = {
             "menu": "The man from uncle",
             "issue_mode": "Seed as",

@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 178
+Issue 180
 
-Seeded from [unclehq/uncle#178](https://github.com/unclehq/uncle/issues/178).
+Seeded from [unclehq/uncle#180](https://github.com/unclehq/uncle/issues/180).
 
 ## Change Type
 
@@ -10,47 +10,33 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Add AWS Bedrock runner (clone of Self Hosted, without temperature)
+Offer the AWS Bedrock runner everywhere a runner can be selected
 
 ## Motivation
 
 ## Summary
-Add a new runner named **AWS Bedrock** that behaves like the existing **Self Hosted** runner, except that it never sends a temperature, and that lets the user choose which Bedrock wire protocol to speak.
-
-## Desired behavior
-- A new **AWS Bedrock** option appears in the main menu, alongside Self Hosted.
-- Its menu offers the same choices as the Self Hosted menu, with these differences:
-  - the token option is named **AWS Bedrock Token** (instead of the Self Hosted token);
-  - the Base URL option is named **Bedrock URL**;
-  - a new **API Compatibility** choice selects the wire protocol (see below).
-- Everything else (model discovery/refresh, connection settings, key storage, per-stage configuration, request options, performance behavior) matches Self Hosted.
-- **Main difference:** the AWS Bedrock runner does not use temperature. No `temperature` value is sent in requests, and the temperature setting is not offered or read (no `WORKFLOW_SELF_HOSTED_TEMPERATURE`, `<stage>.temperature` or built-in per-stage default equivalent).
-
-## API compatibility choice
-The Bedrock menu offers three protocols; the choice is stored with the Bedrock connection settings (separately from Self Hosted):
-- **OpenAI compatible** (default, recommended): reuses the existing Self Hosted HTTP transport (chat completions), minus temperature.
-- **Anthropic compatible**: Anthropic Messages API request/response shape (tools, system prompt, `max_tokens`), minus temperature.
-- **Converse API compatible**: Bedrock native Converse API (`messages`, `toolConfig`, `inferenceConfig` without `temperature`).
-The selected protocol determines request building and response parsing (including tool calls, usage and schema-constrained output). Authentication for each is the AWS Bedrock Token unless a protocol requires otherwise (SigV4 for native Converse is to be decided in the plan).
-
-## Implementation approach
-- Introduce a runner profile (name, key file, env prefix, menu labels, `uses_temperature`, protocol) read by both Self Hosted and Bedrock instead of cloning ~4,000 lines.
-- `temperature()` returns "none" for Bedrock and the request builders (`self_hosted_http.py` ~lines 988, 997, 1110) omit the key; guard `self_hosted_performance.py` (~lines 232, 257), which assumes a number.
-- Add a per-protocol transport layer; OpenAI compatible is the existing path.
+AWS Bedrock was added as a runner (#179), but it is not offered consistently wherever users choose a runner. Users should be able to select it in every runner picker, with the same behavior as Self hosted where that applies.
 
 ## Current behavior
-Self Hosted always sends `temperature` (0 by default, configurable); see `scripts/lib/self_hosted_http.py` (`temperature()`, request payloads) and `scripts/lib/self_hosted.py`. Menu code lives in `uncle_tui.py`; the runner id `"self-hosted"` is hard-coded in many places there, in the shell shims and in `scripts/stagegate.sh`.
+- The full-screen TUI (`uncle_tui.py`) lists `aws-bedrock` in `AGENT_RUNNERS` / `REVIEWER_RUNNERS` and has a "Configure AWS Bedrock" section.
+- The shell fallback in `uncle` (`configure_stage`) builds its choices from `uncle_installed_runners`, which does not include `aws-bedrock`, so typing it at the "Runner" prompt is rejected as "Not a ... runner".
+- The fallback's model prompt (`m`) and "apply to all stages" (`a`) are gated on `self-hosted` only, so Bedrock stages get no model choice and cannot be applied to all stages.
+- Other places that special-case `self-hosted` (e.g. `stage_runner()` handling, per-stage connection/model profile migration, status-line runner mapping in `uncle_tui.py`) should be audited for Bedrock.
+
+## Desired behavior
+- Every runner selection surface (TUI, `uncle` shell fallback, any other config or CLI path) offers `aws-bedrock` alongside claude, codex, kimi and self-hosted.
+- Selecting Bedrock in any of them behaves the same: model selection from the configured Bedrock models, and "apply to all stages" using the Bedrock connection and token.
+- A Bedrock selection made in one surface is shown correctly in the others.
 
 ## Acceptance criteria
-- Main menu shows an AWS Bedrock entry; its submenu mirrors Self Hosted with "AWS Bedrock Token" and "Bedrock URL" labels plus an API Compatibility choice (OpenAI / Anthropic / Converse).
-- Requests made by the AWS Bedrock runner contain no temperature field under any of the three protocols.
-- Each protocol builds a valid request and parses responses (including tool calls) correctly.
-- Self Hosted behavior is unchanged (including its temperature handling).
-- Bedrock credentials/settings, including the chosen protocol, are stored separately from Self Hosted's.
-- Tests cover the menu labels, the protocol choice, and the absence of temperature in Bedrock requests for each protocol.
+- [ ] `aws-bedrock` is accepted at the `uncle` shell fallback runner prompt for both agent and reviewer stages.
+- [ ] Model choice and apply-to-all-stages work for Bedrock in the fallback, using `aws-bedrock-keys.json`.
+- [ ] A grep audit of `self-hosted` special cases is done, and each is either extended to Bedrock or documented as intentionally Self hosted only.
+- [ ] Tests cover Bedrock selection (extend `scripts/tests/aws-bedrock-dispatch-test.sh` or similar).
+- [ ] `docs/aws-bedrock.md` and `README` runner lists are updated if they mention the available runners.
 
-## Open questions
-- Does native Converse need SigV4 signing, or is bearer-token auth sufficient for the target endpoints?
+## Out of scope
+Changes to the Bedrock wire protocols or model discovery.
 
 ## Observed Current Behavior
 

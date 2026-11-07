@@ -1377,13 +1377,22 @@ class UncleTUI:
                     self.notice = "API Compatibility must be one of: " + ", ".join(COMPAT_CHOICES)
                     return
                 keys['__opencode_connection__'] = connection
+                if runner == "aws-bedrock" and connection.get('base_url') and connection.get('api_key'):
+                    # The model list comes from a different endpoint per protocol; reload it.
+                    try:
+                        refresh_models(keys, connection['base_url'], connection['api_key'], value)
+                        keys['__opencode_connection__']['api_compatibility'] = value
+                    except ValueError as exc:
+                        keys['__opencode_connection__'] = connection
+                        self.notice = str(exc)
                 self.save_config()
                 return
             compat = connection.get("api_compatibility")
             if connection.get('base_url') and connection.get('api_key'):
                 self.notice = "Discovering supported %s models…" % ("AWS Bedrock" if runner == "aws-bedrock" else "self-hosted")
                 try:
-                    refresh_models(keys, connection['base_url'], connection['api_key'])
+                    refresh_models(keys, connection['base_url'], connection['api_key'],
+                                   compat if runner == "aws-bedrock" else None)
                     if compat:
                         keys['__opencode_connection__']['api_compatibility'] = compat
                 except ValueError as exc:

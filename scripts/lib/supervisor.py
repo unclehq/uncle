@@ -31,13 +31,13 @@ SUBDIR = 'supervision'
 EFFORTS = ('none', 'low', 'medium', 'high')
 ACTIONS = ('steer', 'retry', 'ask', 'none')
 TRIGGERS = ('validation', 'recurrence', 'steering', 'overrun')
-SUPPORTED_RUNNERS = ('claude', 'codex', 'kimi', 'self-hosted')
+SUPPORTED_RUNNERS = ('claude', 'codex', 'kimi', 'self-hosted', 'aws-bedrock')
 
 
 def unsupported_runner_message(runner):
     runner = re.sub(r'[\x00-\x1f\x7f]', '', str(runner))[:64]
     return ("uncle: runner '%s' is not supported (Cline support was removed). "
-            "Set it to claude, codex, kimi or self-hosted with 'uncle' -> Configure." % runner)
+            "Set it to claude, codex, kimi, self-hosted or aws-bedrock with 'uncle' -> Configure." % runner)
 
 PROPOSAL_KEYS = ('schema', 'diagnosis', 'evidence', 'action', 'target_stage', 'attempt',
                  'run_id', 'template_id', 'rationale')

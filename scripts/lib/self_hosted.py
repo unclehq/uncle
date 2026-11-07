@@ -164,12 +164,56 @@ def discover_models(base_url, api_key):
         raise ValueError('Expected an OpenAI-compatible models response with data and model IDs') from None
 
 
+def bedrock_control_url(base_url):
+    """Bedrock control-plane endpoint for the region named in the configured Bedrock URL."""
+    import re
+    host = urlsplit(base_url).hostname or ''
+    match = re.search(r'\.([a-z]{2}(?:-[a-z]+)+-\d)\.', host)
+    if not match:
+        return base_url.rstrip('/')
+    return 'https://bedrock.%s.amazonaws.com' % match.group(1)
+
+
+def discover_anthropic_models(base_url, api_key):
+    """GET <control plane>/foundation-models?byProvider=Anthropic with the bearer token; no redirects."""
+    from urllib.request import Request, build_opener, HTTPRedirectHandler
+    from urllib.error import HTTPError, URLError
+    url = urlsplit(base_url)
+    if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
+        raise ValueError('Enter an http(s) Bedrock URL without credentials, query, or fragment')
+    if not api_key or any(c in api_key for c in ('\r', '\n')):
+        raise ValueError('Enter an AWS Bedrock token')
+    class NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    request = Request(bedrock_control_url(base_url) + '/foundation-models?byProvider=Anthropic',
+                      headers={'Authorization': 'Bearer ' + api_key, 'Accept': 'application/json'})
+    try:
+        with build_opener(NoRedirect).open(request, timeout=10) as response:
+            raw = response.read(2_000_001)
+        if len(raw) > 2_000_000:
+            raise ValueError('Model response is too large')
+        entries = json.loads(raw)['modelSummaries']
+        names = sorted({item['modelId'] for item in entries if isinstance(item, dict) and isinstance(item.get('modelId'), str)
+                        and item['modelId'] and not any(c.isspace() for c in item['modelId']) and '#' not in item['modelId']})
+        if not names:
+            raise ValueError('The endpoint returned no usable models')
+        return [local_model(name) for name in names]
+    except HTTPError as exc:
+        raise ValueError(f'Model discovery failed (HTTP {exc.code}); check the Bedrock URL and token') from None
+    except (URLError, OSError):
+        raise ValueError('Could not reach the Bedrock foundation-models endpoint; check the Bedrock URL') from None
+    except (KeyError, TypeError, json.JSONDecodeError, UnicodeError):
+        raise ValueError('Expected a Bedrock foundation-models response with modelSummaries and model IDs') from None
+
+
 def connection_settings(keys):
     return dict(keys.get('__opencode_connection__') or next(iter(keys.get('__opencode_models__', {}).values()), {}))
 
 
-def refresh_models(keys, base_url, api_key):
-    names = discover_models(base_url, api_key)
+def refresh_models(keys, base_url, api_key, protocol=None):
+    anthropic = bool(protocol) and str(protocol).strip().lower() in ('anthropic', 'anthropic compatible')
+    names = discover_anthropic_models(base_url, api_key) if anthropic else discover_models(base_url, api_key)
     connection = dict(base_url=base_url.rstrip('/'), api_key=api_key)
     # Commit only after a successful discovery; failures retain the old catalog.
     keys['__opencode_connection__'] = connection
@@ -1992,7 +2036,9 @@ def profile_menu(config, choose=False, profile=SELF_HOSTED):
     url = input('Base URL [' + old.get('base_url', '') + ']: ').strip() or old.get('base_url', '')
     key = getpass.getpass('API key (hidden; blank keeps existing): ').strip() or old.get('api_key', '')
     print('Discovering OpenCode models…', flush=True)
-    names = refresh_models(keys, url, key)
+    names = refresh_models(keys, url, key, old.get('api_compatibility') if bedrock else None)
+    if bedrock and old.get('api_compatibility'):
+        keys['__opencode_connection__']['api_compatibility'] = old['api_compatibility']
     save_keys(config, keys, profile)
     print(f'Loaded {len(names)} {"AWS Bedrock" if bedrock else "OpenCode"} models: ' + ', '.join(names))
     return 0

@@ -20,6 +20,8 @@ REASONS = {
     'verdict-not-ready': 'not created (verdict not READY)',
     'issue-not-eligible': 'not created (issue not eligible)',
     'tree-mismatch': 'not created (tree does not match attested tree)',
+    'merged-local': 'none (no remote; merged into the source branch)',
+    'local-merge-failed': 'none (no remote; local merge did not complete)',
     'handoff-failed': 'not created (handoff failed)',
     'handoff-incomplete': 'not created (handoff did not create a PR)',
 }

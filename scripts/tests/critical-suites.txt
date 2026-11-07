@@ -26,6 +26,7 @@ unattended-scope-deviations
 # Publishing a PR: the only outward-facing action. (close-flow, issue closing, is in the full tier: 386s of work.)
 pr-auto-commit
 pr-auto-publish
+local-merge
 pr-reconcile
 pr-signing
 pr-verdict-binding

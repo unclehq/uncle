@@ -181,6 +181,11 @@ PR: https://github.com/org/repo/pull/12 (#12, draft)
   `created`, marked `draft` when applicable. Otherwise it gives a reason:
   `none (handoff disabled)`, `none (no base commit)`,
   `not created (publication pending)`, or `none (not published)`.
+- **No git remote:** a run in uncle's own worktree has nowhere to open a PR, so a READY audit is committed on the run branch (the
+  audited tree, unsigned), merged into the branch the source checkout is on, and the worktree and its merged branch are removed after
+  the summary prints (`PR: none (no remote; merged into the source branch)`). A non-READY verdict, a failed binding, a source
+  checkout that is detached, or a merge git refuses (it is aborted, leaving the checkout as it was) merges nothing, keeps the
+  worktree and branch, and exits 1 on an unattended run. `WORKFLOW_LOCAL_MERGE=0` opts out.
 - New-application builds always print `PR: none (not applicable to new-application builds)`.
 - A stopped or failed run prints `Total time:` so far, and a `PR:` line only
   if a PR already exists.

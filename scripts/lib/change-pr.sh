@@ -79,14 +79,88 @@ change_pr_worktree_owned() {
     [[ -e "$d/worktree-owned" ]]
 }
 
+# A run in uncle's own worktree on a repository with no remote has nowhere to open a PR. The finished change is committed on the run
+# branch, merged into the branch the source checkout is on, and the worktree is removed (change_pr_remove_merged_worktree, called
+# once the driver has printed its summary, because the summary still reads files in the directory). WORKFLOW_LOCAL_MERGE=0 opts out.
+change_pr_local_merge_applies() {
+    [[ "${WORKFLOW_LOCAL_MERGE:-1}" == 1 ]] || return 1
+    change_pr_in_worktree && change_pr_worktree_owned || return 1
+    [[ -z "$(git remote 2>/dev/null)" && ! -s "${ORIGIN_FILE:-/nonexistent}" ]]
+}
+
+# Always returns 0; the outcome is CHANGE_PR_EXTRAS_REASON (merged-local, or the reason nothing was merged), which change_pr_complete
+# turns into the exit status. Nothing is merged unless the audit verdict is READY: there is no PR for a person to review instead.
+change_pr_local_merge() {
+    local branch verdict tree main srcbranch title wt
+    CHANGE_PR_EXTRAS_REASON=""
+    CHANGE_PR_MERGED_WORKTREE=""
+    wt="$(pwd -P)"
+    branch="$(git branch --show-current 2>/dev/null)"
+    if [[ -z "$branch" ]]; then
+        change_pr_no_pr local-merge-failed "the worktree has no branch (detached HEAD)"; return 0
+    fi
+    verdict="$(awk -F'\t' 'NR == 1 {print $2}' "${VERDICT_FILE:-.uncle/workflow/audit-verdict}" 2>/dev/null)"
+    case "$verdict" in
+        READY|READY_WITH_NON_BLOCKING_ISSUES) ;;
+        *) change_pr_no_pr verdict-not-ready "the audit verdict is '${verdict:-unknown}', so nothing was merged; branch $branch is kept"; return 0 ;;
+    esac
+    change_pr_engine validate >/dev/null || { change_pr_no_pr validate-failed "the audit binding no longer matches; nothing was merged"; return 0; }
+    tree="$(change_pr_engine commit-tree 2>/dev/null)" || tree=""
+    if [[ -z "$tree" ]] || ! assert_tree_matches_attested "$tree" pre; then
+        echo "Not merging: the tree differs from the audited tree." >&2
+        change_pr_no_pr tree-mismatch "the tree differs from the audited tree"; return 0
+    fi
+    main="$(git worktree list --porcelain | head -n 1)"; main="${main#worktree }"
+    srcbranch="$(git -C "$main" branch --show-current 2>/dev/null)"
+    if [[ -z "$srcbranch" ]]; then
+        change_pr_no_pr local-merge-failed "the source checkout $main is not on a named branch; branch $branch is kept"; return 0
+    fi
+    # Stage exactly the audited tree and commit it; the signing hook is bypassed as the automatic PR commit does.
+    title="uncle: $(printf '%s' "${branch#*/}" | tr '-' ' ')"
+    if ! git read-tree "$tree" || ! git -c commit.gpgsign=false commit -q --no-gpg-sign -m "$title"; then
+        change_pr_no_pr local-merge-failed "committing the audited tree failed; nothing was merged"; return 0
+    fi
+    [[ -z "$(git ls-files -- FINAL_AUDIT.md)" ]] || git checkout-index -f -- FINAL_AUDIT.md 2>/dev/null || true
+    echo "Committed the audited tree on $branch."
+    if ! git -C "$main" -c commit.gpgsign=false merge --no-edit "$branch" >&2; then
+        git -C "$main" merge --abort >/dev/null 2>&1 || true   # errors only when no merge was left in progress
+        change_pr_no_pr local-merge-failed "merging $branch into $srcbranch in $main failed (nothing changed there); branch $branch and this worktree are kept"; return 0
+    fi
+    echo "Merged $branch into $srcbranch in $main."
+    CHANGE_PR_EXTRAS_REASON=merged-local
+    CHANGE_PR_MERGED_WORKTREE="$wt|$main|$branch"
+    return 0
+}
+
+# Remove the worktree a successful local merge finished with, and the branch it merged (git refuses -d for anything unmerged).
+# Leaves the directory and says why when git refuses, e.g. because the worktree holds files git does not ignore.
+change_pr_remove_merged_worktree() {
+    [[ -n "${CHANGE_PR_MERGED_WORKTREE:-}" ]] || return 0
+    local wt main branch
+    IFS='|' read -r wt main branch <<< "$CHANGE_PR_MERGED_WORKTREE"
+    CHANGE_PR_MERGED_WORKTREE=""
+    cd "$main" 2>/dev/null || { echo "Worktree $wt kept: $main is unreachable."; return 0; }
+    if git -C "$main" worktree remove "$wt" 2>/dev/null && [[ ! -e "$wt" ]]; then
+        echo "Removed worktree $wt."
+        git -C "$main" branch -d "$branch" >/dev/null 2>&1 && echo "Deleted merged branch $branch." || true
+    else
+        echo "Worktree $wt kept: git would not remove it. Everything is merged; remove it with: git -C $main worktree remove --force $wt"
+    fi
+    return 0
+}
+
 # Worktree runs with the handoff enabled return 1 unless a PR was published
 # (exact reason match); every other run returns 0 as before.
 change_pr_complete() {
     local rc=0
-    change_pr_complete_route || rc=$?
+    if change_pr_local_merge_applies; then
+        change_pr_local_merge
+    else
+        change_pr_complete_route || rc=$?
+    fi
     if [[ "$rc" == 0 && "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] && change_pr_in_worktree; then
         case "${CHANGE_PR_EXTRAS_REASON:-}" in
-            published|published-draft-unreviewed) ;;
+            published|published-draft-unreviewed|merged-local) ;;
             *) echo "Worktree run: no PR was published (${CHANGE_PR_EXTRAS_REASON:-unset})." >&2; return 1 ;;
         esac
     fi

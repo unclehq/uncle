@@ -183,7 +183,9 @@ class StartupRefused(Exception):
 
 def _project_root():
     root = os.environ.get("UNCLE_PROJECT_ROOT")
-    if root and os.path.isabs(root):
+    # A run's worktree can be removed when it finishes (merged locally, no remote); until the next run restores the launch root,
+    # a root that no longer exists is not a project.
+    if root and os.path.isabs(root) and os.path.isdir(root):
         return root
     return os.getcwd()
 

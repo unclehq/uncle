@@ -50,7 +50,7 @@ check "another dirty tracked file is refused" "the worktree has uncommitted chan
 # Fixtures: a plain repo and a linked worktree of it.
 G=(git -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
 (
-    cd "$TMP" && rm -rf plain && mkdir plain && cd plain && git init -q && printf 'a\n' > a.txt && git add -A \
+    cd "$TMP" && rm -rf plain && mkdir plain && cd plain && git init -q && git remote add origin https://example.invalid/r.git && printf 'a\n' > a.txt && git add -A \
         && "${G[@]}" commit -q --no-gpg-sign -m i && git worktree add -q "$TMP/wt" -b wtb
 ) >/dev/null 2>&1
 
@@ -67,7 +67,7 @@ check "git failing outside a repository is not a worktree" "false" "$(GIT_CEILIN
 wt_calls() { : > "$LOG"; ( cd "$TMP/wt"; CLOSE_ISSUE=1 UNATTENDED=1; change_pr_complete </dev/null >/dev/null 2>&1 ); grep -c '^publish' "$LOG"; }
 check "worktree with ORIGIN_FILE calls change_pr_publish exactly once" "1" "$(wt_calls)"
 
-# AC-1/AC-3/AC-4/AC-6: origin-less runs. Driver-exit behavior lives in change-workflow-exit-status-test.sh.
+# AC-1/AC-3/AC-4/AC-6: origin-less runs (the fixture has a git remote; with none, the run merges locally: local-merge-test.sh). Driver-exit behavior lives in change-workflow-exit-status-test.sh.
 mkdir -p "$TMP/wt/.uncle/workflow" && : > "$TMP/wt/.uncle/workflow/worktree-owned"
 nocall() { : > "$LOG"; ( cd "$1"; ORIGIN_FILE="$TMP/none"; STATE_DIR="$1/.uncle/workflow"; CLOSE_ISSUE="$2" UNATTENDED=1; CHANGE_TEST_REASON="$3"
     change_pr_publish() { printf 'publish auto=%s\n' "${UNCLE_AUTO_PUBLISH:-0}" >> "$LOG"; CHANGE_PR_EXTRAS_REASON="$CHANGE_TEST_REASON"; }

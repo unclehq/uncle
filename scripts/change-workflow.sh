@@ -5001,6 +5001,8 @@ PY
             else
                 echo "Build complete without a commit. PR publication requires an existing base commit; no PR was created."
             fi
+            # After the summary: a local merge's worktree is still read by the lines above.
+            ! declare -f change_pr_remove_merged_worktree >/dev/null || change_pr_remove_merged_worktree
             # A failed worktree publication must not read as success. Only
             # when issue closing is on; non-worktree runs keep exiting 0.
             if [[ "${pr_rc:-0}" != 0 && "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] \

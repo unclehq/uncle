@@ -203,8 +203,16 @@ if ! grep -qxF my-notes.txt "$TMP/untracked-before.txt"; then
     fail "the snapshot must list the file that already existed"
 fi
 
+# A file that predates the change AND is edited by it is part of the change.
+# (A project that was never committed has only such files; excluding them made
+# a delivered change look empty and stopped the run as "incomplete".)
+printf 'edited by the agent\n' >> my-notes.txt
+check_eq "a pre-existing untracked file the change edited counts as changed" \
+    "app/created_by_agent.py my-notes.txt " \
+    "$(change_diff_files | tr '\n' ' ')"
+
 WORKFLOW_UNTRACKED_BASELINE=""
-rm -f my-notes.txt app/created_by_agent.py
+rm -f my-notes.txt app/created_by_agent.py "$TMP/untracked-before.txt.hashes"
 cd "$ROOT"
 
 # --- a directory git knows nothing about -----------------------------------

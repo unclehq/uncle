@@ -37,6 +37,9 @@ IMPL_REVIEW_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"   # once, here: the fu
 # Called once, before the implementation stage runs.
 snapshot_untracked() {
     git ls-files --others --exclude-standard > "$1" 2>/dev/null || : > "$1"
+    # Content hashes beside it: a file that predates the change but is edited
+    # by it must still count as changed (see review_paths.write_hashes).
+    python3 -B "$IMPL_REVIEW_LIB_DIR/review_paths.py" --record-hashes "$1" 2>/dev/null || rm -f "$1.hashes"
 }
 
 # in_git_repo — whether git can answer questions about this directory at all.

@@ -27,6 +27,7 @@ unattended-scope-deviations
 pr-auto-commit
 pr-auto-publish
 local-merge
+build-timing-removed-dir
 pr-reconcile
 pr-signing
 pr-verdict-binding

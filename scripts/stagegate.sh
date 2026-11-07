@@ -371,6 +371,8 @@ on_exit() {
     if declare -f uncle_title_end > /dev/null; then uncle_title_end 2>/dev/null || true; fi
     if [[ "$rc" != 0 ]]; then finished_extras print --kind new --reason not-applicable --stopped; fi
     triage_on_exit "$rc"
+    # After every writer above: a removed run worktree's directory is recreated by the state they write.
+    if declare -f worktree_merge_sweep > /dev/null; then worktree_merge_sweep; fi
 }
 trap on_exit EXIT
 if [[ -f "$ROOT/scripts/lib/terminal-title.sh" ]]; then

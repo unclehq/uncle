@@ -503,6 +503,8 @@ on_exit() {
         finished_extras print --kind change --reason "$(change_pr_extras_reason 2>/dev/null || echo not-published)" --stopped
     fi
     triage_on_exit "$rc"
+    # After every writer above: a removed run worktree's directory is recreated by the state they write.
+    if declare -f worktree_merge_sweep > /dev/null; then worktree_merge_sweep; fi
 }
 trap on_exit EXIT
 trap 'uncle_cancel 130' INT

@@ -54,12 +54,47 @@ sys.exit(0 if not strip_managed(open(sys.argv[2], encoding='utf-8').read()).stri
 PY
         rm -f "$main/.gitignore"
     fi
+    # The run's own brief is an input the run carries in its branch. worktree_auto moves it out of the source checkout when the worktree
+    # is made, but a source checkout left by an earlier run (or one that wrote it afterwards) can still hold a changed or stray copy,
+    # which git would refuse to merge over. It is the run's file, so the source copy is put back to HEAD (or removed if untracked).
+    local rel
+    for rel in CHANGE_REQUEST.md REQUIREMENTS.md .uncle/docs/CHANGE_REQUEST.md .uncle/docs/REQUIREMENTS.md; do
+        [[ -e "$main/$rel" ]] || git -C "$main" cat-file -e "HEAD:$rel" 2>/dev/null || continue
+        if git -C "$main" cat-file -e "HEAD:$rel" 2>/dev/null; then
+            git -C "$main" checkout HEAD -- "$rel" >/dev/null 2>&1 || true
+        elif git -C "$main" cat-file -e "$branch:$rel" 2>/dev/null; then
+            rm -f "$main/$rel"
+        fi
+    done
     if ! git -C "$main" -c commit.gpgsign=false merge --no-edit "$branch" >&2; then
         git -C "$main" merge --abort >/dev/null 2>&1 || true   # errors only when no merge was left in progress
         echo "merging $branch into $srcbranch in $main failed (nothing changed there)" >&2
         return 1
     fi
     echo "Merged $branch into $srcbranch in $main."
+}
+
+# worktree_merge_rmdir <dir> <main> — delete what is left of a removed worktree's directory. `git worktree remove` takes the checkout,
+# but the run keeps writing under .uncle/workflow until it exits (cost ledger, performance report, supervisor and triage records), and
+# each write recreates the directory. Only a sibling of <main> named <main>-*, no longer registered with git and holding no .git of its
+# own, is deleted: this must never be able to reach a live checkout or anything else.
+worktree_merge_rmdir() {
+    local dir="$1" main="$2"
+    [[ -n "$dir" && -n "$main" && "$dir" == /* && "$main" == /* && -d "$dir" && "$dir" != "$main" ]] || return 0
+    [[ "$(dirname "$dir")" == "$(dirname "$main")" && "$(basename "$dir")" == "$(basename "$main")"-* ]] || return 0
+    [[ ! -e "$dir/.git" ]] || return 0
+    ! git -C "$main" worktree list --porcelain 2>/dev/null | grep -qxF "worktree $dir" || return 0
+    rm -rf -- "$dir"
+}
+
+# worktree_merge_sweep — last thing a driver does on exit: remove the directory again if the run recreated it after the worktree was
+# removed. WORKTREE_MERGE_REMOVED is "dir|main", set by worktree_merge_remove.
+worktree_merge_sweep() {
+    [[ -n "${WORKTREE_MERGE_REMOVED:-}" ]] || return 0
+    local dir main
+    IFS='|' read -r dir main <<< "$WORKTREE_MERGE_REMOVED"
+    worktree_merge_rmdir "$dir" "$main"
+    return 0
 }
 
 # worktree_merge_remove <worktree> <main> <branch> [keep-branch] — remove the finished worktree, and its branch unless told to keep it
@@ -71,7 +106,9 @@ worktree_merge_remove() {
     cd "$main" 2>/dev/null || { echo "Worktree $wt kept: $main is unreachable."; return 0; }
     other="$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null | cut -c4- | grep -v -e '^\.uncle/' -e '^FINAL_AUDIT\.md$' -e '^"\?\.uncle/' || true)"
     [[ -n "$other" ]] || force=(--force)
-    if git -C "$main" worktree remove ${force[@]+"${force[@]}"} "$wt" 2>/dev/null && [[ ! -e "$wt" ]]; then
+    if git -C "$main" worktree remove ${force[@]+"${force[@]}"} "$wt" 2>/dev/null && { worktree_merge_rmdir "$wt" "$main"; [[ ! -e "$wt" ]]; }; then
+        worktree_merge_rmdir "$wt" "$main"
+        WORKTREE_MERGE_REMOVED="$wt|$main"
         echo "Removed worktree $wt."
         if [[ "$keep" != keep-branch ]]; then
             git -C "$main" branch -d "$branch" >/dev/null 2>&1 && echo "Deleted merged branch $branch." || true

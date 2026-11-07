@@ -132,5 +132,45 @@ OUT="$(STUB_REASON=handoff-failed pr_run)"
 check "pr: nothing published, nothing queued" 1 "$(grep -c '^pending=$' <<<"$OUT")"
 check "pr: nothing published, worktree kept" yes "$([[ -e "$TMP/pr-wt" ]] && echo yes || echo no)"
 
+# --- the source checkout still holds a changed copy of the run's brief (the failure that stopped testme-change-6) ---
+setup READY
+# An earlier run's merge committed the request to main before this run's worktree was made, so the branch carries it too.
+( cd "$TMP/src" && mkdir -p .uncle/docs && echo "earlier request" > .uncle/docs/CHANGE_REQUEST.md && git add -f .uncle/docs/CHANGE_REQUEST.md && git commit -qm "earlier request" )
+( cd "$TMP/src-wt" && git -c commit.gpgsign=false merge -q --no-edit main && echo "run request" > .uncle/docs/CHANGE_REQUEST.md \
+  && git add -f .uncle/docs/CHANGE_REQUEST.md main.c && git -c commit.gpgsign=false commit -qm run )
+echo "stray new request" > "$TMP/src/.uncle/docs/CHANGE_REQUEST.md"
+( . "$ROOT/scripts/lib/worktree-merge.sh"; worktree_merge_into_source uncle/change-it "$TMP/src" >/dev/null 2>&1; echo "rc=$?" > "$TMP/brief-rc" )
+check "stray request in the source checkout does not block the merge" "rc=0" "$(cat "$TMP/brief-rc")"
+check "the run's request is what main has" "run request" "$(git -C "$TMP/src" show HEAD:.uncle/docs/CHANGE_REQUEST.md)"
+
+# --- the directory goes too, even when the run writes into it after the worktree was removed ---
+setup READY
+(
+  . "$ROOT/scripts/lib/change-pr.sh"
+  CLOSE_ISSUE=0; VERDICT_FILE=.uncle/workflow/audit-verdict; ORIGIN_FILE=.uncle/workflow/origin
+  change_pr_engine() { case "$1" in validate) return 0;; commit-tree) echo "$TREE";; esac; }
+  change_pr_local_merge >/dev/null 2>&1
+  change_pr_remove_merged_worktree
+  mkdir -p "$TMP/src-wt/.uncle/workflow" && echo late > "$TMP/src-wt/.uncle/workflow/cost.tsv"   # a writer that outlives the removal
+  worktree_merge_sweep
+  [[ -e "$TMP/src-wt" ]] && echo still-there || echo swept
+) > "$TMP/sweep.out" 2>&1
+check "directory recreated by a late writer is swept" swept "$(tail -1 "$TMP/sweep.out")"
+
+# The sweep must never reach a live checkout or anything that is not a sibling worktree directory.
+( . "$ROOT/scripts/lib/worktree-merge.sh"
+  mkdir -p "$TMP/keep/a" "$TMP/src-notreg" "$TMP/other-dir"
+  worktree_merge_rmdir "$TMP/src" "$TMP/src"                 # the main checkout itself
+  worktree_merge_rmdir "$TMP/other-dir" "$TMP/src"           # not named <main>-*
+  worktree_merge_rmdir "relative-dir" "$TMP/src"             # not absolute
+  setup READY >/dev/null 2>&1
+  worktree_merge_rmdir "$TMP/src-wt" "$TMP/src"              # a live, registered worktree with its own .git
+  worktree_merge_rmdir "$TMP/src-notreg" "$TMP/src"          # an orphan sibling: this one is deleted
+)
+check "main checkout untouched" yes "$([[ -d "$TMP/src/.git" ]] && echo yes || echo no)"
+check "unrelated directory untouched" yes "$([[ -d "$TMP/other-dir" ]] && echo yes || echo no)"
+check "a live worktree is untouched" yes "$([[ -e "$TMP/src-wt/.git" ]] && echo yes || echo no)"
+check "an orphaned sibling directory is deleted" no "$([[ -e "$TMP/src-notreg" ]] && echo yes || echo no)"
+
 if [[ "$FAILED" -ne 0 ]]; then echo "local-merge-test.sh: $FAILED of $COUNT checks failed"; exit 1; fi
 echo "local-merge-test.sh: $COUNT checks passed"

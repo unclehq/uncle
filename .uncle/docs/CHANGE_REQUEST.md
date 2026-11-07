@@ -1,39 +1,34 @@
-# Change Request: Uncle must create and push a PR when appropriate
+# Change Request
 
 ## Change Type
-Bug fix (regression)
+Behavior change (TUI runner selection)
 
 ## Summary
-Uncle no longer opens a pull request and pushes its branch after a finished build. It should create the PR and push the branch whenever doing so is appropriate.
+When no runners are available, the runner choices should show only the Self hosted runner.
 
 ## Motivation
-The operator reports that Uncle "doesn't make PRs anymore for some reason". PR publication used to work (added in commit 882a671 "now makes PRs for a change request"). Recent changes, such as the 'send all errors to stderr' change (PR #175) and the Windows curses fix, may have affected it, but the cause has not been confirmed.
+Self hosted needs no local CLI from the user's side (it is configured with an endpoint), so it should always be selectable. An empty runner list gives the operator nothing to choose.
 
 ## Observed Current Behavior
-After a change or build completes, no PR is created and nothing is pushed. Known paths in scripts/lib/change-pr.sh (`change_pr_complete`) that return without a PR: handoff disabled or unattended ("PR handoff disabled or unattended; no PR was created" / "leaving the issue open"), a failing `assert_tree_matches_attested` check, and a non-READY audit verdict needing an override. The actual cause in the operator's runs is not yet determined.
+`runners_for(side)` in uncle_tui.py scans PATH for claude, codex, kimi and opencode, and lists self-hosted only if opencode is found. With none installed the list is empty, and `stage_runner` returns an empty string.
 
 ## Desired Behavior
-When a run finishes and publishing is appropriate (work is complete, tree matches the attested tree, audit is READY or explicitly overridden by a person, a GitHub remote is available), Uncle creates the PR with `gh` and pushes the branch. When it is not appropriate, Uncle says clearly why no PR was made. Unattended mode behavior stays as designed (draft PR when the audit is not READY).
+When no runner is detected, the runner options and the default runner consist of only `self-hosted` (displayed as "Self hosted"). When other runners are detected, behavior is unchanged.
 
 ## Reproduction
-Run a change (for example via github_issue or create_change) to completion in the current checkout and observe that no branch is pushed and no PR is opened. First step for the implementer: reproduce and identify which path in change_pr_complete / change_pr_publish skips publication, including whether the driver is calling it at all and whether recent commits (a6c05c2, 355822d, 45d8feb) broke it.
+Run uncle with a PATH containing none of claude, codex, kimi or opencode, open Configure, and look at the runner choices for any stage.
 
 ## Constraints
-Do not weaken the attested-tree check, audit gating, or human override rules. Never force-push. Keep Bash 3.2 compatibility in the driver libraries. Add a regression test where practical.
+Preserve existing behavior whenever at least one runner is installed. Keep the diff minimal. Do not weaken existing tests.
 
 ## Known Relevant Files
-- scripts/lib/change-pr.sh
-- scripts/change-workflow.sh (calls change_pr_complete around lines 4980-5000)
-- scripts/lib/home_agent_session.py
-- scripts/lib/gate_answer.py
-- scripts/tests/supervisor-test.py
-- GITHUB_INTEGRATION.md
+- uncle_tui.py: `runners_for` (about line 690), `stage_runner` (about line 1211), runner option lists (about lines 1441-1464)
 
 ## Out of Scope
-Redesigning the publication dialogs, changing audit or approval gates, and unrelated cleanup.
+Changes to the self-hosted configuration flow, other runners, or unrelated cleanup.
 
 ## Success Criteria
-- A completed run in a repository with a GitHub remote pushes its branch and opens a PR.
-- When no PR is made, the reason is reported to the operator.
-- A regression test covers the fixed path.
-- Existing verification commands show no regressions.
+- With no runners installed, the runner choices list only Self hosted.
+- With no runners installed, the default runner for a stage is self-hosted.
+- With one or more runners installed, the lists are unchanged.
+- Existing tests pass, and a test covers the no-runners case.

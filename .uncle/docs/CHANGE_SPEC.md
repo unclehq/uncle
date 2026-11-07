@@ -1,60 +1,56 @@
-# Change spec
+# Change Spec
 
-Omitted sections: Performance, Security (no new surface beyond preserving gates), Migration (none), Prototype isolation (n/a).
+Omitted sections: Performance, Security, Migration, Prototype isolation (not applicable)
 
 ## 1. Change type
-Bug fix (regression) plus diagnosability.
+Behavior change (TUI runner selection).
 
 ## 2. Problem statement
-A finished run does not push/open a PR and the operator is not told why; the finished block can also say `publication pending` after a PR was created.
+With no runner CLI on PATH the runner choices are empty and the default runner is "". Self hosted needs no local CLI and should always be selectable.
 
 ## 3. Current behavior
-Baseline B4-B8: several gate failures return silently; reason is overwritten.
+Baseline B2.
 
 ## 4. Desired behavior
-When gates pass (tree attested, verdict READY or human/unattended-draft override, origin/remote available) the branch is pushed and the PR created. On every other path the operator sees a specific reason in the finished block and on stderr. Gates are unchanged.
+When discovery finds no runner, options and default are exactly `self-hosted` (shown "Self hosted"). Otherwise unchanged.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| SB1 | MODIFY | change_pr_publish finishes with a successful handoff | reason forced to publication-pending | reason `published` | pr-publish-reason-test.sh |
-| SB2 | MODIFY | publish stops at validate failure / verdict not READY / issue not eligible / tree mismatch / handoff failure | silent or generic | distinct reason key and one stderr line naming it | pr-publish-reason-test.sh |
-| SB3 | MODIFY | the reproduced skip path (if a defect) | no PR | PR created when gates pass | regression test, fails before fix |
-| SB4 | PRESERVE | unattended routing, B1-B3 | as baseline | unchanged | pr-auto-publish-test.sh |
-| SB5 | PRESERVE | tree mismatch or non-READY without override | no PR | still no PR | pr-publish-reason-test.sh, pr-verdict-binding-test.sh |
+| C1 | MODIFY | No runner binary on PATH; open runner picker for any stage | empty list | only self-hosted | new Python test |
+| C2 | MODIFY | No runner on PATH, no configured runner or DEFAULT_RUNNER | stage_runner returns "" | returns self-hosted | new Python test |
+| C3 | PRESERVE | One or more runners installed | installed list in fixed order | identical list | new Python test with fake binaries |
+| C4 | PRESERVE | Configured runner or DEFAULT_RUNNER set | that value | unchanged | existing suites |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| SI1 | EXISTING | Tree must match attested tree before publish | change_pr_publish | assert_tree_matches_attested | gitignore-clean-end-test.py |
-| SI2 | EXISTING | Non-READY audit publishes only with human override or unattended draft | engine | verdict-override | pr-verdict-binding-test.sh |
-| SI3 | EXISTING | No force-push | engine | git push refspec | new test greps engine push has no force flag |
-| SI4 | NEW | Every no-PR return sets a non-empty reason key | change_pr_publish/complete | CHANGE_PR_EXTRAS_REASON | pr-publish-reason-test.sh |
- No invariants RELAXED or REMOVED.
+| V1 | NEW | Runner list is never empty | runners_for | runners_for | new test |
+| V2 | EXISTING | Installed runners yield unchanged order and content | runners_for | PATH scan | new test C3 |
+
+No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Driver exit status stays 0 (B9). Bash 3.2 compatible. Unknown reason keys already fall back safely.
+No change when any runner is detected.
 
-## 8. Error behavior
-Reasons never alter whether a PR is created; they only report.
+## 8. Error and failure behavior
+PATH diagnostics on stderr remain as today; unreadable PATH entries still count as not found, so fallback applies.
 
-## 12. Rollback
-Revert the commit; no state/schema changes.
+## 11. Rollback
+Revert the one-line fallback.
 
 ## 14. Non-goals
-Dialog redesign, audit/approval gate changes, unrelated cleanup, force-push.
+Self-hosted config flow, other runners, unrelated cleanup, supervision runner semantics.
 
 ## 15. Assumptions
-Root cause not yet proven; if reproduction shows the defect is outside change-pr.sh/finished_extras.py, implementation must stop and record a deviation.
+Supervision picker keeps its SUPPORTED_RUNNERS filter; it is unaffected beyond what that filter yields.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | When gates pass and a GitHub remote exists, the publish path reaches engine handoff (push and gh pr create) and records reason `published`. | New shell test with stubbed engine drives change_pr_publish through the success path and asserts handoff called and reason published. |
-| AC-2 | Each no-PR path (validate failure, verdict not READY without override, issue_close_eligible failure, tree mismatch, handoff failure) sets a distinct non-empty reason and prints one explanatory stderr line; none creates a PR. | New shell test per path asserts reason, stderr text and that handoff is not called. |
-| AC-3 | change_pr_complete no longer overwrites a reason set by change_pr_publish with publication-pending. | New test asserts the reason after complete equals the one set by publish. |
-| AC-4 | finished_extras.py renders each new reason key with a readable label. | Python or shell assertion on finished_extras output for each key. |
-| AC-5 | If reproduction identifies a defect that skips publication when gates pass, it is fixed and covered by a regression test that fails before the fix. | Test run against pre-fix code fails; post-fix passes. Recorded in IMPLEMENTATION_NOTES.md. |
-| AC-6 | Gates and force-push rules are unchanged; existing suites show no regressions. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh compared with baseline. |
+| AC-1 | With no runner binaries on PATH, runners_for returns exactly ["self-hosted"] for both agent and reviewer sides, so the runner picker lists only self-hosted (displayed "Self hosted"). | New scripts/tests/runners-none-installed-test.py with an empty PATH directory. |
+| AC-2 | With no runners installed and no configured runner or DEFAULT_RUNNER, stage_runner returns "self-hosted". | Same new test, calling stage_runner on a TUI instance. |
+| AC-3 | With one or more runner binaries on PATH, runners_for output is unchanged (installed list, fixed order, opencode mapped to self-hosted, no extra entries). | Same new test with fake executables on PATH. |
+| AC-4 | Existing shell and Python suites show no new failures versus baseline. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh compared to baseline. |
 

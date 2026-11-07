@@ -95,5 +95,42 @@ check "app: a user's own untracked .gitignore blocks the merge" 1 "$(grep -c '^f
 check "app: ...and is left alone" "my own rule" "$(cat "$TMP/app/.gitignore")"
 check "app: ...and the worktree is kept" yes "$([[ -e "$TMP/app-wt" ]] && echo yes || echo no)"
 
+# --- a published PR: the worktree goes, the branch (the PR head) stays ---
+pr_setup() {
+    rm -rf "$TMP/pr" "$TMP/pr-wt"
+    mkdir "$TMP/pr" && cd "$TMP/pr" && git init -q -b main && echo a > main.c && printf '.uncle/*\n!.uncle/docs/\n' > .gitignore && git add -A && git commit -q -m base
+    git remote add origin https://example.invalid/x.git
+    git worktree add -q -b uncle/change-it "$TMP/pr-wt" && cd "$TMP/pr-wt"
+    mkdir -p .uncle/workflow .uncle/docs && : > .uncle/workflow/worktree-owned
+    echo b > main.c && git commit -qam change
+    echo audit > .uncle/docs/FINAL_AUDIT.md        # written after the commit: untracked, not ignored
+    echo audit > FINAL_AUDIT.md && git add FINAL_AUDIT.md && git commit -qm audit && rm FINAL_AUDIT.md   # the root copy the handoff commits, absent on disk
+}
+pr_run() { ( . "$ROOT/scripts/lib/change-pr.sh"
+    CLOSE_ISSUE=1; UNATTENDED=1; ORIGIN_FILE=.uncle/workflow/origin; VERDICT_FILE=.uncle/workflow/audit-verdict
+    change_pr_publish() { CHANGE_PR_EXTRAS_REASON="${STUB_REASON:-published}"; }
+    change_pr_engine() { return 1; }
+    change_pr_complete </dev/null >/dev/null 2>&1; echo "rc=$?"
+    echo "pending=${WORKTREE_MERGE_PENDING:+yes}"
+    change_pr_remove_merged_worktree ) 2>&1; }
+
+pr_setup
+OUT="$(pr_run)"
+check "pr: complete returns 0" 1 "$(grep -c '^rc=0' <<<"$OUT")"
+check "pr: removal queued" 1 "$(grep -c '^pending=yes' <<<"$OUT")"
+check "pr: worktree removed although only run files are dirty" no "$([[ -e "$TMP/pr-wt" ]] && echo yes || echo no)"
+check "pr: the PR branch is kept" uncle/change-it "$(git -C "$TMP/pr" branch --list uncle/change-it | tr -d ' *+')"
+
+pr_setup
+echo "unsaved work" > "$TMP/pr-wt/notes.txt"
+OUT="$(pr_run)"
+check "pr: an operator's own file keeps the worktree" yes "$([[ -e "$TMP/pr-wt" ]] && echo yes || echo no)"
+check "pr: ...and says how to remove it" 1 "$(grep -c 'worktree remove --force' <<<"$OUT")"
+
+pr_setup
+OUT="$(STUB_REASON=handoff-failed pr_run)"
+check "pr: nothing published, nothing queued" 1 "$(grep -c '^pending=$' <<<"$OUT")"
+check "pr: nothing published, worktree kept" yes "$([[ -e "$TMP/pr-wt" ]] && echo yes || echo no)"
+
 if [[ "$FAILED" -ne 0 ]]; then echo "local-merge-test.sh: $FAILED of $COUNT checks failed"; exit 1; fi
 echo "local-merge-test.sh: $COUNT checks passed"

@@ -136,6 +136,16 @@ change_pr_complete() {
         change_pr_local_merge
     else
         change_pr_complete_route || rc=$?
+        # The change is on the remote and a PR holds it; the worktree has done its job. An issue run's worktree is removed by
+        # from-issue.sh, which still reads this one, so only a run with no issue origin is removed here. The branch is the PR head and stays.
+        case "${CHANGE_PR_EXTRAS_REASON:-}" in
+            published|published-draft-unreviewed)
+                if worktree_merge_owned && [[ ! -s "${ORIGIN_FILE:-/nonexistent}" ]]; then
+                    local pr_main
+                    pr_main="$(git worktree list --porcelain | head -n 1)"; pr_main="${pr_main#worktree }"
+                    WORKTREE_MERGE_PENDING="$(pwd -P)|$pr_main|$(git branch --show-current 2>/dev/null)|keep-branch"
+                fi ;;
+        esac
     fi
     if [[ "$rc" == 0 && "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] && change_pr_in_worktree; then
         case "${CHANGE_PR_EXTRAS_REASON:-}" in

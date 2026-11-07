@@ -181,6 +181,9 @@ PR: https://github.com/org/repo/pull/12 (#12, draft)
   `created`, marked `draft` when applicable. Otherwise it gives a reason:
   `none (handoff disabled)`, `none (no base commit)`,
   `not created (publication pending)`, or `none (not published)`.
+- **Published PR (no issue origin):** once the PR exists the worktree is removed after the summary; the branch stays, it is the PR head.
+  The run's own files (`.uncle/`, the root `FINAL_AUDIT.md`) are written after the commit and do not keep it; any other uncommitted
+  file does, and the command to remove it is printed. An issue run's worktree is removed by `from-issue.sh`.
 - **No git remote:** a run in uncle's own worktree has nowhere to open a PR, so a READY audit is committed on the run branch (the
   audited tree, unsigned), merged into the branch the source checkout is on, and the worktree and its merged branch are removed after
   the summary prints (`PR: none (no remote; merged into the source branch)`). A non-READY verdict, a failed binding, a source

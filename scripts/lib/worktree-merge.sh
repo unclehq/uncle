@@ -62,16 +62,22 @@ PY
     echo "Merged $branch into $srcbranch in $main."
 }
 
-# worktree_merge_remove <worktree> <main> <branch> — remove the merged worktree and its branch (git refuses -d for unmerged work).
-# Leaves the directory, and says how to remove it, when git refuses (e.g. files it does not ignore).
+# worktree_merge_remove <worktree> <main> <branch> [keep-branch] — remove the finished worktree, and its branch unless told to keep it
+# (a published PR's head). The run's own files are not work: .uncle/ and the audit's root FINAL_AUDIT.md are written after the commit,
+# so a worktree whose only changes are those is removed with --force. Anything else dirty is the operator's, and is never forced;
+# the directory is kept and the command to remove it is printed. git refuses -d for an unmerged branch.
 worktree_merge_remove() {
-    local wt="$1" main="$2" branch="$3"
+    local wt="$1" main="$2" branch="$3" keep="${4:-}" other force=()
     cd "$main" 2>/dev/null || { echo "Worktree $wt kept: $main is unreachable."; return 0; }
-    if git -C "$main" worktree remove "$wt" 2>/dev/null && [[ ! -e "$wt" ]]; then
+    other="$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null | cut -c4- | grep -v -e '^\.uncle/' -e '^FINAL_AUDIT\.md$' -e '^"\?\.uncle/' || true)"
+    [[ -n "$other" ]] || force=(--force)
+    if git -C "$main" worktree remove ${force[@]+"${force[@]}"} "$wt" 2>/dev/null && [[ ! -e "$wt" ]]; then
         echo "Removed worktree $wt."
-        git -C "$main" branch -d "$branch" >/dev/null 2>&1 && echo "Deleted merged branch $branch." || true
+        if [[ "$keep" != keep-branch ]]; then
+            git -C "$main" branch -d "$branch" >/dev/null 2>&1 && echo "Deleted merged branch $branch." || true
+        fi
     else
-        echo "Worktree $wt kept: git would not remove it. Everything is merged; remove it with: git -C $main worktree remove --force $wt"
+        echo "Worktree $wt kept: git would not remove it (uncommitted changes outside .uncle/). Remove it with: git -C $main worktree remove --force $wt"
     fi
     return 0
 }
@@ -95,8 +101,8 @@ worktree_merge_finish_all() {
 
 worktree_merge_remove_pending() {
     [[ -n "${WORKTREE_MERGE_PENDING:-}" ]] || return 0
-    local wt main branch
-    IFS='|' read -r wt main branch <<< "$WORKTREE_MERGE_PENDING"
+    local wt main branch keep
+    IFS='|' read -r wt main branch keep <<< "$WORKTREE_MERGE_PENDING"
     WORKTREE_MERGE_PENDING=""
-    worktree_merge_remove "$wt" "$main" "$branch"
+    worktree_merge_remove "$wt" "$main" "$branch" "$keep"
 }

@@ -364,8 +364,22 @@ BUILD_CONFIG_STAGES = [name for name in CONFIG_STAGES if name != "triage"]
 # scripts/agent-*.sh and scripts/reviewer-*.sh — and the shim is what enforces
 # that difference. codex, for instance, runs `--sandbox workspace-write` as an
 # agent and `--sandbox read-only` as a reviewer.
-AGENT_RUNNERS = ["claude", "kimi", "codex", "self-hosted"]
-REVIEWER_RUNNERS = ["codex", "claude", "kimi", "self-hosted"]
+AGENT_RUNNERS = ["claude", "kimi", "codex", "self-hosted", "aws-bedrock"]
+REVIEWER_RUNNERS = ["codex", "claude", "kimi", "self-hosted", "aws-bedrock"]
+# Runners that speak HTTP to a configured endpoint.  AWS Bedrock is a profile
+# of the self-hosted class with its own key store, labels and display name.
+HTTP_RUNNERS = ("self-hosted", "aws-bedrock")
+COMPAT_CHOICES = ["OpenAI compatible", "Anthropic compatible", "Converse API compatible"]
+PROFILES = {
+    "self-hosted": {"display": "Self hosted", "key_file": "self-hosted-keys.json",
+                    "url_label": "Base URL", "token_label": "API key"},
+    "aws-bedrock": {"display": "AWS Bedrock", "key_file": "aws-bedrock-keys.json",
+                    "url_label": "Bedrock URL", "token_label": "AWS Bedrock Token"},
+}
+
+
+def runner_display(runner):
+    return PROFILES.get(runner, {}).get("display", runner)
 
 # Applied to any stage the operator has not configured.
 DEFAULT_RUNNER = "claude"
@@ -518,6 +532,7 @@ CONFIG_DESC = {
         "records BLOCKED, and no repair attempt can grant it a port."
     ),
     "field:base_url": "The OpenAI-compatible API root the model server should use, for example http://localhost:8000/v1.",
+    "field:api_compatibility": "Wire protocol the Bedrock URL speaks: OpenAI compatible (default), Anthropic compatible or Converse API compatible. Bedrock never sends a temperature.",
     "field:api_key": "Endpoint credential, hidden while editing and stored separately in .uncle/self-hosted-keys.json. Use a placeholder for a server without authentication.",
     "field:model": (
         "The model this stage runs. claude, codex, and kimi take "
@@ -664,7 +679,7 @@ def stage_env_var(stage):
 def unsupported_runner_message(runner):
     runner = re.sub(r'[\x00-\x1f\x7f]', '', str(runner))[:64]
     return ("uncle: runner '%s' is not supported (Cline support was removed). "
-            "Set it to claude, codex, kimi or self-hosted with 'uncle' -> Configure." % runner)
+            "Set it to claude, codex, kimi, self-hosted or aws-bedrock with 'uncle' -> Configure." % runner)
 
 
 def runner_command(runner, side):
@@ -673,6 +688,7 @@ def runner_command(runner, side):
     if side == REVIEWER:
         table = {
             "self-hosted": shim("reviewer-self-hosted.sh"),
+            "aws-bedrock": shim("reviewer-self-hosted.sh"),
             "codex": "codex",
             "claude": shim("reviewer-claude.sh"),
             "kimi": shim("reviewer-kimi.sh"),
@@ -680,6 +696,7 @@ def runner_command(runner, side):
     else:
         table = {
             "self-hosted": shim("agent-self-hosted.sh"),
+            "aws-bedrock": shim("agent-self-hosted.sh"),
             "claude": "claude",
             "kimi": shim("agent-kimi.sh"),
             "codex": shim("agent-codex.sh"),
@@ -709,6 +726,11 @@ def runners_for(side):
             installed.append("self-hosted" if binary == "opencode" else binary)
             break
     return installed or ["self-hosted"]
+
+
+def selectable_runners(side):
+    """Runners offered in Configure: the installed ones plus the HTTP-only AWS Bedrock runner."""
+    return runners_for(side) + ["aws-bedrock"]
 
 
 
@@ -1047,6 +1069,7 @@ class UncleTUI:
         self.stage_networks = {}
         self.stage_base_urls = {}
         self.stage_api_keys = read_keys(CONFIG_PATH)
+        self.bedrock_keys = read_keys(CONFIG_PATH, profile="aws-bedrock")
         self.notice = ""
         self.config_sel = 0
         self.config_scroll = 0
@@ -1167,6 +1190,8 @@ class UncleTUI:
             return self._config_items()[self.config_sel]
         if section == "opencode":
             return "@connection"
+        if section == "bedrock":
+            return "@bedrock"
         if section == "misc":
             return "!misc"
         if section == "supervision":
@@ -1181,6 +1206,10 @@ class UncleTUI:
 
     def _profile_targets(self):
         return ["@new"] + ["@" + name for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
+
+    def _keys_for(self, runner):
+        """The key store of an HTTP runner's profile."""
+        return self.bedrock_keys if runner == "aws-bedrock" else self.stage_api_keys
 
     # ---- effective values ----
     def _stage_value(self, stage, values):
@@ -1199,7 +1228,7 @@ class UncleTUI:
         runner = self._stage_value(stage, self.stage_runners)
         if runner in ("opencode", "aider"):
             return "self-hosted"
-        if runner and runner not in ("claude", "codex", "kimi", "self-hosted"):
+        if runner and runner not in ("claude", "codex", "kimi") + HTTP_RUNNERS:
             # Saved value is unsupported (e.g. a removed runner): leave the stage
             # unselected and say why; the config file is not rewritten.
             self.notice = unsupported_runner_message(runner)
@@ -1210,14 +1239,14 @@ class UncleTUI:
         # so the installed-agent scan below is what actually decides.
         if DEFAULT_RUNNER:
             return DEFAULT_RUNNER
-        installed = runners_for(STAGE_SIDE.get(stage, AGENT))
+        installed = selectable_runners(STAGE_SIDE.get(stage, AGENT))
         return installed[0] if installed else ""
 
     def stage_effort(self, stage):
         configured = self._stage_value(stage, self.stage_efforts)
         if configured:
             return configured
-        return "none" if self.stage_runner(stage) == "self-hosted" else default_stage_effort(stage)
+        return "none" if self.stage_runner(stage) in HTTP_RUNNERS else default_stage_effort(stage)
 
     def stage_network(self, stage):
         """Whether this stage's sandbox may reach the network. Default off."""
@@ -1226,7 +1255,7 @@ class UncleTUI:
     def stage_model(self, stage):
         """The model for a stage, or "" when its runner takes none."""
         runner = self.stage_runner(stage)
-        if runner == "self-hosted":
+        if runner in HTTP_RUNNERS:
             return self._stage_value(stage, self.stage_models)
         if runner in ("claude", "codex", "kimi"):
             # Stored id or ""; "" means the runner's own default. Kimi stores
@@ -1244,10 +1273,12 @@ class UncleTUI:
         model's reasoningEffort option. Claude, codex, and kimi take a model
         from their own catalogue; codex's row order keeps network above model.
         """
+        if stage == "@bedrock":
+            return ["base_url", "api_key", "api_compatibility"]
         if stage.startswith("@"):
             return ["base_url", "api_key"]
         runner = self.stage_runner(stage)
-        if runner == "self-hosted":
+        if runner in HTTP_RUNNERS:
             return ["runner", "effort", "model"]
         if runner == "codex":
             return ["runner", "effort", "network", "model"]
@@ -1263,6 +1294,8 @@ class UncleTUI:
             return getattr(self, "supervision", {}).get(field, "")
         if stage == "@connection":
             return connection_settings(self.stage_api_keys).get(field, "")
+        if stage == "@bedrock":
+            return connection_settings(self.bedrock_keys).get(field, "")
         if stage.startswith("@"):
             name = stage[1:]
             if field == "name":
@@ -1286,10 +1319,12 @@ class UncleTUI:
         stored = self._field_value(stage, field)
         if field == "api_key":
             return "********" if stored else "not set"
-        if field == "base_url" or (field == "model" and self.stage_runner(stage) == "self-hosted"):
+        if field == "api_compatibility":
+            return stored or "%s  (default)" % COMPAT_CHOICES[0]
+        if field == "base_url" or (field == "model" and self.stage_runner(stage) in HTTP_RUNNERS):
             return stored or "not set"
-        if field == "runner" and stored == "self-hosted":
-            return "Self hosted"
+        if field == "runner" and stored in HTTP_RUNNERS:
+            return runner_display(stored)
         if stored:
             if field == "model":
                 label = MODEL_LABELS.get(stored, "")
@@ -1297,8 +1332,7 @@ class UncleTUI:
             return stored
         if field == "runner":
             default = self.stage_runner(stage)
-            if default == "self-hosted":
-                default = "Self hosted"
+            default = runner_display(default)
             return "%s  (default)" % (default or "No agents installed")
         if field == "effort":
             return "%s  (default)" % default_stage_effort(stage)
@@ -1333,19 +1367,33 @@ class UncleTUI:
                 self.supervision.pop(field, None)
             self.save_config()
             return
-        if stage == "@connection":
-            connection = connection_settings(self.stage_api_keys)
+        if stage in ("@connection", "@bedrock"):
+            runner = "aws-bedrock" if stage == "@bedrock" else "self-hosted"
+            keys = self._keys_for(runner)
+            connection = connection_settings(keys)
             connection[field] = value
+            if field == "api_compatibility":
+                if value not in COMPAT_CHOICES:
+                    self.notice = "API Compatibility must be one of: " + ", ".join(COMPAT_CHOICES)
+                    return
+                keys['__opencode_connection__'] = connection
+                self.save_config()
+                return
+            compat = connection.get("api_compatibility")
             if connection.get('base_url') and connection.get('api_key'):
-                self.notice = "Discovering supported self-hosted models…"
+                self.notice = "Discovering supported %s models…" % ("AWS Bedrock" if runner == "aws-bedrock" else "self-hosted")
                 try:
-                    refresh_models(self.stage_api_keys, connection['base_url'], connection['api_key'])
+                    refresh_models(keys, connection['base_url'], connection['api_key'])
+                    if compat:
+                        keys['__opencode_connection__']['api_compatibility'] = compat
                 except ValueError as exc:
+                    # A failed discovery keeps the prior catalog; keep the typed values.
+                    keys['__opencode_connection__'] = connection
                     self.notice = str(exc)
                     return
                 self.notice = ""
             else:
-                self.stage_api_keys['__opencode_connection__'] = connection
+                keys['__opencode_connection__'] = connection
             self.save_config()
             return
         if field == "runner" and value != self.stage_runner(stage):
@@ -1385,13 +1433,15 @@ class UncleTUI:
     def _config_items(self):
         section = getattr(self, "config_section", "")
         if not section:
-            return ["1. Configure stages", "2. Configure self hosting", "3. Miscellaneous", "4. Supervision", "5. Recovery"]
+            return ["1. Configure stages", "2. Configure self hosting", "3. Configure AWS Bedrock", "4. Miscellaneous", "5. Supervision", "6. Recovery"]
         if section == "supervision":
             return self._supervision_items()
         if section == "recovery":
             return ["Recovery model — diagnose failures and propose repairs"]
         if section == "opencode":
             return ["Connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
+        if section == "bedrock":
+            return ["Connection — Bedrock URL and AWS Bedrock Token", "Refresh supported models (%d loaded)" % len(self.bedrock_keys.get("__opencode_models__", {}))]
         if section == "misc":
             return ["Auto mode: " + ("off" if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "false" else "on"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
@@ -1400,7 +1450,7 @@ class UncleTUI:
         width = max(len(s) for s in BUILD_CONFIG_STAGES)
         rows = []
         for stage in BUILD_CONFIG_STAGES:
-            parts = ["Self hosted" if self.stage_runner(stage) == "self-hosted" else self.stage_runner(stage)]
+            parts = [runner_display(self.stage_runner(stage))]
             model = self.stage_model(stage)
             if model:
                 parts.append(MODEL_LABELS.get(model, model))
@@ -1417,8 +1467,11 @@ class UncleTUI:
         """Rows of the open stage's popup."""
         stage = self.stage_target
         rows = []
+        profile = PROFILES["aws-bedrock" if stage == "@bedrock" else "self-hosted"]
         for field in self.stage_fields(stage):
-            rows.append("%s  %s" % ({"base_url": "Base URL", "api_key": "API key"}.get(field, field).ljust(8), self._field_display(stage, field)))
+            label = {"base_url": profile["url_label"], "api_key": profile["token_label"],
+                     "api_compatibility": "API Compatibility"}.get(field, field)
+            rows.append("%s  %s" % (label.ljust(8), self._field_display(stage, field)))
         return rows
 
     def _stage_field(self):
@@ -1438,12 +1491,14 @@ class UncleTUI:
         if self.state == "stage":
             field = self._stage_field()
             desc = CONFIG_DESC.get("field:%s" % field, "")
+            if field == "model" and self.stage_runner(self.stage_target) == "aws-bedrock":
+                return "Choose one of your configured AWS Bedrock models. Set the Bedrock URL and AWS Bedrock Token to discover models in Configure → Configure AWS Bedrock."
             if field == "model" and self.stage_runner(self.stage_target) == "self-hosted":
                 return "Choose one of your configured self-hosted models. Set the Base URL and API key to discover models in Configure → Configure self hosting."
             if field == "runner":
                 side = STAGE_SIDE.get(self.stage_target, AGENT)
                 desc += " This is a %s stage, so its choices are %s." % (
-                    side, ", ".join(runners_for(side)))
+                    side, ", ".join(selectable_runners(side)))
             return desc
         if getattr(self, "config_section", "") == "misc":
             return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. It asks nothing: blocking final-audit findings are skipped and ledgered as accepted without human review, no completion or star dialog opens, nothing is committed, pushed or opened as a PR, and the finished-build line is printed on exit. The approval name identifies your manual approvals."
@@ -1463,10 +1518,12 @@ class UncleTUI:
             return [("option", e) for e in EFFORTS] + [("custom", "Custom… (type an effort)")]
         if self.picker_kind == "runner":
             if self.picker_target == "!supervision":
-                return [("option", runner) for runner in runners_for(AGENT)
+                return [("option", runner) for runner in selectable_runners(AGENT)
                         if runner in supervision_lib.SUPPORTED_RUNNERS]
             side = STAGE_SIDE.get(self.picker_target, AGENT)
-            return [("option", r) for r in runners_for(side)]
+            return [("option", r) for r in selectable_runners(side)]
+        if self.picker_kind == "api_compatibility":
+            return [("option", c) for c in COMPAT_CHOICES]
         if self.picker_kind == "network":
             # Two states and no custom row: the sandbox is either open or it
             # is not, and a typed value here would read as a setting while
@@ -1474,8 +1531,8 @@ class UncleTUI:
             return [("option", v) for v in NETWORK_CHOICES]
         runner = (self.supervision.get("runner", supervision_lib.DEFAULTS["runner"])
                   if self.picker_target == "!supervision" else self.stage_runner(self.picker_target))
-        if self.picker_kind == "model" and runner == "self-hosted":
-            return ([("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
+        if self.picker_kind == "model" and runner in HTTP_RUNNERS:
+            return ([("option", name) for name in sorted(self._keys_for(runner).get("__opencode_models__", {}))]
                     + [("custom", "Custom… (type a model id)")])
         if self.picker_kind == "model":
             # Each vendor picker offers only its own catalogue: ids from a
@@ -1521,6 +1578,8 @@ class UncleTUI:
             return self.stage_effort(stage)
         if self.picker_kind == "network":
             return self.stage_network(stage)
+        if self.picker_kind == "api_compatibility":
+            return self._field_value(stage, "api_compatibility") or COMPAT_CHOICES[0]
         if self.picker_kind == "markdown_viewer":
             return self._field_value(stage, self.picker_kind)
         return self.stage_model(stage)
@@ -1529,9 +1588,9 @@ class UncleTUI:
         self.notice = ""
         self.picker_kind = kind
         self.picker_target = target
-        available_runners = ([(runner) for runner in runners_for(AGENT)
+        available_runners = ([(runner) for runner in selectable_runners(AGENT)
                               if runner in supervision_lib.SUPPORTED_RUNNERS]
-                             if target == "!supervision" else runners_for(STAGE_SIDE.get(target, AGENT)))
+                             if target == "!supervision" else selectable_runners(STAGE_SIDE.get(target, AGENT)))
         if kind == "runner" and not available_runners:
             self.notice = "No agents installed. Install claude, codex, kimi, or opencode and add its executable to PATH."
             return
@@ -1541,8 +1600,10 @@ class UncleTUI:
             return
         runner = (self.supervision.get("runner", supervision_lib.DEFAULTS["runner"])
                   if target == "!supervision" else self.stage_runner(target))
-        if kind == "model" and runner == "self-hosted" and not self.stage_api_keys.get("__opencode_models__"):
-            self.notice = "Set up your endpoint in Configure → Configure self hosting to discover models first."
+        if kind == "model" and runner in HTTP_RUNNERS and not self._keys_for(runner).get("__opencode_models__"):
+            self.notice = ("Set up your endpoint in Configure → Configure AWS Bedrock to discover models first."
+                           if runner == "aws-bedrock" else
+                           "Set up your endpoint in Configure → Configure self hosting to discover models first.")
             return
         self.pick_filter = ""
         cur = (self._picker_current() or "").lower()
@@ -1643,6 +1704,7 @@ class UncleTUI:
         self.stage_networks = {}
         self.stage_base_urls = {}
         self.stage_api_keys = read_keys(CONFIG_PATH)
+        self.bedrock_keys = read_keys(CONFIG_PATH, profile="aws-bedrock")
         # Normalize existing projects too.  Earlier versions performed this
         # only while creating the first configuration, so a project with an
         # existing config and a legacy bare `.uncle/` rule kept its generated
@@ -1823,6 +1885,7 @@ class UncleTUI:
         except Exception:
             pass
         save_keys(CONFIG_PATH, self.stage_api_keys)
+        save_keys(CONFIG_PATH, getattr(self, "bedrock_keys", {}), profile="aws-bedrock")
         self._config_stamp = self._stamp()
 
     def stage_env(self):
@@ -3848,7 +3911,7 @@ class UncleTUI:
             return session
         try:
             config, homepage_stage = self.homepage_supervision_config()
-            if config.runner == 'self-hosted':
+            if config.runner in HTTP_RUNNERS:
                 # Direct HTTP on a persistent connection of the supervisor's own.
                 from self_hosted import http_transport
                 if not http_transport():
@@ -4874,10 +4937,11 @@ class UncleTUI:
         command = [runner_command(runner, AGENT)] + triage_runner_flags(effort, model, tools)
         env = triage_scrub_env(os.environ)
         env['UNCLE_CONFIG'] = str(CONFIG_PATH)
-        if runner == 'self-hosted':
+        if runner in HTTP_RUNNERS:
             values = home_settings(CONFIG_PATH, 'triage')
+            prefix = 'UNCLE_AWS_BEDROCK_' if runner == 'aws-bedrock' else 'UNCLE_SELF_HOSTED_'
             for field in ('model', 'base_url', 'api_key'):
-                env['UNCLE_SELF_HOSTED_' + field.upper()] = values[field]
+                env[prefix + field.upper()] = values[field]
         self.triage_turn = turn
         self.triage_proposals = []
         self.triage_pending = {'mode': mode, 'proposal': proposal, 'digest': info['digest'], 'turn': turn}
@@ -7445,7 +7509,7 @@ class UncleTUI:
                     text.lower() == (self._picker_current() or "").lower()
                 marker = "  <current>" if cur else ""
                 label = MODEL_LABELS.get(text, "") if kind == "model" else ""
-                display_text = "Self hosted" if self.picker_kind == "runner" and text == "self-hosted" else text
+                display_text = runner_display(text) if self.picker_kind == "runner" else text
                 disp = prefix + display_text + ("  %s" % label if label else "") + marker
             try:
                 self.stdscr.addnstr(top + i, cx, disp, w - 1 - cx, attr)
@@ -7890,7 +7954,7 @@ class UncleTUI:
             elif k in (10, 13):
                 section = getattr(self, "config_section", "")
                 if not section:
-                    self.config_section = ("stages", "opencode", "misc", "supervision", "recovery")[self.config_sel]
+                    self.config_section = ("stages", "opencode", "bedrock", "misc", "supervision", "recovery")[self.config_sel]
                     self.config_sel = self.config_scroll = 0
                 elif section == "supervision":
                     self._supervision_enter()
@@ -7904,6 +7968,8 @@ class UncleTUI:
 
                 elif section == "opencode" and self.config_sel == 1:
                     self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
+                elif section == "bedrock" and self.config_sel == 1:
+                    self._set_field("@bedrock", "base_url", connection_settings(self.bedrock_keys).get("base_url", ""))
                 else:
                     self._open_stage(self._config_row())
             elif k in (ord("q"), ord("Q")):
@@ -8049,7 +8115,7 @@ class UncleTUI:
         elif self.state == "config_edit":
             val = self.input_buf if self.picker_kind == "markdown_viewer" else self.input_buf.strip()
             runner = self.stage_runner(self.picker_target)
-            if self.picker_kind == "model" and runner != "self-hosted" and not valid_model_id(val, runner):
+            if self.picker_kind == "model" and runner not in HTTP_RUNNERS and not valid_model_id(val, runner):
                 # Storing it would only surface as a failed stage later.
                 self.notice = "enter a model id for %s" % runner
                 return

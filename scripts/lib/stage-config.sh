@@ -213,7 +213,7 @@ uncle_validate_config_runners() {
         [[ "$line" == *" "* ]] || continue
         value="${value%% *}"
         case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
-            ""|claude|codex|kimi|self-hosted|opencode|aider) ;;
+            ""|claude|codex|kimi|self-hosted|opencode|aider|aws-bedrock) ;;
             *) uncle_unsupported_runner "$value" || rc=1 ;;
         esac
     done < "$file"
@@ -287,11 +287,20 @@ uncle_resolve_stage_runner() {
         stage="$(uncle_config_stage "$stage")"
         UNCLE_RESOLVED_RUNNER="$(uncle_stage_key "$stage" runner)"
         [[ -n "$UNCLE_RESOLVED_RUNNER" ]] || UNCLE_RESOLVED_RUNNER="$(uncle_config_get runner)"
-        case "$UNCLE_RESOLVED_RUNNER" in opencode|aider) UNCLE_RESOLVED_RUNNER=self-hosted ;; esac
+        case "$(printf '%s' "$UNCLE_RESOLVED_RUNNER" | tr '[:upper:]' '[:lower:]')" in opencode|aider|aws-bedrock) UNCLE_RESOLVED_RUNNER=self-hosted ;; esac
         return 0
     fi
     UNCLE_RESOLVED_RUNNER="$(uncle_stage_runner "$stage")"
     [[ -n "$UNCLE_RESOLVED_RUNNER" ]] || uncle_no_runner
+}
+
+# The runner exactly as configured (lowercased), before shell normalization.
+uncle_raw_stage_runner() {
+    local stage v
+    stage="$(uncle_config_stage "$1")"
+    v="$(uncle_stage_key "$stage" runner)"
+    [[ -n "$v" ]] || v="$(uncle_config_get runner)"
+    printf '%s' "$v" | tr '[:upper:]' '[:lower:]'
 }
 
 uncle_stage_runner() {
@@ -299,7 +308,7 @@ uncle_stage_runner() {
     stage="$(uncle_config_stage "$1")"
     v="$(uncle_stage_key "$stage" runner)"
     [[ -n "$v" ]] || v="$(uncle_config_get runner)"
-    [[ "$v" != "opencode" && "$v" != "aider" ]] || v=self-hosted
+    case "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" in opencode|aider|aws-bedrock) v=self-hosted ;; esac
     if [[ -z "$v" ]]; then
         v="$UNCLE_DEFAULT_RUNNER"
     fi
@@ -332,6 +341,12 @@ uncle_stage_model() {
     local stage v runner
     stage="$(uncle_config_stage "$1")"
     runner="${2-$(uncle_stage_runner "$stage")}"
+    if [[ "$runner" == "self-hosted" && "$(uncle_raw_stage_runner "$stage")" == "aws-bedrock" ]]; then
+        v="${UNCLE_AWS_BEDROCK_MODEL:-$(uncle_stage_key "$stage" model)}"
+        [[ -n "$v" ]] || v="$(uncle_config_get aws-bedrock.model)"
+        printf '%s' "$v"
+        return 0
+    fi
     if [[ "$runner" == "self-hosted" ]]; then
         v="${UNCLE_SELF_HOSTED_MODEL:-$(uncle_stage_key "$stage" model)}"
         [[ -n "$v" ]] || v="$(uncle_config_get self-hosted.model)"

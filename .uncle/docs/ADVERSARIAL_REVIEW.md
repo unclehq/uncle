@@ -1,168 +1,176 @@
-## AR-001: Plan leaves the set of success reasons ambiguous (exact two vs 'published*' glob, empty/unset reason).
+## AR-001: Bedrock temperature env behavior is unspecified.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1(b) vs CHANGE_SPEC OB-3 'published*' and AC-3 exact reasons.
-- Failure: Plan leaves the set of success reasons ambiguous (exact two vs 'published*' glob, empty/unset reason). Settle: 'In a worktree run, change_pr_complete returns 0 only if CHANGE_PR_EXTRAS_REASON is exactly published or published-draft-unreviewed; any other value, including empty, returns 1.'
+- References: CHANGE_SPEC AC-2/BH-4 name only Self Hosted settings; CHANGE_PLAN D-3 adds the WORKFLOW_AWS_BEDROCK_ prefix.
+- Failure: Bedrock temperature env behavior is unspecified. Add: 'Bedrock never reads any temperature env var or stage setting, including WORKFLOW_AWS_BEDROCK_TEMPERATURE, and ignores them silently.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: CLOSE_ISSUE=0 opt-out collides with the non-zero rule: OB-6/AC-6 say no publish, but s1(b) returns 1 on the 'handoff dis
+## AR-002: Invalid-protocol fallback is left two ways to read.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1(b) vs CHANGE_SPEC OB-6, AC-6, INV-4.
-- Failure: CLOSE_ISSUE=0 opt-out collides with the non-zero rule: OB-6/AC-6 say no publish, but s1(b) returns 1 on the 'handoff disabled' path. Settle: 'With WORKFLOW_CLOSE_ISSUE=0, worktree runs return 0 and the driver exits 0; the non-zero rule applies only when CLOSE_ISSUE=1.'
+- References: CHANGE_SPEC section 7 and CHANGE_PLAN section 12 (OpenAI fallback with notice) vs INV-4 (fail closed); notice text, location and env case unspecified.
+- Failure: Invalid-protocol fallback is left two ways to read. Add: 'An unknown or empty protocol value, from file or env, resolves to openai for that run, shows one notice naming the bad value, and is not rewritten to storage.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Attended worktree runs are unspecified when the user declines the PR dialog: INV-4 says never exit 0 without a PR, but O
+## AR-003: The Anthropic auth header is ambiguous across sections.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC INV-4 vs OB-7; CHANGE_PLAN s1.
-- Failure: Attended worktree runs are unspecified when the user declines the PR dialog: INV-4 says never exit 0 without a PR, but OB-7 says dialogs are unchanged. Settle: 'Attended worktree runs are exempt from INV-4; a declined dialog returns 0.'
+- References: CHANGE_SPEC A-2 ('x-api-key/bearer') vs section 10 ('only as bearer'); CHANGE_PLAN R-4.
+- Failure: The Anthropic auth header is ambiguous across sections. Add: 'OpenAI and Converse send Authorization: Bearer; Anthropic sends Authorization: Bearer plus anthropic-version: 2023-06-01 and no x-api-key.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Worktree definition is ambiguous: the marker path depends on cwd/STATE_DIR, git-dir comparison also matches other layout
+## AR-004: URL joining and per-protocol paths are unspecified apart from Converse.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1, D-1, s22; CHANGE_SPEC s15.
-- Failure: Worktree definition is ambiguous: the marker path depends on cwd/STATE_DIR, git-dir comparison also matches other layouts, and the spec says 'linked worktree'. Settle: 'A worktree run is one where the marker exists under STATE_DIR resolved to an absolute path, or git-dir differs from git-common-dir.'
+- References: CHANGE_SPEC A-2 gives only '{URL}/model/{id}/converse'; CHANGE_PLAN risk list admits the endpoint paths are unverified.
+- Failure: URL joining and per-protocol paths are unspecified apart from Converse. Add the exact path per protocol and per operation, including discovery, trailing-slash handling and model-id encoding.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Behavior when an origin-less or failing worktree publish errors (push failure) and the extras-print count are left to th
+## AR-005: The scope of the temperature strip is ambiguous.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s6, s10 D-2 'implementer checks'.
-- Failure: Behavior when an origin-less or failing worktree publish errors (push failure) and the extras-print count are left to the implementer. Settle: 'Push failure in a worktree run sets a failure reason, returns 1, and prints extras exactly once.'
+- References: CHANGE_SPEC AC-2 says 'at any nesting' and INV-1 says transport boundary; CHANGE_PLAN D-2 says builders plus transport.
+- Failure: The scope of the temperature strip is ambiguous. Add: 'The strip removes only top-level temperature and inferenceConfig/options temperature; it never alters tool schemas, tool arguments or user schema property names.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Scope-cut order lets the driver exit-code change be cut, contradicting INV-4/OB-3 requiring non-zero exit.
+## AR-006: Unusual valid responses and constrained output are unspecified.
 
 - Severity: LOW
-- References: CHANGE_PLAN s21 vs CHANGE_SPEC INV-4, AC-3.
-- Failure: Scope-cut order lets the driver exit-code change be cut, contradicting INV-4/OB-3 requiring non-zero exit. Settle: 'The driver exit-code change is not cuttable; only README wording may be cut.'
+- References: CHANGE_SPEC AC-3/BH-5; CHANGE_PLAN section 12 says only 'parse errors raise'.
+- Failure: Unusual valid responses and constrained output are unspecified. Add: 'Missing usage yields zeros; missing content raises a runner error; constrained output uses a forced tool/schema per protocol.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Worktree detection (marker OR git-dir != git-common-dir) conflicts with 'non-worktree unchanged'.
+## AR-007: Plan conflicts on where temperature is stripped: D-2 says builders and transport, INV-1 names only transport.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 and D-1 vs CHANGE_SPEC OB-5/R-2; AC-4 tests only a plain repo with no marker.
-- Failure: Worktree detection (marker OR git-dir != git-common-dir) conflicts with 'non-worktree unchanged'. A stale marker in a plain repo, or an operator worktree, would now auto-publish. Plan should say: 'in_worktree is true only when git-dir != git-common-dir; the marker alone never qualifies.'
+- References: CHANGE_PLAN D-2 vs CHANGE_SPEC INV-1 enforcement point; AC-4/INV-2.
+- Failure: Plan conflicts on where temperature is stripped: D-2 says builders and transport, INV-1 names only transport. How the shared `_strip_temperature` is gated by profile is unstated. Add: `_strip_temperature` runs only for aws-bedrock and is a no-op for self-hosted, with a test that a Self Hosted body still carries temperature.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The non-zero exit is not conditioned on UNATTENDED, so an attended worktree user who declines the dialog would now exit
+## AR-008: Default profile is undefined when shared functions get no profile argument.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1(b)/(c) say 'for worktree runs' with no unattended condition; OB-7 says attended is unchanged.
-- Failure: The non-zero exit is not conditioned on UNATTENDED, so an attended worktree user who declines the dialog would now exit non-zero, contradicting 'attended dialogs unchanged'. Plan should say: 'pr_rc is non-zero only for unattended worktree runs; attended decline or skip returns 0.'
+- References: CHANGE_PLAN R-2 and D-4; INV-4.
+- Failure: Default profile is undefined when shared functions get no profile argument. R-2 defaults to self-hosted; D-4 raises on unresolved Bedrock. Add: omitting the profile means self-hosted, while an explicit unknown profile string raises.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: The set of reasons that return 0 is unspecified for legitimate no-PR outcomes.
+## AR-009: Uncommitted partial work already modifies source files that existing Self Hosted tests cover, and the plan never says wh
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1(b) vs AC-3 ('any reason other than published*') and AC-6/OB-6.
-- Failure: The set of reasons that return 0 is unspecified for legitimate no-PR outcomes. s1(b) treats 'handoff disabled' as a failure while AC-6 requires CLOSE_ISSUE=0 to be unchanged. Plan should say: 'CLOSE_ISSUE=0 returns 0; failures return 1 only when CLOSE_ISSUE=1.'
+- References: CHANGE_PLAN Existing partial work paragraph and section 4; git status shows modified source files.
+- Failure: Uncommitted partial work already modifies source files that existing Self Hosted tests cover, and the plan never says what to do if the baseline is already broken. Add: step 1 first runs both test runners and records deltas against BASELINE_REPORT. Fix Self Hosted failures in source, never in the tests.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: D-2 leaves duplicate printing of extras to the implementer, and the effect of a non-zero exit on the on_exit handler and
+## AR-010: The plan does not say existing runner dispatch cases and unknown-runner errors stay unchanged when `aws-bedrock` is adde
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s10 D-2 'implementer checks on_exit duplicate print'; s7 'None in state files'.
-- Failure: D-2 leaves duplicate printing of extras to the implementer, and the effect of a non-zero exit on the on_exit handler and re-run is unspecified. Plan should say: 'exit via pr_rc runs the normal exit trap, prints the reason once, and a re-run resumes from the journal.'
+- References: CHANGE_PLAN change-impact rows for stage-config.sh and stagegate.sh; AC-6 names no negative test.
+- Failure: The plan does not say existing runner dispatch cases and unknown-runner errors stay unchanged when `aws-bedrock` is added. Add: dispatch adds only an `aws-bedrock` case and leaves existing cases, defaults and error text byte-identical, covered by a shell test.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: It is unstated whether an origin-less unattended worktree should publish a draft for an unreviewed verdict, or refuse on
+## AR-011: Section 12 says an invalid protocol falls back to OpenAI with a notice, while INV-4 and D-4 say Bedrock never falls back
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC s8 'unreviewed verdict still publishes only as a draft'; AC-3 names only two success reasons.
-- Failure: It is unstated whether an origin-less unattended worktree should publish a draft for an unreviewed verdict, or refuse on a non-READY verdict. Plan should say: 'unreviewed publishes as draft and returns 0; a failing verdict does not publish and returns 1.'
+- References: CHANGE_PLAN section 12 vs D-4; CHANGE_SPEC section 7.
+- Failure: Section 12 says an invalid protocol falls back to OpenAI with a notice, while INV-4 and D-4 say Bedrock never falls back silently. Add: only an unknown protocol value falls back to OpenAI with a notice. A missing or unknown profile always raises.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Plan widens unattended auto-publish to every worktree, including operator-made worktrees (D-1), which pushes the branch
+## AR-012: Header carrying the token per protocol is unspecified (A-2 says 'x-api-key/bearer'; Converse unmentioned).
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 (a) and s9 D-1 / Risks 'marker detection also matches operator worktrees; accepted'.
-- Failure: Plan widens unattended auto-publish to every worktree, including operator-made worktrees (D-1), which pushes the branch and opens a PR with no human dialog. Plan should say: 'Auto-publish without origin applies only when the worktree-owned marker exists; git-dir comparison alone never triggers unattended publish.'
+- References: CHANGE_SPEC section 10 and A-2; R-4 says 'bearer header per protocol'.
+- Failure: Header carrying the token per protocol is unspecified (A-2 says 'x-api-key/bearer'; Converse unmentioned). Plan should say: 'OpenAI and Converse send only Authorization: Bearer; Anthropic sends x-api-key plus anthropic-version and no Authorization; the token is never put in the URL or body.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Plan never states which remote and base branch a no-origin worktree run pushes to, or what happens with multiple or miss
+## AR-013: Redaction (INV-5) is scoped to `_request` HTTP errors only.
+
+- Severity: HIGH
+- References: CHANGE_SPEC INV-5 'redaction in _request'; CHANGE_PLAN sections 12 and 19.
+- Failure: Redaction (INV-5) is scoped to `_request` HTTP errors only. Plan should say: 'Every Bedrock error, log line and status string passes through one redactor that removes the token value; tests cover HTTP, parse and URL cases.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-014: The user-configured URL receives the token, but no https requirement, redirect handling or model-id encoding is stated.
+
+- Severity: HIGH
+- References: CHANGE_SPEC section 10 ('to the configured URL') and A-2 path template.
+- Failure: The user-configured URL receives the token, but no https requirement, redirect handling or model-id encoding is stated. Plan should say: 'Bedrock URLs must be https (http only for loopback); redirects never forward credential headers; the model id is percent-encoded in the Converse path.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-015: Storage protection for the Bedrock token is unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s6 says publish skips issue-eligibility when origin is empty; remote and base are not specified; R-4 relies on engine behavior at ~1668.
-- Failure: Plan never states which remote and base branch a no-origin worktree run pushes to, or what happens with multiple or missing remotes. Plan should say: 'Unattended worktree publish pushes only to the configured default remote and fails non-zero with a reason if the remote is missing or ambiguous.'
+- References: CHANGE_PLAN D-3 and INV-3 describe isolation only, with no file mode.
+- Failure: Storage protection for the Bedrock token is unspecified. Plan should say: 'The Bedrock key file is created mode 0600 in a 0700 directory, and the token is never written to config or logs.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Without an origin file the issue-eligibility check is skipped, and the plan does not say issue-closing keywords are supp
+## AR-016: A missing Bedrock token or URL is not stated to fail before any network call, and could pick up Self Hosted credentials.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s6; INV-3 is scoped to 'issue runs' only in CHANGE_SPEC s6.
-- Failure: Without an origin file the issue-eligibility check is skipped, and the plan does not say issue-closing keywords are suppressed in the PR body for non-issue runs. Plan should say: 'No-origin worktree publish never emits issue-closing references and never closes any issue.'
+- References: CHANGE_SPEC INV-3/INV-4; CHANGE_PLAN D-4 and section 12 ('same message as Self Hosted').
+- Failure: A missing Bedrock token or URL is not stated to fail before any network call, and could pick up Self Hosted credentials. Plan should say: 'A Bedrock run never reads Self Hosted key, URL or env, and errors before any network call if its own token or URL is missing.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: Plan does not say that PR text and logs for unattended publish contain no tokens or env values.
+## AR-017: The plan does not say how Anthropic and Converse requests are authenticated.
+
+- Severity: HIGH
+- References: CHANGE_SPEC A-2 and §10 say 'x-api-key/bearer'. CHANGE_PLAN R-4 says 'bearer header per protocol'.
+- Failure: The plan does not say how Anthropic and Converse requests are authenticated. Add this sentence: Anthropic sends `x-api-key` plus `anthropic-version: 2023-06-01` and no Authorization header; OpenAI and Converse send `Authorization: Bearer`.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: INV-1's enforcement point is named two ways.
+
+- Severity: HIGH
+- References: CHANGE_SPEC INV-1 says 'body strip at transport boundary'. CHANGE_PLAN D-2 and §16-18 target only `sampling`.
+- Failure: INV-1's enforcement point is named two ways. The spec puts it at the transport strip; D-2 adds a second strip in `sampling`. Add this sentence: defect injection must break `sampling` and `_strip_temperature` separately, and a test that walks the sent body for all 3 protocols must fail each time.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-019: Unknown, empty or mis-cased stored protocol values are unspecified.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC §7 and CHANGE_PLAN §12 say only 'notice and OpenAI default'.
+- Failure: Unknown, empty or mis-cased stored protocol values are unspecified. Add this sentence: normalize lowercase and trim; empty or missing means OpenAI silently; any other unknown value means OpenAI with one stderr notice per process; the stored value is never rewritten.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: Fixture contracts for Converse and Anthropic are undefined: schema-constrained request fields, usage mapping, and what c
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC AC-3 says 'schema-constrained output'. CHANGE_PLAN §12 says 'parse errors raise runner errors'.
+- Failure: Fixture contracts for Converse and Anthropic are undefined: schema-constrained request fields, usage mapping, and what counts as a parse error. Add this sentence: a table maps each protocol's request fields and usage fields to the common shape, and a missing required key raises a runner error naming the protocol.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: URL construction is ambiguous for trailing slashes, a base URL that already ends in `/converse`, model id encoding, and
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC A-2 gives only 'Converse uses {URL}/model/{id}/converse'. The plan names no OpenAI or Anthropic paths.
+- Failure: URL construction is ambiguous for trailing slashes, a base URL that already ends in `/converse`, model id encoding, and the OpenAI and Anthropic paths. Add this sentence: strip trailing slashes, append the per-protocol path exactly once, percent-encode the model id, and assert the final URL for each protocol.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: 'Unresolved profile' and 'no temperature setting read' cannot be tested as written.
 
 - Severity: LOW
-- References: CHANGE_PLAN s1(b) and s12 reuse existing reason strings; 'non-secret evidence' is stated only for manual verification (s19).
-- Failure: Plan does not say that PR text and logs for unattended publish contain no tokens or env values. Plan should say: 'Published PR bodies and failure output never include credentials or environment values.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: AC-3 driver exit behavior is verified only by a grep on change-workflow.sh, which cannot show the driver exits non-zero.
-
-- Severity: HIGH
-- References: CHANGE_SPEC AC-3 verification says 'grep assertion on change-workflow.sh exit handling'; CHANGE_PLAN s16 lists only pr-auto-publish-test.sh cases.
-- Failure: AC-3 driver exit behavior is verified only by a grep on change-workflow.sh, which cannot show the driver exits non-zero. Settle it: 'A shell test must run the completion path of change-workflow.sh with change_pr_complete stubbed to return 1 in a worktree fixture and assert exit status 1; it must also assert exit 0 for the same stub in a non-worktree fixture.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: The plan does not say which reasons count as failure in worktree runs, nor what happens when the reason is empty or unse
-
-- Severity: HIGH
-- References: CHANGE_PLAN s1(b) says 'not published or published-draft-unreviewed' and lists 'handoff disabled' and 'pending' without enumerating reasons. AC-3 stubs only 'a reason'.
-- Failure: The plan does not say which reasons count as failure in worktree runs, nor what happens when the reason is empty or unset. Settle it: 'In a worktree run, change_pr_complete returns 0 only when CHANGE_PR_EXTRAS_REASON is exactly published or published-draft-unreviewed; any other value, including empty or unset, returns 1.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: Two statements conflict on CLOSE_ISSUE=0 in a worktree.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1(b) vs CHANGE_SPEC OB-6 and AC-6, which assert only 'does not publish'.
-- Failure: Two statements conflict on CLOSE_ISSUE=0 in a worktree. Section 1(b) says the handoff-disabled path returns 1, while OB-6 and AC-6 say CLOSE_ISSUE=0 is unchanged. Settle it: 'With WORKFLOW_CLOSE_ISSUE=0 in a worktree, change_pr_complete does not publish and returns 0; the new non-zero return applies only when CLOSE_ISSUE=1.' AC-6 should also assert rc 0.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-019: Worktree detection has no specified behavior for the marker present in a non-worktree dir, STATE_DIR unset versus overri
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1 definition of change_pr_in_worktree; s16 'Fixture must override STATE_DIR' covers only the marker case.
-- Failure: Worktree detection has no specified behavior for the marker present in a non-worktree dir, STATE_DIR unset versus overridden, or git failing outside a repo. Settle it: 'in_worktree is true if the marker exists, otherwise true if git-dir differs from git-common-dir, and false when git fails; tests must cover marker-only, git-dir-only, and neither.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: D-2 leaves duplicate printing of extras to the implementer, so no test can assert it.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s12 D-2: 'implementer checks on_exit duplicate print and suppresses if repeated'.
-- Failure: D-2 leaves duplicate printing of extras to the implementer, so no test can assert it. Settle it: 'On worktree publish failure the stopped-extras message is printed exactly once, and a test must count its occurrences in stderr.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-021: D-1 claims no double PR for issue worktrees, but the planned tests never exercise a worktree with an ORIGIN_FILE.
-
-- Severity: LOW
-- References: CHANGE_PLAN s10 D-1 versus s16, which lists a call-count test without a worktree-plus-origin fixture.
-- Failure: D-1 claims no double PR for issue worktrees, but the planned tests never exercise a worktree with an ORIGIN_FILE. Settle it: 'An unattended issue-linked run inside a worktree must call change_pr_publish exactly once, asserted by a test with a worktree fixture that also has an ORIGIN_FILE.'
+- References: CHANGE_PLAN D-4. CHANGE_SPEC AC-2 and AC-5.
+- Failure: 'Unresolved profile' and 'no temperature setting read' cannot be tested as written. Add this sentence: the Bedrock runner raises a named exception when the profile tag is absent, and a test sets both Self Hosted temperature settings to a sentinel and asserts the sentinel is not in the body.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

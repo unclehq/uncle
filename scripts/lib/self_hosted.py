@@ -25,8 +25,53 @@ def runner_directory(prefix):
         cleanup_directory(directory)
 
 
-def key_file(config):
-    return Path(config).parent / 'self-hosted-keys.json'
+BEDROCK = 'aws-bedrock'
+_BEDROCK_COMPAT_NOTICED = False
+SELF_HOSTED = 'self-hosted'
+
+
+def key_file(config, profile=SELF_HOSTED):
+    return Path(config).parent / (BEDROCK + '-keys.json' if profile == BEDROCK else 'self-hosted-keys.json')
+
+
+def stage_names(stage):
+    """The stage's own name then its parents, mirroring stage_names in stage-config.sh."""
+    names = [stage]
+    for suffix in ('-investigate',):
+        if stage.endswith(suffix):
+            names.append(stage[:-len(suffix)])
+    for marker in ('-review-worker-', '-worker-'):
+        if marker in stage:
+            names.append(stage.split(marker, 1)[0])
+    if stage.startswith('implementation-step-') or stage == 'implementation-report':
+        names.append('implementation')
+    return [name for name in names if name]
+
+
+def resolve_profile(values, stage=''):
+    """Profile from config runner values only; never from shell-normalized values or CMD overrides."""
+    names = stage_names(stage) if stage else []
+    if stage:
+        names += [name for name in stage_names(config_stage(stage, values)) if name not in names]
+    for name in names:
+        runner = (values.get(name + '.runner') or '').strip().lower()
+        if runner:
+            return BEDROCK if runner == BEDROCK else SELF_HOSTED
+    return BEDROCK if (values.get('runner') or '').strip().lower() == BEDROCK else SELF_HOSTED
+
+
+def redact_token(text, token):
+    """The single Bedrock redactor: scrub the token (and its Bearer form) from any text or bytes."""
+    if not token:
+        return text
+    if isinstance(text, bytes):
+        return text.replace(token.encode('utf-8'), b'[redacted]')
+    return str(text).replace(token, '[redacted]')
+
+
+def _bedrock_url_ok(url):
+    parts = urlsplit(url)
+    return parts.scheme in ('http', 'https') and bool(parts.netloc) and not (parts.username or parts.password or parts.query or parts.fragment)
 
 
 def local_model(name):
@@ -34,8 +79,8 @@ def local_model(name):
     return name if name.startswith('local/') else 'local/' + name
 
 
-def read_keys(config):
-    path = key_file(config)
+def read_keys(config, profile=SELF_HOSTED):
+    path = key_file(config, profile)
     keys = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     # Read old credentials without rewriting them until the user saves config.
     if '__opencode_models__' not in keys and '__aider_models__' in keys:
@@ -51,18 +96,31 @@ def read_keys(config):
     return keys
 
 
-def save_keys(config, keys):
-    path = key_file(config)
+def save_keys(config, keys, profile=SELF_HOSTED):
+    path = key_file(config, profile)
     if not keys and not path.exists():
         return
+    bedrock = profile == BEDROCK
+    if bedrock:
+        connection = keys.get('__opencode_connection__') or {}
+        urls = [connection.get('base_url', '')] + [m.get('base_url', '') for m in (keys.get('__opencode_models__') or {}).values()]
+        if any(url and not _bedrock_url_ok(url) for url in urls):
+            raise ValueError('AWS Bedrock requires an http(s) Bedrock URL without credentials, query, or fragment')
+    entry = '/' + path.name
     path.parent.mkdir(parents=True, exist_ok=True)
     ignore = path.parent / '.gitignore'
-    existing = ignore.read_text(encoding='utf-8') if ignore.exists() else ''
-    if '/self-hosted-keys.json' not in existing.splitlines():
-        with ignore.open('a', encoding='utf-8', newline='\n') as stream:
-            stream.write(('\n' if existing and not existing.endswith('\n') else '') + '/self-hosted-keys.json\n')
-    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.self-hosted-')
     try:
+        existing = ignore.read_text(encoding='utf-8') if ignore.exists() else ''
+        if entry not in existing.splitlines():
+            with ignore.open('a', encoding='utf-8', newline='\n') as stream:
+                stream.write(('\n' if existing and not existing.endswith('\n') else '') + entry + '\n')
+    except OSError:
+        if bedrock:
+            raise ValueError('AWS Bedrock token not saved: could not add %s to .uncle/.gitignore' % entry.lstrip('/')) from None
+        raise
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.aws-bedrock-' if bedrock else '.self-hosted-')
+    try:
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             json.dump(keys, stream)
         os.replace(temporary, path)
@@ -186,38 +244,65 @@ def settings(config, stage):
     values = _config_values(config)
     options = request_options(stage, values)  # validate before credential lookup
     requested_stage = stage
+    profile = resolve_profile(values, requested_stage)
+    bedrock = profile == BEDROCK
+    env = 'UNCLE_AWS_BEDROCK_' if bedrock else 'UNCLE_SELF_HOSTED_'
+    shared = BEDROCK if bedrock else 'self-hosted'
+    label = 'AWS Bedrock' if bedrock else 'Self hosted'
     stage = config_stage(stage, values)
+    stored = read_keys(config, profile)
     result = {}
     for field in ('base_url', 'model'):
-        result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or values.get(stage + '.' + field) or values.get('self-hosted.' + field, '')
-    result['api_key'] = os.environ.get('UNCLE_SELF_HOSTED_API_KEY') or read_keys(config).get(stage, '')
-    profiles = read_keys(config).get('__opencode_models__', {})
+        result[field] = os.environ.get(env + field.upper()) or values.get(stage + '.' + field) or values.get(shared + '.' + field, '')
+    result['api_key'] = os.environ.get(env + 'API_KEY') or stored.get(stage, '')
+    profiles = stored.get('__opencode_models__', {})
     selected = values.get(stage + '.model', '')
     if selected and selected not in profiles:
         selected = local_model(selected)
     if selected in profiles:
-        profile = profiles[selected]
-        result = dict(model=profile.get('model', selected), base_url=profile.get('base_url', ''), api_key=profile.get('api_key', ''))
+        profile_entry = profiles[selected]
+        result = dict(model=profile_entry.get('model', selected), base_url=profile_entry.get('base_url', ''), api_key=profile_entry.get('api_key', ''))
+        connection = stored.get('__opencode_connection__')
+        if bedrock and connection is not None and not (connection.get('base_url') and connection.get('api_key')):
+            # The connection was cleared in Configure; discovered profiles must not keep the old URL/token alive.
+            result.update(base_url='', api_key='')
     elif profiles and not values.get(stage + '.base_url'):
-        raise ValueError('No self-hosted model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (stage, stage))
+        raise ValueError('No %s model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (label.lower(), stage, stage))
     for field in ('model', 'base_url', 'api_key'):
-        result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or result[field]
+        result[field] = os.environ.get(env + field.upper()) or result[field]
     result['model'] = result['model'].removeprefix('openai/').removeprefix('local/')
     url = urlsplit(result['base_url'])
     if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
-        raise ValueError('Self hosted requires an http(s) Base URL without credentials, query, or fragment')
+        raise ValueError('AWS Bedrock requires an http(s) Bedrock URL without credentials, query, or fragment' if bedrock
+                         else 'Self hosted requires an http(s) Base URL without credentials, query, or fragment')
+    if bedrock and url.scheme == 'http' and (url.hostname or '').lower() not in ('localhost', '127.0.0.1', '::1'):
+        raise ValueError('AWS Bedrock requires an https Bedrock URL (http is allowed only for loopback); the token is never sent over cleartext')
     if not result['model']:
-        raise ValueError('Self hosted requires a model name')
+        raise ValueError('AWS Bedrock requires a model name' if bedrock else 'Self hosted requires a model name')
     if '\n' in result['api_key'] or '\r' in result['api_key']:
-        raise ValueError('API key must be a single line')
+        raise ValueError('AWS Bedrock token must be a single line' if bedrock else 'API key must be a single line')
     if not result['api_key']:
-        raise ValueError('Self hosted requires an API key (use a placeholder for a server without authentication)')
+        raise ValueError('AWS Bedrock requires a token (set it in Configure → AWS Bedrock Token)' if bedrock
+                         else 'Self hosted requires an API key (use a placeholder for a server without authentication)')
     # Callers such as home chat can pass a config path without exporting it.
     # Carry even an explicit {} with that connection, so it cannot accidentally
     # be replaced by options from a different config when the loop starts.
     if (any(key.endswith('.request-options') for key in values) or
             any(key.startswith('WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS') for key in os.environ)):
         result.update(_request_options=options, _request_options_stage=requested_stage)
+    if bedrock:
+        result['_profile'] = BEDROCK
+        from bedrock_protocols import normalize_protocol
+        choice = os.environ.get('WORKFLOW_AWS_BEDROCK_API_COMPATIBILITY') or (stored.get('__opencode_connection__') or {}).get('api_compatibility')
+        try:
+            result['_protocol'] = normalize_protocol(choice)
+        except ValueError:
+            # An unrecognised stored value runs as OpenAI; tell the user once per process, never rewrite the store.
+            global _BEDROCK_COMPAT_NOTICED
+            if not _BEDROCK_COMPAT_NOTICED:
+                _BEDROCK_COMPAT_NOTICED = True
+                print('AWS Bedrock: unknown API Compatibility %r; using OpenAI compatible' % choice, file=sys.stderr)
+            result['_protocol'] = 'openai'
     return result
 
 

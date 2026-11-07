@@ -158,9 +158,13 @@ def _names_option(detail, options):
 def compatible_post(values, body, timeout, url=None):
     """Reserve reasoning separately from the deliverable cap on every transport."""
     from self_hosted_stream import ANSWER_CAP, answer_signal, output_accounting
+    if isinstance(values, dict) and values.get('_profile') == 'aws-bedrock':
+        body = _strip_temperature(body)  # Bedrock only; Self Hosted bodies stay untouched
+        if values.get('_protocol', 'openai') != 'openai':
+            return _bedrock_native_post(values, body, timeout)
     answer_cap = body.get('max_tokens', body.get('options', {}).get('num_predict'))
     if answer_cap is None:
-        return _compatible_output_post(values, body, timeout, url)
+        return _require_choices(values, _compatible_output_post(values, body, timeout, url))
     # OpenAI max_tokens and Ollama num_predict include reasoning. Even servers
     # that omit/reject reasoning_effort may still think, so always reserve room.
     reserve = output_cap(2 ** 31 - 1, 'reasoning-output-tokens')
@@ -171,7 +175,7 @@ def compatible_post(values, body, timeout, url=None):
         body['options'] = dict(body['options'], num_predict=answer_cap + reserve)
     token = ANSWER_CAP.set(answer_cap)
     try:
-        data = _compatible_output_post(values, body, timeout, url)
+        data = _require_choices(values, _compatible_output_post(values, body, timeout, url))
         # Non-streaming fallback cannot interrupt generation, but still checks
         # the answer before capture or tool execution. Native Ollama reports
         # thinking separately and eval_count as the combined completion total.
@@ -187,6 +191,37 @@ def compatible_post(values, body, timeout, url=None):
         return data
     finally:
         ANSWER_CAP.reset(token)
+
+
+def _require_choices(values, data):
+    """Bedrock OpenAI-compatible replies must carry a choice; name the protocol instead of an IndexError later."""
+    if (isinstance(values, dict) and values.get('_profile') == 'aws-bedrock' and isinstance(data, dict)
+            and 'message' not in data and not data.get('choices')):
+        raise ValueError('AWS Bedrock OpenAI response has no choices')
+    return data
+
+
+def _bedrock_native_post(values, body, timeout):
+    """Anthropic/Converse transport: translate the OpenAI-style body, post with that protocol's auth headers,
+    and return an OpenAI-shaped response so callers are unchanged."""
+    import bedrock_protocols as bp
+    protocol, token = values['_protocol'], values['api_key']
+    schema, name = None, 'result'
+    rf = body.get('response_format') or {}
+    if rf.get('type') == 'json_schema':
+        schema, name = rf['json_schema']['schema'], rf['json_schema'].get('name', 'result')
+    native = bp.build_body(protocol, values['model'], body['messages'], body.get('max_tokens', 4096), body.get('tools'), schema, name)
+    native = _strip_temperature(native)
+    url = bp.build_url(protocol, values['base_url'], values['model'])
+    raw = _request(url, token, native, timeout, headers=bp.build_headers(protocol, token))
+    parsed = bp.parse_response(protocol, raw, name if schema else None)
+    message = {'role': 'assistant', 'content': parsed['text']}
+    if parsed['tool_calls']:
+        message['tool_calls'] = [{'id': c['id'], 'type': 'function', 'function': {'name': c['name'], 'arguments': json.dumps(c['arguments'])}}
+                                 for c in parsed['tool_calls']]
+    u = parsed['usage']
+    return {'choices': [{'message': message, 'finish_reason': parsed['reason']}],
+            'usage': {'prompt_tokens': u['input'], 'completion_tokens': u['output'], 'total_tokens': u['input'] + u['output']}}
 
 
 def _compatible_output_post(values, body, timeout, url=None):
@@ -920,18 +955,23 @@ def _via_http2(method, url, data, headers, timeout):
         return response.status_code, response.reason_phrase, response.headers, raw
 
 
-def _request(url, api_key, body=None, timeout=30):
+def _request(url, api_key, body=None, timeout=30, headers=None):
     """GET, or POST when `body` is given; returns parsed JSON.
 
     Redirects are never followed (the key must not leave the configured host).
     A non-2xx answer raises urllib's HTTPError so callers can read its code.
     """
     data = json.dumps(body).encode('utf-8') if body is not None else None
-    headers = {'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json', 'Accept': 'application/json'}
+    headers = dict(headers or {'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json'}, Accept='application/json')
     method = 'POST' if data is not None else 'GET'
     transport = _via_http2 if wants_http2(urlsplit(url).scheme) else _via_http1
     status, reason, response_headers, raw = transport(method, url, data, headers, timeout)
     if not 200 <= status < 300:
+        if api_key and not isinstance(raw, dict):
+            # An upstream body or reason may echo the Authorization value; scrub it and bound what is kept.
+            import self_hosted
+            raw = self_hosted.redact_token((raw or b'')[:4000], api_key)
+            reason = self_hosted.redact_token(reason, api_key)
         raise HTTPError(url, status, reason, response_headers, io.BytesIO(raw))
     return raw if isinstance(raw, dict) else json.loads(raw or b'null')
 
@@ -980,12 +1020,37 @@ def _flatten(messages):
     return [{'role': 'user', 'content': '\n\n'.join(parts)}]
 
 
+def _strip_temperature(node):
+    if isinstance(node, dict):
+        # Keys of a JSON-Schema `properties` map are user-chosen names, not sampling fields: keep them.
+        return {k: (({n: _strip_temperature(sub) for n, sub in v.items()} if k == 'properties' and isinstance(v, dict) else _strip_temperature(v)))
+                for k, v in node.items() if k != 'temperature' or k == 'properties'}
+    if isinstance(node, list):
+        return [_strip_temperature(v) for v in node]
+    return node
+
+
+def sampling(values):
+    """Sampling fields for a request body. Fails closed for Bedrock: never a temperature."""
+    profile = values.get('_profile') if isinstance(values, dict) else None
+    if profile is None:
+        config = _config_values()
+        stage = os.environ.get('UNCLE_STATUS_STAGE', '')
+        import self_hosted
+        if self_hosted.resolve_profile(config, stage) == 'aws-bedrock':
+            raise ValueError('AWS Bedrock request values lack _profile; refusing to send a request (never defaults to Self Hosted)')
+        return {'temperature': temperature()}
+    if profile == 'aws-bedrock':
+        return {}
+    return {'temperature': temperature()}
+
+
 def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
     """One schema-constrained request in `mode`; returns (text, reason, usage)."""
     base_url, key = values['base_url'].rstrip('/'), values['api_key']
     if mode == 'ollama_format':
         body = {'model': values['model'], 'messages': _flatten(messages), 'stream': False, 'format': schema,
-                'options': {'num_predict': limit, 'temperature': temperature()}}
+                'options': dict({'num_predict': limit}, **sampling(values))}
         if effort:
             body['reasoning_effort'] = effort
         data = compatible_post(values, body, timeout, url=_origin(base_url) + '/api/chat')
@@ -993,8 +1058,8 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
                      completion_tokens=data.get('eval_count', 0))
         reason = 'length' if data.get('done_reason') == 'length' else 'stop'
         return strip_reasoning(data['message']['content']), reason, usage
-    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
-            'temperature': temperature()}
+    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False}
+    body.update(sampling(values))
     if effort:
         body['reasoning_effort'] = effort
     if mode == 'json_schema':
@@ -1018,6 +1083,8 @@ def constrained_completion(values, messages, schema, name, limit, effort=None, t
     last = None
     for mode in caps['modes']:
         if mode in caps['rejected'] or mode in skip:
+            continue
+        if mode == 'ollama_format' and values.get('_profile') == 'aws-bedrock':
             continue
         try:
             text, reason, usage = _final_call(values, messages, schema, name, mode, limit, effort, timeout)
@@ -1106,8 +1173,8 @@ def conforms(value, schema, path='$'):
 
 def chat(values, messages, tools, limit, effort=None, timeout=3600):
     """One tool-capable turn; None means the server rejected tool calling."""
-    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
-            'temperature': temperature()}
+    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False}
+    body.update(sampling(values))
     if tools:
         body['tools'] = tools
     effort = reasoning_effort(values, effort)

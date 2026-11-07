@@ -15,6 +15,21 @@ In the TUI Configure menu, choose **AWS Bedrock** and set:
 
 Then set a stage runner, e.g. `<stage>.runner aws-bedrock`.
 
+## Fallback (shell) configure path
+
+When the TUI is unavailable, `uncle` -> Configure uses a shell fallback. Its
+runner prompt lists the installed runners followed by `aws-bedrock` last, and
+accepts `aws-bedrock` case-insensitively (stored lowercase). It works even when
+no runner binaries are on `PATH`. The fallback offers Bedrock URL/token setup
+with the same validation and 0600 key file as the TUI. Self Hosted model
+discovery (stages-menu `m`) on a Bedrock stage prints a pointer to per-stage
+Configure and writes nothing.
+
+Switching a stage's runner to or from `aws-bedrock` keeps its existing
+`<stage>.model` unchanged and unvalidated, so a Self Hosted model name may sit
+on a Bedrock stage (or vice versa) until you run `m`, which validates against
+the key store of the stage's current runner.
+
 ## Settings
 
 | Config key | Environment variable |

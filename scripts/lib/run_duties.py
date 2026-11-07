@@ -206,6 +206,40 @@ def change_request_exists(project_root):
                for part in ((), (".uncle", "docs")))
 
 
+def archive_change_request(project_root, environ=None):
+    """Move a leftover CHANGE_REQUEST.md out of the way so a new request can be written; returns the archived paths.
+
+    A finished run leaves its request behind (a local merge even commits it as .uncle/docs/CHANGE_REQUEST.md), and refusing every
+    later `--change-request` for it made the operator delete the file by hand. The file is moved to .uncle/brief-history/, not
+    destroyed, as the homepage's replace does. A symlink is only unlinked: there is no content of ours behind it.
+    UNCLE_KEEP_CHANGE_REQUEST=1 keeps the old refusal.
+    """
+    env = os.environ if environ is None else environ
+    if env.get("UNCLE_KEEP_CHANGE_REQUEST") == "1":
+        return []
+    import time
+    history = os.path.join(project_root, ".uncle", "brief-history")
+    moved = []
+    for part in ((), (".uncle", "docs")):
+        path = os.path.join(project_root, *part, "CHANGE_REQUEST.md")
+        if not os.path.lexists(path):
+            continue
+        if os.path.islink(path) or not os.path.isfile(path):
+            if os.path.islink(path):
+                os.unlink(path)
+                continue
+            raise FileExistsError(path + " is not a regular file")
+        os.makedirs(history, exist_ok=True)
+        stamp = time.strftime("%Y%m%dT%H%M%S")
+        dest, n = os.path.join(history, "%s.CHANGE_REQUEST.md" % stamp), 0
+        while os.path.lexists(dest):
+            n += 1
+            dest = os.path.join(history, "%s-%d.CHANGE_REQUEST.md" % (stamp, n))
+        os.replace(path, dest)
+        moved.append(dest)
+    return moved
+
+
 def write_change_request(project_root, text):
     """Write CHANGE_REQUEST.md under .uncle/docs; refuses to overwrite."""
     if change_request_exists(project_root):

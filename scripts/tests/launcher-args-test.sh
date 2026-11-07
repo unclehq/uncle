@@ -115,11 +115,19 @@ check "cr utf8 tab accepted"              cmp -s "$CR/tui-text" <(printf 'caf\30
 
 for existing in file link; do
     if [[ "$existing" == file ]]; then pre='echo old > CHANGE_REQUEST.md'; else pre='ln -s nowhere CHANGE_REQUEST.md'; fi
+    # Default: the leftover request is archived (a symlink unlinked) and the new one runs.
     CR_PRE="$pre" cr_run "printf x" --change-request
-    check "cr existing $existing: exit 1"  test "$RC" -eq 1
-    check "cr existing $existing: message" grep -qF "CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten." "$CR/err"
-    check "cr existing $existing: untouched" test "$(ls -A "$CR/proj")" = "CHANGE_REQUEST.md"
-    check "cr existing $existing: tmp clean" test -z "$(ls -A "$CR/tmp")"
+    check "cr existing $existing: runs" test "$RC" -eq 0
+    check "cr existing $existing: new text used" cmp -s "$CR/tui-text" <(printf x)
+    if [[ "$existing" == file ]]; then
+        check "cr existing file: archived, not destroyed" grep -rqx old "$CR/proj/.uncle/brief-history"
+    fi
+    # Opt-out keeps the refusal.
+    CR_PRE="$pre" UNCLE_KEEP_CHANGE_REQUEST=1 cr_run "printf x" --change-request
+    check "cr existing $existing keep: exit 1"  test "$RC" -eq 1
+    check "cr existing $existing keep: message" grep -qF "CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten." "$CR/err"
+    check "cr existing $existing keep: untouched" test "$(ls -A "$CR/proj")" = "CHANGE_REQUEST.md"
+    check "cr existing $existing keep: tmp clean" test -z "$(ls -A "$CR/tmp")"
 done
 rm -rf "$CR/proj"; mkdir -p "$CR/proj"
 

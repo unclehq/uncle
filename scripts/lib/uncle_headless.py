@@ -465,6 +465,8 @@ def prepare_driver(root, err, env=None):
             with open(target, "w", encoding="utf-8") as fh:
                 fh.write(document)
         elif action == "change_request":
+            for archived in _duties.archive_change_request(root, e):
+                err.write("uncle --noui: archived the previous change request to %s\n" % archived)
             _duties.write_change_request(root, text)
         issue_mode = ""
         if action == "github_issue":

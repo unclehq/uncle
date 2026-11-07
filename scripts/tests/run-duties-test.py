@@ -133,6 +133,27 @@ class ChangeRequest(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 rd.write_change_request(d, 'again')
 
+    def test_archive_moves_leftover_requests_aside(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, '.uncle', 'docs'))
+            for rel in ('CHANGE_REQUEST.md', '.uncle/docs/CHANGE_REQUEST.md'):
+                open(os.path.join(d, rel), 'w').write('old ' + rel)
+            moved = rd.archive_change_request(d, {})
+            self.assertEqual(len(moved), 2)
+            self.assertEqual(sorted(open(m).read() for m in moved), ['old .uncle/docs/CHANGE_REQUEST.md', 'old CHANGE_REQUEST.md'])
+            self.assertFalse(rd.change_request_exists(d))
+            self.assertEqual(open(rd.write_change_request(d, 'new')).read(), 'new')
+
+    def test_archive_unlinks_a_symlink_and_honours_the_opt_out(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            os.symlink('nowhere', os.path.join(d, 'CHANGE_REQUEST.md'))
+            self.assertEqual(rd.archive_change_request(d, {'UNCLE_KEEP_CHANGE_REQUEST': '1'}), [])
+            self.assertTrue(rd.change_request_exists(d))
+            self.assertEqual(rd.archive_change_request(d, {}), [])
+            self.assertFalse(rd.change_request_exists(d))
+
 
 class NoDuplicateDefinitions(unittest.TestCase):
     def test_tui_defines_none(self):

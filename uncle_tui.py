@@ -4538,6 +4538,13 @@ class UncleTUI:
                 self._home_action(action, replace_approved=True)
             elif self._startup_action == 'change_request':
                 text = self._read_startup_text_file(self._startup_text_file)
+                # A finished run leaves its request behind; archive it rather than refusing every later one
+                # (UNCLE_KEEP_CHANGE_REQUEST=1 restores the refusal).
+                try:
+                    for archived in run_duties.archive_change_request(_project_root()):
+                        self.home_history.append(('system', 'Archived the previous change request to ' + sanitize(archived)))
+                except OSError:
+                    raise StartupRefused(CHANGE_REQUEST_EXISTS) from None
                 if any(os.path.lexists(os.path.join(_project_root(), *part, 'CHANGE_REQUEST.md'))
                        for part in ((), ('.uncle', 'docs'))):
                     raise StartupRefused(CHANGE_REQUEST_EXISTS)

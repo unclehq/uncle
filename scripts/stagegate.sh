@@ -168,6 +168,7 @@ fi
 # hardcoded here; phase (c) decides whether it becomes a branch or stays
 # wrapper logic around the shared FINAL_AUDIT function.
 . "$ROOT/scripts/lib/project-git.sh"
+. "$ROOT/scripts/lib/worktree-merge.sh"
 . "$ROOT/scripts/lib/preview-build.sh"
 . "$ROOT/scripts/lib/install-warm.sh"
 . "$ROOT/scripts/lib/background-verify.sh"
@@ -6717,7 +6718,33 @@ PY
                 echo
                 finished_build_line "$(completed_verdict)"
             fi
-            finished_extras print --kind new --reason not-applicable ${UNATTENDED:+$([[ "$UNATTENDED" == 1 ]] && echo --unattended)}
+            # An application build has no PR path. In uncle's own worktree the finished build would otherwise sit on a branch nobody
+            # merges, so a clean READY build is committed and merged into the source checkout's branch, and the worktree removed once
+            # the summary has printed. Anything short of that keeps the worktree and says so.
+            extras_reason=not-applicable merge_failed=0
+            if worktree_merge_owned; then
+                case "$(completed_verdict)" in
+                    READY|READY_WITH_NON_BLOCKING_ISSUES)
+                        if [[ -s "$GREEN_OVERRIDE_FILE" || -s "$AUDIT_OVERRIDE_FILE" ]]; then
+                            echo "Not merging: the build completed over an override; branch $(git branch --show-current) is kept."
+                            extras_reason=local-merge-failed merge_failed=1
+                        elif worktree_merge_finish_all "uncle: $(git branch --show-current | sed 's|^[^/]*/||; s|-| |g')"; then
+                            extras_reason=merged-local
+                        else
+                            echo "Not merged: $WORKTREE_MERGE_FAILURE."
+                            extras_reason=local-merge-failed merge_failed=1
+                        fi
+                        ;;
+                    *)
+                        echo "Not merging: the audit verdict is '$(completed_verdict)'; branch $(git branch --show-current) is kept."
+                        extras_reason=local-merge-failed merge_failed=1
+                        ;;
+                esac
+            fi
+            finished_extras print --kind new --reason "$extras_reason" ${UNATTENDED:+$([[ "$UNATTENDED" == 1 ]] && echo --unattended)}
+            worktree_merge_remove_pending
+            # An unattended run that delivered nothing into the source branch must not read as success.
+            [[ "$merge_failed" == 1 && "${UNATTENDED:-0}" == 1 ]] && exit 1
 
             exit 0
             ;;

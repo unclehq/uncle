@@ -62,5 +62,38 @@ OUT="$(STUB_VALIDATE=1 run)"
 check "audit no longer binds: nothing merged" 1 "$(grep -c '^reason=validate-failed' <<<"$OUT")"
 check "audit no longer binds: main untouched" old "$(git -C "$TMP/src" show HEAD:main.c)"
 
+# --- new-application build: nothing committed, an untracked uncle placeholder .gitignore in the source checkout ---
+app_setup() {
+    rm -rf "$TMP/app" "$TMP/app-wt"
+    mkdir "$TMP/app" && cd "$TMP/app" && git init -q -b main && echo readme > README.md && git add -A && git commit -q -m first
+    printf '.uncle\n' > .gitignore     # untracked, as an earlier uncle run left it
+    git worktree add -q -b uncle/create-hello "$TMP/app-wt" && cd "$TMP/app-wt"
+    mkdir -p .uncle/workflow .uncle/docs && : > .uncle/workflow/worktree-owned && echo state > .uncle/workflow/state
+    printf '/hello\n.uncle\n' > .gitignore; echo 'int main(void){return 0;}' > hello.c; printf 'all:\n' > Makefile; echo bin > hello; echo doc > .uncle/docs/P.md
+}
+app_run() { ( . "$ROOT/scripts/lib/worktree-merge.sh"
+    worktree_merge_owned && echo owned
+    worktree_merge_finish_all "uncle: create hello" && echo finished || echo "failed: $WORKTREE_MERGE_FAILURE"
+    worktree_merge_remove_pending ) 2>&1; }
+
+app_setup
+OUT="$(app_run)"
+check "app: owned worktree detected" 1 "$(grep -c '^owned' <<<"$OUT")"
+check "app: finished" 1 "$(grep -c '^finished' <<<"$OUT")"
+check "app: main has the code" "$(printf 'int main(void){return 0;}')" "$(cat "$TMP/app/hello.c")"
+check "app: main tracks the Makefile" Makefile "$(git -C "$TMP/app" ls-files Makefile)"
+check "app: the project's .gitignore replaced the placeholder" "/hello" "$(git -C "$TMP/app" show HEAD:.gitignore | head -1)"
+check "app: ignored binary not committed" "" "$(git -C "$TMP/app" ls-files hello)"
+check "app: run state not committed" "" "$(git -C "$TMP/app" ls-files .uncle)"
+check "app: worktree removed" no "$([[ -e "$TMP/app-wt" ]] && echo yes || echo no)"
+check "app: branch deleted" "" "$(git -C "$TMP/app" branch --list uncle/create-hello)"
+
+app_setup
+echo "my own rule" > "$TMP/app/.gitignore"      # a real untracked .gitignore of the user's: must not be removed
+OUT="$(app_run)"
+check "app: a user's own untracked .gitignore blocks the merge" 1 "$(grep -c '^failed' <<<"$OUT")"
+check "app: ...and is left alone" "my own rule" "$(cat "$TMP/app/.gitignore")"
+check "app: ...and the worktree is kept" yes "$([[ -e "$TMP/app-wt" ]] && echo yes || echo no)"
+
 if [[ "$FAILED" -ne 0 ]]; then echo "local-merge-test.sh: $FAILED of $COUNT checks failed"; exit 1; fi
 echo "local-merge-test.sh: $COUNT checks passed"

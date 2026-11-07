@@ -186,7 +186,12 @@ PR: https://github.com/org/repo/pull/12 (#12, draft)
   the summary prints (`PR: none (no remote; merged into the source branch)`). A non-READY verdict, a failed binding, a source
   checkout that is detached, or a merge git refuses (it is aborted, leaving the checkout as it was) merges nothing, keeps the
   worktree and branch, and exits 1 on an unattended run. `WORKFLOW_LOCAL_MERGE=0` opts out.
-- New-application builds always print `PR: none (not applicable to new-application builds)`.
+- New-application builds have no PR path. In uncle's own worktree a clean READY build (no green or audit override) is committed (the
+  files the run left, not `.uncle/workflow`), merged into the source checkout's branch, and the worktree and branch removed after the
+  summary, whether or not the repository has a remote (`PR: none (merged into the source branch locally; no PR)`). Nothing is pushed.
+  A source checkout holding an untracked `.gitignore` of only uncle's own entries (a first build) has it replaced by the project's; any
+  other conflict keeps the worktree, says why, and exits 1 on an unattended run. Otherwise they print
+  `PR: none (not applicable to new-application builds)`.
 - A stopped or failed run prints `Total time:` so far, and a `PR:` line only
   if a PR already exists.
 - Limitation: if the PR draft state is absent from the journal, the PR is

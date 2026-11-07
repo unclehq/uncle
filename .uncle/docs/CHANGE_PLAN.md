@@ -1,130 +1,117 @@
-# Change plan: Uncle must create and push a PR when appropriate
+# Change Plan
 
-Omitted sections: Schema/persistence (none); Migration (none); Concurrency (none); Feature flag (none, containment is revert).
-
-Issue 0
+Omitted sections: Schema/persistence (none); Concurrency (none); Migration (none); Feature flag (none); Observability (none); State-transition changes (none)
 
 ## 1. Selected technical approach
 
-Reproduce the skip with a stub-engine harness, then (a) make `change_pr_publish` record a distinct `CHANGE_PR_EXTRAS_REASON` and a stderr line on each early return and on handoff failure/success, (b) stop `change_pr_complete` overwriting the reason, (c) add labels in finished_extras.py, (d) fix any proven defect on the skip path. The AC-5 fix may correct gate inputs (as with the FINAL_AUDIT.json artifact path) but may not remove or loosen any gate, including the `issue_close_eligible ... || return 0` and `assert_tree_matches_attested` checks; any such change is a deviation needing human approval.
+Decision D1: in `runners_for` (uncle_tui.py:690), after the scan, `return installed or ["self-hosted"]`. Every consumer (stage_runner default, runner pickers, description text) then sees the fallback with no further edits. The fallback applies independently per side (agent and reviewer); no agent-reviewer distinctness rule filters it.
 
-## 2. Alternatives
-- Make publish return nonzero: rejected; driver treats rc!=0 as `--stopped` and exit semantics B9 must stay.
-- Parse engine stdout for the reason: rejected; fragile.
+Clarified semantics: (a) With no runner installed, runners_for returns ["self-hosted"]. stage_runner is unchanged and still returns a configured runner or DEFAULT_RUNNER if set, even if that runner is absent from runners_for; only an unset value yields self-hosted. (b) The fallback fires only when the scanned list is empty and never appends to a non-empty list, so self-hosted cannot appear twice. With only opencode on PATH (opencode maps to self-hosted), runners_for returns exactly ["self-hosted"] once.
+
+## 2. Alternatives considered
+- A: patch `stage_runner` and each picker site separately (3+ edits; can diverge).
+- B: add a new helper wrapping runners_for (extra surface).
 
 ## 3. Why preferred
-Smallest change; no gate touched; reporting only plus proven fix.
+One-line, minimal diff, single source of truth; installed case is untouched because the fallback only fires on an empty list.
 
 ## 4. Components to modify
 See change-impact table.
 
 ## 5. Not to modify
-change-workflow.sh, engine Python gating/attestation, home_agent_session.py, gate_answer.py, supervisor, dialogs, existing tests.
 
-## 6. Data flow
-Reason flows: publish sets CHANGE_PR_EXTRAS_REASON -> complete keeps it -> change_pr_extras_print -> finished_extras.py.
+self-hosted config flow, shims, `stage_runner` logic, DEFAULT_RUNNER, supervision_lib, existing tests.
 
-## 8. Interfaces
+Explicit rule for `stage_runner` (unchanged): a configured runner, or DEFAULT_RUNNER if set, is still returned even when it is absent from `runners_for` output (for example claude configured but nothing installed). Only an unset value falls back to self-hosted, via the runners_for fallback. The picker and the default may therefore differ for a configured-but-uninstalled runner; this is preserved existing behavior (C4) and is out of scope.
 
-New reason keys: published, published-draft-unreviewed, validate-failed, verdict-not-ready, issue-not-eligible, tree-mismatch, handoff-failed. Fallback publication-pending when publish sets none. Publishing over a non-READY verdict (an operator override, or UNCLE_AUTO_PUBLISH) records published-draft-unreviewed instead of published when handoff exits 0; its stderr line is 'PR published as unreviewed draft: published-draft-unreviewed: verdict <class>'. Static text only: no engine/gh output, URLs or env values. Mapping for the early returns in change_pr_publish after `change_pr_engine validate`: validate exit 3 with no override available (neither interactive nor UNCLE_AUTO_PUBLISH), or with `verdict-override` declined or failing, sets verdict-not-ready; any other nonzero validate exit (including exit 1), and a failing re-validate after a successful override, set validate-failed. Each of these four early returns still returns 0, with the key set first.
+## 6. Data-flow changes
 
-Render rule: finished_extras.py renders a label only for allowlisted reason keys (the new keys above plus the existing ones); any other or malformed value, including empty, multi-line or unknown text, renders as the publication-pending label and is never echoed verbatim. The spec's claim that unknown keys already fall back safely is not relied on; the allowlist is verified by test.
+`runners_for` result is non-empty. The fallback fires only when the scan finds nothing and never appends to a non-empty list, so self-hosted cannot be duplicated (opencode-only installed gives exactly ["self-hosted"], since opencode maps to self-hosted). With no runners installed the description text lists "Self hosted" and never shows "No agents installed"; that label at line 1297 becomes unreachable and is left as-is (minimal diff). Defaulting to self-hosted does NOT bypass the existing self-hosted configuration requirement: an unconfigured self-hosted runner remains subject to whatever existing config gate applies at launch. Before editing, step 1 audits uncle_tui.py for any other guard keyed on an empty runner list or runner=="" and records the result in IMPLEMENTATION_NOTES.md.
+
+## 8. Interface changes
+None in signature; return value gains a fallback.
 
 ## 10. Compatibility
-Bash 3.2: no associative arrays, no `${var,,}`; exit status unchanged.
+Preserved whenever one runner is detected (C3, C4).
 
 ## 12. Error and recovery
-Handoff exit status captured (`rc=0; change_pr_engine handoff || rc=$?`) then reported; still `return 0`.
+PATH stderr diagnostics unchanged.
 
 ## 14. Rollback plan
-Revert the change commit; no persisted state altered.
+Revert the fallback line and delete the new test.
 
-## 16-17. Automated and regression tests
+## 16. Automated-test strategy
 
-New `scripts/tests/pr-publish-reason-test.sh` sources change-pr.sh and covers success and each failure path (AC-1..4) with `change_pr_engine`, `issue_close_eligible`, `assert_tree_matches_attested`, `origin_field` and `origin_fetch_method` stubbed for those unit paths, plus a grep that the engine push has no force flag (SI3). The AC-5 regression test is different: it runs the real `issue_close_eligible` and `assert_tree_matches_attested` (and the real engine) on a fixture repo with signing disabled; only `gh` and network are stubbed. It is added once step 1 identifies the path and must fail on pre-fix code. Existing pr-auto-publish-test.sh must still pass untouched.
+New `scripts/tests/runners-none-installed-test.py` (hyphenated so run-python-tests.sh collects it), modelled on how scripts/tests/home-actions-test.py imports uncle_tui. Isolation (binding): every test sets os.environ["PATH"] to a fresh temp directory only (never the host PATH, never appended), patches uncle_tui.DEFAULT_RUNNER to "", and uses an empty/temp config so no configured runner is read from the host; all env, module-attribute and config changes are restored in tearDown and only temp dirs are used. runners_for reads PATH on every call (verified against the source when writing the test; if it caches, the test resets the cache). Fake binaries are created portably: on POSIX, executable files with chmod 0o755; on Windows, `.bat`/`.cmd` stubs with PATHEXT honoured, and if the scan cannot detect them the cases needing fake binaries are skipped with a stated reason rather than silently passing. Cases: (AC-1) with PATH set to an empty temp dir, call `runners_for` once for each side value the real signature accepts (the implementer reads the signature at uncle_tui.py:690 and the test enumerates exactly those values, i.e. the agent side and the reviewer side), each side independently with no distinctness filtering, and assert the result equals ["self-hosted"] for each; an unset/empty PATH value also gives ["self-hosted"] and launches nothing (AR-011); with no runners installed the description text lists "Self hosted" and never contains "No agents installed" (AC-1); (AC-2) stage_runner default gives self-hosted with no configured runner and DEFAULT_RUNNER empty; a configured runner (e.g. claude) that is not installed is still returned by stage_runner while runners_for returns ["self-hosted"]; (AC-2, V1) with no runner installed and self-hosted unconfigured, the existing self-hosted configuration requirement still applies, i.e. defaulting does not start a run or bypass the existing gate (if the gate is not unit-reachable, assert the existing predicate returns the same result as for an explicitly selected unconfigured self-hosted; if no such guard exists today, record that in IMPLEMENTATION_NOTES.md as a pre-existing gap and do not fix it here); (AC-3) temp dir with executable fake `claude` and `opencode` makes `runners_for` return exactly ["claude","self-hosted"], self-hosted appearing once (opencode maps to self-hosted, no extra entries); temp dir with only fake `opencode` returns exactly ["self-hosted"] once, no duplicate; the fallback fires only on an empty list and never appends to a non-empty one. Fails before the fix (empty list), passes after: this is the regression test.
+
+Binding test-case supplement (applies in addition to the cases above; all cases live in runners-none-installed-test.py): (1) Isolation: PATH is set to a fresh temp dir only, uncle_tui.DEFAULT_RUNNER is patched to "", config is empty/temp, all restored in tearDown. (2) Per-side: assert ["self-hosted"] for each side value separately, naming the side in the assertion message. (3) Description text: with nothing installed it contains "Self hosted" and not "No agents installed". (4) Configured-but-uninstalled: with claude configured and nothing installed, stage_runner returns "claude" while runners_for returns ["self-hosted"]. (5) Exact lists via assertEqual: fake claude+opencode gives ["claude","self-hosted"]; opencode only gives ["self-hosted"] once. (6) Unconfigured self-hosted default does not start a stage and hits the existing configuration-required path (if no such guard exists, record as a pre-existing gap in IMPLEMENTATION_NOTES.md). (7) runners_for reads PATH on every call; fake binaries are chmod 0o755 files on POSIX, .cmd stubs on Windows, with a stated skip reason if undetectable.
+
+## 17. Regression strategy
+Run baseline commands: `bash scripts/run-shell-tests.sh`, `bash scripts/run-python-tests.sh` (from baseline), compared to the pre-change baseline.
 
 ## 18. Manual verification
 
-Handoff exit status captured (`rc=0; change_pr_engine handoff || rc=$?`) then reported; still `return 0`. `published` is set only when handoff exits 0 and the journal phase is `created`; exit 0 with any other phase (declined or early-return paths) records `handoff-incomplete`; nonzero exit records `handoff-failed`. Tests cover each outcome.
-
-Also confirm the printed `PR not created:` line, when one appears, contains no URL, token or tool output.
-
-## 19. Observability
-One stderr line per no-PR path; accurate finished-block label.
-
-## Restrictions
-
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
-|---|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST Constraints | SI1, SI2 | Gates unchanged: no gate in change_pr_publish may be removed or loosened; AC-5 may correct gate inputs only | No edits to gate conditions; a fix may change the inputs a gate receives but never its pass criteria; any gate removal or loosening is a deviation needing human approval | Request | none | change-pr.sh:120-159 inspected | CODING |
-| R-2 | USER | CHANGE_REQUEST Constraints | SI3 | No force push | No push edits; test greps | Request | none | change-pr.sh:1589 inspected | CODING |
-| R-3 | USER | CHANGE_REQUEST Constraints | AC-6 | Bash 3.2 | Plain bash constructs | Request | none | existing style | CODING |
-| R-4 | DESIGN | plan | SB1-2 | Reporting via env var reason | CHANGE_PR_EXTRAS_REASON | Existing channel | none | change-pr.sh:15-20 | CODING |
-
-Live GitHub verification needs `gh auth` and a remote (CAP-LIVE-GH, LIVE_VERIFICATION phase only); it does not block coding. Live check: manual section 18; no secrets recorded.
+Run uncle with a PATH holding none of the four binaries, open Configure, and inspect the runner picker for a stage: only "Self hosted". The manual check covers the stage runner pickers only; the supervision picker is excluded from pass/fail (it may remain empty if SUPPORTED_RUNNERS excludes self-hosted, per section 22).
 
 ## Change-impact table
+
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/lib/change-pr.sh` | Reasons and stderr lines in change_pr_publish; stop overwrite in change_pr_complete; fix proven defect | SB1-SB3 | Medium: publish ordering | pr-publish-reason-test.sh, pr-auto-publish-test.sh, pr-verdict-binding-test.sh |
-| `scripts/lib/finished_extras.py` | Add labels for new keys | AC-4 | Low | new test |
-| `scripts/tests/pr-publish-reason-test.sh` | New suite | AC-1..5 | None | self |
+| `uncle_tui.py` `runners_for` | return `installed or ["self-hosted"]` | single fallback point | Low: callers get a non-empty list | new test + existing suites |
+| `scripts/tests/runners-none-installed-test.py` | new test file, isolated: PATH set to a temp dir only (read per call), DEFAULT_RUNNER patched to "", empty config, restored in tearDown; portable fake binaries (.bat/.cmd on Windows, else skip with reason); includes unset/empty PATH case and an assertion that the unconfigured self-hosted default does not bypass the existing configuration guard | cover no-runner and preserved cases | None | itself |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1. When ORIGIN_FILE is empty the issue gate (issue_close_eligible) is skipped and publication proceeds to the tree assertion and handoff; the test matrix in pr-publish-reason-test.sh includes this case, asserting no issue-not-eligible reason is recorded. | SB1 | SI1, SI2 | change-pr.sh | pr-publish-reason-test.sh | Section 18 |
-| AC-2: each no-PR path adds exactly one new stderr line formatted 'PR not created: <key>: <detail>', in addition to (never replacing) existing diagnostics such as assert_tree_matches_attested stderr output, 'Publish refused', and the engine's stdout 'PR pending:'. | SB2, SB5 | SI4 | change-pr.sh | pr-publish-reason-test.sh | Section 18 |
-| AC-3: change_pr_complete never assigns CHANGE_PR_EXTRAS_REASON after change_pr_publish returns, at any of its three call sites (unattended change-pr.sh:70, headless :98, interactive :104). The unconditional `CHANGE_PR_EXTRAS_REASON=publication-pending` assignments after publish at :70 and :98 are deleted; publication-pending is set only when publish left the reason empty. The handoff-disabled assignment at :93 is kept. The interactive path at :104 already preserves the reason. | SB1 | SI4 | change-pr.sh | pr-publish-reason-test.sh | Section 18 |
-| AC-4 | SB2 | SI4 | finished_extras.py | pr-publish-reason-test.sh | Finished block |
-| AC-5: any proven defect on the skip path is fixed with a regression test that fails on pre-fix code; the fix may correct gate inputs but may not remove or loosen any gate (SI1/SI2). | SB3 | SI1-3 | change-pr.sh | pr-publish-reason-test.sh (regression; real issue_close_eligible and assert_tree_matches_attested on a fixture, only gh and network stubbed) | Section 18 |
-| AC-6 | SB4 | SI3 | all | both runners | none |
+| AC-1: with no runner on PATH, runners_for returns exactly ["self-hosted"] (self-hosted appearing once) independently for each side value the real signature accepts (agent and reviewer; the test names the actual values from the signature), with no distinctness rule filtering it; the description text lists "Self hosted" and never shows "No agents installed". | C1 | V1 | runners_for | runners-none-installed-test.py | picker shows only Self hosted |
+| AC-2: with no configured runner and DEFAULT_RUNNER empty, stage_runner returns self-hosted; a configured runner (e.g. claude) absent from runners_for output is still returned unchanged; an unconfigured self-hosted default does not start a stage and surfaces the existing configuration-required behavior. | C2 | V1 | runners_for via stage_runner | runners-none-installed-test.py | stage default shown as Self hosted; selecting it while unconfigured does not start a stage and shows the existing configuration-required behavior |
+| AC-3: when any non-self-hosted runner is detected, behavior is unchanged: with fake claude and opencode on PATH, runners_for returns exactly ["claude","self-hosted"] (self-hosted appearing once); with only opencode it returns exactly ["self-hosted"] (once, no duplicates); the fallback fires only on an empty list and never appends to a non-empty list. | C3, C4 | V2 | runners_for | runners-none-installed-test.py (claude+opencode case, opencode-only case) | n/a |
+| AC-4 | C3, C4 | V2 | whole TUI | both baseline commands | n/a |
 
-## Implementation sequence
+## Restrictions
 
-1. Reproduce: using a throwaway repro script kept outside the repo (e.g. under /tmp), build a fixture (temp git repo, signing disabled, bare local remote, `gh` stubbed on PATH) and run change_pr_publish with the REAL issue_close_eligible, assert_tree_matches_attested and engine to find which path skips publication; record the path in IMPLEMENTATION_NOTES.md. This step does not touch scripts/tests/pr-publish-reason-test.sh, which step 4 alone owns.
-   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
-2. Reporting changes in change_pr_publish/change_pr_complete and fix of any proven defect; builds on step 1 harness only for verification, edits a different file. Reason keys and stderr: on each no-PR path add exactly one new stderr line 'PR not created: <key>: <detail>'; existing stdout/stderr messages are left untouched. change_pr_publish clears CHANGE_PR_EXTRAS_REASON on entry (no stale reason on a direct call) and sets a non-empty key on every no-PR return. Validate mapping: exit 3 with no override, or a declined/failed verdict-override -> verdict-not-ready; any other nonzero validate exit, and a failing re-validate after override -> validate-failed. Gate branches: empty ORIGIN_FILE skips the issue gate and sets no reason (never issue-not-eligible); under a non-READY override the issue gate is not run and no issue-not-eligible is recorded (issue stays open, publication continues); issue-not-eligible is set only when issue_close_eligible actually runs and fails; empty commit-tree (fallback attested="") with a failing assert_tree_matches_attested records tree-mismatch. Existing gate conditions and `|| return 0` returns are kept; only a reason assignment is added before each. Handoff outcome: capture the exit code (`rc=0; change_pr_engine handoff || rc=$?`); any nonzero rc (declined consent, PR pending exits 1 or 3) records handoff-failed with the exit code in the stderr line; rc 0 with journal phase not `created` records handoff-incomplete (add to the key set); rc 0 with phase `created` (including already-created rerun and override-created PRs) records published, or published-draft-unreviewed when the verdict class is not READY/READY_WITH_NON_BLOCKING_ISSUES (override or UNCLE_AUTO_PUBLISH), with a stderr line naming the verdict and stating draft vs ready so a draft is never reported as ready. A handoff exit 0 is never recorded under any other key. publish still returns 0. change_pr_complete never assigns CHANGE_PR_EXTRAS_REASON after change_pr_publish returns, except publication-pending when still empty: delete the unconditional assignments at change-pr.sh:70 (unattended) and :98 (headless) and replace each with an if-empty fallback; the :104 attended call has no assignment and stays consistent; the handoff-disabled assignment at :93 stays since publish is not called there. The fix may correct gate inputs but must not remove or loosen any SI1/SI2 gate (issue_close_eligible, tree assertion); any such change is a recorded deviation needing human approval. Verify against the step 1 real-gate fixture (real issue_close_eligible and assert_tree_matches_attested; only gh and network stubbed). Step 4 tests cover the empty-ORIGIN_FILE, empty-commit-tree, rerun and override-created cases.
-   Owns: `scripts/lib/change-pr.sh`
-   Depends on: 1
-3. Add labels for new reason keys in finished_extras.py, and make rendering allowlist-only: any value not in the allowlist renders as publication-pending, never verbatim. Test unknown, empty and malformed values.
-   Owns: `scripts/lib/finished_extras.py`
-4. Create and finalize scripts/tests/pr-publish-reason-test.sh (sole owner), capturing stderr. Matrix with exact-key assertions: (1) validate exit 1 -> validate-failed; validate 3 with declined override -> verdict-not-ready; validate 3 then failing re-validate -> validate-failed; (2) empty ORIGIN_FILE bypasses issue gate and reaches handoff, no issue-not-eligible; non-READY verdict under override; issue_close_eligible failure -> issue-not-eligible; empty commit-tree failing assert -> tree-mismatch; ineligible issue or mismatched tree yields no handoff call (gates intact); (3) handoff stub exit 0 (rerun with phase created, override-created) -> published, exit 1 (decline) and 3 -> handoff-failed with the exit code in the line; release_skipped draft stated in line; UNCLE_AUTO_PUBLISH=1 with non-READY verdict -> published-draft-unreviewed naming the verdict; handoff exit 0 without phase created -> handoff-incomplete; (4) CHANGE_PR_EXTRAS_REASON preset to a sentinel is replaced on every path, including success; (5) exactly one stderr line beginning 'PR not created: <key>' per no-PR path, including tree-mismatch with multiple existing stderr lines, existing messages intact; (6) canary token and credentialed URL emitted by stub engine/gh never appear in the reason line; (7) change_pr_complete table test over unattended, headless and interactive paths: publish stub's reason survives, empty becomes publication-pending, handoff-disabled unchanged; (8) finished_extras.py invoked from this suite with each allowlisted key, an unknown key and a malformed value, asserting labels and publication-pending fallback; (9) AC-5 regression using real gates, shown failing on pre-fix code; diff check that no gate condition was removed. Add the suite to the plan's verification commands and protected paths.
-   Owns: `scripts/tests/pr-publish-reason-test.sh`
-   Depends on: 1, 2, 3
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
+|---|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST.md Constraints | AC-3, AC-4 | Behavior unchanged when any runner installed | fallback only on empty list; no other behavior change, and PATH contents never select or auto-launch a runner beyond the existing scan | minimal | none | inspected uncle_tui.py:690-709 | CODING |
+| R-2 | USER | CHANGE_REQUEST.md Constraints | AC-4 | Do not weaken existing tests | add new test only | requested | none | no existing test references runners_for | CODING |
 
-## 21. Scope cuts
-Cut first: the live-fixture reproduction harness fidelity (keep stubbed engine tests); then finished_extras labels (fallback label stays valid). Never cut reason reporting or gate preservation.
+No live-authentication prerequisites; no capability IDs needed. The empty-list fallback is the only behavior change: PATH contents (empty, unset, or unreadable/untrusted directories) never select or auto-launch a runner beyond the existing scan.
 
-## 22. Risks
+## 20. Implementation sequence
 
-- Root cause may be outside change-pr.sh (e.g. state files); then record a deviation and stop for new authority.
-- Stubs in other suites define change_pr_publish; new variables must not break them.
-- The `PR not created: <key>` stderr line contains only the reason key and a fixed static message (plus the numeric handoff exit code where applicable), never engine/gh output, remote URLs, tokens or environment values; tests assert this with a credentialed-URL canary in the stub remote.
+1. Audit uncle_tui.py for other guards keyed on an empty runner list or runner=="" (and whether an unconfigured self-hosted default can start a run); record findings in IMPLEMENTATION_NOTES.md. Then add the fallback to `runners_for` (D1; R-1).
+   Owns: `uncle_tui.py`
+2. Add regression test AC-1..AC-3; independent of step 1 file-wise (it only imports uncle_tui), so can be written concurrently.
+   Owns: `scripts/tests/runners-none-installed-test.py`
+3. Run the new test and confirm the baseline commands show no new failures.
+   Depends on: 1, 2
+
+## 21. Scope cuts under time pressure
+
+Cut the preserved-case AC-3 assertions last-first (opencode-only and claude+opencode cases), then the Windows-specific fake-binary variants (skipped with a stated reason); never cut the AC-1/AC-2 test, the guard audit in step 1, the unconfigured self-hosted guard assertion, or the fallback.
+
+## 22. Risks and unresolved questions
+
+- The unreachable "No agents installed" label is left untouched deliberately.
+- V1 (runners_for never empty) applies only to `runners_for` output. The supervision picker, filtered by SUPPORTED_RUNNERS, may still be empty if that list excludes self-hosted; out of scope per the request and excluded from pass/fail.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | change_pr_publish has four silent return-0 branches after validate; the plan listed keys without mapping exits to keys. | s7.1 gains an explicit exit-to-reason mapping; step-2 text requires implementing it. |
-| AR-002 | Accepted | change-pr.sh:70 and :98 unconditionally overwrite the reason after change_pr_publish; naming those lines makes AC-3 scoped and testable. | AC-3 and step-2 now delete the post-publish assignments at change-pr.sh:70 and :98, fall back to publication-pending only if empty, keep handoff-disabled. |
-| AR-003 | Accepted | Handoff exit 0 can mean an already-created PR and a declined consent exits 1, so 'published' needs a strict definition. | Step 2 now states published means handoff exit 0 only; any nonzero exit (including declined consent) is handoff-failed with the exit code in the stderr line. |
-| AR-004 | Accepted | The gate branches after validate (empty ORIGIN_FILE, non-READY override, empty commit-tree) had no stated reason mapping. | Step 2 text now maps each branch to a reason; step 4 tests the empty-ORIGIN_FILE and empty-commit-tree cases. |
-| AR-005 | Accepted | Existing stderr/stdout diagnostics (Publish refused, PR pending) must stay; a single added, uniformly formatted line avoids conflict with them. | AC-2 requirement and step-2 now specify exactly one added stderr line 'PR not created: <key>: <detail>', leaving existing messages untouched. |
-| AR-006 | Accepted | change_pr_publish only inherits a reset from change_pr_complete, so a direct call could report a stale reason; clearing on entry fixes that. | Step 2 now requires change_pr_publish to clear CHANGE_PR_EXTRAS_REASON on entry and set a non-empty key on every no-PR return. |
-| AR-007 | Accepted | change_pr_complete's unattended (line 70) and headless (line 98) branches unconditionally overwrite the reason after change_pr_publish, making AC-3 ambiguous about call sites. | Edit step-2 and AC-3 to remove both post-publish assignments and set publication-pending only when publish left the reason empty. |
-| AR-008 | Accepted | The four silent return-0 sites in change_pr_publish (change-pr.sh:120-129) need an explicit exit-to-key mapping or SI4 cannot hold. | Section 8 text gains a validate-exit-to-reason mapping, and step 2 is amended to implement it. |
-| AR-009 | Accepted | Handoff exit 0 also occurs on the already-created rerun and on override-created PRs, so the plan must say exactly when published is recorded. | Step 2 text now states published is set only when handoff exits 0, including rerun and override paths; any nonzero exit is handoff-failed. |
-| AR-010 | Accepted | Handoff exit 0 can be a draft PR over a failed audit, and nonzero exits include declined consent, so success and failure need precise definitions. | Step 2 now specifies: handoff-failed for any nonzero rc; published only on rc 0; stderr line states draft vs ready. |
-| AR-011 | Accepted | change_pr_publish only inherits the reset done in change_pr_complete, so a direct call could surface a stale reason. | step-2 now requires change_pr_publish to clear CHANGE_PR_EXTRAS_REASON on entry and set a non-empty key on every no-PR return. |
-| AR-012 | Accepted | The reason line could leak engine/gh output, URLs or tokens if not constrained; a static-content rule is cheap and safe. | Add a content rule to s19.1 and a test assertion to s12.1 that the stderr reason line holds only the key and a static message. |
-| AR-013 | Accepted | The render rule for unknown or malformed reason values was unstated, and the spec's 'fall back safely' claim was uncited. | s7.1 now states finished_extras.py renders only allowlisted keys and anything else as publication-pending; step-3 owns implementing and testing it. |
-| AR-014 | Accepted | Publishing a draft over a non-READY verdict via override or UNCLE_AUTO_PUBLISH must not be reported as plain 'published' once complete stops overwriting the reason. | Section 8 adds key published-draft-unreviewed with stderr line naming the verdict; step-2 implements it. |
-| AR-015 | Accepted | The plan allowed fixing any proven defect but did not say the SI1/SI2 gates in the wrapper may not be loosened; the finding is correct. | Edit s1.1(d), R-1, step-2 and AC-5 so fixes may correct gate inputs but not remove or loosen a gate, and any such change is a deviation needing human approval. |
-| AR-016 | Accepted | Stubbing the real gate functions would hide the likely silent skip at change-pr.sh:145-148/159, so the AC-5 regression must run them for real. | Edit s11.1, AC-5 traceability row and step-2 text: AC-5 regression runs real issue_close_eligible and assert_tree_matches_attested on a fixture; only gh and network are stubbed. |
-| AR-017 | Accepted | The four silent return-0 paths after validate need explicit reason keys; the plan listed keys without a mapping. | Section 8 text and step-2 now map validate exit 1/other failures and failing re-validate to validate-failed, exit 3 with no or declined override to verdict-not-ready. |
-| AR-018 | Accepted | Real gap: lines 69-71 and 97-99 overwrite the reason while 104 does not, and the plan never states a per-path rule. | Step-2 and AC-3 now require change_pr_complete to never assign the reason after publish returns, except publication-pending when empty, on all three call sites. |
-| AR-019 | Accepted | Existing stderr and engine stdout diagnostics make 'one stderr line' ambiguous; the added line must be defined as additive and fixed in format. | AC-2 requirement and step-2 now say each no-PR path adds exactly one new stderr line 'PR not created: <key>: <detail>', leaving existing diagnostics untouched. |
-| AR-020 | Accepted | Handoff exit 0 also occurs on declined/early-return paths, so exit status alone cannot prove a PR exists. | step-2 and s12.1 require published only when handoff exits 0 and the journal phase is created; otherwise handoff-incomplete. |
-| AR-021 | Accepted | The empty ORIGIN_FILE path skips the issue gate and is a real untested branch of change_pr_publish. | Add an empty-ORIGIN_FILE case to the test matrix (step-2 note, AC-1 requirement) and state the issue gate is skipped there. |
+| AR-001 | Accepted | Real gap: configured-but-absent runner behavior was unstated; stage_runner is untouched so it keeps returning configured/DEFAULT_RUNNER. | Add s1 block stating stage_runner still returns a configured runner or DEFAULT_RUNNER even if absent from runners_for; add test case in s11.1. |
+| AR-002 | Accepted | Opencode-only and duplicate cases were unspecified; the fallback only fires on an empty list so it cannot duplicate. | Specify opencode-only returns ["self-hosted"] once and no duplicates in s1 block, AC-3 row, and s11.1 test cases. |
+| AR-003 | Accepted | The fallback is a single post-scan line, so independence per side and exemption from distinctness rules should be stated explicitly. | s1.1 states per-side independence with no distinctness filtering; AC-1 test wording updated to match. |
+| AR-004 | Accepted | Description text consumes runners_for, so with the fallback it lists Self hosted; the label should be stated unreachable and tested. | s6.1 specifies description text with no runners; s11.1 adds an assertion that the text never shows No agents installed. |
+| AR-005 | Accepted | V1 'never empty' was unscoped while the plan admits the supervision picker may stay empty; scoping removes the contradiction. | Section 22 item 2 now states V1 applies only to runners_for output; the supervision picker filtered by SUPPORTED_RUNNERS may be empty. |
+| AR-006 | Accepted | Plan left unstated what happens when a configured runner is absent from runners_for; stage_runner is unchanged by design, so say so. | Section 5 gains an explicit rule: stage_runner still returns a configured runner or DEFAULT_RUNNER even if absent from runners_for; only an unset value falls back to self-hosted. |
+| AR-007 | Accepted | Opencode-only result and no-duplicate behavior are real gaps in the spec and test. | s11.1 adds an opencode-only case asserting exactly ["self-hosted"]; s6.1 states the fallback only fires on an empty list and never appends. |
+| AR-008 | Partially accepted | Plan should state defaulting does not bypass self-hosted configuration and have step 1 audit other empty-runner guards; changing launch gating itself is out of scope. | s6.1 and step-1 require auditing guards keyed on empty runner lists or runner==""; s11.1 tests that unconfigured self-hosted is still gated; s18.1 notes the cut order. |
+| AR-009 | Accepted | Real gap: the test must not depend on caching or on POSIX executable bits unstated. | s11.1 states PATH is read per call and fake binaries are portable (.bat/.cmd on Windows, else skip with reason). |
+| AR-010 | Partially accepted | Changing the self-hosted config flow is out of scope, but the plan should assert that it is not bypassed and test the existing guard. | s11.1 and AC-2 add a test that the unconfigured self-hosted default does not bypass the existing configuration guard; no production change. |
+| AR-011 | Accepted | Stating that the fallback is the only behavior change and PATH contents never auto-select or launch a runner is cheap, accurate, and testable. | Added restriction R-1 wording and a s16 prose note that the fallback is the only behavior change; test also covers unset/empty PATH. |
+| AR-012 | Accepted | The test must be isolated from the host environment or results depend on installed binaries and config. | s11.1 now specifies PATH set to a temp dir only, DEFAULT_RUNNER patched to empty, empty config, with restoration in tearDown. |
+| AR-013 | Accepted | The AC-3 expected shape was ambiguous; fixing it to exactly ["claude","self-hosted"] with self-hosted once is testable. | Edit s11.1 and AC-3 to state the exact result with self-hosted appearing once. |
+| AR-014 | Accepted | The 'both sides' wording gave no argument values; the test must name them. | Edit s11.1 and AC-1 so the test iterates over the side values the real runners_for signature accepts and asserts ["self-hosted"] for each. |
+| AR-015 | Accepted | The manual check did not say whether the supervision picker is in scope, though the plan admits it may stay empty; scoping it removes the ambiguity. | Section 18 (s13.1) now limits the manual check to stage runner pickers and excludes the supervision picker from pass/fail. |

@@ -706,7 +706,7 @@ def runners_for(side):
                 continue
             installed.append("self-hosted" if binary == "opencode" else binary)
             break
-    return installed
+    return installed or ["self-hosted"]
 
 
 
@@ -1294,7 +1294,10 @@ class UncleTUI:
                 return "%s  %s" % (stored, label) if label else stored
             return stored
         if field == "runner":
-            return "%s  (default)" % (self.stage_runner(stage) or "No agents installed")
+            default = self.stage_runner(stage)
+            if default == "self-hosted":
+                default = "Self hosted"
+            return "%s  (default)" % (default or "No agents installed")
         if field == "effort":
             return "%s  (default)" % default_stage_effort(stage)
         if field == "network":

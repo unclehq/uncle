@@ -1,117 +1,155 @@
-# Change Plan
+# Change plan
 
-Omitted sections: Schema/persistence (none); Concurrency (none); Migration (none); Feature flag (none); Observability (none); State-transition changes (none)
+Omitted sections: Schema/persistence (none); Migration (none); Concurrency (none new); Feature flag (existing WORKFLOW_CLOSE_ISSUE=0 opt-out is the containment); Observability (reuses existing reason messages).
 
 ## 1. Selected technical approach
 
-Decision D1: in `runners_for` (uncle_tui.py:690), after the scan, `return installed or ["self-hosted"]`. Every consumer (stage_runner default, runner pickers, description text) then sees the fallback with no further edits. The fallback applies independently per side (agent and reviewer); no agent-reviewer distinctness rule filters it.
+Add two predicates to `scripts/lib/change-pr.sh`. `change_pr_in_worktree`: true only when `git rev-parse --absolute-git-dir` differs from `git rev-parse --path-format=absolute --git-common-dir` (a linked worktree); false if either git command fails; the `worktree-owned` marker alone never makes it true, so a stale marker in a plain repo changes nothing. `change_pr_worktree_owned`: true only when the marker `worktree-owned` exists under STATE_DIR (default `.uncle/workflow`), resolved to an absolute path against the project root before testing. In `change_pr_complete`: (a) widen the unattended auto-publish condition at line 66 to `CLOSE_ISSUE==1 && UNATTENDED==1 && (-s ORIGIN_FILE || (change_pr_worktree_owned && change_pr_in_worktree))`, so origin-less auto-publish needs the worktree-owned marker and a real linked worktree, and operator-made worktrees without the marker never auto-publish; (b) the new non-zero return applies only when `CLOSE_ISSUE==1 && UNATTENDED==1` in a run where `change_pr_in_worktree` is true: after the publish path, return 0 only when `CHANGE_PR_EXTRAS_REASON` is EXACTLY `published` or `published-draft-unreviewed` (exact string match, no glob/prefix); any other value, including empty or unset, returns 1 (this includes the pending case). With `CLOSE_ISSUE==0` (operator opt-out, 'handoff disabled'), `change_pr_complete` does not publish and returns 0; attended runs always return 0, so an attended decline or skip is not a failure; (c) in `scripts/change-workflow.sh` completion (~4988-5004) exit with `pr_rc` when it is non-zero (which by (b) happens only for unattended CLOSE_ISSUE==1 worktree runs), instead of unconditional `exit 0`; otherwise the driver exits 0. Attended dialogs unchanged. The engine already pushes without force, reuses existing PRs and supports origin-less runs, so it is not modified.
 
-Clarified semantics: (a) With no runner installed, runners_for returns ["self-hosted"]. stage_runner is unchanged and still returns a configured runner or DEFAULT_RUNNER if set, even if that runner is absent from runners_for; only an unset value yields self-hosted. (b) The fallback fires only when the scanned list is empty and never appends to a non-empty list, so self-hosted cannot appear twice. With only opencode on PATH (opencode maps to self-hosted), runners_for returns exactly ["self-hosted"] once.
+Detection contract for `change_pr_in_worktree` (AR-019): true if the marker `${STATE_DIR:-.uncle/workflow}/worktree-owned` exists; otherwise true if `git rev-parse --git-dir` differs from `--git-common-dir`; false when either git call fails (e.g. outside a repository). Marker presence alone suffices even in a non-worktree directory, subject to any stricter qualification decided by the owners of AR-007/AR-012.
 
 ## 2. Alternatives considered
-- A: patch `stage_runner` and each picker site separately (3+ edits; can diverge).
-- B: add a new helper wrapping runners_for (extra surface).
+- Write PR logic into worktrees.sh: rejected; duplicates the audited engine and bypasses tree/verdict gates.
+- Always publish regardless of CLOSE_ISSUE: rejected; removes the documented operator opt-out and is not requested.
+- Make all failures non-zero including non-worktree: rejected by constraint (no alteration beyond need).
 
 ## 3. Why preferred
-One-line, minimal diff, single source of truth; installed case is untouched because the fallback only fires on an empty list.
+Smallest surface; reuses the journaled, tree-attested engine; issue path untouched.
 
 ## 4. Components to modify
 See change-impact table.
 
 ## 5. Not to modify
-
-self-hosted config flow, shims, `stage_runner` logic, DEFAULT_RUNNER, supervision_lib, existing tests.
-
-Explicit rule for `stage_runner` (unchanged): a configured runner, or DEFAULT_RUNNER if set, is still returned even when it is absent from `runners_for` output (for example claude configured but nothing installed). Only an unset value falls back to self-hosted, via the runners_for fallback. The picker and the default may therefore differ for a configured-but-uninstalled runner; this is preserved existing behavior (C4) and is out of scope.
+`worktrees.sh`, `parallel_steps.py`, `from-issue.sh`, engine python in change-pr.sh, `stagegate.sh`, `workflow.sh`, review/approval gates, existing test expectations.
 
 ## 6. Data-flow changes
 
-`runners_for` result is non-empty. The fallback fires only when the scan finds nothing and never appends to a non-empty list, so self-hosted cannot be duplicated (opencode-only installed gives exactly ["self-hosted"], since opencode maps to self-hosted). With no runners installed the description text lists "Self hosted" and never shows "No agents installed"; that label at line 1297 becomes unreachable and is left as-is (minimal diff). Defaulting to self-hosted does NOT bypass the existing self-hosted configuration requirement: an unconfigured self-hosted runner remains subject to whatever existing config gate applies at launch. Before editing, step 1 audits uncle_tui.py for any other guard keyed on an empty runner list or runner=="" and records the result in IMPLEMENTATION_NOTES.md.
+Unattended worktree completion now reaches `change_pr_publish` without an origin file; `change_pr_publish` already skips issue-eligibility when origin is empty. Remote and base rule: an origin-less worktree publish pushes only to the repository's configured default remote (`origin`, or the single configured remote if exactly one exists) and targets the repository default branch as PR base. If no remote is configured, or several remotes exist with none being `origin`, publish does not push, sets a failure reason naming the missing/ambiguous remote, and `change_pr_complete` returns 1. Failure rule: a push failure (or any publish failure) in an unattended worktree run with CLOSE_ISSUE=1 sets `CHANGE_PR_EXTRAS_REASON` to a failure reason (never `published*`), makes `change_pr_complete` return 1, and prints the stopped-extras message exactly once. Issue-reference rule: a no-origin worktree publish never emits issue-closing references (e.g. Closes/Fixes/Resolves #N) in the PR title or body and never closes any issue; the PR body is built without an issue link when ORIGIN_FILE is absent.
+
+## 7. State-transition changes
+
+None in state files or journal; process exit status differs for failed worktree publication. A non-zero exit runs the normal exit trap and does not mutate or clear the journal, so a re-run resumes from it.
 
 ## 8. Interface changes
-None in signature; return value gains a fallback.
+
+New internal function `change_pr_in_worktree`; `change_pr_complete` may now return 1 (worktree runs only). Callers use `|| pr_rc=$?`, so set -e safe. Verdict rule for unattended worktree runs without an origin file: an unreviewed verdict publishes as a draft (reason `published-draft-unreviewed`) and returns 0; a failing (non-READY, reviewed) verdict does not publish, keeps the engine's existing no-publish reason, and returns 1.
 
 ## 10. Compatibility
-Preserved whenever one runner is detected (C3, C4).
+
+Non-worktree and issue paths byte-identical in routing. Decision D-1: worktree detection uses the single definition in section 1 (change_pr_in_worktree: absolute-resolved worktree-owned marker under STATE_DIR OR git-dir != git-common-dir; false when git fails), so issue worktrees and operator-made linked worktrees count; no other section may define worktree detection differently. Issue worktrees already auto-publish via ORIGIN_FILE, so no double PR (journal + lookup guarantee one PR). This is asserted, not assumed: an unattended issue-linked run inside a worktree (worktree fixture that also has an ORIGIN_FILE) must call change_pr_publish exactly once.
 
 ## 12. Error and recovery
-PATH stderr diagnostics unchanged.
+
+Reasons from `change_pr_no_pr` retained; stopped-extras printed via existing `change_pr_extras_print`; rerun resumes via journal. Decision D-2: on worktree publish failure the failure reason and the stopped-extras message are printed exactly once. `change_pr_complete` prints them, and the driver exits with `pr_rc` through the normal exit trap (on_exit), which must not print them again; the implementer adds a printed-once guard if the trap would repeat the print. A re-run resumes from the journal without duplicating a push or PR. A test counts occurrences of the reason/extras message in stderr and asserts exactly one.
 
 ## 14. Rollback plan
-Revert the fallback line and delete the new test.
+`git revert` the change commit; no state, schema or remote artifacts to unwind (created PRs remain, which is intended).
 
 ## 16. Automated-test strategy
 
-New `scripts/tests/runners-none-installed-test.py` (hyphenated so run-python-tests.sh collects it), modelled on how scripts/tests/home-actions-test.py imports uncle_tui. Isolation (binding): every test sets os.environ["PATH"] to a fresh temp directory only (never the host PATH, never appended), patches uncle_tui.DEFAULT_RUNNER to "", and uses an empty/temp config so no configured runner is read from the host; all env, module-attribute and config changes are restored in tearDown and only temp dirs are used. runners_for reads PATH on every call (verified against the source when writing the test; if it caches, the test resets the cache). Fake binaries are created portably: on POSIX, executable files with chmod 0o755; on Windows, `.bat`/`.cmd` stubs with PATHEXT honoured, and if the scan cannot detect them the cases needing fake binaries are skipped with a stated reason rather than silently passing. Cases: (AC-1) with PATH set to an empty temp dir, call `runners_for` once for each side value the real signature accepts (the implementer reads the signature at uncle_tui.py:690 and the test enumerates exactly those values, i.e. the agent side and the reviewer side), each side independently with no distinctness filtering, and assert the result equals ["self-hosted"] for each; an unset/empty PATH value also gives ["self-hosted"] and launches nothing (AR-011); with no runners installed the description text lists "Self hosted" and never contains "No agents installed" (AC-1); (AC-2) stage_runner default gives self-hosted with no configured runner and DEFAULT_RUNNER empty; a configured runner (e.g. claude) that is not installed is still returned by stage_runner while runners_for returns ["self-hosted"]; (AC-2, V1) with no runner installed and self-hosted unconfigured, the existing self-hosted configuration requirement still applies, i.e. defaulting does not start a run or bypass the existing gate (if the gate is not unit-reachable, assert the existing predicate returns the same result as for an explicitly selected unconfigured self-hosted; if no such guard exists today, record that in IMPLEMENTATION_NOTES.md as a pre-existing gap and do not fix it here); (AC-3) temp dir with executable fake `claude` and `opencode` makes `runners_for` return exactly ["claude","self-hosted"], self-hosted appearing once (opencode maps to self-hosted, no extra entries); temp dir with only fake `opencode` returns exactly ["self-hosted"] once, no duplicate; the fallback fires only on an empty list and never appends to a non-empty one. Fails before the fix (empty list), passes after: this is the regression test.
+Extend `scripts/tests/pr-auto-publish-test.sh` (stubs publish/engine; fixture worktree via `git -c commit.gpgsign=false`, `--no-gpg-sign`, local gpgsign=false): AC-1, AC-3, AC-4, AC-6, plus call-count for AC-2. Fixture must override STATE_DIR so the marker is tested. Cases:
+(a) AC-3 exact-match allowlist (worktree, WORKFLOW_CLOSE_ISSUE=1): reason `published` -> rc 0; `published-draft-unreviewed` -> rc 0; empty, unset, `pending`, handoff-disabled, and an arbitrary other string (e.g. `published-other`) -> rc 1 (proves exact match, not glob).
+(b) AC-6: in a worktree with WORKFLOW_CLOSE_ISSUE=0, assert publish is not called AND `change_pr_complete` returns 0 (and driver exit 0); non-zero return applies only when CLOSE_ISSUE=1.
+(c) Driver exit status (AC-3) is verified behaviorally, not by grep: a shell test runs the completion path of `scripts/change-workflow.sh` with `change_pr_complete` stubbed to return 1 in a worktree fixture (CLOSE_ISSUE=1) and asserts exit status 1, and asserts exit status 0 for the same stub in a non-worktree fixture. It may live in `scripts/tests/pr-auto-publish-test.sh` or a new sibling shell test registered with `scripts/run-shell-tests.sh`.
+(d) Detection (in_worktree is git-dir != git-common-dir only): git-dir-only linked worktree (true); marker-only in a plain repo with STATE_DIR overridden so the marker exists (false, no publish, behavior unchanged); neither (false); git failing outside a repo (false).
+(e) Verdict cases (AR-011): with the engine stubbed to an unreviewed verdict, an origin-less unattended worktree run publishes as a draft (reason `published-draft-unreviewed`) and returns 0; with a failing verdict it does not call publish and returns 1.
+(f) Failure-path single-print: worktree, publish stub failing, run through the completion/exit path with stderr captured; assert the stopped-extras message occurs exactly once (occurrence count == 1) so any on_exit duplicate print is caught.
 
-Binding test-case supplement (applies in addition to the cases above; all cases live in runners-none-installed-test.py): (1) Isolation: PATH is set to a fresh temp dir only, uncle_tui.DEFAULT_RUNNER is patched to "", config is empty/temp, all restored in tearDown. (2) Per-side: assert ["self-hosted"] for each side value separately, naming the side in the assertion message. (3) Description text: with nothing installed it contains "Self hosted" and not "No agents installed". (4) Configured-but-uninstalled: with claude configured and nothing installed, stage_runner returns "claude" while runners_for returns ["self-hosted"]. (5) Exact lists via assertEqual: fake claude+opencode gives ["claude","self-hosted"]; opencode only gives ["self-hosted"] once. (6) Unconfigured self-hosted default does not start a stage and hits the existing configuration-required path (if no such guard exists, record as a pre-existing gap in IMPLEMENTATION_NOTES.md). (7) runners_for reads PATH on every call; fake binaries are chmod 0o755 files on POSIX, .cmd stubs on Windows, with a stated skip reason if undetectable.
+Secret-hygiene check (AR-015): export a sentinel value (e.g. `GH_TOKEN=SENTINEL-SECRET-123`) in the test environment, run the publish-success and publish-failure worktree cases, and assert the sentinel appears in neither the published PR body (captured from the stub) nor stdout/stderr of `change_pr_complete`.
 
-## 17. Regression strategy
-Run baseline commands: `bash scripts/run-shell-tests.sh`, `bash scripts/run-python-tests.sh` (from baseline), compared to the pre-change baseline.
+## 17. Regression-test strategy
+
+Existing four routing checks, pr-verdict-binding, pr-reconcile, worktree-run tests, full suites via the baseline commands. Test would fail before change: AC-1 and AC-3 (no publish / rc 0), and the driver-exit test (worktree fixture with change_pr_complete stubbed to rc 1 exits 0 before the change, 1 after).
 
 ## 18. Manual verification
+Run a headless non-issue build in a worktree against a scratch GitHub repo: PR opened; rerun reuses it; break remote auth to see non-zero exit with reason. LIVE_VERIFICATION phase only; not a coding prerequisite.
 
-Run uncle with a PATH holding none of the four binaries, open Configure, and inspect the runner picker for a stage: only "Self hosted". The manual check covers the stage runner pickers only; the supervision picker is excluded from pass/fail (it may remain empty if SUPPORTED_RUNNERS excludes self-hosted, per section 22).
+## 20. Implementation sequence
+
+## Implementation sequence
+
+1. Add `change_pr_in_worktree` and routing/return-code changes in `change_pr_complete` (R-1, R-2; AC-1,3,4,6).
+   Owns: `scripts/lib/change-pr.sh`
+2. Driver exit-status handling after `change_pr_complete` for worktree runs (AC-3); CLOSE_ISSUE=0 worktree runs still exit 0, and non-zero applies only when CLOSE_ISSUE=1. Not cuttable under time pressure: only README wording may be cut. Verified by the behavioral driver-exit test (worktree stub rc 1 -> exit 1; non-worktree stub rc 1 -> exit 0), not by grep.
+   Owns: `scripts/change-workflow.sh`
+   Depends on: 1
+3. Tests for the cases in section 16, including: (a) the driver completion-path exit-status test (change-workflow.sh completion with change_pr_complete stubbed to rc 1; worktree: exit 1; non-worktree: exit 0); (b) detection cases (AR-019): marker-only (STATE_DIR overridden, plain repo), git-dir-only (linked worktree, no marker), neither (plain repo, no marker), and git failing outside a repo (false); (c) a worktree fixture that also has an ORIGIN_FILE: an unattended issue-linked run inside it must call change_pr_publish exactly once (AC-2 call-count).
+   independent of 1-2 (written against the specified function contract), may run concurrently
+   Owns: `scripts/tests/pr-auto-publish-test.sh`
+4. **Driver exit-status test** — Add a shell test that runs the change-workflow.sh completion path with change_pr_complete stubbed to return 1: exit 1 in a worktree fixture (unattended), exit 0 in a non-worktree fixture and for attended runs. Register it in scripts/run-shell-tests.sh if that runner enumerates tests explicitly, and add it to the plan's Verification commands and protected verification paths.
+   Owns: `scripts/tests/change-workflow-exit-status-test.sh`, `scripts/run-shell-tests.sh`
+   Depends on: 2
+5. Document behavior (AC-9).
+   Owns: `scripts/README.md`
+
+## 21. Scope cuts under time pressure
+
+Cut first: README wording only (step 4). The routing fix, the driver exit-code change (step 2), the driver exit-status test and the routing tests are never cut, because INV-4/OB-3/AC-3 require a non-zero exit for failed unattended worktree publication.
+
+## 22. Risks and unresolved questions
+
+- Risk: marker detection also matches operator worktrees; accepted per 'all worktrees'.
+- Risk: an extra non-zero exit surprises wrappers (TUI); only after real PR failure in worktrees.
+- No blocking decisions.
+- Ownership: step 2 (scripts/change-workflow.sh) owns the on_exit/extras single-print handling; if suppressing a duplicate print requires editing any other file, that file must be added to the step's Owns before implementation.
+
+## Restrictions
+
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
+|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST Constraints | AC-7 | No force push | Reuse engine plain push; no push edits | Engine already compliant (change-pr.sh ~1636) | CAP-none | CODING |
+| R-2 | USER | CHANGE_REQUEST Constraints | AC-2, 4, 5 | Non-worktree and issue behavior unchanged | Gate all new routing on `change_pr_in_worktree` | Minimal surface | CAP-none | CODING |
+| R-3 | USER | Success criteria | AC-3 | Failure surfaced, not claimed complete | rc 1 + driver exit (driver exits with pr_rc), only when WORKFLOW_CLOSE_ISSUE=1; CLOSE_ISSUE=0 returns 0. When CLOSE_ISSUE=1 in a worktree run, change_pr_complete returns 0 only if CHANGE_PR_EXTRAS_REASON is exactly `published` or `published-draft-unreviewed`; any other value (including empty/unset) returns 1 | Existing reason strings reused | CAP-none | CODING |
+| R-6 | DESIGN | Review AR-014 | AC-1 | No-origin worktree publish never emits issue-closing references and never closes any issue | Build PR title/body without an issue link when ORIGIN_FILE is absent; automated test captures the body and asserts no Closes/Fixes/Resolves keyword or issue reference | Without an origin file issue-eligibility is skipped, so closing keywords must be explicitly suppressed (AR-014) | CAP-none | CODING |
+| R-4 | DESIGN | Plan | AC-1 | PR creation via gh against default branch | Existing engine `gh pr create`; push only to the default remote (`origin` or the single configured remote); missing or ambiguous remote fails non-zero with a reason | Already implemented; feasibility seen at change-pr.sh ~1668; remote/base selection per s6.1 (AR-013) | CAP-gh | LIVE_VERIFICATION |
+| R-5 | DESIGN | Review AR-015 | AC-1, AC-3 | No credentials or environment values in PR text or logs | Reuse existing engine body/reason strings, which carry no env values; add no new output interpolating environment variables, tokens or remote URLs with embedded credentials; test asserts a sentinel secret in env never appears in output | Unattended publish has no human reviewing output before it is posted | CAP-none | CODING |
+
+Runner/config binding: bash/shell test runner `scripts/run-shell-tests.sh`. Live check: manual scratch-repo run (section 18); needs authenticated gh, non-secret evidence only.
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `uncle_tui.py` `runners_for` | return `installed or ["self-hosted"]` | single fallback point | Low: callers get a non-empty list | new test + existing suites |
-| `scripts/tests/runners-none-installed-test.py` | new test file, isolated: PATH set to a temp dir only (read per call), DEFAULT_RUNNER patched to "", empty config, restored in tearDown; portable fake binaries (.bat/.cmd on Windows, else skip with reason); includes unset/empty PATH case and an assertion that the unconfigured self-hosted default does not bypass the existing configuration guard | cover no-runner and preserved cases | None | itself |
+| `scripts/lib/change-pr.sh` | Add `change_pr_in_worktree`; widen auto-publish condition; return non-zero for unpublished worktree runs | Core defect B-3/B-4 | Medium: shared with issue flow | pr-auto-publish-test.sh, pr-verdict-binding-test.sh |
+| `scripts/change-workflow.sh` | Exit with `pr_rc` for worktree runs after completion | Do not claim completion on failure | Low-medium | grep/behavior test, suites |
+| `scripts/tests/pr-auto-publish-test.sh` | Add worktree/no-origin, failure, non-worktree, opt-out cases | Success criterion: test for no-issue case | Low | itself |
+| `scripts/README.md` | Document behavior | AC-9 | None | manual |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1: with no runner on PATH, runners_for returns exactly ["self-hosted"] (self-hosted appearing once) independently for each side value the real signature accepts (agent and reviewer; the test names the actual values from the signature), with no distinctness rule filtering it; the description text lists "Self hosted" and never shows "No agents installed". | C1 | V1 | runners_for | runners-none-installed-test.py | picker shows only Self hosted |
-| AC-2: with no configured runner and DEFAULT_RUNNER empty, stage_runner returns self-hosted; a configured runner (e.g. claude) absent from runners_for output is still returned unchanged; an unconfigured self-hosted default does not start a stage and surfaces the existing configuration-required behavior. | C2 | V1 | runners_for via stage_runner | runners-none-installed-test.py | stage default shown as Self hosted; selecting it while unconfigured does not start a stage and shows the existing configuration-required behavior |
-| AC-3: when any non-self-hosted runner is detected, behavior is unchanged: with fake claude and opencode on PATH, runners_for returns exactly ["claude","self-hosted"] (self-hosted appearing once); with only opencode it returns exactly ["self-hosted"] (once, no duplicates); the fallback fires only on an empty list and never appends to a non-empty list. | C3, C4 | V2 | runners_for | runners-none-installed-test.py (claude+opencode case, opencode-only case) | n/a |
-| AC-4 | C3, C4 | V2 | whole TUI | both baseline commands | n/a |
+| Publish PR for non-issue worktree | OB-1 | INV-5 | change-pr.sh | AC-1 case | Scratch-repo run |
+| Issue PR still once | OB-2 | INV-3, INV-5 | change-pr.sh | AC-2, No-origin worktree publish: assert PR body/title contain no closing keyword or issue reference | n/a |
+| Failure surfaced: with WORKFLOW_CLOSE_ISSUE=1 a worktree run returns 0 only for reason exactly published or published-draft-unreviewed; any other value (including empty/unset) returns non-zero. With CLOSE_ISSUE=0 a worktree run returns 0. Attended worktree runs are exempt from INV-4: a declined or skipped dialog returns 0. | OB-3 | INV-4 | change-pr.sh, change-workflow.sh | AC-3 case (CLOSE_ISSUE=1: published, published-draft-unreviewed => 0; empty, unset, pending, other => 1; unattended: non-zero), AC-3 case (CLOSE_ISSUE=0 => 0), Attended worktree decline case (rc 0), Driver completion-path test: change_pr_complete stubbed rc 1 -> exit 1 in worktree fixture with CLOSE_ISSUE=1, exit 0 in non-worktree fixture and with CLOSE_ISSUE=0 | Break auth run |
+| Reuse existing PR | OB-4 | INV-5 | engine (unchanged) | pr-reconcile-test.py | Rerun |
+| Non-worktree unchanged; CLOSE_ISSUE=0 worktree run does not publish and returns rc 0 | OB-5, OB-6 | INV-2 | change-pr.sh | AC-4, AC-6 (asserts no publish and rc 0) | n/a |
+| No force push | n/a | INV-1 | engine (unchanged) | AC-7 diff check | n/a |
 
-## Restrictions
-
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
-|---|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST.md Constraints | AC-3, AC-4 | Behavior unchanged when any runner installed | fallback only on empty list; no other behavior change, and PATH contents never select or auto-launch a runner beyond the existing scan | minimal | none | inspected uncle_tui.py:690-709 | CODING |
-| R-2 | USER | CHANGE_REQUEST.md Constraints | AC-4 | Do not weaken existing tests | add new test only | requested | none | no existing test references runners_for | CODING |
-
-No live-authentication prerequisites; no capability IDs needed. The empty-list fallback is the only behavior change: PATH contents (empty, unset, or unreadable/untrusted directories) never select or auto-launch a runner beyond the existing scan.
-
-## 20. Implementation sequence
-
-1. Audit uncle_tui.py for other guards keyed on an empty runner list or runner=="" (and whether an unconfigured self-hosted default can start a run); record findings in IMPLEMENTATION_NOTES.md. Then add the fallback to `runners_for` (D1; R-1).
-   Owns: `uncle_tui.py`
-2. Add regression test AC-1..AC-3; independent of step 1 file-wise (it only imports uncle_tui), so can be written concurrently.
-   Owns: `scripts/tests/runners-none-installed-test.py`
-3. Run the new test and confirm the baseline commands show no new failures.
-   Depends on: 1, 2
-
-## 21. Scope cuts under time pressure
-
-Cut the preserved-case AC-3 assertions last-first (opencode-only and claude+opencode cases), then the Windows-specific fake-binary variants (skipped with a stated reason); never cut the AC-1/AC-2 test, the guard audit in step 1, the unconfigured self-hosted guard assertion, or the fallback.
-
-## 22. Risks and unresolved questions
-
-- The unreachable "No agents installed" label is left untouched deliberately.
-- V1 (runners_for never empty) applies only to `runners_for` output. The supervision picker, filtered by SUPPORTED_RUNNERS, may still be empty if that list excludes self-hosted; out of scope per the request and excluded from pass/fail.
+Scope-cut override (supersedes the earlier scope-cut order): the driver exit-code change in `scripts/change-workflow.sh` (step 2) is NOT cuttable, because INV-4/OB-3/AC-3 require a non-zero exit when an unattended worktree publish fails. Only README wording (step 4) may be cut. The routing fix, the driver exit-code change and their tests are never cut.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | Real gap: configured-but-absent runner behavior was unstated; stage_runner is untouched so it keeps returning configured/DEFAULT_RUNNER. | Add s1 block stating stage_runner still returns a configured runner or DEFAULT_RUNNER even if absent from runners_for; add test case in s11.1. |
-| AR-002 | Accepted | Opencode-only and duplicate cases were unspecified; the fallback only fires on an empty list so it cannot duplicate. | Specify opencode-only returns ["self-hosted"] once and no duplicates in s1 block, AC-3 row, and s11.1 test cases. |
-| AR-003 | Accepted | The fallback is a single post-scan line, so independence per side and exemption from distinctness rules should be stated explicitly. | s1.1 states per-side independence with no distinctness filtering; AC-1 test wording updated to match. |
-| AR-004 | Accepted | Description text consumes runners_for, so with the fallback it lists Self hosted; the label should be stated unreachable and tested. | s6.1 specifies description text with no runners; s11.1 adds an assertion that the text never shows No agents installed. |
-| AR-005 | Accepted | V1 'never empty' was unscoped while the plan admits the supervision picker may stay empty; scoping removes the contradiction. | Section 22 item 2 now states V1 applies only to runners_for output; the supervision picker filtered by SUPPORTED_RUNNERS may be empty. |
-| AR-006 | Accepted | Plan left unstated what happens when a configured runner is absent from runners_for; stage_runner is unchanged by design, so say so. | Section 5 gains an explicit rule: stage_runner still returns a configured runner or DEFAULT_RUNNER even if absent from runners_for; only an unset value falls back to self-hosted. |
-| AR-007 | Accepted | Opencode-only result and no-duplicate behavior are real gaps in the spec and test. | s11.1 adds an opencode-only case asserting exactly ["self-hosted"]; s6.1 states the fallback only fires on an empty list and never appends. |
-| AR-008 | Partially accepted | Plan should state defaulting does not bypass self-hosted configuration and have step 1 audit other empty-runner guards; changing launch gating itself is out of scope. | s6.1 and step-1 require auditing guards keyed on empty runner lists or runner==""; s11.1 tests that unconfigured self-hosted is still gated; s18.1 notes the cut order. |
-| AR-009 | Accepted | Real gap: the test must not depend on caching or on POSIX executable bits unstated. | s11.1 states PATH is read per call and fake binaries are portable (.bat/.cmd on Windows, else skip with reason). |
-| AR-010 | Partially accepted | Changing the self-hosted config flow is out of scope, but the plan should assert that it is not bypassed and test the existing guard. | s11.1 and AC-2 add a test that the unconfigured self-hosted default does not bypass the existing configuration guard; no production change. |
-| AR-011 | Accepted | Stating that the fallback is the only behavior change and PATH contents never auto-select or launch a runner is cheap, accurate, and testable. | Added restriction R-1 wording and a s16 prose note that the fallback is the only behavior change; test also covers unset/empty PATH. |
-| AR-012 | Accepted | The test must be isolated from the host environment or results depend on installed binaries and config. | s11.1 now specifies PATH set to a temp dir only, DEFAULT_RUNNER patched to empty, empty config, with restoration in tearDown. |
-| AR-013 | Accepted | The AC-3 expected shape was ambiguous; fixing it to exactly ["claude","self-hosted"] with self-hosted once is testable. | Edit s11.1 and AC-3 to state the exact result with self-hosted appearing once. |
-| AR-014 | Accepted | The 'both sides' wording gave no argument values; the test must name them. | Edit s11.1 and AC-1 so the test iterates over the side values the real runners_for signature accepts and asserts ["self-hosted"] for each. |
-| AR-015 | Accepted | The manual check did not say whether the supervision picker is in scope, though the plan admits it may stay empty; scoping it removes the ambiguity. | Section 18 (s13.1) now limits the manual check to stage runner pickers and excludes the supervision picker from pass/fail. |
+| AR-001 | Accepted | The success-reason set was ambiguous; an exact two-value allowlist (empty/unset fails) is testable and matches AC-3. | s1.1 and R-3 state exact allowlist; s12.1 adds empty/unset/other-reason test cases. |
+| AR-002 | Accepted | The 'handoff disabled' failure return contradicts the CLOSE_ISSUE=0 opt-out (OB-6/AC-6), so the non-zero rule must apply only when CLOSE_ISSUE=1. | Edit s1.1 (b)/(c) so CLOSE_ISSUE=0 worktree runs return 0 and the driver exits 0; update s12.1 and traceability rows s21.1.r3 and s21.1.r5 to assert rc 0. |
+| AR-003 | Accepted | Attended worktree runs keep their dialogs unchanged (OB-7), so INV-4 must not apply to them; a declined dialog returns 0. | Traceability row s21.1.r3 now states attended worktree runs are exempt from INV-4 and a declined dialog returns 0; non-zero applies only to unattended runs. |
+| AR-004 | Accepted | The worktree definition was ambiguous about marker path resolution, git-dir layouts and git failure; a single precise definition removes that. | Sections 1 (s1.1) and 10 (s9.1) now define change_pr_in_worktree precisely: absolute-resolved marker OR git-dir != git-common-dir, false on git failure. |
+| AR-005 | Accepted | Push-failure behavior and extras-print count must be specified in the plan so they are testable, not left to the implementer. | Edited s6.1 and s10.1 to state push failure sets a failure reason, returns 1, and prints extras exactly once. |
+| AR-006 | Accepted | The driver exit-code change implements the required non-zero exit (INV-4/OB-3, AC-3), so cutting it would contradict the requirements. | Step 2 marked non-cuttable and a scope-cut override block added (s21); only README wording may be cut. |
+| AR-007 | Accepted | A marker-or-git-dir test lets a stale marker in a plain repo trigger auto-publish, which breaks 'non-worktree unchanged'. | s1.1, s9.1 and s12.1 now define in_worktree by git-dir != git-common-dir only, with marker-alone and plain-repo tests. |
+| AR-008 | Accepted | Non-zero exit must not apply to attended runs, since attended dialogs are unchanged and a declined dialog is a legitimate outcome. | Section 1 (s1.1) now conditions the non-zero return and driver exit on UNATTENDED==1; attended runs always return 0. |
+| AR-009 | Accepted | s1(b) treated 'handoff disabled' as failure, contradicting AC-6/OB-6; CLOSE_ISSUE=0 must return 0 and the non-zero rule applies only when CLOSE_ISSUE=1. | Edit s1.1 (b) and (c), R-3, s21.1.r3/r5 and s12.1 so CLOSE_ISSUE=0 worktree runs return 0 and non-zero applies only when CLOSE_ISSUE=1. |
+| AR-010 | Accepted | Duplicate extras printing and exit-trap/re-run behavior should be specified, not left to the implementer. | Rewrote D-2 in s10.1 to fix exit via pr_rc, single reason print, and journal resume; clarified s7.1 on exit-trap and re-run. |
+| AR-011 | Accepted | Verdict handling for origin-less unattended worktree publish was unstated; settling it avoids ambiguity between draft publish and refusal. | Added verdict rule to s8.1 (interface) and a verdict test case to s12.1 (automated tests). |
+| AR-012 | Accepted | Auto-publishing from operator-made worktrees with no human dialog is unrequested and risky; only driver-owned worktrees (marker) should qualify. | Edited s1.1 and s9.1: origin-less unattended auto-publish requires the worktree-owned marker; git-dir comparison alone never triggers it. |
+| AR-013 | Accepted | Remote and base were unspecified for origin-less worktree publish; a missing or ambiguous remote must fail visibly rather than guess. | Edit s6.1 to state remote/base rule and non-zero failure; update R-4 to match. |
+| AR-014 | Accepted | With no origin file the issue-eligibility check is skipped, so the plan must state explicitly that non-issue worktree publish emits no closing references. | Section 6 data-flow text states no-origin worktree publish never emits issue-closing references or closes an issue; traceability row r2 adds a test for it. |
+| AR-015 | Accepted | Unattended publish writes PR text and logs without a stated no-secrets rule; adding one is cheap and low risk. | Add restriction row R-5 and a test assertion in s12.1 that PR bodies and failure output contain no credentials or env values. |
+| AR-016 | Accepted | A grep cannot prove the driver exits non-zero; a behavioral test of the completion path is required. | Sections 16, 17, step-2/step-3 and traceability s21.1.r3 now require a shell test running change-workflow.sh completion with change_pr_complete stubbed to rc 1 (worktree: exit 1; non-worktree: exit 0). |
+| AR-017 | Accepted | Plan left failure reasons unenumerated; an exact allow-list with empty/unset treated as failure is unambiguous and testable. | s1.1(b) now states the exact-match success reasons; R-3, s21.1.r3 and the s12.1 test cases cover empty/unset and other reasons. |
+| AR-018 | Accepted | Section 1(b) treating 'handoff disabled' as failure contradicts OB-6/AC-6; the opt-out must return 0 and the non-zero rule must apply only when CLOSE_ISSUE=1. | Edit s1.1 to scope the non-zero return to CLOSE_ISSUE==1 and return 0 without publishing when CLOSE_ISSUE=0; s12.1 and s21.1.r5 now assert rc 0 for AC-6. |
+| AR-019 | Accepted | Detection edge cases were unspecified and untested. | Section 1 adds a detection contract; step-3 now requires marker-only, git-dir-only, neither and git-failure tests. |
+| AR-020 | Accepted | Leaving duplicate extras printing to the implementer makes it untestable; a fixed single-print rule can be asserted. | Section 12 (s10.1) fixes single-print behavior; section 16 (s12.1) adds a test counting extras occurrences in stderr. |
+| AR-021 | Accepted | D-1's no-double-PR claim was untested; a worktree fixture with an ORIGIN_FILE is cheap and closes the gap. | Edit s10.1 (D-1), step-3 and s16 test list to require a worktree+ORIGIN_FILE case asserting change_pr_publish is called exactly once. |

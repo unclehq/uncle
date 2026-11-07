@@ -52,7 +52,40 @@ assert_tree_matches_attested() {
     return "$bad"
 }
 
+# True only in a linked git worktree: git-dir differs from git-common-dir.
+# False when git fails. The worktree-owned marker alone never counts.
+change_pr_in_worktree() {
+    local gd cd
+    gd="$(git rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+    cd="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+    [[ -n "$gd" && -n "$cd" ]] || return 1
+    cd="$(cd "$cd" 2>/dev/null && pwd -P)" || return 1
+    gd="$(cd "$gd" 2>/dev/null && pwd -P)" || return 1
+    [[ "$gd" != "$cd" ]]
+}
+
+# True when the driver created this worktree (marker under STATE_DIR).
+change_pr_worktree_owned() {
+    local d="${STATE_DIR:-.uncle/workflow}"
+    [[ "$d" == /* ]] || d="$(pwd -P)/$d"
+    [[ -e "$d/worktree-owned" ]]
+}
+
+# Worktree runs with the handoff enabled return 1 unless a PR was published
+# (exact reason match); every other run returns 0 as before.
 change_pr_complete() {
+    local rc=0
+    change_pr_complete_route || rc=$?
+    if [[ "$rc" == 0 && "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] && change_pr_in_worktree; then
+        case "${CHANGE_PR_EXTRAS_REASON:-}" in
+            published|published-draft-unreviewed) ;;
+            *) echo "Worktree run: no PR was published (${CHANGE_PR_EXTRAS_REASON:-unset})." >&2; return 1 ;;
+        esac
+    fi
+    return "$rc"
+}
+
+change_pr_complete_route() {
     CHANGE_PR_EXTRAS_REASON=""
     # The publication boundary. The unattended stages have ended; whether the
     # handoff dialogs open depends only on whether someone can answer them.
@@ -63,7 +96,7 @@ change_pr_complete() {
     # are generated, a NOT_READY audit is published over on the record as a DRAFT
     # PR, and nothing waits on anyone. The release envelope and the PR banner still
     # say the audit failed; only the gesture is automated, never the verdict.
-    if [[ "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 && -s "$ORIGIN_FILE" ]]; then
+    if [[ "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] && { [[ -s "$ORIGIN_FILE" ]] || { change_pr_worktree_owned && change_pr_in_worktree; }; }; then
         echo "Unattended: publishing the PR without a dialog (draft when the audit is not READY)."
         local -x UNCLE_AUTO_PUBLISH=1
         change_pr_publish 0 </dev/null

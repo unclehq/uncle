@@ -300,6 +300,15 @@ change workflow inside it:
 
   Removal or refusal never changes the exit status: the script exits as the run
   did.
+- **Every worktree run publishes a PR.** A change run inside a git worktree
+  (git dir differs from the common git dir; a marker file alone does not count)
+  auto-publishes its PR at `COMPLETE` whether or not the change came from an
+  issue or an `origin` remote exists, when `CLOSE_ISSUE=1` (without an origin
+  record, the driver-owned `worktree-owned` marker is also required). With `CLOSE_ISSUE=0`
+  it does not publish and exits 0. Attended runs keep their existing dialogs, and
+  a declined dialog is not a failure. If an unattended worktree run cannot
+  publish (for example the push fails), the driver exits non-zero rather than
+  reporting success. Non-worktree runs behave as before.
 - Without the flag nothing changes: same files, cwd and driver arguments.
 
 With valid PR evidence the prompt is never shown, in any mode (interactive,

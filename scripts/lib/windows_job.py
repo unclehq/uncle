@@ -91,7 +91,11 @@ class Job:
 
 def start(command, prompt=None, **kwargs):
     """Start `command` inside a fresh Job. With `prompt` (bytes) the command
-    reads it from stdin after the handshake byte; otherwise stdin is NUL."""
+    reads it from stdin after the handshake byte; otherwise stdin is NUL.
+    With process_tree.KEEP_STDIN the command's stdin stays open and is returned
+    on the process, for a worker that is fed more than once."""
+    from process_tree import KEEP_STDIN
+    keep = prompt is KEEP_STDIN
     job = Job()
     child = None
     try:
@@ -104,6 +108,10 @@ def start(command, prompt=None, **kwargs):
         job.assign(child)
         child._uncle_job = job
         child.stdin.write(b'G')
+        if keep:
+            # The handshake byte must reach the shim now; the pipe stays open.
+            child.stdin.flush()
+            return child
         if prompt is not None:
             try:
                 child.stdin.write(prompt)

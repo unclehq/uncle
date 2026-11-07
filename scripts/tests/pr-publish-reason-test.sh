@@ -211,7 +211,7 @@ hasnt "AC-5 no skip" "$ERR" "^PR not created:"
 # gates not removed
 grep -q 'issue_close_eligible "\$recorded"' "$LIB" && ok || bad "issue gate call missing"
 grep -q 'READY|READY_WITH_NON_BLOCKING_ISSUES)' "$LIB" && ok || bad "verdict case missing"
-grep -q 'assert_tree_matches_attested "\$attested" ||' "$LIB" && ok || bad "tree gate missing"
+grep -q 'assert_tree_matches_attested "\$attested" pre ||' "$LIB" && ok || bad "tree gate missing"
 grep -q '|| return 0' "$LIB" && ok || bad "issue gate return missing"
 # SI3: no force push anywhere in the library
 if grep -nE 'push[^#]*(--force|-f[ "'"'"']|--force-with-lease)|\+refs/' "$LIB" >/dev/null; then bad "force push present"; else ok; fi

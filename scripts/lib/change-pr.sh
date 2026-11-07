@@ -23,13 +23,20 @@ change_pr_extras_reason() {
 # managed-line tolerance); without one only the clean tracked-status check applies. Nothing under .uncle/ outside the allowlist may
 # be tracked or staged, and no .uncle/docs artifact of the attested tree may be ignored. Untracked artifacts never fail it.
 # Offending paths and the reason go to stderr; returns nonzero on any failure.
+#
+# $2 = pre: the call is made before `handoff`, which is what commits the audited tree. The change is still uncommitted then, so
+# modified tracked files are expected and the clean-status check does not apply (it is the post-commit check, and applying it here
+# refused every run whose change edits a tracked file). The audit's root FINAL_AUDIT.md is written by the handoff, so its absence
+# from disk is not a difference either. Content drift from the attested tree and ignored artifacts still refuse.
 assert_tree_matches_attested() {
-    local tree="${1:-}" bad=0 line path
+    local tree="${1:-}" when="${2:-}" bad=0 line path
     local allow='^\.uncle/(docs/.*|attestation\.json|attestation\.sig|allowed_signers)$'
-    while IFS= read -r line; do
-        [[ -n "$line" ]] || continue
-        echo "tracked file not clean: $line" >&2; bad=1
-    done < <(git status --porcelain --untracked-files=no 2>&1)
+    if [[ "$when" != pre ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            echo "tracked file not clean: $line" >&2; bad=1
+        done < <(git status --porcelain --untracked-files=no 2>&1)
+    fi
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
         [[ "$path" == .uncle/* && ! "$path" =~ $allow ]] || continue
@@ -42,6 +49,7 @@ assert_tree_matches_attested() {
             # An approved artifact that is merely untracked is not a difference.
             # Likewise a file of the change that is not yet tracked: present on disk, absent from the index.
             if [[ "$status" == D && ( "$path" =~ $allow || -e "$path" ) ]]; then continue; fi
+            if [[ "$when" == pre && "$status" == D && "$path" == FINAL_AUDIT.md ]]; then continue; fi
             echo "path differs from the attested tree ($status): $path" >&2; bad=1
         done < <(git diff --name-status --no-renames "$tree" 2>/dev/null)
         while IFS= read -r line; do
@@ -198,7 +206,7 @@ change_pr_publish() {
     fi
     local attested
     attested="$(change_pr_engine commit-tree 2>/dev/null)" || attested=""
-    assert_tree_matches_attested "$attested" || {
+    assert_tree_matches_attested "$attested" pre || {
         echo "Publish refused: the tree differs from the audited tree." >&2
         change_pr_no_pr tree-mismatch "the tree differs from the audited tree"
         return 0
@@ -1789,6 +1797,21 @@ def main():
                 or snapshot() != j['reviewed_tree'] or read(STATE / 'origin') != j['origin']):
             raise ValueError('Files, origin, HEAD or branch changed during audit; rerun FINAL_AUDIT.')
         check_remotes(j)
+        # Settle uncle's own ignore entries before the commit tree is bound. The reviewed snapshot above drops them, so a stray
+        # bare `.uncle` appended during the run passed; but the commit tree keeps the exact bytes, and that line sits after the
+        # canonical block and re-ignores `.uncle/docs/` and the attestation. Publish then refused the finished audit
+        # ('approved artifact is ignored', tree-mismatch) for a change nobody made. Only in a linked worktree, which uncle
+        # created and normalizes on creation; the user's own checkout is never rewritten here.
+        if git('rev-parse', '--absolute-git-dir') != git('rev-parse', '--path-format=absolute', '--git-common-dir'):
+            import sys as _sys
+            lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+            if lib not in _sys.path:
+                _sys.path.insert(0, lib)
+            try:
+                import uncle_gitignore
+                uncle_gitignore.ensure('.')  # worktree-only: see the comment above
+            except ImportError:
+                pass
         j.update(audit_hash=audit_hash(), commit_tree=snapshot(True),
                  verdict_run=read(STATE / 'audit-verdict').split('\t')[0], phase='bound')
         # Sealed here, after the last agent stage and before any handoff.

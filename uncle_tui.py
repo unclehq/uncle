@@ -4494,6 +4494,15 @@ class UncleTUI:
             if start:
                 self.workflow_idx = 0 if kind == 'app' else 2
                 self._run()
+                # _run returns without starting for several reasons (recovery
+                # pending, home agent still alive, a backgrounded build). It
+                # reports why in chat_error; claiming "Started" and clearing
+                # that error left the brief replaced and nothing running.
+                if self.state != 'running':
+                    reason = self.chat_error or 'the workflow did not start'
+                    self.home_history.append(('system', 'Not started: ' + reason + ' ' + filename +
+                                              ' was written; start it again once that is resolved.'))
+                    return
                 self.home_history.append(('system', 'Started the ' + kind + ' workflow using ' + filename + '.'))
         self.chat_error = ''
 

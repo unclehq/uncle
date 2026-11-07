@@ -56,6 +56,52 @@ class ManagedIgnore(unittest.TestCase):
         self.assertNotEqual(NS['snapshot'](True), before)
 
 
+class BindNormalizesTheIgnoreFile(unittest.TestCase):
+    def test_bind_settles_a_stray_bare_uncle_line_before_binding_the_commit_tree(self):
+        # A bare `.uncle` after the canonical block re-ignores .uncle/docs/, so publish refused the audited tree.
+        src = (ROOT / 'scripts/lib/change-pr.sh').read_text()
+        bind = src.split("elif action == 'bind':", 1)[1].split("elif action == 'artifact':", 1)[0]
+        self.assertLess(bind.index('uncle_gitignore.ensure'), bind.index('commit_tree=snapshot(True)'))
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        import uncle_gitignore
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, '.gitignore').write_text('hello\n' + '\n'.join(uncle_gitignore.CANONICAL) + '\n.uncle\n')
+            uncle_gitignore.ensure(tmp)
+            lines = Path(tmp, '.gitignore').read_text().splitlines()
+        self.assertNotIn('.uncle', lines)
+        self.assertEqual(lines, ['hello'] + uncle_gitignore.CANONICAL)
+
+
+class PrePublishAssertion(unittest.TestCase):
+    """The publish guard runs before handoff commits the tree: uncommitted tracked edits are expected then."""
+
+    def run_assert(self, mode, tree_extra=''):
+        src = (ROOT / 'scripts/lib/change-pr.sh').read_text()
+        func = src.split('assert_tree_matches_attested() {', 1)[1].split('\n}\n', 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            sh = lambda c: subprocess.run(c, shell=True, cwd=tmp, check=True, capture_output=True, text=True).stdout.strip()
+            sh('git init -q && git config user.email a@b.c && git config user.name a && git config commit.gpgsign false')
+            Path(tmp, 'main.c').write_text('old\n')
+            sh('git add . && git commit -q -m base')
+            Path(tmp, 'main.c').write_text('new\n')
+            Path(tmp, 'FINAL_AUDIT.md').write_text('audit\n')
+            sh('git add -A && git write-tree > /tmp/.tree_x')
+            tree = sh('git write-tree')
+            sh('git reset -q && rm FINAL_AUDIT.md')
+            res = subprocess.run(['bash', '-c', 'assert_tree_matches_attested() {' + func + '\n}\nassert_tree_matches_attested ' + tree + ' ' + mode],
+                                 cwd=tmp, capture_output=True, text=True)
+            return res.returncode, res.stderr
+
+    def test_uncommitted_change_and_unwritten_audit_copy_pass_before_handoff(self):
+        rc, err = self.run_assert('pre')
+        self.assertEqual(rc, 0, err)
+
+    def test_the_post_commit_check_still_refuses_dirty_tracked_files(self):
+        rc, err = self.run_assert('')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('tracked file not clean', err)
+
+
 class BindFailureIsExplained(unittest.TestCase):
     def test_the_driver_records_why_a_failed_bind_stopped_it(self):
         driver = (ROOT / 'scripts/change-workflow.sh').read_text()

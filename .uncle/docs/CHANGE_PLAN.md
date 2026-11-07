@@ -1,155 +1,151 @@
-# Change plan
+# Change Plan — Issue 178
 
-Omitted sections: Schema/persistence (none); Migration (none); Concurrency (none new); Feature flag (existing WORKFLOW_CLOSE_ISSUE=0 opt-out is the containment); Observability (reuses existing reason messages).
+Seeded from [unclehq/uncle#178](https://github.com/unclehq/uncle/issues/178).
 
-## 1. Selected technical approach
+Issue 178
 
-Add two predicates to `scripts/lib/change-pr.sh`. `change_pr_in_worktree`: true only when `git rev-parse --absolute-git-dir` differs from `git rev-parse --path-format=absolute --git-common-dir` (a linked worktree); false if either git command fails; the `worktree-owned` marker alone never makes it true, so a stale marker in a plain repo changes nothing. `change_pr_worktree_owned`: true only when the marker `worktree-owned` exists under STATE_DIR (default `.uncle/workflow`), resolved to an absolute path against the project root before testing. In `change_pr_complete`: (a) widen the unattended auto-publish condition at line 66 to `CLOSE_ISSUE==1 && UNATTENDED==1 && (-s ORIGIN_FILE || (change_pr_worktree_owned && change_pr_in_worktree))`, so origin-less auto-publish needs the worktree-owned marker and a real linked worktree, and operator-made worktrees without the marker never auto-publish; (b) the new non-zero return applies only when `CLOSE_ISSUE==1 && UNATTENDED==1` in a run where `change_pr_in_worktree` is true: after the publish path, return 0 only when `CHANGE_PR_EXTRAS_REASON` is EXACTLY `published` or `published-draft-unreviewed` (exact string match, no glob/prefix); any other value, including empty or unset, returns 1 (this includes the pending case). With `CLOSE_ISSUE==0` (operator opt-out, 'handoff disabled'), `change_pr_complete` does not publish and returns 0; attended runs always return 0, so an attended decline or skip is not a failure; (c) in `scripts/change-workflow.sh` completion (~4988-5004) exit with `pr_rc` when it is non-zero (which by (b) happens only for unattended CLOSE_ISSUE==1 worktree runs), instead of unconditional `exit 0`; otherwise the driver exits 0. Attended dialogs unchanged. The engine already pushes without force, reuses existing PRs and supports origin-less runs, so it is not modified.
+Omitted sections: Schema/migration (additive files only); Concurrency (no new shared state); Feature flag (new runner is opt-in by selection)
 
-Detection contract for `change_pr_in_worktree` (AR-019): true if the marker `${STATE_DIR:-.uncle/workflow}/worktree-owned` exists; otherwise true if `git rev-parse --git-dir` differs from `--git-common-dir`; false when either git call fails (e.g. outside a repository). Marker presence alone suffices even in a non-worktree directory, subject to any stricter qualification decided by the owners of AR-007/AR-012.
+## 1-3. Approach
+Selected: a runner **profile** (`self-hosted`, `aws-bedrock`) read by existing Self Hosted code; `sampling(values)` returns `{}` for Bedrock; a small per-protocol adapter layer (openai = existing path, anthropic, converse) builds bodies and parses responses. Alternatives: clone ~4k lines (rejected: drift); separate runner module per protocol (rejected: duplicates discovery/keys). Preferred: smallest surface, Self Hosted untouched by default.
 
-## 2. Alternatives considered
-- Write PR logic into worktrees.sh: rejected; duplicates the audited engine and bypasses tree/verdict gates.
-- Always publish regardless of CLOSE_ISSUE: rejected; removes the documented operator opt-out and is not requested.
-- Make all failures non-zero including non-worktree: rejected by constraint (no alteration beyond need).
+**Existing partial work:** uncommitted tree already contains `sampling()`, `_strip_temperature`, `_profile` plumbing, key redaction, a test file and doc. Step 1 audits it against ACs and completes the rest; it is not assumed correct.
 
-## 3. Why preferred
-Smallest surface; reuses the journaled, tree-attested engine; issue path untouched.
+## Decisions
 
-## 4. Components to modify
-See change-impact table.
-
-## 5. Not to modify
-`worktrees.sh`, `parallel_steps.py`, `from-issue.sh`, engine python in change-pr.sh, `stagegate.sh`, `workflow.sh`, review/approval gates, existing test expectations.
-
-## 6. Data-flow changes
-
-Unattended worktree completion now reaches `change_pr_publish` without an origin file; `change_pr_publish` already skips issue-eligibility when origin is empty. Remote and base rule: an origin-less worktree publish pushes only to the repository's configured default remote (`origin`, or the single configured remote if exactly one exists) and targets the repository default branch as PR base. If no remote is configured, or several remotes exist with none being `origin`, publish does not push, sets a failure reason naming the missing/ambiguous remote, and `change_pr_complete` returns 1. Failure rule: a push failure (or any publish failure) in an unattended worktree run with CLOSE_ISSUE=1 sets `CHANGE_PR_EXTRAS_REASON` to a failure reason (never `published*`), makes `change_pr_complete` return 1, and prints the stopped-extras message exactly once. Issue-reference rule: a no-origin worktree publish never emits issue-closing references (e.g. Closes/Fixes/Resolves #N) in the PR title or body and never closes any issue; the PR body is built without an issue link when ORIGIN_FILE is absent.
-
-## 7. State-transition changes
-
-None in state files or journal; process exit status differs for failed worktree publication. A non-zero exit runs the normal exit trap and does not mutate or clear the journal, so a re-run resumes from it.
-
-## 8. Interface changes
-
-New internal function `change_pr_in_worktree`; `change_pr_complete` may now return 1 (worktree runs only). Callers use `|| pr_rc=$?`, so set -e safe. Verdict rule for unattended worktree runs without an origin file: an unreviewed verdict publishes as a draft (reason `published-draft-unreviewed`) and returns 0; a failing (non-READY, reviewed) verdict does not publish, keeps the engine's existing no-publish reason, and returns 1.
-
-## 10. Compatibility
-
-Non-worktree and issue paths byte-identical in routing. Decision D-1: worktree detection uses the single definition in section 1 (change_pr_in_worktree: absolute-resolved worktree-owned marker under STATE_DIR OR git-dir != git-common-dir; false when git fails), so issue worktrees and operator-made linked worktrees count; no other section may define worktree detection differently. Issue worktrees already auto-publish via ORIGIN_FILE, so no double PR (journal + lookup guarantee one PR). This is asserted, not assumed: an unattended issue-linked run inside a worktree (worktree fixture that also has an ORIGIN_FILE) must call change_pr_publish exactly once.
-
-## 12. Error and recovery
-
-Reasons from `change_pr_no_pr` retained; stopped-extras printed via existing `change_pr_extras_print`; rerun resumes via journal. Decision D-2: on worktree publish failure the failure reason and the stopped-extras message are printed exactly once. `change_pr_complete` prints them, and the driver exits with `pr_rc` through the normal exit trap (on_exit), which must not print them again; the implementer adds a printed-once guard if the trap would repeat the print. A re-run resumes from the journal without duplicating a push or PR. A test counts occurrences of the reason/extras message in stderr and asserts exactly one.
-
-## 14. Rollback plan
-`git revert` the change commit; no state, schema or remote artifacts to unwind (created PRs remain, which is intended).
-
-## 16. Automated-test strategy
-
-Extend `scripts/tests/pr-auto-publish-test.sh` (stubs publish/engine; fixture worktree via `git -c commit.gpgsign=false`, `--no-gpg-sign`, local gpgsign=false): AC-1, AC-3, AC-4, AC-6, plus call-count for AC-2. Fixture must override STATE_DIR so the marker is tested. Cases:
-(a) AC-3 exact-match allowlist (worktree, WORKFLOW_CLOSE_ISSUE=1): reason `published` -> rc 0; `published-draft-unreviewed` -> rc 0; empty, unset, `pending`, handoff-disabled, and an arbitrary other string (e.g. `published-other`) -> rc 1 (proves exact match, not glob).
-(b) AC-6: in a worktree with WORKFLOW_CLOSE_ISSUE=0, assert publish is not called AND `change_pr_complete` returns 0 (and driver exit 0); non-zero return applies only when CLOSE_ISSUE=1.
-(c) Driver exit status (AC-3) is verified behaviorally, not by grep: a shell test runs the completion path of `scripts/change-workflow.sh` with `change_pr_complete` stubbed to return 1 in a worktree fixture (CLOSE_ISSUE=1) and asserts exit status 1, and asserts exit status 0 for the same stub in a non-worktree fixture. It may live in `scripts/tests/pr-auto-publish-test.sh` or a new sibling shell test registered with `scripts/run-shell-tests.sh`.
-(d) Detection (in_worktree is git-dir != git-common-dir only): git-dir-only linked worktree (true); marker-only in a plain repo with STATE_DIR overridden so the marker exists (false, no publish, behavior unchanged); neither (false); git failing outside a repo (false).
-(e) Verdict cases (AR-011): with the engine stubbed to an unreviewed verdict, an origin-less unattended worktree run publishes as a draft (reason `published-draft-unreviewed`) and returns 0; with a failing verdict it does not call publish and returns 1.
-(f) Failure-path single-print: worktree, publish stub failing, run through the completion/exit path with stderr captured; assert the stopped-extras message occurs exactly once (occurrence count == 1) so any on_exit duplicate print is caught.
-
-Secret-hygiene check (AR-015): export a sentinel value (e.g. `GH_TOKEN=SENTINEL-SECRET-123`) in the test environment, run the publish-success and publish-failure worktree cases, and assert the sentinel appears in neither the published PR body (captured from the stub) nor stdout/stderr of `change_pr_complete`.
-
-## 17. Regression-test strategy
-
-Existing four routing checks, pr-verdict-binding, pr-reconcile, worktree-run tests, full suites via the baseline commands. Test would fail before change: AC-1 and AC-3 (no publish / rc 0), and the driver-exit test (worktree fixture with change_pr_complete stubbed to rc 1 exits 0 before the change, 1 after).
-
-## 18. Manual verification
-Run a headless non-issue build in a worktree against a scratch GitHub repo: PR opened; rerun reuses it; break remote auth to see non-zero exit with reason. LIVE_VERIFICATION phase only; not a coding prerequisite.
-
-## 20. Implementation sequence
-
-## Implementation sequence
-
-1. Add `change_pr_in_worktree` and routing/return-code changes in `change_pr_complete` (R-1, R-2; AC-1,3,4,6).
-   Owns: `scripts/lib/change-pr.sh`
-2. Driver exit-status handling after `change_pr_complete` for worktree runs (AC-3); CLOSE_ISSUE=0 worktree runs still exit 0, and non-zero applies only when CLOSE_ISSUE=1. Not cuttable under time pressure: only README wording may be cut. Verified by the behavioral driver-exit test (worktree stub rc 1 -> exit 1; non-worktree stub rc 1 -> exit 0), not by grep.
-   Owns: `scripts/change-workflow.sh`
-   Depends on: 1
-3. Tests for the cases in section 16, including: (a) the driver completion-path exit-status test (change-workflow.sh completion with change_pr_complete stubbed to rc 1; worktree: exit 1; non-worktree: exit 0); (b) detection cases (AR-019): marker-only (STATE_DIR overridden, plain repo), git-dir-only (linked worktree, no marker), neither (plain repo, no marker), and git failing outside a repo (false); (c) a worktree fixture that also has an ORIGIN_FILE: an unattended issue-linked run inside it must call change_pr_publish exactly once (AC-2 call-count).
-   independent of 1-2 (written against the specified function contract), may run concurrently
-   Owns: `scripts/tests/pr-auto-publish-test.sh`
-4. **Driver exit-status test** — Add a shell test that runs the change-workflow.sh completion path with change_pr_complete stubbed to return 1: exit 1 in a worktree fixture (unattended), exit 0 in a non-worktree fixture and for attended runs. Register it in scripts/run-shell-tests.sh if that runner enumerates tests explicitly, and add it to the plan's Verification commands and protected verification paths.
-   Owns: `scripts/tests/change-workflow-exit-status-test.sh`, `scripts/run-shell-tests.sh`
-   Depends on: 2
-5. Document behavior (AC-9).
-   Owns: `scripts/README.md`
-
-## 21. Scope cuts under time pressure
-
-Cut first: README wording only (step 4). The routing fix, the driver exit-code change (step 2), the driver exit-status test and the routing tests are never cut, because INV-4/OB-3/AC-3 require a non-zero exit for failed unattended worktree publication.
-
-## 22. Risks and unresolved questions
-
-- Risk: marker detection also matches operator worktrees; accepted per 'all worktrees'.
-- Risk: an extra non-zero exit surprises wrappers (TUI); only after real PR failure in worktrees.
-- No blocking decisions.
-- Ownership: step 2 (scripts/change-workflow.sh) owns the on_exit/extras single-print handling; if suppressing a duplicate print requires editing any other file, that file must be added to the step's Owns before implementation.
+| ID | Decision | Reason |
+|---|---|---|
+| D-1 | Bearer-token auth only; no SigV4, no boto3 | Open question resolved in scope; avoids dependency (A-1) |
+| D-2 | Temperature is removed at two enforcement points, both for aws-bedrock only: builders (`sampling` returns `{}`) and the transport boundary (`_strip_temperature`) over the final sent body. `_strip_temperature` is gated by profile: it runs only for aws-bedrock and is a strict no-op for self-hosted (and when profile is omitted), so Self Hosted bodies still carry temperature. The strip removes only top-level `temperature` and `temperature` inside `inferenceConfig` (Converse) or `options` (OpenAI/Anthropic bodies); it never alters tool schemas, tool arguments or user schema property names (a user property literally named `temperature` is preserved). INV-1 is enforced at both points; either alone must keep temperature out. | Defense in depth for INV-1 while preserving INV-2 (Self Hosted unchanged), with a narrow strip scope so legitimate schema content is never corrupted. Defect injection must break `sampling` and `_strip_temperature` separately, and a test that walks the sent body for all 3 protocols (openai, anthropic, converse) must fail each time. |
+| D-3 | Bedrock env prefix `WORKFLOW_AWS_BEDROCK_`, own key file, protocol key `API_COMPATIBILITY`. Bedrock never reads any temperature env var or stage setting (including `WORKFLOW_AWS_BEDROCK_TEMPERATURE` and the Self Hosted temperature settings) and ignores them silently. The Bedrock key file is created mode 0600 in a 0700 directory, and the token is never written to config or logs. | INV-3 (isolation); AR-015 (storage protection) |
+| D-4 | Profile resolution: an omitted profile argument (None) means `self-hosted`; an explicit profile string that is not `self-hosted` or `aws-bedrock` raises a named exception; a Bedrock runner whose profile tag is absent raises, never defaults. This fail-closed rule covers the profile only: an unknown protocol value falls back to openai with one notice and no storage rewrite (see section 12). A Bedrock run never reads Self Hosted key, URL or env, and raises a runner error before any network call if its own token or URL is missing. | INV-3, INV-4: keeps existing callers unchanged (AC-4) while failing closed on bad explicit profiles; profile failure fails closed, protocol failure degrades to OpenAI with a notice; no credential leakage across profiles and no silent fallback |
+| D-5 | New adapters live in new module `scripts/lib/bedrock_protocols.py` (pure functions) | Keeps domain logic separate from transport |
 
 ## Restrictions
 
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST Constraints | AC-7 | No force push | Reuse engine plain push; no push edits | Engine already compliant (change-pr.sh ~1636) | CAP-none | CODING |
-| R-2 | USER | CHANGE_REQUEST Constraints | AC-2, 4, 5 | Non-worktree and issue behavior unchanged | Gate all new routing on `change_pr_in_worktree` | Minimal surface | CAP-none | CODING |
-| R-3 | USER | Success criteria | AC-3 | Failure surfaced, not claimed complete | rc 1 + driver exit (driver exits with pr_rc), only when WORKFLOW_CLOSE_ISSUE=1; CLOSE_ISSUE=0 returns 0. When CLOSE_ISSUE=1 in a worktree run, change_pr_complete returns 0 only if CHANGE_PR_EXTRAS_REASON is exactly `published` or `published-draft-unreviewed`; any other value (including empty/unset) returns 1 | Existing reason strings reused | CAP-none | CODING |
-| R-6 | DESIGN | Review AR-014 | AC-1 | No-origin worktree publish never emits issue-closing references and never closes any issue | Build PR title/body without an issue link when ORIGIN_FILE is absent; automated test captures the body and asserts no Closes/Fixes/Resolves keyword or issue reference | Without an origin file issue-eligibility is skipped, so closing keywords must be explicitly suppressed (AR-014) | CAP-none | CODING |
-| R-4 | DESIGN | Plan | AC-1 | PR creation via gh against default branch | Existing engine `gh pr create`; push only to the default remote (`origin` or the single configured remote); missing or ambiguous remote fails non-zero with a reason | Already implemented; feasibility seen at change-pr.sh ~1668; remote/base selection per s6.1 (AR-013) | CAP-gh | LIVE_VERIFICATION |
-| R-5 | DESIGN | Review AR-015 | AC-1, AC-3 | No credentials or environment values in PR text or logs | Reuse existing engine body/reason strings, which carry no env values; add no new output interpolating environment variables, tokens or remote URLs with embedded credentials; test asserts a sentinel secret in env never appears in output | Unattended publish has no human reviewing output before it is posted | CAP-none | CODING |
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
+|---|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST Desired behavior | AC-2 | No temperature for aws-bedrock: Bedrock never reads any temperature env var or stage setting (including WORKFLOW_AWS_BEDROCK_TEMPERATURE) and ignores them silently; Self Hosted bodies still carry temperature; the Bedrock runner raises a named exception (e.g. `ProfileUnresolvedError`) when the profile tag is absent; a test sets both Self Hosted temperature settings to a sentinel value and asserts the sentinel appears nowhere in the sent Bedrock body | D-2 (profile-gated `_strip_temperature` plus `sampling`) | fail closed | CAP-PY | `sampling` in self_hosted_http.py (inspected) | CODING |
+| R-2 | USER | CHANGE_REQUEST AC | AC-4 | Self Hosted unchanged | omitted profile argument = self-hosted (D-4); explicit unknown profile string raises | compat | CAP-PY | existing suites via runners | CODING |
+| R-3 | REPOSITORY | CLAUDE.md/test naming | AC-1..7 | Python tests named `*-test.py` | `scripts/tests/aws-bedrock-test.py` | runner collects pattern | CAP-PY | scripts/run-python-tests.sh exists | CODING |
+| R-4 | DESIGN | D-1 | AC-3 | Auth by token, header fixed per protocol | OpenAI and Converse send only `Authorization: Bearer <token>`. Anthropic sends `x-api-key: <token>` plus `anthropic-version: 2023-06-01` and no Authorization header. The token is never put in the URL, query string or request body. | no SigV4; unambiguous header contract per protocol, testable by asserting on captured request headers, URL and body for all 3 protocols | CAP-PY | AR-012; tests capture sent headers, URL and body per protocol and assert the exact header set and absence of the token elsewhere | CODING |
+| R-5 | PLATFORM | live Bedrock | AC-3 | Live endpoint check | optional manual check with real token | credentials unavailable here | CAP-LIVE | non-secret evidence: none required; absence of token must not block coding | LIVE_VERIFICATION |
 
-Runner/config binding: bash/shell test runner `scripts/run-shell-tests.sh`. Live check: manual scratch-repo run (section 18); needs authenticated gh, non-secret evidence only.
+- Protocol contract table (fixtures in aws-bedrock-test.py assert each row). OpenAI: request `messages`, `response_format` json_schema for constrained output; response `choices[0].message.content` / `tool_calls`; usage `prompt_tokens`->input, `completion_tokens`->output. Anthropic: request `system`, `messages`, `max_tokens`, constrained output via forced `tools` + `tool_choice {type:tool,name}`; response `content[]` blocks (`text`, `tool_use`); usage `input_tokens`->input, `output_tokens`->output. Converse: request `system[]`, `messages[].content[]`, `inferenceConfig` (maxTokens only, never temperature), constrained output via `toolConfig.tools[].toolSpec.inputSchema.json` + forced `toolChoice.tool`; response `output.message.content[]` (`text`, `toolUse`); usage `inputTokens`->input, `outputTokens`->output.
+- Parse-error rule: a missing required key (OpenAI `choices`; Anthropic `content`; Converse `output.message.content`) or non-JSON body raises a runner error naming the protocol, and never falls through to another protocol. Missing `usage` yields zero input/output tokens, not an error.
+
+Selected runner/config binding: Python 3 stdlib only, existing runners `run-python-tests.sh` and `run-shell-tests.sh` (CAP-PY). Live Bedrock check ID LV-1: manual, uses user's token; no secrets recorded.
+
+## 4. Components not to modify
+
+Other runners, workflow drivers/stage logic, Self Hosted default values, existing tests (no test edits to protected existing tests; only new test file added). If existing Self Hosted tests fail against the uncommitted partial work, the source is fixed, never the tests.
+
+## 6-8. Data flow / interfaces
+Menu -> profile settings (token, URL, protocol) -> `_profile`-tagged values -> adapter builds body -> transport (`compatible_post`/`_request`) -> adapter parses -> common result shape (text, tool_calls, usage). New env: `WORKFLOW_AWS_BEDROCK_*`. Existing interfaces unchanged.
+
+## 12. Error and recovery
+
+Protocol value (file or env) is trimmed and lowercased; empty or missing means openai silently; any other unknown value means openai for that run only, with one stderr notice per process naming the bad value; the stored value is never rewritten. Only an unknown protocol falls back; a missing or unknown profile always raises and never falls back (per D-4/INV-4). Missing Bedrock token/URL -> error raised before any network call, using the same message form as Self Hosted with Bedrock labels, and never falling back to Self Hosted key, URL or env values; HTTP errors redacted; Converse/Anthropic parse errors raise runner errors, never fall through to another protocol. Unusual valid responses: missing usage yields zeros (input/output/total = 0) and is not an error; missing content (no text and no tool calls where the protocol requires one) raises a runner error naming the protocol. Constrained (schema) output uses a forced tool/schema per protocol: OpenAI response_format/json_schema (existing path), Anthropic a single forced tool via tool_choice, Converse toolConfig with a forced toolChoice; the tool input is returned as the structured result.
+
+## 14. Rollback
+`git revert` of the change; new files removable; stored Bedrock files are ignored by Self Hosted.
+
+## 16-18. Test strategy
+Automated: `bash scripts/run-python-tests.sh` (new `scripts/tests/aws-bedrock-test.py`: labels, protocol persistence, per-protocol body/parse fixtures, no-temperature walk, Self Hosted regression, isolation, fail-closed, perf no-temperature, redaction) and `bash scripts/run-shell-tests.sh` (dispatch). Defect injection: temporarily-free reasoning—tests must fail if `sampling` returns temperature for Bedrock (verified by test asserting on the body, not on helper). Manual: TUI menu inspection; optional LV-1 against a real endpoint.
+
+## 19. Observability
+Bedrock labels in status lines and logs; protocol name logged; token never logged.
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/lib/change-pr.sh` | Add `change_pr_in_worktree`; widen auto-publish condition; return non-zero for unpublished worktree runs | Core defect B-3/B-4 | Medium: shared with issue flow | pr-auto-publish-test.sh, pr-verdict-binding-test.sh |
-| `scripts/change-workflow.sh` | Exit with `pr_rc` for worktree runs after completion | Do not claim completion on failure | Low-medium | grep/behavior test, suites |
-| `scripts/tests/pr-auto-publish-test.sh` | Add worktree/no-origin, failure, non-worktree, opt-out cases | Success criterion: test for no-issue case | Low | itself |
-| `scripts/README.md` | Document behavior | AC-9 | None | manual |
+| `scripts/lib/self_hosted.py` | Profile resolution, Bedrock key/config/protocol storage | INV-3/4 | High | aws-bedrock-test.py, Self Hosted suites |
+| `scripts/lib/self_hosted_http.py` | `sampling`, strip, protocol dispatch, redaction | INV-1/5 | High | same |
+| `scripts/lib/bedrock_protocols.py` | New pure adapters (anthropic, converse) | AC-3 | Low | aws-bedrock-test.py: fixtures per protocol contract table (request fields, constrained output, usage mapping, missing-key errors naming the protocol) |
+| `scripts/lib/self_hosted_performance.py` | Tolerate absent temperature | AC-6 | Medium | aws-bedrock-test.py |
+| `scripts/lib/stage-config.sh` | Accept `aws-bedrock` runner and env by adding only an `aws-bedrock` case; existing cases, defaults and unknown-runner error text stay byte-identical | AC-6 | Medium | shell suites incl. new negative dispatch test (existing runners and unknown-runner error unchanged) |
+| `scripts/stagegate.sh` | Dispatch for `aws-bedrock` added as a new case only; existing runner cases, defaults and error text left byte-identical | AC-6 | Medium | shell suites incl. new negative dispatch test (existing runners and unknown-runner error unchanged) |
+| `uncle_tui.py` | Menu entry, labels, API Compatibility choice | AC-1 | Medium | aws-bedrock-test.py |
+| `scripts/tests/aws-bedrock-test.py` | New tests | AC-1..7 | Low | self |
+| `docs/aws-bedrock.md` | Document runner, protocols, SigV4 decision | AC-7 | Low | inspection |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| Publish PR for non-issue worktree | OB-1 | INV-5 | change-pr.sh | AC-1 case | Scratch-repo run |
-| Issue PR still once | OB-2 | INV-3, INV-5 | change-pr.sh | AC-2, No-origin worktree publish: assert PR body/title contain no closing keyword or issue reference | n/a |
-| Failure surfaced: with WORKFLOW_CLOSE_ISSUE=1 a worktree run returns 0 only for reason exactly published or published-draft-unreviewed; any other value (including empty/unset) returns non-zero. With CLOSE_ISSUE=0 a worktree run returns 0. Attended worktree runs are exempt from INV-4: a declined or skipped dialog returns 0. | OB-3 | INV-4 | change-pr.sh, change-workflow.sh | AC-3 case (CLOSE_ISSUE=1: published, published-draft-unreviewed => 0; empty, unset, pending, other => 1; unattended: non-zero), AC-3 case (CLOSE_ISSUE=0 => 0), Attended worktree decline case (rc 0), Driver completion-path test: change_pr_complete stubbed rc 1 -> exit 1 in worktree fixture with CLOSE_ISSUE=1, exit 0 in non-worktree fixture and with CLOSE_ISSUE=0 | Break auth run |
-| Reuse existing PR | OB-4 | INV-5 | engine (unchanged) | pr-reconcile-test.py | Rerun |
-| Non-worktree unchanged; CLOSE_ISSUE=0 worktree run does not publish and returns rc 0 | OB-5, OB-6 | INV-2 | change-pr.sh | AC-4, AC-6 (asserts no publish and rc 0) | n/a |
-| No force push | n/a | INV-1 | engine (unchanged) | AC-7 diff check | n/a |
+| AC-1 | BH-1, 2, 3 | INV-3 | uncle_tui.py | aws-bedrock-test.py (labels, menu, protocol persistence; protocol normalization: mixed case/whitespace/empty/unknown resolve as specified, one notice per process only for unknown values, stored value never rewritten) | TUI menu |
+| AC-2: Bedrock requests never contain temperature; no temperature env var or stage setting (e.g. WORKFLOW_AWS_BEDROCK_TEMPERATURE) is read, and any such value is silently ignored. A missing profile tag raises a named exception. | BH-4 | INV-1 | self_hosted_http.py, bedrock_protocols.py | aws-bedrock-test.py: sentinel test (both Self Hosted temperature settings and any Bedrock temperature env var/setting set to a sentinel; sentinel absent from the sent body for every protocol, with no error or notice), aws-bedrock-test.py: walk the sent body for all 3 protocols; defect injection breaks `sampling` and `_strip_temperature` separately and the walk test must fail each time, aws-bedrock-test.py: named exception raised when profile tag is absent | LV-1 |
+| AC-3: Anthropic and Converse request bodies, schema-constrained output (forced tool/schema per protocol), usage mapping and parse errors follow the section 3 protocol contract table; missing usage yields zeros, and a missing required key or missing content raises a runner error naming the protocol. | BH-5 | INV-1 | bedrock_protocols.py | aws-bedrock-test.py (per-protocol request/response/usage fixtures, forced tool/schema per protocol, missing-key/missing-content error naming protocol, missing usage -> zeros) | LV-1 |
+| AC-4 | BH-6 | INV-2 | self_hosted*.py | existing suites + regression, aws-bedrock-test.py: Self Hosted body still carries temperature and `_strip_temperature` is a no-op for self-hosted | none |
+| AC-5 | BH-7 | INV-3, 4 | self_hosted.py | aws-bedrock-test.py (incl. key file mode 0600, directory mode 0700, token absent from config and logs; and with Self Hosted key/URL/env set to sentinels and Bedrock token or URL missing, the Bedrock run raises before any network call and no sentinel is used or sent) | none |
+| AC-6 | BH-8 | INV-4 | stage-config.sh, stagegate.sh, performance | shell suites + py, aws-bedrock-test.py: shared functions called with no profile behave as self-hosted; explicit unknown profile string raises, shell test: with aws-bedrock added, every existing runner still dispatches as before, defaults are unchanged, and an unknown runner yields the same error text byte-for-byte (compared against pre-change output) | none |
+| AC-7: Every Bedrock error, log line and status string passes through one shared redactor that removes the token value (HTTP errors, parse errors, URLs, status lines); the redactor is not limited to `_request`. Runner is documented in docs/aws-bedrock.md. | BH-8 | INV-5 | self_hosted_http.py, docs | aws-bedrock-test.py: redaction cases for HTTP error, parse error, URL/status/log string | doc read |
 
-Scope-cut override (supersedes the earlier scope-cut order): the driver exit-code change in `scripts/change-workflow.sh` (step 2) is NOT cuttable, because INV-4/OB-3/AC-3 require a non-zero exit when an unattended worktree publish fails. Only README wording (step 4) may be cut. The routing fix, the driver exit-code change and their tests are never cut.
+## Implementation sequence
+
+1. **Baseline audit of uncommitted tree** — Owns no source files. Run `bash scripts/run-python-tests.sh` and `bash scripts/run-shell-tests.sh` on the current uncommitted tree and record every delta against BASELINE_REPORT.md before any edit, so regressions from the partial work are attributed. Failures are fixed in source in step 1, never in tests.
+2. First, before any edit, run `bash scripts/run-python-tests.sh` and `bash scripts/run-shell-tests.sh` on the current uncommitted tree and record every delta against BASELINE_REPORT.md. Any Self Hosted failure introduced by the partial work is fixed in the source files, never by editing or weakening existing tests. Then audit and complete profile core in `self_hosted.py` and `self_hosted_http.py`: resolve profile, Bedrock storage, `sampling`, strip, redaction (D-2,3,4; R-1). Ensure `_strip_temperature` is gated to aws-bedrock and is a no-op for self-hosted. INV-1 has two enforcement points (`sampling` and `_strip_temperature`); keep both so each can be defect-injected separately.
+   Owns: `scripts/lib/self_hosted.py`
+   Depends on: 1
+3. Protocol adapters, pure functions (D-5; R-4). Auth headers are fixed per protocol: OpenAI and Converse send `Authorization: Bearer <token>`; Anthropic sends `x-api-key: <token>` plus `anthropic-version: 2023-06-01` and no Authorization header. Tests assert the exact header set sent for each protocol; the header assumption is also covered by the live-verification check LV-1.
+   Owns: `scripts/lib/bedrock_protocols.py`
+   Depends on: 2
+4. Performance temperature guard. Consumes the profile contract from step 1 (omitted profile = self-hosted; explicit unknown profile raises).
+   Owns: `scripts/lib/self_hosted_performance.py`
+   Depends on: 2
+5. Shell dispatch for `aws-bedrock`: add only an `aws-bedrock` case in `stage-config.sh` and `stagegate.sh`; leave existing cases, defaults and unknown-runner error text byte-identical. Add a shell test that captures existing-runner dispatch and the unknown-runner error before the edit and asserts identical output after.
+   Owns: `scripts/lib/stage-config.sh`, `scripts/stagegate.sh`
+   Depends on: 2
+6. TUI menu, labels, API Compatibility
+   Owns: `uncle_tui.py`
+   Depends on: 2
+7. Sole owner of `scripts/lib/self_hosted_http.py`: profile-gated `_strip_temperature` (aws-bedrock only, strict no-op for self-hosted), `sampling`, wiring of the step 2 adapters into transport, and calls to the single shared Bedrock redactor. The redactor itself lives in `self_hosted.py` (step 1) so step 2 adapters, this step and step 5 status strings all call it; step 1 therefore does not edit this file.
+   Owns: `scripts/lib/self_hosted_http.py`
+   Depends on: 2, 3
+8. Tests and docs. New files only; existing suites stay unmodified. Python tests cover: temperature env/setting sentinels (incl. WORKFLOW_AWS_BEDROCK_TEMPERATURE) absent from all 3 bodies; a tool-schema property named `temperature` survives the strip; Self Hosted body still carries temperature; protocol normalization (mixed case, whitespace, empty, unknown -> resolved protocol, one notice only for unknown, storage unchanged); per-protocol missing-usage -> zeros, missing-content error, forced tool/schema for constrained output; per-protocol missing-required-key errors naming the protocol; captured request per protocol asserting exact headers and token absent from URL/body; parametrized final-URL assertions; https/loopback and redirect credential-drop; key file 0600/dir 0700; Self Hosted credentials ignored with pre-network error; redaction of HTTP, parse, URL and status strings with a token sentinel; omitted profile = self-hosted and explicit unknown profile raises. Shell test `aws-bedrock-dispatch-test.sh` (depends on step 4) asserts positive `aws-bedrock` dispatch plus unchanged existing-runner dispatch and unknown-runner error text.
+   Owns: `scripts/tests/aws-bedrock-test.py`, `scripts/tests/aws-bedrock-dispatch-test.sh`, `docs/aws-bedrock.md`
+   Depends on: 2, 3, 4, 5, 6, 7
+9. Record deviations (if any) and launch metadata `.uncle/launch.json`
+   
+   After step 1 settles the profile contract, steps 2, 3, 4 are independent of each other and may be batched.
+   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`, `.uncle/launch.json`
+   Depends on: 8
+
+## Scope cuts under time pressure
+Cut first: Converse tool-config edge cases, then LV-1 live check, then Anthropic streaming; never cut INV-1, INV-2, INV-4.
+
+## Risks
+
+- Missed hard-coded `self-hosted` strings (grep each file in step 4/5).
+- Provider endpoint path and auth-header assumptions (A-2; Anthropic uses Bearer plus anthropic-version, no x-api-key) are unverified live; LV-1 mitigates the remainder. URL construction rule: strip trailing slashes from the configured base URL, append the per-protocol path exactly once (no double append if the base already ends in that path, e.g. `/converse`), percent-encode the model id in the Converse path, and tests assert the final URL for each of the three protocols (openai, anthropic, converse). Token-bearing URL safety rule: Bedrock URLs must be https (http allowed only for loopback hosts such as localhost/127.0.0.1/::1), otherwise the runner raises before any network call; redirects never forward credential headers (Authorization, x-api-key) to another origin and are not followed with credentials. aws-bedrock-test.py asserts each of these.
+- Existing uncommitted partial work may contain defects; step 1 audits it.
+
+**URL construction (AR-004).** Strip all trailing slashes from the configured base URL, then append the per-protocol suffix exactly once; if the base already ends with that suffix, do not append it again. Paths: openai chat = `/chat/completions`, discovery = `/models`; anthropic messages = `/v1/messages` (just `/messages` when the base already ends in `/v1`), discovery = `/v1/models` (same `/v1` rule); converse = `/model/{id}/converse`, where `{id}` is percent-encoded with no safe characters (so `:` and `/` are encoded). Converse has no discovery call: the configured model id is used as-is. The token is never placed in the URL. Tests assert the final URL string for each protocol and operation, including trailing-slash, already-suffixed base, and an id such as `anthropic.claude-3:0`.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | The success-reason set was ambiguous; an exact two-value allowlist (empty/unset fails) is testable and matches AC-3. | s1.1 and R-3 state exact allowlist; s12.1 adds empty/unset/other-reason test cases. |
-| AR-002 | Accepted | The 'handoff disabled' failure return contradicts the CLOSE_ISSUE=0 opt-out (OB-6/AC-6), so the non-zero rule must apply only when CLOSE_ISSUE=1. | Edit s1.1 (b)/(c) so CLOSE_ISSUE=0 worktree runs return 0 and the driver exits 0; update s12.1 and traceability rows s21.1.r3 and s21.1.r5 to assert rc 0. |
-| AR-003 | Accepted | Attended worktree runs keep their dialogs unchanged (OB-7), so INV-4 must not apply to them; a declined dialog returns 0. | Traceability row s21.1.r3 now states attended worktree runs are exempt from INV-4 and a declined dialog returns 0; non-zero applies only to unattended runs. |
-| AR-004 | Accepted | The worktree definition was ambiguous about marker path resolution, git-dir layouts and git failure; a single precise definition removes that. | Sections 1 (s1.1) and 10 (s9.1) now define change_pr_in_worktree precisely: absolute-resolved marker OR git-dir != git-common-dir, false on git failure. |
-| AR-005 | Accepted | Push-failure behavior and extras-print count must be specified in the plan so they are testable, not left to the implementer. | Edited s6.1 and s10.1 to state push failure sets a failure reason, returns 1, and prints extras exactly once. |
-| AR-006 | Accepted | The driver exit-code change implements the required non-zero exit (INV-4/OB-3, AC-3), so cutting it would contradict the requirements. | Step 2 marked non-cuttable and a scope-cut override block added (s21); only README wording may be cut. |
-| AR-007 | Accepted | A marker-or-git-dir test lets a stale marker in a plain repo trigger auto-publish, which breaks 'non-worktree unchanged'. | s1.1, s9.1 and s12.1 now define in_worktree by git-dir != git-common-dir only, with marker-alone and plain-repo tests. |
-| AR-008 | Accepted | Non-zero exit must not apply to attended runs, since attended dialogs are unchanged and a declined dialog is a legitimate outcome. | Section 1 (s1.1) now conditions the non-zero return and driver exit on UNATTENDED==1; attended runs always return 0. |
-| AR-009 | Accepted | s1(b) treated 'handoff disabled' as failure, contradicting AC-6/OB-6; CLOSE_ISSUE=0 must return 0 and the non-zero rule applies only when CLOSE_ISSUE=1. | Edit s1.1 (b) and (c), R-3, s21.1.r3/r5 and s12.1 so CLOSE_ISSUE=0 worktree runs return 0 and non-zero applies only when CLOSE_ISSUE=1. |
-| AR-010 | Accepted | Duplicate extras printing and exit-trap/re-run behavior should be specified, not left to the implementer. | Rewrote D-2 in s10.1 to fix exit via pr_rc, single reason print, and journal resume; clarified s7.1 on exit-trap and re-run. |
-| AR-011 | Accepted | Verdict handling for origin-less unattended worktree publish was unstated; settling it avoids ambiguity between draft publish and refusal. | Added verdict rule to s8.1 (interface) and a verdict test case to s12.1 (automated tests). |
-| AR-012 | Accepted | Auto-publishing from operator-made worktrees with no human dialog is unrequested and risky; only driver-owned worktrees (marker) should qualify. | Edited s1.1 and s9.1: origin-less unattended auto-publish requires the worktree-owned marker; git-dir comparison alone never triggers it. |
-| AR-013 | Accepted | Remote and base were unspecified for origin-less worktree publish; a missing or ambiguous remote must fail visibly rather than guess. | Edit s6.1 to state remote/base rule and non-zero failure; update R-4 to match. |
-| AR-014 | Accepted | With no origin file the issue-eligibility check is skipped, so the plan must state explicitly that non-issue worktree publish emits no closing references. | Section 6 data-flow text states no-origin worktree publish never emits issue-closing references or closes an issue; traceability row r2 adds a test for it. |
-| AR-015 | Accepted | Unattended publish writes PR text and logs without a stated no-secrets rule; adding one is cheap and low risk. | Add restriction row R-5 and a test assertion in s12.1 that PR bodies and failure output contain no credentials or env values. |
-| AR-016 | Accepted | A grep cannot prove the driver exits non-zero; a behavioral test of the completion path is required. | Sections 16, 17, step-2/step-3 and traceability s21.1.r3 now require a shell test running change-workflow.sh completion with change_pr_complete stubbed to rc 1 (worktree: exit 1; non-worktree: exit 0). |
-| AR-017 | Accepted | Plan left failure reasons unenumerated; an exact allow-list with empty/unset treated as failure is unambiguous and testable. | s1.1(b) now states the exact-match success reasons; R-3, s21.1.r3 and the s12.1 test cases cover empty/unset and other reasons. |
-| AR-018 | Accepted | Section 1(b) treating 'handoff disabled' as failure contradicts OB-6/AC-6; the opt-out must return 0 and the non-zero rule must apply only when CLOSE_ISSUE=1. | Edit s1.1 to scope the non-zero return to CLOSE_ISSUE==1 and return 0 without publishing when CLOSE_ISSUE=0; s12.1 and s21.1.r5 now assert rc 0 for AC-6. |
-| AR-019 | Accepted | Detection edge cases were unspecified and untested. | Section 1 adds a detection contract; step-3 now requires marker-only, git-dir-only, neither and git-failure tests. |
-| AR-020 | Accepted | Leaving duplicate extras printing to the implementer makes it untestable; a fixed single-print rule can be asserted. | Section 12 (s10.1) fixes single-print behavior; section 16 (s12.1) adds a test counting extras occurrences in stderr. |
-| AR-021 | Accepted | D-1's no-double-PR claim was untested; a worktree fixture with an ORIGIN_FILE is cheap and closes the gap. | Edit s10.1 (D-1), step-3 and s16 test list to require a worktree+ORIGIN_FILE case asserting change_pr_publish is called exactly once. |
+| AR-001 | Accepted | Bedrock temperature env/stage-setting behavior was unspecified; a silent-ignore rule closes the gap and supports INV-1. | D-3 and R-1 state Bedrock never reads any temperature env var or setting; AC-2 test requirement added. |
+| AR-002 | Accepted | Section 12 fallback and INV-4 fail-closed conflict; scoping fallback to unknown protocol values only (never profile) resolves it and fixes notice and storage behavior. | Edit s6.1 to define protocol fallback (openai, one notice, no rewrite); D-4 clarified that only the profile fails closed, not protocol. |
+| AR-003 | Accepted | Auth header was ambiguous; the finding's rule (Bearer for all three protocols, anthropic-version for Anthropic, no x-api-key) matches the Bedrock bearer-token decision D-1. | Step 2 now fixes headers per protocol; risk s14.1.i2 notes header assumption is also covered by LV-1. |
+| AR-004 | Accepted | Real gap: only the Converse path was specified; exact per-protocol paths, joining and encoding are needed to test URLs. | Added a URL-construction block under Risks (s14) and reworded the endpoint-path risk item to reference it. |
+| AR-005 | Accepted | The strip scope was ambiguous between 'any nesting' and transport-only; a narrow, explicit scope protects tool schemas and user property names. | D-2 now states the strip scope (top-level and inferenceConfig/options temperature only; never tool schemas, arguments or user property names). |
+| AR-006 | Accepted | Unusual-but-valid responses and constrained output were unspecified; stating the rules makes parse behavior testable. | Section 12 error/recovery (s6.1) and AC-3 traceability row now state missing-usage zeros, missing-content error, and forced tool/schema per protocol. |
+| AR-007 | Accepted | D-2 and INV-1 disagreed on the strip location and the profile gating of the shared strip was unstated; Self Hosted must keep temperature. | D-2 now gates `_strip_temperature` to aws-bedrock (no-op for self-hosted); R-1 and the AC-2/AC-4 rows add a Self Hosted-keeps-temperature test; step-1 implements it. |
+| AR-008 | Accepted | Default profile was undefined for shared functions called without a profile; omitted means self-hosted, explicit unknown raises. | Edit D-4 and R-2 to state omitted profile = self-hosted and explicit unknown profile string raises; add test to AC-6. |
+| AR-009 | Accepted | Uncommitted partial work touches files covered by existing Self Hosted tests, so baseline deltas must be checked first and failures fixed in source. | Step 1 now first runs both test runners, records deltas vs BASELINE_REPORT, and fixes Self Hosted failures in source only; s4.1 states this. |
+| AR-010 | Accepted | Real gap: adding aws-bedrock must not alter existing runner dispatch, defaults or unknown-runner error text, and AC-6 had no negative test. | Edited s10.1.r5, s10.1.r6, AC-6 and step-4 to add an additive-only dispatch rule with a byte-identical shell regression test. |
+| AR-011 | Accepted | Section 12 (fallback to OpenAI) and D-4 (raise on unresolved profile) read as contradictory; they cover different values (protocol vs profile) and must be stated so. | Edit D-4 and s6.1 to state only an unknown protocol falls back to OpenAI with a notice; a missing or unknown profile always raises. |
+| AR-012 | Accepted | The per-protocol credential header was ambiguous; the finding's explicit rule is adopted (it also overrides the conflicting AR-003 Bearer wording for Anthropic). | Edited R-4 (s3.1) to fix headers per protocol and forbid the token in URL or body. |
+| AR-013 | Accepted | INV-5 redaction was scoped to _request HTTP errors only; Bedrock parse errors, URLs, logs and status strings could also leak the token. | AC-7 row requirement and tests now require one shared redactor for every Bedrock error, log line and status string, with HTTP, parse and URL tests. |
+| AR-014 | Accepted | The user-configured URL receives the token, so transport safety (https, redirects, model-id encoding) must be stated and tested. | Reworded risk s14.1.i2 to state https-only (loopback http exempt), no credential forwarding on redirects, and percent-encoded Converse model id. |
+| AR-015 | Accepted | Token storage protection was unspecified; owner-only file and directory modes are cheap and testable. | D-3 now requires key file mode 0600 in a 0700 directory and no token in config or logs; AC-5 test coverage updated. |
+| AR-016 | Accepted | Real gap: nothing says Bedrock cannot read Self Hosted credentials or that missing config fails before any network call. | Edited D-4 and s6.1 to state Bedrock never reads Self Hosted key/URL/env and errors before any network call; added a test to AC-5. |
+| AR-017 | Accepted | Plan left Anthropic/Converse auth headers unspecified; the finding's explicit header rule is adopted. | R-4 mechanism and step-2 text now state per-protocol headers: Anthropic x-api-key + anthropic-version, OpenAI/Converse Authorization: Bearer. |
+| AR-018 | Accepted | INV-1 enforcement was named two ways; both layers are kept as defense in depth and each must be independently proven by defect injection. | Edit D-2 and step-1 to state the two enforcement points, and add the separate-defect-injection requirement to the test strategy via s13.1 and AC-2. |
+| AR-019 | Accepted | Stored protocol value handling was unspecified; a normalize/fallback/notice rule makes it testable and consistent with fail-closed profile handling. | Section 12 (s6.1) now states the trim/lowercase rule, silent OpenAI for empty or missing, one stderr notice per process for unknown values, and no rewrite of storage. |
+| AR-020 | Accepted | Fixture contracts for Converse and Anthropic were undefined; a field-mapping table and a named parse-error rule make fixtures testable. | Added section 3 mapping table block and parse-error rule; updated AC-3 requirement/tests and s10.1.r3 coverage. |
+| AR-021 | Accepted | URL construction rules were unspecified; stating them makes the path assumption testable and removes ambiguity about slashes and encoding. | Reworded risk s14.1.i2 to define URL construction (strip slashes, append path once, percent-encode model id, assert final URL per protocol). |
+| AR-022 | Accepted | 'Unresolved profile' and 'no temperature setting read' were untestable as written; a named exception and a sentinel test make them observable. | Updated R-1 and AC-2 (s3.1, s11.1) to require a named exception on absent profile tag and a sentinel-temperature body test. |

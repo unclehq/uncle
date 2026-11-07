@@ -4,20 +4,18 @@
 
 | Command | Status | Meaningful output | Requirements |
 |---|---|---|---|
-| bash scripts/tests/pr-auto-publish-test.sh | PASS | 22 checks passed | AC-1, AC-2, AC-3, AC-4, AC-6 |
-| bash scripts/tests/change-workflow-exit-status-test.sh | PASS | 4 passed | AC-3 |
-| bash scripts/tests/pr-verdict-binding-test.sh | PASS | binding checks printed, rc 0 | AC-2 |
-| python3 scripts/tests/pr-reconcile-test.py | PASS | OK | AC-5 |
-| bash scripts/run-shell-tests.sh && bash scripts/run-python-tests.sh | DRIVER PENDING | Full suites owned by driver | AC-8 |
-| formatter / type checker / linter / frontend build / migration / rollback / performance | N/A | Not applicable to this shell change | None stated |
-| git diff grep for force push | PASS | no force flags added in code | AC-7 |
+| python3 scripts/tests/aws-bedrock-test.py | PASS | Ran 53 tests OK | AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7 |
+| mutant: early return in _strip_temperature, then python3 scripts/tests/aws-bedrock-test.py | PASS | FAILED (errors=3): test_token_only_to_configured_url, test_anthropic_headers_url_no_temperature, test_converse_headers_url; file restored, 53 OK | AC-2 |
+| bash scripts/run-shell-tests.sh && bash scripts/run-python-tests.sh | DRIVER PENDING | Driver owns the full suite; prior run showed pre-existing failures (D-1) | AC-4 |
+| formatter / type checker / linter / frontend build / migration / rollback / performance | N/A | No such tooling configured for this change | None stated |
+| live stub-server and TUI manual checks | NOT RUN | Belong to manual verification stage | AC-1, AC-6 |
 
 ## Coverage gaps
 
-- D-2 single-print, AR-015 secret sentinel, AR-011 verdict cases, R-6 closing-keyword body, remote/base selection are untested
-- Live scratch-repo PR check not run
-- Not verified: tests fail before the change (no revert run)
+- Only one crude mutant run; no per-test defect injection
+- Live stub-server and TUI checks not executed
+- Pre-existing failures D-1 not investigated
 
 ## Next action
 
-Driver runs full regression block; human reviews diff.
+Driver runs full regression block; manual verification stage executes MC checks.

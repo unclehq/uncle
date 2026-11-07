@@ -109,7 +109,7 @@ from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compo
                          hold_reason as triage_hold_reason, DIAGNOSIS_TOOLS, EXECUTE_TOOLS)
 from github_issues import IssuePicker, references as issue_references, issue_context
 from self_hosted import settings as home_settings
-from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
+from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, refresh_bedrock_models, validate_bedrock_token, local_model
 import supervisor as supervision_lib
 import supervisor_runner
 import home_agent_session
@@ -369,12 +369,11 @@ REVIEWER_RUNNERS = ["codex", "claude", "kimi", "self-hosted", "aws-bedrock"]
 # Runners that speak HTTP to a configured endpoint.  AWS Bedrock is a profile
 # of the self-hosted class with its own key store, labels and display name.
 HTTP_RUNNERS = ("self-hosted", "aws-bedrock")
-COMPAT_CHOICES = ["OpenAI compatible", "Anthropic compatible", "Converse API compatible"]
 PROFILES = {
     "self-hosted": {"display": "Self hosted", "key_file": "self-hosted-keys.json",
                     "url_label": "Base URL", "token_label": "API key"},
     "aws-bedrock": {"display": "AWS Bedrock", "key_file": "aws-bedrock-keys.json",
-                    "url_label": "Bedrock URL", "token_label": "AWS Bedrock Token"},
+                    "url_label": "Region", "token_label": "AWS Bedrock Token"},
 }
 
 
@@ -532,7 +531,7 @@ CONFIG_DESC = {
         "records BLOCKED, and no repair attempt can grant it a port."
     ),
     "field:base_url": "The OpenAI-compatible API root the model server should use, for example http://localhost:8000/v1.",
-    "field:api_compatibility": "Wire protocol the Bedrock URL speaks: OpenAI compatible (default), Anthropic compatible or Converse API compatible. Bedrock never sends a temperature.",
+    "field:region": "The AWS region that serves your Bedrock models, for example us-east-1. Endpoints and model discovery are derived from it. Bedrock never sends a temperature.",
     "field:api_key": "Endpoint credential, hidden while editing and stored separately in .uncle/self-hosted-keys.json. Use a placeholder for a server without authentication.",
     "field:model": (
         "The model this stage runs. claude, codex, and kimi take "
@@ -1274,7 +1273,7 @@ class UncleTUI:
         from their own catalogue; codex's row order keeps network above model.
         """
         if stage == "@bedrock":
-            return ["base_url", "api_key", "api_compatibility"]
+            return ["region", "api_key"]
         if stage.startswith("@"):
             return ["base_url", "api_key"]
         runner = self.stage_runner(stage)
@@ -1295,7 +1294,11 @@ class UncleTUI:
         if stage == "@connection":
             return connection_settings(self.stage_api_keys).get(field, "")
         if stage == "@bedrock":
-            return connection_settings(self.bedrock_keys).get(field, "")
+            connection = connection_settings(self.bedrock_keys)
+            if field == "region":
+                import bedrock_protocols
+                return connection.get("region") or bedrock_protocols.region_from_url(connection.get("base_url")) or ""
+            return connection.get(field, "")
         if stage.startswith("@"):
             name = stage[1:]
             if field == "name":
@@ -1319,9 +1322,7 @@ class UncleTUI:
         stored = self._field_value(stage, field)
         if field == "api_key":
             return "********" if stored else "not set"
-        if field == "api_compatibility":
-            return stored or "%s  (default)" % COMPAT_CHOICES[0]
-        if field == "base_url" or (field == "model" and self.stage_runner(stage) in HTTP_RUNNERS):
+        if field in ("base_url", "region") or (field == "model" and self.stage_runner(stage) in HTTP_RUNNERS):
             return stored or "not set"
         if field == "runner" and stored in HTTP_RUNNERS:
             return runner_display(stored)
@@ -1367,34 +1368,43 @@ class UncleTUI:
                 self.supervision.pop(field, None)
             self.save_config()
             return
-        if stage in ("@connection", "@bedrock"):
-            runner = "aws-bedrock" if stage == "@bedrock" else "self-hosted"
+        if stage == "@bedrock":
+            import bedrock_protocols
+            keys = self._keys_for("aws-bedrock")
+            old = connection_settings(keys)
+            connection = {"region": self._field_value("@bedrock", "region"), "api_key": old.get("api_key", "")}
+            value = value.strip() if field == "region" else value
+            try:
+                if value and field == "region":
+                    value = bedrock_protocols.validate_region(value)
+                if value and field == "api_key":
+                    validate_bedrock_token(value)
+            except ValueError as exc:
+                self.notice = str(exc)
+                return
+            connection[field] = value
+            if connection["region"] and connection["api_key"]:
+                self.notice = "Discovering supported AWS Bedrock models…"
+                try:
+                    refresh_bedrock_models(keys, connection["region"], connection["api_key"])
+                except ValueError as exc:
+                    # A failed discovery keeps the prior connection, region and catalog untouched.
+                    self.notice = str(exc)
+                    return
+                self.notice = ""
+            else:
+                keys["__opencode_connection__"] = connection
+            self.save_config()
+            return
+        if stage == "@connection":
+            runner = "self-hosted"
             keys = self._keys_for(runner)
             connection = connection_settings(keys)
             connection[field] = value
-            if field == "api_compatibility":
-                if value not in COMPAT_CHOICES:
-                    self.notice = "API Compatibility must be one of: " + ", ".join(COMPAT_CHOICES)
-                    return
-                keys['__opencode_connection__'] = connection
-                if runner == "aws-bedrock" and connection.get('base_url') and connection.get('api_key'):
-                    # The model list comes from a different endpoint per protocol; reload it.
-                    try:
-                        refresh_models(keys, connection['base_url'], connection['api_key'], value)
-                        keys['__opencode_connection__']['api_compatibility'] = value
-                    except ValueError as exc:
-                        keys['__opencode_connection__'] = connection
-                        self.notice = str(exc)
-                self.save_config()
-                return
-            compat = connection.get("api_compatibility")
             if connection.get('base_url') and connection.get('api_key'):
-                self.notice = "Discovering supported %s models…" % ("AWS Bedrock" if runner == "aws-bedrock" else "self-hosted")
+                self.notice = "Discovering supported self-hosted models…"
                 try:
-                    refresh_models(keys, connection['base_url'], connection['api_key'],
-                                   compat if runner == "aws-bedrock" else None)
-                    if compat:
-                        keys['__opencode_connection__']['api_compatibility'] = compat
+                    refresh_models(keys, connection['base_url'], connection['api_key'])
                 except ValueError as exc:
                     # A failed discovery keeps the prior catalog; keep the typed values.
                     keys['__opencode_connection__'] = connection
@@ -1452,7 +1462,7 @@ class UncleTUI:
         if section == "opencode":
             return ["Connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
         if section == "bedrock":
-            return ["Connection — Bedrock URL and AWS Bedrock Token", "Refresh supported models (%d loaded)" % len(self.bedrock_keys.get("__opencode_models__", {}))]
+            return ["Connection — Region and AWS Bedrock Token", "Refresh supported models (%d loaded)" % len(self.bedrock_keys.get("__opencode_models__", {}))]
         if section == "misc":
             return ["Auto mode: " + ("off" if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "false" else "on"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
@@ -1480,8 +1490,7 @@ class UncleTUI:
         rows = []
         profile = PROFILES["aws-bedrock" if stage == "@bedrock" else "self-hosted"]
         for field in self.stage_fields(stage):
-            label = {"base_url": profile["url_label"], "api_key": profile["token_label"],
-                     "api_compatibility": "API Compatibility"}.get(field, field)
+            label = {"base_url": profile["url_label"], "region": "Region", "api_key": profile["token_label"]}.get(field, field)
             rows.append("%s  %s" % (label.ljust(8), self._field_display(stage, field)))
         return rows
 
@@ -1503,7 +1512,7 @@ class UncleTUI:
             field = self._stage_field()
             desc = CONFIG_DESC.get("field:%s" % field, "")
             if field == "model" and self.stage_runner(self.stage_target) == "aws-bedrock":
-                return "Choose one of your configured AWS Bedrock models. Set the Bedrock URL and AWS Bedrock Token to discover models in Configure → Configure AWS Bedrock."
+                return "Choose one of your configured AWS Bedrock models. Set the Region and AWS Bedrock Token to discover models in Configure → Configure AWS Bedrock."
             if field == "model" and self.stage_runner(self.stage_target) == "self-hosted":
                 return "Choose one of your configured self-hosted models. Set the Base URL and API key to discover models in Configure → Configure self hosting."
             if field == "runner":
@@ -1533,8 +1542,6 @@ class UncleTUI:
                         if runner in supervision_lib.SUPPORTED_RUNNERS]
             side = STAGE_SIDE.get(self.picker_target, AGENT)
             return [("option", r) for r in selectable_runners(side)]
-        if self.picker_kind == "api_compatibility":
-            return [("option", c) for c in COMPAT_CHOICES]
         if self.picker_kind == "network":
             # Two states and no custom row: the sandbox is either open or it
             # is not, and a typed value here would read as a setting while
@@ -1589,8 +1596,6 @@ class UncleTUI:
             return self.stage_effort(stage)
         if self.picker_kind == "network":
             return self.stage_network(stage)
-        if self.picker_kind == "api_compatibility":
-            return self._field_value(stage, "api_compatibility") or COMPAT_CHOICES[0]
         if self.picker_kind == "markdown_viewer":
             return self._field_value(stage, self.picker_kind)
         return self.stage_model(stage)
@@ -1605,7 +1610,7 @@ class UncleTUI:
         if kind == "runner" and not available_runners:
             self.notice = "No agents installed. Install claude, codex, kimi, or opencode and add its executable to PATH."
             return
-        if kind in ("name", "base_url", "api_key", "approval_name"):
+        if kind in ("name", "base_url", "region", "api_key", "approval_name"):
             self.input_buf = self._field_value(target, kind)
             self.state = "config_edit"
             return
@@ -7980,7 +7985,7 @@ class UncleTUI:
                 elif section == "opencode" and self.config_sel == 1:
                     self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
                 elif section == "bedrock" and self.config_sel == 1:
-                    self._set_field("@bedrock", "base_url", connection_settings(self.bedrock_keys).get("base_url", ""))
+                    self._set_field("@bedrock", "region", self._field_value("@bedrock", "region"))
                 else:
                     self._open_stage(self._config_row())
             elif k in (ord("q"), ord("Q")):

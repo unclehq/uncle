@@ -21,7 +21,9 @@ sys.path.insert(0, str(ROOT))
 import self_hosted  # noqa: E402
 import self_hosted_http as http  # noqa: E402
 
-URL = 'https://bedrock.example.com/openai/v1'
+REGION = 'us-east-1'
+RUNTIME = 'https://bedrock-runtime.us-east-1.amazonaws.com'
+URL = RUNTIME  # legacy base_url form
 TOKEN = 'bedrock-secret-token-xyz'
 SH_TOKEN = 'selfhosted-secret-token-abc'
 SCHEMA = {'type': 'object', 'properties': {'a': {'type': 'string'}}}
@@ -52,7 +54,7 @@ class Base(unittest.TestCase):
         self.config.write_text(text, encoding='utf-8')
 
     def bedrock_config(self, extra=''):
-        self.write_config('runner aws-bedrock\naws-bedrock.base_url %s\naws-bedrock.model anthropic.claude\n%s' % (URL, extra))
+        self.write_config('runner aws-bedrock\naws-bedrock.region %s\naws-bedrock.model anthropic.claude\n%s' % (REGION, extra))
         os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = TOKEN
 
     def self_hosted_config(self, extra=''):
@@ -86,13 +88,30 @@ class Capture:
                 'message': {'content': '{}'}}
 
 
+CONVERSE_OK = {'output': {'message': {'content': [{'text': '{}'}]}}, 'stopReason': 'end_turn', 'usage': {}}
+
+
+class RequestCapture:
+    """Stands in for self_hosted_http._request (the Bedrock transport seam)."""
+    def __init__(self, reply=None, error=None):
+        self.calls = []
+        self.reply = CONVERSE_OK if reply is None else reply
+        self.error = error
+
+    def __call__(self, url, key, body=None, timeout=30, headers=None):
+        self.calls.append({'url': url, 'key': key, 'body': body, 'headers': headers})
+        if self.error:
+            raise self.error
+        return self.reply
+
+
 class LabelsTest(unittest.TestCase):
     """AC-1, AC-2: TUI labels and row order."""
     def setUp(self):
         self.source = (ROOT / 'uncle_tui.py').read_text(encoding='utf-8')
 
     def test_labels_present(self):
-        for label in ('Bedrock URL', 'AWS Bedrock Token', 'AWS Bedrock', 'aws-bedrock-keys.json', 'HTTP_RUNNERS'):
+        for label in ('Region', 'AWS Bedrock Token', 'AWS Bedrock', 'aws-bedrock-keys.json', 'HTTP_RUNNERS'):
             self.assertIn(label, self.source)
 
     def test_second_key_store(self):
@@ -118,7 +137,7 @@ class LabelsTest(unittest.TestCase):
     def test_bedrock_submenu_exact_and_no_temperature_entry(self):
         items = self._items('bedrock')
         labels = re.findall(r'(?:^\[|, )"([^"%]+)', items)
-        self.assertEqual(labels, ['Connection \u2014 Bedrock URL and AWS Bedrock Token', 'Refresh supported models ('])
+        self.assertEqual(labels, ['Connection \u2014 Region and AWS Bedrock Token', 'Refresh supported models ('])
         self.assertNotIn('emperature', items)
         self.assertNotIn('emperature', self._items(None))
 
@@ -217,7 +236,7 @@ class BuilderTest(Base):
             http._final_call(values, [], SCHEMA, 'n', 'ollama_format', 10, None, 10)
         self.assertIn('temperature', post.calls[0][0]['options'])
 
-    def test_bedrock_never_selects_ollama_format(self):
+    def test_bedrock_constrained_uses_only_json_schema_without_probe(self):
         self.bedrock_config()
         values = self.bedrock_values()
         modes = []
@@ -225,26 +244,24 @@ class BuilderTest(Base):
         def fake_final(v, messages, schema, name, mode, limit, effort, timeout):
             modes.append(mode)
             return '{}', 'stop', {}
-        caps = {'modes': list(http.GRAMMAR_MODES) + ['prompt'], 'rejected': set()}
-        with mock.patch.object(http, 'capabilities', return_value=caps), \
+        with mock.patch.object(http, 'capabilities', side_effect=AssertionError('capabilities probed')), \
                 mock.patch.object(http, '_final_call', fake_final):
             http.constrained_completion(values, [], SCHEMA, 'n', 10)
-        self.assertNotIn('ollama_format', modes)
+        self.assertEqual(modes, ['json_schema'])
 
-    def test_token_only_to_configured_url(self):
+    def test_token_only_to_region_runtime_host(self):
         self.bedrock_config()
         values = self.bedrock_values()
-        seen = []
-
-        def fake_post(url, key, body, timeout, what='model request'):
-            seen.append((url, key))
-            return {'choices': [{'message': {'content': '{}'}, 'finish_reason': 'stop'}], 'usage': {}}
-        with mock.patch.object(http, 'post', fake_post):
-            http.chat(values, [], [], 10)
-        self.assertTrue(seen, 'no request reached post()')
-        for url, key in seen:
-            self.assertTrue(url.startswith(URL), url)
-            self.assertEqual(key, TOKEN)
+        cap = RequestCapture()
+        with mock.patch.object(http, '_request', cap):
+            http.chat(values, [{'role': 'user', 'content': 'x'}], [], 10)
+        self.assertEqual(len(cap.calls), 1)
+        for call in cap.calls:
+            self.assertTrue(call['url'].startswith(RUNTIME + '/model/'), call['url'])
+            self.assertEqual(call['key'], TOKEN)
+            self.assertEqual(call['headers']['Authorization'], 'Bearer ' + TOKEN)
+            self.assertNotIn(TOKEN, call['url'])
+            self.assertNotIn(TOKEN, json.dumps(call['body']))
 
     def test_redirect_not_followed_token_not_forwarded(self):
         import http.server as server_lib
@@ -351,17 +368,14 @@ class RedactionAndSchemeTest(Base):
         self.assertNotIn(TOKEN, text)
         self.assertLess(len(text), 5000)
 
-    def test_non_loopback_http_rejected_loopback_allowed(self):
-        for host, ok in (('http://remote.example.com/v1', False), ('http://127.0.0.1:9/v1', True), ('http://localhost:9/v1', True)):
+    def test_http_and_non_aws_hosts_have_no_region(self):
+        for host in ('http://127.0.0.1:9/v1', 'http://localhost:9/v1', 'http://remote.example.com/v1'):
             self.write_config('runner aws-bedrock\naws-bedrock.base_url %s\naws-bedrock.model m\n' % host)
             os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = TOKEN
-            if ok:
-                self.assertEqual(self_hosted.settings(str(self.config), 'implementation')['_profile'], 'aws-bedrock')
-            else:
-                with self.assertRaises(ValueError) as caught:
-                    self_hosted.settings(str(self.config), 'implementation')
-                self.assertIn('AWS Bedrock', str(caught.exception))
-                self.assertNotIn(TOKEN, str(caught.exception))
+            with self.assertRaises(ValueError) as caught:
+                self_hosted.settings(str(self.config), 'implementation')
+            self.assertIn('Region', str(caught.exception))
+            self.assertNotIn(TOKEN, str(caught.exception))
 
 
 class SupervisorPathTest(Base):
@@ -437,12 +451,30 @@ class ReuseTest(Base):
         os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = 'another-token'
         self.assertEqual(base, self.make_key(self.bedrock_values()), 'token must not enter the key')
         os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = TOKEN
-        self.write_config('runner aws-bedrock\naws-bedrock.base_url https://other.example.com/v1\naws-bedrock.model anthropic.claude\n')
-        self.assertNotEqual(base, self.make_key(self.bedrock_values()), 'base URL must change the key')
-        self.write_config('runner aws-bedrock\naws-bedrock.base_url %s\naws-bedrock.model other-model\n' % URL)
+        self.write_config('runner aws-bedrock\naws-bedrock.region eu-west-1\naws-bedrock.model anthropic.claude\n')
+        self.assertNotEqual(base, self.make_key(self.bedrock_values()), 'region must change the key')
+        self.write_config('runner aws-bedrock\naws-bedrock.region %s\naws-bedrock.model other-model\n' % REGION)
         self.assertNotEqual(base, self.make_key(self.bedrock_values()), 'model must change the key')
         sh = self.make_key(self.bedrock_values_as_self_hosted())
         self.assertNotEqual(base, sh, 'profile must change the key')
+
+    def test_reuse_key_identical_across_temperature_sources_and_changes_with_region(self):
+        self.bedrock_config()
+        base = self.make_key(self.bedrock_values())
+        self.assertIsNotNone(base)
+        os.environ['WORKFLOW_AWS_BEDROCK_TEMPERATURE'] = '0.77'
+        self.assertEqual(base, self.make_key(self.bedrock_values()), 'global env temperature')
+        del os.environ['WORKFLOW_AWS_BEDROCK_TEMPERATURE']
+        self.bedrock_config('implementation.temperature 0.9\n')
+        self.assertEqual(base, self.make_key(self.bedrock_values()), 'per-stage temperature')
+        self.bedrock_config('implementation.request-options %s\n' % json.dumps({'top_p': 0.9}))
+        without_temp = self.make_key(self.bedrock_values())
+        self.bedrock_config('implementation.request-options %s\n' % json.dumps({'temperature': 0.3, 'top_p': 0.9}))
+        with_temp = self.make_key(self.bedrock_values())
+        self.assertIsNotNone(without_temp)
+        self.assertEqual(without_temp, with_temp, 'temperature in request-options must not alter the Reuse key')
+        self.write_config('runner aws-bedrock\naws-bedrock.region eu-west-1\naws-bedrock.model anthropic.claude\n')
+        self.assertNotEqual(base, self.make_key(self.bedrock_values()), 'region change')
 
     def bedrock_values_as_self_hosted(self):
         self.bedrock_config()
@@ -486,15 +518,74 @@ class StorageTest(Base):
             self_hosted.save_keys(str(self.config), {'implementation': TOKEN}, profile='aws-bedrock')
         self.assertFalse((self.dir / 'aws-bedrock-keys.json').exists())
 
-    def test_bedrock_url_rejected(self):
-        # '#' starts a comment in the config file, so the fragment case goes through the env override.
-        for bad in ('https://user:pw@h.example/v1', 'https://h.example/v1?x=1', 'https://h.example/v1#f'):
-            self.write_config('runner aws-bedrock\naws-bedrock.base_url %s\naws-bedrock.model m\n' % URL)
-            os.environ['UNCLE_AWS_BEDROCK_BASE_URL'] = bad
-            os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = TOKEN
+    def test_region_validation_and_precedence(self):
+        self.write_config('runner aws-bedrock\naws-bedrock.model m\n')
+        os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = TOKEN
+        os.environ['UNCLE_AWS_BEDROCK_REGION'] = ' us-east-1 '
+        values = self_hosted.settings(str(self.config), 'implementation')
+        self.assertEqual((values['region'], values['base_url']), ('us-east-1', RUNTIME))
+        for bad in ('US-EAST-1', 'us_east_1', 'us-east', 'x.y-1', 'us-east-1.evil.com/'):
+            os.environ['UNCLE_AWS_BEDROCK_REGION'] = bad
             with self.assertRaises(ValueError) as caught:
                 self_hosted.settings(str(self.config), 'implementation')
-            self.assertIn('Bedrock', str(caught.exception))
+            self.assertIn('Region', str(caught.exception))
+            self.assertNotIn(TOKEN, str(caught.exception))
+        os.environ['UNCLE_AWS_BEDROCK_REGION'] = '   '
+        with self.assertRaises(ValueError) as caught:
+            self_hosted.settings(str(self.config), 'implementation')
+        self.assertIn('Region is not set', str(caught.exception))
+
+    def test_invalid_env_region_does_not_fall_through_to_stored(self):
+        self.bedrock_config()
+        self.assertEqual(self.bedrock_values()['region'], REGION)
+        self_hosted.save_keys(str(self.config), {'__opencode_connection__': {'region': 'eu-west-1', 'api_key': TOKEN}}, profile='aws-bedrock')
+        os.environ['UNCLE_AWS_BEDROCK_REGION'] = 'US-EAST-1'
+        with self.assertRaises(ValueError) as caught:
+            self_hosted.settings(str(self.config), 'implementation')
+        self.assertIn('Region', str(caught.exception))
+
+    def test_region_precedence_order(self):
+        self.write_config('runner aws-bedrock\naws-bedrock.region ap-south-1\nimplementation.region sa-east-1\naws-bedrock.model m\n')
+        self_hosted.save_keys(str(self.config), {'__opencode_connection__': {'region': 'eu-west-1', 'api_key': TOKEN}}, profile='aws-bedrock')
+        self.assertEqual(self_hosted.settings(str(self.config), 'implementation')['region'], 'sa-east-1')
+        self.assertEqual(self_hosted.settings(str(self.config), 'requirements')['region'], 'ap-south-1')
+        os.environ['UNCLE_AWS_BEDROCK_REGION'] = 'us-west-2'
+        self.assertEqual(self_hosted.settings(str(self.config), 'implementation')['region'], 'us-west-2')
+        del os.environ['UNCLE_AWS_BEDROCK_REGION']
+        self.write_config('runner aws-bedrock\naws-bedrock.model m\n')
+        self.assertEqual(self_hosted.settings(str(self.config), 'implementation')['region'], 'eu-west-1')
+
+    def test_legacy_base_url_migration(self):
+        os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = TOKEN
+        for url in ('https://bedrock-runtime.eu-west-1.amazonaws.com', 'https://bedrock.eu-west-1.amazonaws.com'):
+            self.write_config('runner aws-bedrock\naws-bedrock.base_url %s\naws-bedrock.api_compatibility converse\naws-bedrock.model m\n' % url)
+            values = self_hosted.settings(str(self.config), 'implementation')
+            self.assertEqual(values['region'], 'eu-west-1')
+            self.assertEqual(values['base_url'], 'https://bedrock-runtime.eu-west-1.amazonaws.com')
+        for url in ('http://bedrock-runtime.eu-west-1.amazonaws.com', 'https://bedrock-runtime.eu-west-1.example.com',
+                    'https://user:pw@bedrock-runtime.eu-west-1.amazonaws.com', 'https://bedrock-runtime.eu-west-1.amazonaws.com:8443',
+                    'https://example.com/bedrock-runtime.eu-west-1.amazonaws.com'):
+            self.write_config('runner aws-bedrock\naws-bedrock.base_url %s\naws-bedrock.api_compatibility converse\naws-bedrock.model m\n' % url)
+            with self.assertRaises(ValueError) as caught:
+                self_hosted.settings(str(self.config), 'implementation')
+            self.assertIn('Region', str(caught.exception), url)
+            self.assertNotIn(TOKEN, str(caught.exception))
+
+    def test_token_validation(self):
+        self.bedrock_config()
+        for bad in ('line1\nline2', 'has space', 'ctrl\x01char', ''):
+            os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = bad
+            if not bad:
+                del os.environ['UNCLE_AWS_BEDROCK_API_KEY']
+            with self.assertRaises(ValueError) as caught:
+                self_hosted.settings(str(self.config), 'implementation')
+            self.assertIn('token', str(caught.exception))
+            for part in ('line1', 'line2', 'has', 'ctrl'):
+                self.assertNotIn(part, str(caught.exception))
+        for bad in ('a\nb', 'a b', ''):
+            with self.assertRaises(ValueError):
+                self_hosted.validate_bedrock_token(bad)
+        self.assertEqual(self_hosted.validate_bedrock_token(TOKEN), TOKEN)
 
     def test_settings_never_read_self_hosted_store(self):
         self_hosted.save_keys(str(self.config), {'implementation': SH_TOKEN})
@@ -610,62 +701,46 @@ class ProtocolAdapterTests(unittest.TestCase):
     SCHEMA = {'type': 'object', 'properties': {'a': {'type': 'string'}}}
     TOOLS = [{'type': 'function', 'function': {'name': 't', 'description': 'd', 'parameters': {'type': 'object'}}}]
 
-    def test_exact_header_sets(self):
+    def test_exact_header_set(self):
         import bedrock_protocols as bp
-        self.assertEqual(bp.build_headers('openai', 'K'), {'Content-Type': 'application/json', 'Authorization': 'Bearer K'})
-        self.assertEqual(bp.build_headers('converse', 'K'), {'Content-Type': 'application/json', 'Authorization': 'Bearer K'})
-        self.assertEqual(bp.build_headers('anthropic', 'K'), {'Content-Type': 'application/json', 'x-api-key': 'K', 'anthropic-version': '2023-06-01'})
+        self.assertEqual(bp.build_headers('K'), {'Content-Type': 'application/json', 'Authorization': 'Bearer K'})
 
-    def test_urls_and_unknown_protocol(self):
+    def test_urls(self):
         import bedrock_protocols as bp
-        self.assertEqual(bp.build_url('openai', 'http://h/', 'm'), 'http://h/chat/completions')
-        self.assertEqual(bp.build_url('anthropic', 'http://h', 'm'), 'http://h/v1/messages')
-        self.assertEqual(bp.build_url('converse', 'http://h', 'a/b'), 'http://h/model/a%2Fb/converse')
-        with self.assertRaises(ValueError):
-            bp.normalize_protocol('bogus')
+        self.assertEqual(bp.runtime_url('us-east-1'), RUNTIME)
+        self.assertEqual(bp.control_url('eu-west-1'), 'https://bedrock.eu-west-1.amazonaws.com')
+        self.assertEqual(bp.build_url('us-east-1', 'anthropic.claude-3:0'), RUNTIME + '/model/anthropic.claude-3%3A0/converse')
+        self.assertEqual(bp.build_url('us-east-1', 'a/b'), RUNTIME + '/model/a%2Fb/converse')
+        self.assertFalse(hasattr(bp, 'normalize_protocol'))
 
-    def test_bodies_have_no_temperature_and_shapes(self):
+    def test_body_has_no_temperature_and_shape(self):
         import bedrock_protocols as bp
-        for proto in bp.PROTOCOLS:
-            body = bp.build_body(proto, 'm', self.MSGS, 50, self.TOOLS, self.SCHEMA)
-            self.assertNotIn('temperature', json.dumps(body).lower(), proto)
-        self.assertEqual(bp.build_body('openai', 'm', self.MSGS, 5, schema=self.SCHEMA)['response_format']['type'], 'json_schema')
-        a = bp.build_body('anthropic', 'm', self.MSGS, 5, schema=self.SCHEMA)
-        self.assertEqual((a['system'], a['tool_choice']['name']), ('sys', 'result'))
-        c = bp.build_body('converse', 'm', self.MSGS, 5, schema=self.SCHEMA)
+        body = bp.build_body(self.MSGS, 50, self.TOOLS, self.SCHEMA)
+        self.assertNotIn('temperature', json.dumps(body).lower())
+        c = bp.build_body(self.MSGS, 5, schema=self.SCHEMA)
         self.assertEqual(c['inferenceConfig'], {'maxTokens': 5})
         self.assertEqual(c['toolConfig']['toolChoice'], {'tool': {'name': 'result'}})
+        self.assertEqual(c['system'], [{'text': 'sys'}])
 
-    def test_parse_openai(self):
-        import bedrock_protocols as bp
-        r = bp.parse_response('openai', {'choices': [{'finish_reason': 'tool_calls', 'message': {'content': 'x', 'tool_calls': [
-            {'id': '1', 'function': {'name': 't', 'arguments': '{"q":1}'}}]}}], 'usage': {'prompt_tokens': 3, 'completion_tokens': 4}})
-        self.assertEqual((r['text'], r['tool_calls'][0]['arguments'], r['usage']), ('x', {'q': 1}, {'input': 3, 'output': 4}))
-
-    def test_parse_anthropic_and_schema(self):
-        import bedrock_protocols as bp
-        d = {'content': [{'type': 'text', 'text': 'a'}, {'type': 'tool_use', 'id': '1', 'name': 'result', 'input': {'a': 'z'}},
-                         {'type': 'tool_use', 'id': '2', 'name': 't', 'input': {}}], 'stop_reason': 'tool_use', 'usage': {'input_tokens': 1, 'output_tokens': 2}}
-        r = bp.parse_response('anthropic', d, 'result')
-        self.assertEqual(json.loads(r['text']), {'a': 'z'})
-        self.assertEqual([c['name'] for c in r['tool_calls']], ['t'])
-        self.assertEqual(r['usage'], {'input': 1, 'output': 2})
-
-    def test_parse_converse(self):
+    def test_parse_converse_and_schema(self):
         import bedrock_protocols as bp
         d = {'output': {'message': {'content': [{'text': 'hi'}, {'toolUse': {'toolUseId': '9', 'name': 't', 'input': {'k': 1}}}]}},
              'stopReason': 'tool_use', 'usage': {'inputTokens': 5, 'outputTokens': 6}}
-        r = bp.parse_response('converse', d)
+        r = bp.parse_response(d)
         self.assertEqual((r['text'], r['tool_calls'][0]['id'], r['usage']), ('hi', '9', {'input': 5, 'output': 6}))
+        d['output']['message']['content'].append({'toolUse': {'toolUseId': '2', 'name': 'result', 'input': {'a': 'z'}}})
+        r = bp.parse_response(d, 'result')
+        self.assertEqual(json.loads(r['text']), {'a': 'z'})
+        self.assertEqual([c['name'] for c in r['tool_calls']], ['t'])
 
     def test_malformed_responses_raise(self):
         import bedrock_protocols as bp
-        for proto in bp.PROTOCOLS:
+        for bad in ({}, [], {'output': {}}):
             with self.assertRaises(ValueError):
-                bp.parse_response(proto, {})
+                bp.parse_response(bad)
 
 
-class ApiCompatibilityFieldTests(unittest.TestCase):
+class RegionFieldTests(unittest.TestCase):
     def make(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location('uncle_tui_under_test', ROOT / 'uncle_tui.py')
@@ -678,53 +753,76 @@ class ApiCompatibilityFieldTests(unittest.TestCase):
         tui.maybe_reload = lambda: None
         return mod, tui
 
-    def test_bedrock_popup_fields_and_choices(self):
+    def test_bedrock_popup_fields_have_no_compatibility_or_url(self):
         mod, tui = self.make()
-        self.assertEqual(mod.COMPAT_CHOICES, ['OpenAI compatible', 'Anthropic compatible', 'Converse API compatible'])
-        self.assertEqual(tui.stage_fields('@bedrock'), ['base_url', 'api_key', 'api_compatibility'])
+        self.assertFalse(hasattr(mod, 'COMPAT_CHOICES'))
+        self.assertEqual(tui.stage_fields('@bedrock'), ['region', 'api_key'])
         self.assertEqual(tui.stage_fields('@connection'), ['base_url', 'api_key'])
-        tui.picker_kind, tui.picker_target = 'api_compatibility', '@bedrock'
-        self.assertEqual([t for _, t in tui._picker_rows()], mod.COMPAT_CHOICES)
-        self.assertEqual(tui._picker_current(), 'OpenAI compatible')
-        rows = tui._stage_items() if False else None
-        self.assertIn('OpenAI compatible  (default)', tui._field_display('@bedrock', 'api_compatibility'))
+        self.assertNotIn('api_compatibility', (ROOT / 'uncle_tui.py').read_text(encoding='utf-8'))
 
-    def test_choice_persists_in_bedrock_keys_only_and_rejects_others(self):
+    def test_failed_discovery_leaves_connection_and_catalog_untouched(self):
+        import copy
         mod, tui = self.make()
-        tui._set_field('@bedrock', 'api_compatibility', 'Anthropic compatible')
-        self.assertEqual(tui.bedrock_keys['__opencode_connection__']['api_compatibility'], 'Anthropic compatible')
-        self.assertEqual(tui.stage_api_keys, {})
-        tui._set_field('@bedrock', 'api_compatibility', 'bogus')
-        self.assertEqual(tui.bedrock_keys['__opencode_connection__']['api_compatibility'], 'Anthropic compatible')
-        self.assertIn('API Compatibility', tui.notice)
+        seed = {'__opencode_connection__': {'region': 'us-east-1', 'api_key': 'OLDTOKEN'},
+                '__opencode_models__': {'local/m': {'region': 'us-east-1', 'api_key': 'OLDTOKEN', 'model': 'm'}}}
+        tui.bedrock_keys = copy.deepcopy(seed)
+        saved = []
+        tui.save_config = lambda: saved.append(1)
+        def boom(keys, region, key):
+            raise ValueError('AWS Bedrock model discovery failed (HTTP 401); check the Region and token')
+        for field, value in (('region', 'eu-west-1'), ('api_key', 'NEWTOKEN999')):
+            with mock.patch.object(mod, 'refresh_bedrock_models', boom):
+                tui._set_field('@bedrock', field, value)
+            self.assertEqual(tui.bedrock_keys, seed)
+            self.assertEqual(saved, [])
+            self.assertIn('check the Region', tui.notice)
 
 
 class NativeTransportTests(unittest.TestCase):
-    def post(self, protocol, reply):
+    def post(self, reply, **extra):
         import self_hosted_http as h
         seen = {}
         def fake(url, key, body=None, timeout=30, headers=None):
             seen.update(url=url, body=body, headers=headers)
             return reply
-        values = {'_profile': 'aws-bedrock', '_protocol': protocol, 'api_key': 'TOK', 'model': 'm', 'base_url': 'https://h'}
+        values = dict({'_profile': 'aws-bedrock', 'api_key': 'TOK', 'model': 'anthropic.claude-3:0', 'region': 'us-east-1',
+                       'base_url': RUNTIME}, **extra)
         body = {'messages': [{'role': 'user', 'content': 'x'}], 'max_tokens': 9, 'temperature': 0.5}
         with mock.patch.object(h, '_request', fake):
             out = h.compatible_post(values, body, 5)
         return seen, out
 
-    def test_anthropic_headers_url_no_temperature(self):
-        seen, out = self.post('anthropic', {'content': [{'type': 'text', 'text': 'ok'}], 'usage': {'input_tokens': 1, 'output_tokens': 2}})
-        self.assertEqual(seen['url'], 'https://h/v1/messages')
-        self.assertEqual(seen['headers'], {'Content-Type': 'application/json', 'x-api-key': 'TOK', 'anthropic-version': '2023-06-01'})
+    def test_converse_headers_url_and_reasons(self):
+        for reason, want in (('end_turn', 'stop'), ('max_tokens', 'length'), ('tool_use', 'tool_calls')):
+            seen, out = self.post({'output': {'message': {'content': [{'text': 'hi'}]}}, 'stopReason': reason,
+                                   'usage': {'inputTokens': 1, 'outputTokens': 2}})
+            self.assertEqual(out['choices'][0]['finish_reason'], want)
+        self.assertEqual(seen['url'], RUNTIME + '/model/anthropic.claude-3%3A0/converse')
+        self.assertEqual(seen['headers'], {'Content-Type': 'application/json', 'Authorization': 'Bearer TOK'})
         self.assertNotIn('temperature', json.dumps(seen['body']))
-        self.assertEqual(out['choices'][0]['message']['content'], 'ok')
-
-    def test_converse_headers_url(self):
-        seen, out = self.post('converse', {'output': {'message': {'content': [{'text': 'hi'}]}}, 'usage': {'inputTokens': 1, 'outputTokens': 2}})
-        self.assertEqual(seen['url'], 'https://h/model/m/converse')
-        self.assertEqual(seen['headers']['Authorization'], 'Bearer TOK')
-        self.assertNotIn('temperature', json.dumps(seen['body']))
+        self.assertEqual(seen['body']['inferenceConfig'], {'maxTokens': 9})
         self.assertEqual(out['usage']['completion_tokens'], 2)
+
+    def test_missing_content_names_converse_and_model(self):
+        for reply in ({}, {'output': {}}):
+            with self.assertRaises(ValueError) as caught:
+                self.post(reply)
+            self.assertIn('Converse', str(caught.exception))
+            self.assertIn('anthropic.claude-3:0', str(caught.exception))
+
+    def test_http_errors_and_redirects_do_not_leak_token(self):
+        from urllib.error import HTTPError
+        import self_hosted_http as h
+        for code in (401, 403, 500, 302, 307):
+            err = HTTPError(RUNTIME, code, 'denied TOK', {}, None)
+            values = {'_profile': 'aws-bedrock', 'api_key': 'TOK', 'model': 'm', 'region': 'us-east-1', 'base_url': RUNTIME}
+            with mock.patch.object(h, '_request', RequestCapture(error=err)):
+                with self.assertRaises(ValueError) as caught:
+                    h.compatible_post(values, {'messages': []}, 5)
+            self.assertNotIn('TOK', str(caught.exception))
+            self.assertIn(str(code), str(caught.exception))
+            if code < 400:
+                self.assertIn('not followed', str(caught.exception))
 
     def test_redactor_scrubs_text_and_bytes(self):
         import self_hosted
@@ -741,46 +839,36 @@ class RepairRegressionTests(Base):
 
     def test_cleared_connection_does_not_keep_profile_credentials(self):
         self.write_config('runner aws-bedrock\nimplementation.model local/anthropic.claude\n')
-        self.profile_store({'base_url': URL, 'api_key': TOKEN})
+        self.profile_store({'region': REGION, 'api_key': TOKEN})
         self.assertEqual(self_hosted.settings(str(self.config), 'implementation')['api_key'], TOKEN)
-        for cleared in ({'base_url': URL, 'api_key': ''}, {'base_url': '', 'api_key': TOKEN}, {'base_url': '', 'api_key': ''}):
+        for cleared in ({'region': REGION, 'api_key': ''}, {'region': '', 'api_key': TOKEN}, {'region': '', 'api_key': ''}):
             self.profile_store(cleared)
             with self.assertRaisesRegex(ValueError, 'AWS Bedrock'):
                 self_hosted.settings(str(self.config), 'implementation')
 
-    def test_unknown_stored_protocol_runs_as_openai_with_one_notice(self):
-        self.bedrock_config()
-        self.profile_store({'base_url': URL, 'api_key': TOKEN, 'api_compatibility': 'Foo '})
+    def test_legacy_stored_connection_migrates_region_without_rewrite(self):
         self.write_config('runner aws-bedrock\nimplementation.model local/anthropic.claude\n')
-        self_hosted._BEDROCK_COMPAT_NOTICED = False
+        self.profile_store({'base_url': 'https://bedrock-runtime.eu-west-1.amazonaws.com', 'api_key': TOKEN, 'api_compatibility': 'Foo '})
         before = (self.dir / 'aws-bedrock-keys.json').read_text()
-        with mock.patch('sys.stderr') as err:
-            first = self_hosted.settings(str(self.config), 'implementation')
-            second = self_hosted.settings(str(self.config), 'implementation')
-        self.assertEqual((first['_protocol'], second['_protocol']), ('openai', 'openai'))
-        notices = [c.args[0] for c in err.write.call_args_list if 'Foo' in c.args[0]]
-        self.assertEqual(len(notices), 1)
+        values = self_hosted.settings(str(self.config), 'implementation')
+        self.assertEqual((values['region'], values['_profile']), ('eu-west-1', 'aws-bedrock'))
+        self.assertNotIn('_protocol', values)
         self.assertEqual((self.dir / 'aws-bedrock-keys.json').read_text(), before)
 
-    def test_openai_empty_choices_names_protocol(self):
-        values = {'_profile': 'aws-bedrock', '_protocol': 'openai', 'api_key': 'T', 'model': 'm', 'base_url': 'https://h'}
-        for reply in ({'choices': []}, {}):
-            with mock.patch.object(http, '_compatible_output_post', lambda *a, **k: reply):
-                for cap in (None, 5):
-                    body = {'messages': [], **({} if cap is None else {'max_tokens': cap})}
-                    with self.assertRaisesRegex(ValueError, 'AWS Bedrock OpenAI response has no choices'):
-                        http.compatible_post(values, body, 5)
+    def test_compatibility_env_is_ignored(self):
+        self.bedrock_config()
+        os.environ['WORKFLOW_AWS_BEDROCK_API_COMPATIBILITY'] = 'anthropic'
+        self.assertNotIn('_protocol', self.bedrock_values())
 
     def test_self_hosted_empty_choices_unchanged(self):
         values = {'api_key': 'T', 'model': 'm', 'base_url': 'http://h'}
         with mock.patch.object(http, '_compatible_output_post', lambda *a, **k: {'choices': []}):
             self.assertEqual(http.compatible_post(values, {'messages': []}, 5), {'choices': []})
 
-    def test_malformed_responses_name_protocol(self):
+    def test_malformed_response_names_converse(self):
         import bedrock_protocols as bp
-        for proto, word in (('openai', 'OpenAI'), ('anthropic', 'Anthropic'), ('converse', 'Converse')):
-            with self.assertRaisesRegex(ValueError, word):
-                bp.parse_response(proto, {})
+        with self.assertRaisesRegex(ValueError, 'Converse'):
+            bp.parse_response({})
 
     def test_sampling_bedrock_empty_and_self_hosted_has_temperature(self):
         self.assertEqual(http.sampling({'_profile': 'aws-bedrock'}), {})
@@ -792,6 +880,132 @@ class RepairRegressionTests(Base):
         self.assertNotIn('temperature', out)
         self.assertNotIn('temperature', out['options'])
         self.assertEqual(out['schema']['properties'], {'temperature': {'type': 'number'}})
+
+
+class DiscoveryTest(Base):
+    CONTROL = 'https://bedrock.us-east-1.amazonaws.com'
+
+    def run_discovery(self, responder, keys=None):
+        calls = []
+
+        def fake(url, headers):
+            calls.append((url, headers))
+            out = responder(url, len(calls))
+            if isinstance(out, BaseException):
+                raise out
+            return out if isinstance(out, bytes) else json.dumps(out).encode()
+        keys = {} if keys is None else keys
+        with mock.patch.object(self_hosted, '_discovery_get', fake):
+            try:
+                return calls, self_hosted.refresh_bedrock_models(keys, REGION, TOKEN), keys
+            except ValueError as exc:
+                return calls, exc, keys
+
+    def test_paginates_both_lists_and_unions_ids(self):
+        def responder(url, n):
+            if url == self.CONTROL + '/foundation-models':
+                return {'modelSummaries': [{'modelId': 'amazon.a:0'}], 'nextToken': 'a/b+c='}
+            if url == self.CONTROL + '/foundation-models?nextToken=a%2Fb%2Bc%3D':
+                return {'modelSummaries': [{'modelId': 'amazon.b'}]}
+            if url == self.CONTROL + '/inference-profiles?maxResults=100':
+                return {'inferenceProfileSummaries': [{'inferenceProfileId': 'us.amazon.a:0'}, {'inferenceProfileId': 'amazon.b'}]}
+            raise AssertionError(url)
+        calls, names, keys = self.run_discovery(responder)
+        self.assertEqual([u for u, _ in calls], [
+            self.CONTROL + '/foundation-models', self.CONTROL + '/foundation-models?nextToken=a%2Fb%2Bc%3D',
+            self.CONTROL + '/inference-profiles?maxResults=100'])
+        for _, headers in calls:
+            self.assertEqual(headers['Authorization'], 'Bearer ' + TOKEN)
+        self.assertEqual(sorted(names), ['local/amazon.a:0', 'local/amazon.b', 'local/us.amazon.a:0'])
+        self.assertEqual(keys['__opencode_connection__'], {'region': REGION, 'api_key': TOKEN})
+        self.assertEqual(set(keys['__opencode_models__']), set(names))
+
+    PRIOR = {'__opencode_connection__': {'region': 'eu-west-1', 'api_key': 'old'},
+             '__opencode_models__': {'local/old': {'model': 'old', 'region': 'eu-west-1', 'api_key': 'old'}}}
+
+    def assert_kept(self, responder, **kw):
+        import copy
+        prior = copy.deepcopy(self.PRIOR)
+        calls, exc, keys = self.run_discovery(responder, copy.deepcopy(prior))
+        self.assertIsInstance(exc, ValueError)
+        self.assertEqual(keys, prior)
+        self.assertNotIn(TOKEN, str(exc))
+        return exc
+
+    def test_repeated_next_token_errors_and_keeps_prior(self):
+        self.assert_kept(lambda url, n: {'modelSummaries': [{'modelId': 'a.b'}], 'nextToken': 'same'})
+
+    def test_101_pages_errors(self):
+        counter = []
+
+        def responder(url, n):
+            counter.append(n)
+            return {'modelSummaries': [{'modelId': 'a.b'}], 'nextToken': 'tok%d' % n}
+        self.assert_kept(responder)
+        self.assertLessEqual(len(counter), 101)
+
+    def test_failures_keep_prior_catalog_and_hide_token(self):
+        from urllib.error import HTTPError, URLError
+        good = {'modelSummaries': [{'modelId': 'a.b'}]}
+        cases = (
+            lambda url, n: HTTPError(url, 403, 'denied ' + TOKEN, {}, None),
+            lambda url, n: HTTPError(url, 302, 'moved', {}, None),
+            lambda url, n: URLError('dns ' + TOKEN),
+            lambda url, n: b'{not json ' + TOKEN.encode(),
+            lambda url, n: b'[1, 2]',
+            lambda url, n: good if n == 1 else HTTPError(url, 500, 'boom', {}, None),
+            lambda url, n: dict(good, nextToken='p2') if n == 1 else b'garbage',
+        )
+        for responder in cases:
+            self.assert_kept(responder)
+
+    def test_unsafe_ids_skipped_and_empty_union_errors(self):
+        def responder(url, n):
+            if 'foundation' in url:
+                return {'modelSummaries': [{'modelId': 'ok.model'}, {'modelId': 'has space'}, {'modelId': 'bad#frag'},
+                                           {'modelId': '/leading'}, {'modelId': 'new\nline'}]}
+            return {'inferenceProfileSummaries': []}
+        _, names, _ = self.run_discovery(responder)
+        self.assertEqual(names, ['local/ok.model'])
+        exc = self.assert_kept(lambda url, n: {'modelSummaries': [{'modelId': 'has space'}, {'modelId': '#x'}]})
+        self.assertIn('no usable models', str(exc))
+        self.assert_kept(lambda url, n: {})
+
+    def test_invalid_region_or_token_makes_no_request(self):
+        calls = []
+        with mock.patch.object(self_hosted, '_discovery_get', lambda u, h: calls.append(u)):
+            for region, token in (('US-EAST-1', TOKEN), (REGION, 'bad token'), (REGION, '')):
+                with self.assertRaises(ValueError):
+                    self_hosted.discover_bedrock_models(region, token)
+        self.assertEqual(calls, [])
+
+
+class ConverseTemperatureTest(Base):
+    """Every temperature source: the real settings() -> chat/final-call path posts a Converse body without it."""
+    SOURCES = {
+        'global-env': ('', {'WORKFLOW_AWS_BEDROCK_TEMPERATURE': '0.4242'}),
+        'self-hosted-env': ('', {'WORKFLOW_SELF_HOSTED_TEMPERATURE': '0.4242'}),
+        'per-stage': ('implementation.temperature 0.4242\naws-bedrock.temperature 0.4242\n', {}),
+        'request-options': ('implementation.request-options %s\n' % json.dumps({'temperature': 0.4242, 'extra_body': {'temperature': 0.4242}}), {}),
+    }
+
+    def test_no_temperature_and_max_tokens_preserved(self):
+        for name, (extra, env) in self.SOURCES.items():
+            self.bedrock_config(extra)
+            with mock.patch.dict(os.environ, env):
+                values = http.configure_request_options(self.bedrock_values(), 'implementation')
+                cap = RequestCapture()
+                with mock.patch.object(http, '_request', cap):
+                    http.chat(values, [{'role': 'system', 'content': 's'}, {'role': 'user', 'content': 'x'}], [], 321)
+                    http.constrained_completion(values, [{'role': 'user', 'content': 'x'}], SCHEMA, 'n', 123)
+            self.assertEqual(len(cap.calls), 2, name)
+            for call in cap.calls:
+                self.assertFalse(has_key(call['body'], 'temperature'), name)
+                self.assertNotIn('0.4242', json.dumps(call['body']), name)
+                self.assertTrue(call['url'].endswith('/converse'), name)
+            self.assertEqual(cap.calls[0]['body']['inferenceConfig']['maxTokens'], 321, name)
+            self.assertEqual(cap.calls[1]['body']['inferenceConfig']['maxTokens'], 123, name)
+            self.assertEqual(cap.calls[1]['body']['toolConfig']['toolChoice'], {'tool': {'name': 'n'}}, name)
 
 
 if __name__ == '__main__':

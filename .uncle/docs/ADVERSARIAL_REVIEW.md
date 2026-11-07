@@ -1,184 +1,184 @@
-## AR-001: Apply-to-all (`a`) is only specified for success and for the no-Bedrock-stage refusal.
+## AR-001: Region regex conflicts: spec S7 says {2,}, plan D2 says {2}.
 
 - Severity: HIGH
-- References: CHANGE_SPEC BH-4 and section 8 cover only the no-Bedrock-stage refusal; CHANGE_PLAN section 6 shows only the success path.
-- Failure: Apply-to-all (`a`) is only specified for success and for the no-Bedrock-stage refusal. Plan should say: 'If the Bedrock key store lacks token, model or base_url for the source stage, `a` prints a Bedrock-worded error and writes nothing.'
+- References: CHANGE_SPEC S7 vs CHANGE_PLAN D2; D1 precedence (self_hosted.py:300).
+- Failure: Region regex conflicts: spec S7 says {2,}, plan D2 says {2}. Trim/case handling and invalid-region precedence across env/stage/shared config are unspecified. Plan should say: 'Region is trimmed, lowercased and validated against one regex; an invalid value from any source raises ValueError, never falling through.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Fallback `m` writes `<stage>.model`, but lookup falls back to `aws-bedrock.model`; plan never says which key is written.
+## AR-002: Legacy migration precedence is undefined: D3 derives region from legacy base_url while S9/AC-7 say base_url is never use
 
 - Severity: HIGH
-- References: CHANGE_PLAN section 6 (`config_set <stage>.model`) vs stage-config.sh:344-346.
-- Failure: Fallback `m` writes `<stage>.model`, but lookup falls back to `aws-bedrock.model`; plan never says which key is written. Plan should say: 'Fallback `m` writes only `<stage>.model`; global `aws-bedrock.model` is never modified by configure.'
+- References: CHANGE_PLAN D3/D4, AC-7; settings() self_hosted.py:299-316.
+- Failure: Legacy migration precedence is undefined: D3 derives region from legacy base_url while S9/AC-7 say base_url is never used. Plan should say: 'Region precedence: env, stage, shared config, stored connection region, then region_from_url(legacy base_url) only for bedrock(-runtime).<region>.amazonaws.com hosts; else raise the Set Region error.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: BH-1 keeps the stage's existing model when switching to aws-bedrock, which can leave a Self hosted model name on a Bedro
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC BH-1 'stage's model kept'; spec section 8 has no validation.
-- Failure: BH-1 keeps the stage's existing model when switching to aws-bedrock, which can leave a Self hosted model name on a Bedrock stage. Plan should say: 'Switching to aws-bedrock keeps the model unvalidated' or 'clears it if not in the Bedrock list'.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-004: Menu renumbering leaves stale scripted input unspecified (old '3' now opens Bedrock setup).
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-4 and risk 22; CHANGE_SPEC section 7.
-- Failure: Menu renumbering leaves stale scripted input unspecified (old '3' now opens Bedrock setup). Plan should say: 'Item 3 opens Bedrock configuration with no confirmation; invalid numbers show the existing invalid-choice message.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-005: Runner prompt ordering and the zero-installed-CLI case are unspecified.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-1; BH-9; uncle_no_runner at stage-config.sh:273.
-- Failure: Runner prompt ordering and the zero-installed-CLI case are unspecified. Plan should say: 'With zero installed CLIs the prompt lists only aws-bedrock and accepts it; order is installed runners then aws-bedrock.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-006: Audit rows collide: stages-menu `m` is Self hosted only (uncle:887) yet a Bedrock stage now displays as aws-bedrock ther
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN audit table rows uncle:875 vs uncle:887.
-- Failure: Audit rows collide: stages-menu `m` is Self hosted only (uncle:887) yet a Bedrock stage now displays as aws-bedrock there (uncle:875). Plan should say: 'Stages-menu `m` on a Bedrock stage prints a message pointing to per-stage configure and writes nothing.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-007: The plan never says what happens to model when a stage's runner switches to or from aws-bedrock.
+## AR-003: Unspecified whether region/token at request time come from the connection or per-model entries; D4 stores region per ent
 
 - Severity: HIGH
-- References: CHANGE_SPEC BH-1 'stage's model kept'; INV-1 requires separate key stores but gives no model carry-over rule.
-- Failure: The plan never says what happens to model when a stage's runner switches to or from aws-bedrock. BH-1 says 'stage's model kept', so a Self hosted model could remain on a Bedrock stage. Settle with: 'Changing runner to or from aws-bedrock leaves model unchanged; `m` validates against the key store of the stage's current runner.'
+- References: self_hosted.py:306-312; CHANGE_PLAN D4.
+- Failure: Unspecified whether region/token at request time come from the connection or per-model entries; D4 stores region per entry and settings() prefers entry values, so stale entries could be used. Plan should say: 'Region and api_key come from the connection (env first), never per-model entries; entries supply only the model ID.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Menu renumbering (Misc 3 to 4) is only an assumption and risk; no test covers input 3 or 4 for scripted users.
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-4 and risk s21.1.i1; the traceability table has no menu-mapping test.
-- Failure: Menu renumbering (Misc 3 to 4) is only an assumption and risk; no test covers input 3 or 4 for scripted users. Settle with: 'Input 3 opens Configure AWS Bedrock, 4 opens Miscellaneous, and the shell test asserts both mappings and rejection of 5.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: Apply-to-all behavior is unspecified for stages with an existing per-stage key or a non-HTTP runner such as claude or co
+## AR-004: Skipping the capabilities probe leaves the Bedrock mode list undefined; Converse replies lacking content or with stopRea
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s6 'copy runner/model/base_url to all stages'; INV-1 covers only the key stores.
-- Failure: Apply-to-all behavior is unspecified for stages with an existing per-stage key or a non-HTTP runner such as claude or codex. Settle with: 'Apply-to-all overwrites runner, model and base_url on every stage, replaces each stage's Bedrock key, and leaves self-hosted-keys.json untouched.'
+- References: self_hosted_http.py:1081-1095; CHANGE_PLAN section 1; CHANGE_SPEC section 8.
+- Failure: Skipping the capabilities probe leaves the Bedrock mode list undefined; Converse replies lacking content or with stopReason max_tokens are unspecified. Plan should say: 'Bedrock uses one json_schema mode via Converse; missing output.message.content raises ValueError naming Converse; no rejected-mode fallback loop.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Behavior of `uncle_selectable_runners` with no installed binaries is unspecified.
+## AR-005: Discovery edge cases are unspecified: empty union catalog, empty or repeated nextToken, and 3xx responses.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1 vs stage-config.sh:294,316 (uncle_no_runner); BH-9 says only 'installed runners plus aws-bedrock'.
-- Failure: Behavior of `uncle_selectable_runners` with no installed binaries is unspecified. The no-runner error at stage-config.sh:316 is unchanged while the picker offers Bedrock. Settle with: 'With no binaries installed the prompt lists only aws-bedrock, and selecting it succeeds.'
+- References: CHANGE_PLAN D5, D8, section 1; AC-4/AC-5.
+- Failure: Discovery edge cases are unspecified: empty union catalog, empty or repeated nextToken, and 3xx responses. Plan should say: 'An empty catalog is an error keeping the prior catalog; empty nextToken ends pagination and a repeated one errors; any 3xx is an error naming region.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: Showing the raw runner in the list (uncle:875) conflicts with unchanged Self hosted display: legacy opencode/aider value
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN audit row uncle:875 'show raw runner' vs s8 Compatibility; stage-config.sh:311 normalizes opencode|aider|aws-bedrock.
-- Failure: Showing the raw runner in the list (uncle:875) conflicts with unchanged Self hosted display: legacy opencode/aider values would now display raw. Settle with: 'The list shows the raw runner only for aws-bedrock; opencode and aider still display as self-hosted.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-012: An unrecognized optional profile argument on `self_hosted.py` is unspecified; a typo would silently write the Self hoste
+## AR-006: settings() still exposes base_url though the spec removes it; precedence of env/stored base_url vs derived value, and wh
 
 - Severity: LOW
-- References: self_hosted.py:1974-1982 uses only args[0] and args[1]; D-2 does not validate args[2].
-- Failure: An unrecognized optional profile argument on `self_hosted.py` is unspecified; a typo would silently write the Self hosted store, breaking INV-1. Settle with: 'A profile argument other than aws-bedrock or absent exits non-zero and writes nothing.'
+- References: CHANGE_PLAN sections 8-9 vs D3; CHANGE_SPEC section 7.
+- Failure: settings() still exposes base_url though the spec removes it; precedence of env/stored base_url vs derived value, and whether saving drops legacy fields, are unspecified. Plan should say: 'Derived base_url always overrides any stored or env value; saving in Configure drops legacy base_url and api_compatibility.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Plan does not say how the Bedrock token moves during fallback apply-to-all.
+## AR-007: Plan never orders region sources for a stored model entry lacking region (legacy).
 
 - Severity: HIGH
-- References: CHANGE_PLAN s6: 'token copied via read_keys/save_keys' but D-2 lists no such subcommand; INV-5 forbids token in argv/output.
-- Failure: Plan does not say how the Bedrock token moves during fallback apply-to-all. Settle with: 'Apply-to-all copies the token only inside self_hosted.py via a subcommand on aws-bedrock-keys.json; the token never passes through shell variables, argv, env or output.'
+- References: self_hosted.py:307-316 takes base_url from the profile entry; D1/D3/D4 give no precedence among entry, connection, config and env.
+- Failure: Plan never orders region sources for a stored model entry lacking region (legacy). Add: 'settings() resolves region as env, stage config, aws-bedrock config, entry.region, connection.region, then region_from_url(legacy base_url); else raises the D3 error.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Invalid profile argument handling is unspecified.
+## AR-008: Plan removes the openai branch but never says which constrained modes Bedrock uses or how Converse treats ANSWER_CAP.
+
+- Severity: HIGH
+- References: self_hosted_http.py:163-178 and :1081-1088; STEP-3 says 'fixed mode list' without naming it.
+- Failure: Plan removes the openai branch but never says which constrained modes Bedrock uses or how Converse treats ANSWER_CAP. Add: 'Bedrock uses only json_schema mode; ollama/vllm/json_object are never tried; max_tokens passes unchanged, with no reasoning reserve.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: Plan does not say whether settings() keeps the scheme/loopback URL check, which conflicts with V3, or how a cleared conn
 
 - Severity: MEDIUM
-- References: D-2 optional trailing arg; self_hosted.py:1970-1982 uses unvalidated positional args, so a typo could write a Bedrock token to self-hosted-keys.json (INV-1).
-- Failure: Invalid profile argument handling is unspecified. Settle with: 'Any profile argument other than aws-bedrock or absent exits non-zero, writes nothing, and never falls back to the Self hosted store.'
+- References: self_hosted.py:310-312 (cleared connection) and :322-323 (http loopback allowed) versus V3/R-2.
+- Failure: Plan does not say whether settings() keeps the scheme/loopback URL check, which conflicts with V3, or how a cleared connection behaves. Add: 'Bedrock deletes the URL scheme/loopback check; empty connection region or token blanks both and raises the missing-region or missing-token error.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: Bedrock connection setup (BH-6) leaves URL validation unspecified.
+## AR-010: Spec S7 regex `[a-z]{2,}` conflicts with plan D2 `[a-z]{2}`; trim and case rules are unstated.
 
 - Severity: MEDIUM
-- References: profile_menu (self_hosted.py:1960-1966) takes URL unvalidated; _bedrock_url_ok exists at line 72; CHANGE_SPEC s10 claims 0600 mode but no test is mapped.
-- Failure: Bedrock connection setup (BH-6) leaves URL validation unspecified. Settle with: 'Configure AWS Bedrock applies _bedrock_url_ok to the Base URL and rejects invalid URLs without writing; failures redact the token via redact_token.'
+- References: CHANGE_SPEC S7 versus CHANGE_PLAN D2.
+- Failure: Spec S7 regex `[a-z]{2,}` conflicts with plan D2 `[a-z]{2}`; trim and case rules are unstated. Add: 'Region is trimmed and matched against D2's regex with no case folding; empty or uppercase is rejected before any request.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: Apply-to-all scope for tokens is ambiguous for stages with other runners.
+## AR-011: Plan is silent on blank Region/token input in shell profile_menu and on a region change whose discovery fails.
 
 - Severity: MEDIUM
-- References: BH-4/AC-3: token copied 'to every stage'; INV-1 only asserts self-hosted-keys.json byte-identical.
-- Failure: Apply-to-all scope for tokens is ambiguous for stages with other runners. Settle with: 'Apply copies the Bedrock token only to stages set to aws-bedrock by this action, in aws-bedrock-keys.json only.'
+- References: self_hosted.py:2036-2043 blank-keeps-old behaviour; plan only says 'commits only on success'.
+- Failure: Plan is silent on blank Region/token input in shell profile_menu and on a region change whose discovery fails. Add: 'Blank input keeps the existing value; on discovery failure neither connection nor catalog changes, including region.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: Plan does not state where token absence is asserted.
+## AR-012: Converse stopReason to finish_reason mapping and a reply without output.message.content are unspecified.
 
 - Severity: LOW
-- References: AC-3 verification greps only '.uncle/config or output'; INV-5 does not name stderr.
-- Failure: Plan does not state where token absence is asserted. Settle with: 'No token appears in stdout, stderr, .uncle/config or argv for any fallback action, including failures.'
+- References: _bedrock_native_post (self_hosted_http.py:204-224) depends on parse_response reason; AC-6 only says 'parse'.
+- Failure: Converse stopReason to finish_reason mapping and a reply without output.message.content are unspecified. Add: 'end_turn→stop, max_tokens→length, tool_use→tool_calls, others pass through; missing content raises ValueError naming the model.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: AC-6 requires a fallback selection to be read by the TUI loader, but the plan never names which TUI function is the conf
+## AR-013: Legacy region_from_url on an arbitrary base_url could derive a region from a non-AWS host.
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-6 verification: 'loads a config written by the fallback test into the TUI config reader'; plan section 16 names no function.
-- Failure: AC-6 requires a fallback selection to be read by the TUI loader, but the plan never names which TUI function is the config reader under test. Plan should say: 'AC-6 test calls <named TUI function> on the fallback-written config and asserts stage_runner == aws-bedrock.'
+- References: CHANGE_PLAN D3 and s1.2.i1; self_hosted.py:318-323 currently allows arbitrary hosts.
+- Failure: Legacy region_from_url on an arbitrary base_url could derive a region from a non-AWS host. Plan should say: region_from_url accepts only https hosts exactly matching bedrock(-runtime).<region>.amazonaws.com, and the result must pass validate_region.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: BH-4/AC-3 'token copied to every stage' is untestable: the plan doesn't say how the per-stage token is keyed in aws-bedr
+## AR-014: No-redirect rule is stated only for discovery; the Converse POST via _request has no redirect policy, so a 3xx could for
 
 - Severity: HIGH
-- References: CHANGE_PLAN section 6: 'token copied via read_keys/save_keys(profile=aws-bedrock)'; BH-4 says 'every stage' with no enumeration.
-- Failure: BH-4/AC-3 'token copied to every stage' is untestable: the plan doesn't say how the per-stage token is keyed in aws-bedrock-keys.json or which stages count as 'all'. Plan should say: 'apply-to-all writes keys[stage]=token for each stage in <explicit list>, and the test asserts exactly that key set.'
+- References: CHANGE_PLAN s1.2.i2 (discovery only); s1.2.i3 reuses _request (self_hosted_http.py:216).
+- Failure: No-redirect rule is stated only for discovery; the Converse POST via _request has no redirect policy, so a 3xx could forward the bearer token. Plan should say: all Bedrock requests refuse redirects and treat 3xx as an error.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: Error behavior for `m` is unspecified for an empty model list, EOF, a blank choice, and a name without the local/ prefix
+## AR-015: Region precedence and validation point are unspecified when stored entry region, config and env differ.
 
 - Severity: MEDIUM
-- References: self_hosted.py:1955-1957 applies local_model() and an OpenCode-worded error; CHANGE_SPEC section 8 only says 'Bedrock-worded message'.
-- Failure: Error behavior for `m` is unspecified for an empty model list, EOF, a blank choice, and a name without the local/ prefix. Plan should say: 'For aws-bedrock, choose-model matches names exactly as stored, exits nonzero with a Bedrock-worded stderr message on an unknown or empty choice, and prints nothing to stdout.'
+- References: CHANGE_PLAN D1/D4; self_hosted.py:307-316 merges entry fields with env overrides.
+- Failure: Region precedence and validation point are unspecified when stored entry region, config and env differ. Plan should say: the final region is merged (env > stage > shared > entry), then validated with validate_region, and entry base_url is never read.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: `d` on a Bedrock stage with no stored key, and `set-key` with empty stdin, are unspecified, so test oracles can disagree
+## AR-016: Token validation covers only CR/LF, and token or response-body leakage in errors is not forbidden.
 
 - Severity: MEDIUM
-- References: self_hosted.py:1974-1982 pops silently on empty key; BH-7 states only the 'clears' case.
-- Failure: `d` on a Bedrock stage with no stored key, and `set-key` with empty stdin, are unspecified, so test oracles can disagree. Plan should say: 'd with no stored key exits 0 and leaves aws-bedrock-keys.json byte-identical.'
+- References: CHANGE_SPEC V4/S7; self_hosted.py:326-327 checks only newline characters.
+- Failure: Token validation covers only CR/LF, and token or response-body leakage in errors is not forbidden. Plan should say: token must be non-empty printable ASCII without whitespace or control characters, and no error or log may include the token or response body.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: The shell test's fallback of awk-extracting function blocks from `uncle` tests copies rather than shipped code, so the d
+## AR-017: Discovery handling of a repeated nextToken and malformed model IDs is unspecified.
 
-- Severity: MEDIUM
-- References: CHANGE_PLAN step 4 and risks: 'check whether uncle can be sourced ... else extract function blocks with awk'; section 16 requires tests to fail on HEAD.
-- Failure: The shell test's fallback of awk-extracting function blocks from `uncle` tests copies rather than shipped code, so the defect-injection-on-HEAD claim can pass or fail for the wrong reason. Plan should say: 'The shell test runs the real `uncle` functions; an extracted copy is allowed only if the test asserts it matches the file text.'
+- Severity: LOW
+- References: CHANGE_PLAN D5 (page cap only); D8 filters whitespace and # only.
+- Failure: Discovery handling of a repeated nextToken and malformed model IDs is unspecified. Plan should say: a repeated nextToken is an error and model IDs must be strings matching a safe pattern before storage or use in URLs.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-023: The prompt format in BH-9 ('installed runners plus aws-bedrock') leaves order and separator unspecified, and doesn't say
+## AR-018: D6 says tests patch `_request`/urlopen but never names the seam for discovery GETs or Converse capture.
+
+- Severity: HIGH
+- References: CHANGE_PLAN D6, R-3; self_hosted_http.py:216 calls _request(url, token, native, timeout, headers=...). The discovery GET transport is unnamed.
+- Failure: D6 says tests patch `_request`/urlopen but never names the seam for discovery GETs or Converse capture. Settle: 'Tests patch one named seam, `self_hosted_http._request`, plus a named discovery GET helper, and assert captured url, headers and body.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-019: Region precedence and migration are unspecified.
+
+- Severity: HIGH
+- References: CHANGE_PLAN D1, D3, D4, Compatibility; settings() at self_hosted.py:299-316 merges env, stage, entry and connection values in a different order.
+- Failure: Region precedence and migration are unspecified. D3 raises ValueError for legacy configs without a region while 'Legacy files read' says they work. Settle: 'Region precedence is env, then stage key, then aws-bedrock.region, then connection region, then entry region, then region_from_url(legacy base_url), else ValueError; a stale base_url is ignored when any region exists.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: The region regex differs between spec (`[a-z]{2,}`) and plan D2 (`[a-z]{2}`).
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1 helper 'installed + aws-bedrock'; stage-config.sh:215 lowercases values; AC-1 only says 'the prompt lists it'.
-- Failure: The prompt format in BH-9 ('installed runners plus aws-bedrock') leaves order and separator unspecified, and doesn't say how uppercase input like 'AWS-Bedrock' is handled. Plan should say: 'Prompt lists uncle_selectable_runners in order, installed first then aws-bedrock; input is lowercased and written lowercase.'
+- References: CHANGE_SPEC S7 vs CHANGE_PLAN D2; AC-3 verification.
+- Failure: The region regex differs between spec (`[a-z]{2,}`) and plan D2 (`[a-z]{2}`). Whitespace, case, empty value, and where validation fires are unspecified. Settle: 'Region is stripped, not lowercased, and matched against D2's regex; empty or invalid is rejected at TUI save, shell save and settings() with no network call.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: The 'fixed mode list' for Bedrock in constrained_completion is never named.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN section 1 (skips capabilities probe); self_hosted_http.py:1081-1094 (caps['modes'], REJECTED).
+- Failure: The 'fixed mode list' for Bedrock in constrained_completion is never named. Tests and code may disagree on modes and on HTTPError fallback. Settle: 'Bedrock mode list is exactly [json_schema], with no fallback; an HTTPError raises the actionable ValueError.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: Discovery edge cases are unspecified: an empty catalog, a repeated nextToken, an oversized page, a redirect, and the 101
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN section 1 and D5; AC-5 lists only HTTP, network, malformed JSON and page-2 failure.
+- Failure: Discovery edge cases are unspecified: an empty catalog, a repeated nextToken, an oversized page, a redirect, and the 101st page. Settle: 'An empty union, redirect, oversized page, repeated token or 101st page raises an actionable ValueError and keeps the prior catalog.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-023: V7 (temperature must not alter reuse keys) has no planned test and the reuse key is undefined for region.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC V7; CHANGE_PLAN R-1 says 'verify only' for self_hosted_performance.py.
+- Failure: V7 (temperature must not alter reuse keys) has no planned test and the reuse key is undefined for region. Settle: 'aws-bedrock-test.py asserts the reuse key is identical with and without each temperature source and includes region.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

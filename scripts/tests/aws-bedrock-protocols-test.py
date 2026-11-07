@@ -23,11 +23,10 @@ class TemperatureTests(unittest.TestCase):
     def test_env_sentinels_absent_from_all_bodies(self):
         env = {'WORKFLOW_AWS_BEDROCK_TEMPERATURE': '0.12345', 'WORKFLOW_SELF_HOSTED_TEMPERATURE': '0.67890'}
         with mock.patch.dict(os.environ, env):
-            for proto in bp.PROTOCOLS:
-                text = json.dumps(http._strip_temperature(bp.build_body(proto, 'm', MSGS, 5, None, SCHEMA)))
-                self.assertNotIn('0.12345', text)
-                self.assertNotIn('0.67890', text)
-                self.assertNotIn('temperature', text)
+            text = json.dumps(http._strip_temperature(bp.build_body(MSGS, 5, None, SCHEMA)))
+            self.assertNotIn('0.12345', text)
+            self.assertNotIn('0.67890', text)
+            self.assertNotIn('temperature', text)
             self.assertEqual(http.sampling({'_profile': 'aws-bedrock'}), {})
 
     def test_schema_property_named_temperature_survives_strip(self):
@@ -51,40 +50,44 @@ class TemperatureTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.TestCase):
-    def test_protocol_normalization(self):
-        for raw, want in (('  OpenAI Compatible ', 'openai'), ('ANTHROPIC', 'anthropic'), ('', 'openai'), (None, 'openai'),
-                          ('Converse API compatible', 'converse')):
-            self.assertEqual(bp.normalize_protocol(raw), want)
-        with self.assertRaises(ValueError):
-            bp.normalize_protocol('grpc')
+    def test_removed_protocol_surface(self):
+        for name in ('normalize_protocol', 'PROTOCOLS'):
+            self.assertFalse(hasattr(bp, name), name)
+
+    def test_region_validation(self):
+        self.assertEqual(bp.validate_region(' us-east-1 '), 'us-east-1')
+        for bad in ('US-EAST-1', '', '  ', None, 'us_east_1', 'us-east', 'a.b-1', 'us-east-1/x'):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                bp.validate_region(bad)
+
+    def test_region_from_url_legacy(self):
+        self.assertEqual(bp.region_from_url('https://bedrock-runtime.eu-west-1.amazonaws.com'), 'eu-west-1')
+        self.assertEqual(bp.region_from_url('https://bedrock.eu-west-1.amazonaws.com'), 'eu-west-1')
+        for bad in ('http://bedrock-runtime.eu-west-1.amazonaws.com', 'https://bedrock-runtime.eu-west-1.example.com',
+                    'https://u:p@bedrock-runtime.eu-west-1.amazonaws.com', 'https://bedrock-runtime.eu-west-1.amazonaws.com:443', '', None):
+            self.assertIsNone(bp.region_from_url(bad), bad)
 
     def test_missing_usage_is_zeros(self):
-        replies = {'openai': {'choices': [{'message': {'content': 'x'}}]},
-                   'anthropic': {'content': [{'type': 'text', 'text': 'x'}]},
-                   'converse': {'output': {'message': {'content': [{'text': 'x'}]}}}}
-        for proto, data in replies.items():
-            self.assertEqual(bp.parse_response(proto, data)['usage'], {'input': 0, 'output': 0}, proto)
+        data = {'output': {'message': {'content': [{'text': 'x'}]}}}
+        self.assertEqual(bp.parse_response(data)['usage'], {'input': 0, 'output': 0})
 
-    def test_missing_required_keys_error_names_protocol(self):
-        for proto, word in (('openai', 'OpenAI'), ('anthropic', 'Anthropic'), ('converse', 'Converse')):
-            with self.assertRaises(ValueError) as cm:
-                bp.parse_response(proto, {})
-            self.assertIn(word, str(cm.exception))
+    def test_missing_required_keys_error_names_converse(self):
+        with self.assertRaises(ValueError) as cm:
+            bp.parse_response({})
+        self.assertIn('Converse', str(cm.exception))
 
-    def test_constrained_output_forces_tool_or_schema(self):
-        self.assertEqual(bp.build_body('openai', 'm', MSGS, 5, schema=SCHEMA)['response_format']['json_schema']['schema'], SCHEMA)
-        self.assertEqual(bp.build_body('anthropic', 'm', MSGS, 5, schema=SCHEMA)['tool_choice'], {'type': 'tool', 'name': 'result'})
-        self.assertEqual(bp.build_body('converse', 'm', MSGS, 5, schema=SCHEMA)['toolConfig']['toolChoice'], {'tool': {'name': 'result'}})
+    def test_constrained_output_forces_tool(self):
+        body = bp.build_body(MSGS, 5, schema=SCHEMA)
+        self.assertEqual(body['toolConfig']['toolChoice'], {'tool': {'name': 'result'}})
+        self.assertEqual(body['toolConfig']['tools'][0]['toolSpec']['inputSchema']['json'], SCHEMA)
 
-    def test_token_only_in_headers_and_final_urls(self):
-        urls = {'openai': 'https://h/v1/chat/completions', 'anthropic': 'https://h/v1/v1/messages',
-                'converse': 'https://h/v1/model/m1/converse'}
-        for proto, url in urls.items():
-            self.assertEqual(bp.build_url(proto, 'https://h/v1/', 'm1'), url)
-            self.assertNotIn('SECRET', url)
-            self.assertNotIn('SECRET', json.dumps(bp.build_body(proto, 'm1', MSGS, 5)))
-            self.assertIn('SECRET', json.dumps(bp.build_headers(proto, 'SECRET')))
-        self.assertNotIn('Authorization', bp.build_headers('anthropic', 'SECRET'))
+    def test_token_only_in_headers_and_final_url(self):
+        url = 'https://bedrock-runtime.us-east-1.amazonaws.com/model/m1/converse'
+        self.assertEqual(bp.build_url('us-east-1', 'm1'), url)
+        self.assertNotIn('SECRET', url)
+        self.assertNotIn('SECRET', json.dumps(bp.build_body(MSGS, 5)))
+        self.assertEqual(bp.build_headers('SECRET')['Authorization'], 'Bearer SECRET')
+        self.assertEqual(set(bp.build_headers('SECRET')), {'Content-Type', 'Authorization'})
 
 
 class RedactionTests(unittest.TestCase):

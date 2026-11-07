@@ -1,66 +1,80 @@
-# Change Spec — Issue 180
-Omitted sections: Performance (none); Security beyond I-N (no new surface); Migration (none); Prototype isolation (n/a)
+# Change spec — Issue 182
+
+Omitted sections: Performance (none); Migration of data stores beyond config (see section 11 inline); Prototype isolation (not a prototype)
 
 ## 1. Change type
-Feature / consistency fix.
+Feature + Refactor + Security (AWS Bedrock runner only).
 
 ## 2. Problem statement
-`aws-bedrock` is selectable in the TUI but not in the `uncle` shell-fallback Configure, which also lacks model choice, apply-to-all and connection setup for it. Baseline B-1, B-2, B-5, B-6.
+Bedrock Configure asks for a URL and wire protocol although the region determines endpoints and Converse works for all providers. Extra surface, extra failure modes, protocol-dependent discovery.
+
+## 3. Current behavior
+Baseline B1-B3.
 
 ## 4. Desired behavior
-Every runner picker offers `aws-bedrock` beside claude, codex, kimi, self-hosted. Selecting it gives model choice from Bedrock-configured models and apply-to-all using the Bedrock connection and `aws-bedrock-keys.json`. A selection made in one surface reads correctly in the other (shared config file).
+Connection = `region` + AWS Bedrock Token. Control `https://bedrock.<region>.amazonaws.com`, runtime `https://bedrock-runtime.<region>.amazonaws.com`. Always Converse. Model picker offers foundation model IDs and inference profile IDs (all pages).
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| BH-1 | MODIFY | Fallback `r`, enter `aws-bedrock` (agent or reviewer stage) | Rejected | Accepted; `<stage>.runner aws-bedrock` written; stage's model kept | AC-1 shell test |
-| BH-2 | MODIFY | Fallback shows a Bedrock-configured stage | Shown as `self-hosted`, Self hosted prompts | Shown as `aws-bedrock` with Bedrock prompts (`Set [r]unner [m]odel, [a]pply AWS Bedrock to all stages...`) | AC-2 |
-| BH-3 | MODIFY | Fallback `m` on Bedrock stage | No model choice (or Self hosted list) | Lists models from `aws-bedrock-keys.json`; selection written to `<stage>.model`; invalid choice leaves config unchanged | AC-2 |
-| BH-4 | MODIFY | Fallback `a` on Bedrock stage | Refused | All stages get `runner aws-bedrock`, model, base_url; Bedrock token copied in `aws-bedrock-keys.json` to every stage; self-hosted-keys.json untouched | AC-2, AC-3 |
-| BH-5 | MODIFY | TUI apply-to-all on Bedrock stage | Refused | Same effect as BH-4, using Bedrock key store | AC-3 py test |
-| BH-6 | ADD | Fallback Configure menu | No Bedrock connection setup | Item "Configure AWS Bedrock" (URL, hidden token, model discovery) writing `aws-bedrock-keys.json` | AC-4 |
-| BH-7 | MODIFY | Fallback `d` on a Bedrock stage | Clears self-hosted key | Also clears that stage's Bedrock key; Self hosted behavior unchanged | AC-2 |
-| BH-8 | PRESERVE | Self hosted/claude/codex/kimi fallback flows; `uncle_stage_runner`; TUI Bedrock picks | B-3, B-4, B-8, B-9 | Unchanged | existing suites + AC-5 |
-| BH-9 | MODIFY | Fallback runner prompt text | Lists installed runners only | Lists installed runners plus `aws-bedrock` | AC-1 |
+| S1 | MODIFY | Configure → AWS Bedrock (TUI and shell) | URL, token, API Compatibility | Only Region and AWS Bedrock Token; no URL/compat field or picker | TUI + shell configure tests |
+| S2 | MODIFY | Set region + token | Discovery per protocol | Discovery GET `{control}/foundation-models` and `{control}/inference-profiles?maxResults=100` with `Authorization: Bearer`, following `nextToken` (URL-encoded) until absent; catalog = union of modelId and inferenceProfileId | discovery tests with fake transport |
+| S3 | MODIFY | Any Bedrock stage request | OpenAI default; URL from config | POST `{runtime}/model/<quote(modelId,safe='')>/converse`, `content-type: application/json`, bearer auth; `:`→`%3A`; reply text from `output.message.content` | request-capture tests |
+| S4 | PRESERVE | Any Bedrock request with temperature configured (config key, env, request-options, per-stage) | no temperature | body has no `temperature` anywhere in `inferenceConfig` or elsewhere; config ignored; reuse key not affected | body-inspection test (B4, I1, I2) |
+| S5 | PRESERVE | Self Hosted request | temperature as before | unchanged | existing Self Hosted tests (B5) |
+| S6 | MODIFY | Discovery failure (HTTP error, network, bad JSON, any page failing) | error | prior catalog kept; actionable error naming region/token | failure tests (B7) |
+| S7 | ADD | Invalid region (not `^[a-z]{2,}(-[a-z]+)+-\d+$`-style) or multi-line token | n/a | rejected at save/settings with clear message; no request sent | validation tests |
+| S8 | MODIFY | Existing config with `base_url`/`api_compatibility` and no region | works per protocol | region derived from legacy URL host when it matches a Bedrock host pattern; else a clear error telling the user to set Region in Configure → AWS Bedrock; legacy keys never used for requests and not an obscure failure | migration tests |
+| S9 | REMOVE | `WORKFLOW_AWS_BEDROCK_API_COMPATIBILITY`, `UNCLE_AWS_BEDROCK_BASE_URL`, `aws-bedrock.base_url` | honored | ignored for Bedrock requests | tests |
+| S10 | ADD | Region override | n/a | `UNCLE_AWS_BEDROCK_REGION` env and `aws-bedrock.region` config key | settings tests |
+| S11 | PRESERVE | Token storage (B6), isolation from Self Hosted (B8), redaction (B9) | as baseline | unchanged | existing tests |
+| S12 | MODIFY | Docs | describe URL/compat | docs/aws-bedrock.md and README describe region+token+Converse | doc grep test/inspection |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| INV-1 | EXISTING | Bedrock token only in aws-bedrock-keys.json; Self hosted store never read/written for Bedrock actions and vice versa | key stores | self_hosted.py key_file/save_keys | AC-3 test compares self-hosted-keys.json hash |
-| INV-2 | EXISTING | Shell dispatch maps aws-bedrock to self-hosted; others unchanged | stage-config.sh | stage-config.sh:311 | aws-bedrock-dispatch-test.sh |
-| INV-3 | EXISTING | `uncle_installed_runners` reflects PATH binaries only | stage-config.sh | :248 | AC-5 |
-| INV-4 | NEW | Fallback and TUI write identical config for equal Bedrock selections | config file | shared config keys | AC-6 |
-| INV-5 | EXISTING | Token never written to `.uncle/config` or printed | config/stdout | save_keys, getpass/stdin | AC-3 test greps |
+| V1 | STRENGTHENED | No Bedrock request contains any temperature/sampling field regardless of config/env | Bedrock only | body builder + `_strip_temperature` + `sampling` | outgoing-body test |
+| V2 | EXISTING | Self Hosted temperature behavior unchanged | Self Hosted | unchanged code | existing suites |
+| V3 | STRENGTHENED | Token only sent over https to hosts derived from a validated region; no http loopback exception | Bedrock | URL builders | URL tests |
+| V4 | EXISTING | Token single-line | Bedrock | settings/save | tests |
+| V5 | EXISTING | Failed discovery keeps prior catalog | Bedrock | refresh | tests |
+| V6 | EXISTING | Bedrock never falls back to Self Hosted credentials | Bedrock | settings | tests |
+| V7 | NEW | Configured temperature does not alter reuse/cache keys for Bedrock | Bedrock | self_hosted_performance.py | test |
 
-No RELAXED or REMOVED invariants.
+RELAXED/REMOVED invariants: none. (Removal of the loopback http allowance in I3 is a strengthening.)
 
 ## 7. Compatibility
-Config file format unchanged. Self hosted menu semantics unchanged. Configure menu: Bedrock inserted as item 3 and Miscellaneous becomes 4 (matches TUI order). TUI behavior for existing runners unchanged.
+Self Hosted and other runners unchanged. Legacy Bedrock key files readable; stale fields ignored, not rewritten until user saves.
 
 ## 8. Error behavior
-Unknown runner still rejected with the existing message. Missing/empty Bedrock model list: `m` prints a Bedrock-worded message pointing to Configure AWS Bedrock and writes nothing. `a` without a Bedrock-selected stage prints "Select AWS Bedrock and configure its connection first." and writes nothing.
+Actionable messages for: missing/invalid region, missing token, HTTP status on discovery (names region and token), unreachable endpoint, malformed response, Converse response lacking `output.message.content`.
 
 ## 10. Security
-Token read hidden, never echoed or placed in config/argv; key file mode 0600 and gitignored via existing `save_keys`.
+Bearer token https-only, no redirects on discovery, redaction preserved, key file 0600 and gitignored.
+
+## 11. Migration
+Legacy `base_url` → region derivation (S8); no automatic file rewrite.
 
 ## 12. Rollback
-Revert the commit; no persisted format changes.
+Revert commit; key file format additive (adds `region`), legacy readers ignore it.
 
 ## 14. Non-goals
-Bedrock wire protocols, discovery logic, dispatch normalization, changing `uncle_installed_runners`, workflow drivers.
+SigV4/IAM credentials, other runners, streaming Converse, changing Self Hosted.
 
 ## 15. Assumptions
-Audit of `self-hosted` special cases is recorded in CHANGE_PLAN (audit table). Menu renumbering is acceptable (assumption; flagged in plan risks).
+Default region when none: none — region required. Live Bedrock verification is manual only.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | `aws-bedrock` is accepted at the `uncle` shell-fallback Runner prompt for both an agent stage and a reviewer stage, writes `<stage>.runner aws-bedrock`, and the prompt lists it; invalid names are still rejected. | New shell test drives configure_stage with piped input in a temp config; asserts config contents and rejection message. |
-| AC-2 | In the fallback, a Bedrock stage shows as aws-bedrock, `m` chooses a model from `aws-bedrock-keys.json` (invalid choice changes nothing), and `d` clears the stage's Bedrock key. | Same shell test with a fixture aws-bedrock-keys.json containing `__opencode_models__`. |
-| AC-3 | Apply-to-all works for Bedrock in the fallback and the TUI: every stage gets runner aws-bedrock, model, base_url and the Bedrock token from aws-bedrock-keys.json; self-hosted-keys.json is byte-identical afterwards; token never appears in `.uncle/config` or output. | Shell test (fallback) plus Python test calling TUI `_apply_opencode_to_all_stages` on a minimal instance; hash and grep assertions. |
-| AC-4 | The fallback Configure menu offers a Configure AWS Bedrock item that stores URL/token in aws-bedrock-keys.json via the Bedrock profile, without touching Self hosted keys. | Python test of `self_hosted.py models\|choose-model\|set-key` with the aws-bedrock profile argument; manual fallback walkthrough. |
-| AC-5 | Existing Self hosted, claude, codex, kimi behavior is unchanged: aws-bedrock-dispatch-test.sh and all existing shell and Python suites pass; `uncle_installed_runners` output unchanged. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh compared with baseline. |
-| AC-6 | A grep audit of `self-hosted` special cases is recorded in the plan with each site marked extended or intentionally Self-hosted-only, and a Bedrock selection made in the fallback is displayed as aws-bedrock by the TUI loader (and vice versa). | Audit table in CHANGE_PLAN; Python test loads a config written by the fallback test into the TUI config reader and asserts stage_runner == aws-bedrock. |
-| AC-7 | `docs/aws-bedrock.md` and README runner lists mention aws-bedrock and the shell-fallback Configure path. | grep for aws-bedrock in README.md and docs/aws-bedrock.md. |
+| AC-1 | No Bedrock request body ever contains a temperature (or sampling) field, even when temperature is configured globally, per stage, via env, or in request-options; configured values do not change Bedrock reuse keys. Self Hosted temperature handling is unchanged. | Python test inspects the outgoing Converse body with temperature configured in each place; existing Self Hosted temperature tests still pass. |
+| AC-2 | Configure → AWS Bedrock (TUI and shell) asks only for Region and AWS Bedrock Token; no Bedrock URL or API Compatibility field, picker, or label remains. | TUI field-list test and shell configure test; grep for removed labels. |
+| AC-3 | Region is validated (format) and token must be a single line; endpoints are https URLs derived only from the region. | Validation unit tests including invalid region, multi-line token, and URL builders. |
+| AC-4 | Model discovery GETs {control}/foundation-models and {control}/inference-profiles?maxResults=100 with bearer auth, follows nextToken (URL-encoded) across all pages, and the catalog contains both modelId and inferenceProfileId values. | Fake-transport test with multi-page profiles incl. a token needing URL encoding. |
+| AC-5 | A discovery failure (any page) keeps the prior catalog and surfaces an actionable error. | Failure-injection tests for HTTP error, network error, malformed JSON, and failure on page 2. |
+| AC-6 | All Bedrock stage requests POST to https://bedrock-runtime.<region>.amazonaws.com/model/<url-encoded modelId>/converse with bearer auth and content-type application/json; ':' is encoded %3A; text, tool-call and schema outputs parse from the Converse response. | Request-capture test asserting URL, headers, body shape; response parsing tests. |
+| AC-7 | Existing configs with base_url/api_compatibility are migrated: region derived from the old Bedrock host when possible, otherwise a clear message instructs setting Region; legacy fields and WORKFLOW_AWS_BEDROCK_API_COMPATIBILITY/UNCLE_AWS_BEDROCK_BASE_URL are never used for requests. | Migration tests with legacy key files and env vars. |
+| AC-8 | OpenAI and Anthropic adapters and protocol selection are removed from Bedrock code. | grep shows no openai/anthropic adapter or api_compatibility reference in Bedrock code; protocols test updated. |
+| AC-9 | docs/aws-bedrock.md and README describe region + token + Converse; Bedrock tests updated; both full suites show no new failures versus baseline. | Doc inspection; run-shell-tests.sh and run-python-tests.sh compared to baseline. |
 

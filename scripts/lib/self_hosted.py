@@ -26,7 +26,6 @@ def runner_directory(prefix):
 
 
 BEDROCK = 'aws-bedrock'
-_BEDROCK_COMPAT_NOTICED = False
 SELF_HOSTED = 'self-hosted'
 
 
@@ -164,61 +163,91 @@ def discover_models(base_url, api_key):
         raise ValueError('Expected an OpenAI-compatible models response with data and model IDs') from None
 
 
-def bedrock_control_url(base_url):
-    """Bedrock control-plane endpoint for the region named in the configured Bedrock URL."""
-    import re
-    host = urlsplit(base_url).hostname or ''
-    match = re.search(r'\.([a-z]{2}(?:-[a-z]+)+-\d)\.', host)
-    if not match:
-        return base_url.rstrip('/')
-    return 'https://bedrock.%s.amazonaws.com' % match.group(1)
+_MODEL_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/-]*$')
 
 
-def discover_anthropic_models(base_url, api_key):
-    """GET <control plane>/foundation-models?byProvider=Anthropic with the bearer token; no redirects."""
+def _discovery_get(url, headers):
+    """The one discovery GET seam (tests patch it): no redirects, at most 2 MB + 1 byte read."""
     from urllib.request import Request, build_opener, HTTPRedirectHandler
-    from urllib.error import HTTPError, URLError
-    url = urlsplit(base_url)
-    if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
-        raise ValueError('Enter an http(s) Bedrock URL without credentials, query, or fragment')
-    if not api_key or any(c in api_key for c in ('\r', '\n')):
-        raise ValueError('Enter an AWS Bedrock token')
+
     class NoRedirect(HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None
-    request = Request(bedrock_control_url(base_url) + '/foundation-models?byProvider=Anthropic',
-                      headers={'Authorization': 'Bearer ' + api_key, 'Accept': 'application/json'})
-    try:
-        with build_opener(NoRedirect).open(request, timeout=10) as response:
-            raw = response.read(2_000_001)
-        if len(raw) > 2_000_000:
-            raise ValueError('Model response is too large')
-        entries = json.loads(raw)['modelSummaries']
-        names = sorted({item['modelId'] for item in entries if isinstance(item, dict) and isinstance(item.get('modelId'), str)
-                        and item['modelId'] and not any(c.isspace() for c in item['modelId']) and '#' not in item['modelId']})
-        if not names:
-            raise ValueError('The endpoint returned no usable models')
-        return [local_model(name) for name in names]
-    except HTTPError as exc:
-        raise ValueError(f'Model discovery failed (HTTP {exc.code}); check the Bedrock URL and token') from None
-    except (URLError, OSError):
-        raise ValueError('Could not reach the Bedrock foundation-models endpoint; check the Bedrock URL') from None
-    except (KeyError, TypeError, json.JSONDecodeError, UnicodeError):
-        raise ValueError('Expected a Bedrock foundation-models response with modelSummaries and model IDs') from None
+
+    with build_opener(NoRedirect).open(Request(url, headers=headers), timeout=10) as response:
+        return response.read(2_000_001)
+
+
+def discover_bedrock_models(region, api_key):
+    """List foundation models and inference profiles for `region` (no redirects, paginated, bearer auth).
+
+    Errors are actionable ValueErrors that never include the token or a response body."""
+    from urllib.parse import quote
+    from urllib.error import HTTPError, URLError
+    import bedrock_protocols as bp
+    region = bp.validate_region(region)
+    validate_bedrock_token(api_key)
+    control = bp.control_url(region)
+
+    def pages(path, query):
+        found, seen, token = [], set(), None
+        for _ in range(101):
+            parts = list(query) + (['nextToken=' + quote(token, safe='')] if token else [])
+            try:
+                raw = _discovery_get(control + path + ('?' + '&'.join(parts) if parts else ''),
+                                     {'Authorization': 'Bearer ' + api_key, 'Accept': 'application/json'})
+            except HTTPError as exc:
+                if 300 <= exc.code < 400:
+                    raise ValueError(f'AWS Bedrock model discovery for region {region} was redirected (HTTP {exc.code}); not followed') from None
+                raise ValueError(f'AWS Bedrock model discovery failed (HTTP {exc.code}); check the Region and token') from None
+            except (URLError, OSError):
+                raise ValueError(f'Could not reach AWS Bedrock in region {region}; check the Region and network') from None
+            if len(raw) > 2_000_000:
+                raise ValueError('AWS Bedrock model response is too large')
+            try:
+                page = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeError):
+                raise ValueError('AWS Bedrock returned a malformed model list') from None
+            if not isinstance(page, dict):
+                raise ValueError('AWS Bedrock returned a malformed model list')
+            found.append(page)
+            token = page.get('nextToken')
+            if not token:
+                return found
+            if not isinstance(token, str) or token in seen:
+                raise ValueError('AWS Bedrock model list pagination did not terminate')
+            seen.add(token)
+        raise ValueError('AWS Bedrock model list has too many pages')
+
+    foundation = pages('/foundation-models', [])
+    profiles = pages('/inference-profiles', ['maxResults=100'])
+    names = [n for n in bp.parse_models(foundation, profiles) if _MODEL_ID.match(n)]
+    if not names:
+        raise ValueError(f'AWS Bedrock returned no usable models for region {region}')
+    return [local_model(name) for name in names]
 
 
 def connection_settings(keys):
     return dict(keys.get('__opencode_connection__') or next(iter(keys.get('__opencode_models__', {}).values()), {}))
 
 
-def refresh_models(keys, base_url, api_key, protocol=None):
-    anthropic = bool(protocol) and str(protocol).strip().lower() in ('anthropic', 'anthropic compatible')
-    names = discover_anthropic_models(base_url, api_key) if anthropic else discover_models(base_url, api_key)
+def refresh_models(keys, base_url, api_key):
+    names = discover_models(base_url, api_key)
     connection = dict(base_url=base_url.rstrip('/'), api_key=api_key)
     # Commit only after a successful discovery; failures retain the old catalog.
     keys['__opencode_connection__'] = connection
     keys['__opencode_models__'] = {name: dict(connection, model=name.removeprefix('local/')) for name in names}
     return names
+
+
+def refresh_bedrock_models(keys, region, api_key):
+    names = discover_bedrock_models(region, api_key)
+    connection = dict(region=region, api_key=api_key)
+    # Commit only after a successful discovery; failures retain the old catalog and connection.
+    keys['__opencode_connection__'] = connection
+    keys['__opencode_models__'] = {name: dict(connection, model=name.removeprefix('local/')) for name in names}
+    return names
+
 
 
 def config_stage(stage, values):
@@ -283,6 +312,59 @@ def config_stage(stage, values):
     return stage
 
 
+def _text_or_empty(value):
+    return value.strip() if isinstance(value, str) else ('' if value is None else str(value))
+
+
+def validate_bedrock_token(token):
+    """Non-empty printable ASCII, no whitespace/control characters. Never echoes the token."""
+    if not isinstance(token, str) or not token:
+        raise ValueError('AWS Bedrock requires a token (set it in Configure → AWS Bedrock Token)')
+    if any(not 0x21 <= ord(c) <= 0x7E for c in token):
+        raise ValueError('AWS Bedrock token must be a single line of printable ASCII without spaces')
+    return token
+
+
+def _bedrock_result(values, stage, stored):
+    """Bedrock connection: region + token from env/connection; entries supply only the model ID (D1, D4, D9)."""
+    import bedrock_protocols as bp
+    profiles = stored.get('__opencode_models__', {})
+    connection = stored.get('__opencode_connection__')
+    selected = values.get(stage + '.model', '')
+    if selected and selected not in profiles:
+        selected = local_model(selected)
+    entry = profiles.get(selected) if selected in profiles else None
+    if not isinstance(entry, dict):
+        entry = None
+    # A cleared connection must not revive stale per-model values.
+    stale = entry if connection is None else None
+    conn = connection if isinstance(connection, dict) else {}
+    region = ''
+    for source in (os.environ.get('UNCLE_AWS_BEDROCK_REGION'), values.get(stage + '.region'), values.get(BEDROCK + '.region'),
+                   conn.get('region'), (stale or {}).get('region')):
+        text = _text_or_empty(source)
+        if text:
+            region = bp.validate_region(text)  # an invalid value never falls through
+            break
+    if not region:
+        for url in (conn.get('base_url'), (stale or {}).get('base_url'), values.get(stage + '.base_url'), values.get(BEDROCK + '.base_url')):
+            region = bp.region_from_url(url) if isinstance(url, str) else None
+            if region:
+                break
+    if not region:
+        raise ValueError('AWS Bedrock Region is not set; set Region in Configure → AWS Bedrock')
+    token = os.environ.get('UNCLE_AWS_BEDROCK_API_KEY') or conn.get('api_key') or stored.get(stage) or (stale or {}).get('api_key') or ''
+    model = (os.environ.get('UNCLE_AWS_BEDROCK_MODEL') or (entry or {}).get('model', selected if entry else '')
+             or values.get(stage + '.model') or values.get(BEDROCK + '.model', ''))
+    if not model and profiles:
+        raise ValueError('No aws bedrock model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (stage, stage))
+    model = model.removeprefix('openai/').removeprefix('local/')
+    if not model:
+        raise ValueError('AWS Bedrock requires a model name')
+    validate_bedrock_token(token)
+    return dict(model=model, base_url=bp.runtime_url(region), api_key=token, region=region)
+
+
 def settings(config, stage):
     from self_hosted_http import _config_values, request_options
     values = _config_values(config)
@@ -290,44 +372,37 @@ def settings(config, stage):
     requested_stage = stage
     profile = resolve_profile(values, requested_stage)
     bedrock = profile == BEDROCK
-    env = 'UNCLE_AWS_BEDROCK_' if bedrock else 'UNCLE_SELF_HOSTED_'
-    shared = BEDROCK if bedrock else 'self-hosted'
-    label = 'AWS Bedrock' if bedrock else 'Self hosted'
+    env = 'UNCLE_SELF_HOSTED_'
     stage = config_stage(stage, values)
     stored = read_keys(config, profile)
-    result = {}
-    for field in ('base_url', 'model'):
-        result[field] = os.environ.get(env + field.upper()) or values.get(stage + '.' + field) or values.get(shared + '.' + field, '')
-    result['api_key'] = os.environ.get(env + 'API_KEY') or stored.get(stage, '')
-    profiles = stored.get('__opencode_models__', {})
-    selected = values.get(stage + '.model', '')
-    if selected and selected not in profiles:
-        selected = local_model(selected)
-    if selected in profiles:
-        profile_entry = profiles[selected]
-        result = dict(model=profile_entry.get('model', selected), base_url=profile_entry.get('base_url', ''), api_key=profile_entry.get('api_key', ''))
-        connection = stored.get('__opencode_connection__')
-        if bedrock and connection is not None and not (connection.get('base_url') and connection.get('api_key')):
-            # The connection was cleared in Configure; discovered profiles must not keep the old URL/token alive.
-            result.update(base_url='', api_key='')
-    elif profiles and not values.get(stage + '.base_url'):
-        raise ValueError('No %s model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (label.lower(), stage, stage))
-    for field in ('model', 'base_url', 'api_key'):
-        result[field] = os.environ.get(env + field.upper()) or result[field]
-    result['model'] = result['model'].removeprefix('openai/').removeprefix('local/')
-    url = urlsplit(result['base_url'])
-    if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
-        raise ValueError('AWS Bedrock requires an http(s) Bedrock URL without credentials, query, or fragment' if bedrock
-                         else 'Self hosted requires an http(s) Base URL without credentials, query, or fragment')
-    if bedrock and url.scheme == 'http' and (url.hostname or '').lower() not in ('localhost', '127.0.0.1', '::1'):
-        raise ValueError('AWS Bedrock requires an https Bedrock URL (http is allowed only for loopback); the token is never sent over cleartext')
-    if not result['model']:
-        raise ValueError('AWS Bedrock requires a model name' if bedrock else 'Self hosted requires a model name')
-    if '\n' in result['api_key'] or '\r' in result['api_key']:
-        raise ValueError('AWS Bedrock token must be a single line' if bedrock else 'API key must be a single line')
-    if not result['api_key']:
-        raise ValueError('AWS Bedrock requires a token (set it in Configure → AWS Bedrock Token)' if bedrock
-                         else 'Self hosted requires an API key (use a placeholder for a server without authentication)')
+    if bedrock:
+        result = _bedrock_result(values, stage, stored)
+    else:
+        result = {}
+        for field in ('base_url', 'model'):
+            result[field] = os.environ.get(env + field.upper()) or values.get(stage + '.' + field) or values.get('self-hosted.' + field, '')
+        result['api_key'] = os.environ.get(env + 'API_KEY') or stored.get(stage, '')
+        profiles = stored.get('__opencode_models__', {})
+        selected = values.get(stage + '.model', '')
+        if selected and selected not in profiles:
+            selected = local_model(selected)
+        if selected in profiles:
+            profile_entry = profiles[selected]
+            result = dict(model=profile_entry.get('model', selected), base_url=profile_entry.get('base_url', ''), api_key=profile_entry.get('api_key', ''))
+        elif profiles and not values.get(stage + '.base_url'):
+            raise ValueError('No self hosted model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (stage, stage))
+        for field in ('model', 'base_url', 'api_key'):
+            result[field] = os.environ.get(env + field.upper()) or result[field]
+        result['model'] = result['model'].removeprefix('openai/').removeprefix('local/')
+        url = urlsplit(result['base_url'])
+        if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
+            raise ValueError('Self hosted requires an http(s) Base URL without credentials, query, or fragment')
+        if not result['model']:
+            raise ValueError('Self hosted requires a model name')
+        if '\n' in result['api_key'] or '\r' in result['api_key']:
+            raise ValueError('API key must be a single line')
+        if not result['api_key']:
+            raise ValueError('Self hosted requires an API key (use a placeholder for a server without authentication)')
     # Callers such as home chat can pass a config path without exporting it.
     # Carry even an explicit {} with that connection, so it cannot accidentally
     # be replaced by options from a different config when the loop starts.
@@ -336,17 +411,6 @@ def settings(config, stage):
         result.update(_request_options=options, _request_options_stage=requested_stage)
     if bedrock:
         result['_profile'] = BEDROCK
-        from bedrock_protocols import normalize_protocol
-        choice = os.environ.get('WORKFLOW_AWS_BEDROCK_API_COMPATIBILITY') or (stored.get('__opencode_connection__') or {}).get('api_compatibility')
-        try:
-            result['_protocol'] = normalize_protocol(choice)
-        except ValueError:
-            # An unrecognised stored value runs as OpenAI; tell the user once per process, never rewrite the store.
-            global _BEDROCK_COMPAT_NOTICED
-            if not _BEDROCK_COMPAT_NOTICED:
-                _BEDROCK_COMPAT_NOTICED = True
-                print('AWS Bedrock: unknown API Compatibility %r; using OpenAI compatible' % choice, file=sys.stderr)
-            result['_protocol'] = 'openai'
     return result
 
 
@@ -2033,14 +2097,33 @@ def profile_menu(config, choose=False, profile=SELF_HOSTED):
         print(name)
         return 0
     old = connection_settings(keys)
+    if bedrock:
+        return _bedrock_configure(config, keys, old, profile)
     url = input('Base URL [' + old.get('base_url', '') + ']: ').strip() or old.get('base_url', '')
     key = getpass.getpass('API key (hidden; blank keeps existing): ').strip() or old.get('api_key', '')
     print('Discovering OpenCode models…', flush=True)
-    names = refresh_models(keys, url, key, old.get('api_compatibility') if bedrock else None)
-    if bedrock and old.get('api_compatibility'):
-        keys['__opencode_connection__']['api_compatibility'] = old['api_compatibility']
+    names = refresh_models(keys, url, key)
     save_keys(config, keys, profile)
-    print(f'Loaded {len(names)} {"AWS Bedrock" if bedrock else "OpenCode"} models: ' + ', '.join(names))
+    print(f'Loaded {len(names)} OpenCode models: ' + ', '.join(names))
+    return 0
+
+
+def _bedrock_configure(config, keys, old, profile):
+    """Shell Configure → AWS Bedrock: Region + token only. Nothing is saved unless discovery succeeds."""
+    import getpass
+    import bedrock_protocols as bp
+    current = _text_or_empty(old.get('region')) or bp.region_from_url(old.get('base_url')) or ''
+    try:
+        region = bp.validate_region(input('Region [' + current + ']: ').strip() or current)
+        token = getpass.getpass('AWS Bedrock Token (hidden; blank keeps existing): ').strip() or old.get('api_key', '')
+        validate_bedrock_token(token)
+        print('Discovering AWS Bedrock models…', flush=True)
+        names = refresh_bedrock_models(keys, region, token)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    save_keys(config, keys, profile)
+    print(f'Loaded {len(names)} AWS Bedrock models: ' + ', '.join(names))
     return 0
 
 

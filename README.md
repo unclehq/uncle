@@ -139,7 +139,7 @@ Coding agents can write code. They should not be trusted to approve their own wo
 Uncle separates the people and agents doing the work from the system establishing the integrity of the change.
 
 * **Work with Uncle while it works.** Ask questions, provide context, redirect implementation, or discuss failures without leaving the terminal.
-* **Use the agents you already have.** Uncle works with Claude, Codex, Kimi, self-hosted models, AWS Bedrock (see [docs/aws-bedrock.md](docs/aws-bedrock.md)), and other coding agents.
+* **Use the agents you already have.** Uncle works with Claude, Codex, Kimi, self-hosted models, AWS Bedrock (Region + token, Converse API; see [docs/aws-bedrock.md](docs/aws-bedrock.md)), and other coding agents.
 
 Note: Cline support was removed. If a saved runner is `cline`, switch it to claude, codex, kimi, self-hosted or aws-bedrock with `uncle` -> Configure.
 * **Independent review.** The agent that writes the code does not approve its own implementation.

@@ -1,16 +1,18 @@
 # AWS Bedrock runner
 
-`aws-bedrock` is a profile of the Self Hosted runner class. It talks to an
-OpenAI-compatible Bedrock endpoint with a bearer token and never sends a
-`temperature` field.
+`aws-bedrock` is a profile of the Self Hosted runner class. It uses the Bedrock
+Converse API for every model, with a bearer token, and never sends a
+`temperature` field. Endpoints are derived from the Region (always https):
+`https://bedrock.<region>.amazonaws.com` (model discovery) and
+`https://bedrock-runtime.<region>.amazonaws.com` (Converse).
 
 ## Configure
 
 In the TUI Configure menu, choose **AWS Bedrock** and set:
 
-- **Bedrock URL**: the endpoint base URL. URLs containing userinfo, a query or
-  a fragment are rejected.
-- **AWS Bedrock Token**: stored in `.uncle/aws-bedrock-keys.json` (mode 0600).
+- **Region**: a lowercase AWS region such as `us-east-1`. There is no URL or
+  API Compatibility field.
+- **AWS Bedrock Token**: a single line of printable ASCII, stored in `.uncle/aws-bedrock-keys.json` (mode 0600).
   The save is refused if the file cannot be added to `.gitignore`.
 
 Then set a stage runner, e.g. `<stage>.runner aws-bedrock`.
@@ -20,7 +22,7 @@ Then set a stage runner, e.g. `<stage>.runner aws-bedrock`.
 When the TUI is unavailable, `uncle` -> Configure uses a shell fallback. Its
 runner prompt lists the installed runners followed by `aws-bedrock` last, and
 accepts `aws-bedrock` case-insensitively (stored lowercase). It works even when
-no runner binaries are on `PATH`. The fallback offers Bedrock URL/token setup
+no runner binaries are on `PATH`. The fallback offers Region/token setup
 with the same validation and 0600 key file as the TUI. Self Hosted model
 discovery (stages-menu `m`) on a Bedrock stage prints a pointer to per-stage
 Configure and writes nothing.
@@ -35,7 +37,7 @@ the key store of the stage's current runner.
 | Config key | Environment variable |
 |---|---|
 | `aws-bedrock.model` / `<stage>.model` | `UNCLE_AWS_BEDROCK_MODEL` |
-| `aws-bedrock.base_url` | `UNCLE_AWS_BEDROCK_BASE_URL` |
+| `<stage>.region` / `aws-bedrock.region` | `UNCLE_AWS_BEDROCK_REGION` |
 | (token) | `UNCLE_AWS_BEDROCK_API_KEY` |
 
 Model lookup order for a Bedrock stage: `UNCLE_AWS_BEDROCK_MODEL`,
@@ -48,9 +50,15 @@ Temperature env/config values and any `temperature` key in
 
 ## Isolation from Self Hosted
 
-Bedrock uses its own key file and model sources. Missing URL, model or token
+Bedrock uses its own key file and model sources. Missing Region, model or token
 raises a Bedrock-worded error; it never falls back to Self Hosted credentials.
 Self Hosted state is not rewritten by this feature.
+
+## Legacy configuration
+
+An existing config with `base_url` but no region derives the region from the
+URL only when its host is exactly `bedrock[-runtime].<region>.amazonaws.com`
+over https; otherwise set Region in Configure → AWS Bedrock.
 
 ## Limitations
 

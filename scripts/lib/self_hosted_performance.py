@@ -254,13 +254,19 @@ class Reuse:
             controls = {k: v for k, v in os.environ.items() if k.startswith(('WORKFLOW_SELF_HOSTED_', 'WORKFLOW_EFFORT_', 'WORKFLOW_AWS_BEDROCK_'))
                         and not any(s in k for s in ('API_KEY', 'SECRET', 'PASSWORD'))
                         and not (bedrock and k.endswith('_TEMPERATURE'))}
-            from self_hosted_http import _config_values
+            from self_hosted_http import _config_values, _strip_temperature
             config = {k: v for k, v in _config_values().items() if k.startswith(('self-hosted.', 'aws-bedrock.')) or
                       k.endswith(('.effort', '.request-options', '.turn-output-tokens', '.final-output-tokens'))}
             if bedrock:  # Bedrock never sends a temperature, so no configured one may split the key
                 config = {k: v for k, v in config.items() if not k.endswith('.temperature')}
+                for k, v in list(config.items()):
+                    if k.endswith('.request-options'):
+                        try:
+                            config[k] = json.dumps(_strip_temperature(json.loads(v) if isinstance(v, str) else v), sort_keys=True)
+                        except ValueError:
+                            pass
             self.key = digest(encoded(dict(version=VERSION, model=values.get('model'),
-                base=urlunsplit(base), options=values['_request_options'], effort=reasoning_effort(values),
+                base=urlunsplit(base), options=(_strip_temperature(values['_request_options']) if bedrock else values['_request_options']), effort=reasoning_effort(values),
                 profile=values.get('_profile'), temperature=None if bedrock else temperature(), prompt=prompt, root=str(policy.root), tools=policy.tools(),
                 schema=schema, name=name, inputs=self.inputs, limit=limit, turns=turns, seconds=seconds,
                 stage=os.environ.get('UNCLE_STATUS_STAGE', ''), delivery=os.environ.get('UNCLE_ARTIFACT_DELIVERY', ''),

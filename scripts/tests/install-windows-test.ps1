@@ -10,6 +10,11 @@ function scoop {
     $global:UncleScoopTestCalls += ($args -join ' ')
     $global:LASTEXITCODE = $global:UncleScoopTestFailure
     if ($global:UncleScoopTestFailure) { return }
+    # `bucket list/add` must not look like an installed app.
+    if ($args[0] -notin @('install', 'update')) {
+        if ($args[0] -eq 'bucket' -and $args[1] -eq 'list') { return 'versions' }
+        return
+    }
     $current = Join-Path $env:SCOOP 'apps/uncle/current'
     New-Item -ItemType Directory -Force $current | Out-Null
     Set-Content (Join-Path $current 'install.json') '{"bucket":"uncle-github"}'

@@ -7205,7 +7205,7 @@ class UncleTUI:
         body_rows = max(0, block_start - top)
         logo_left = left + max(0, (width - LOGO_W) // 2)
         if logo:
-            logo_top = block_start - len(logo)
+            logo_top = max(0, (block_start - len(logo)) // 2)  # centred in the rows above the composer
             for i, line in enumerate(logo):
                 if logo_top < 0:
                     break

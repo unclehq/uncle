@@ -5998,6 +5998,11 @@ class UncleTUI:
         if k == 12:  # Ctrl-L
             self.stdscr.clearok(True)
             return True
+        if k == 7:  # Ctrl-G
+            self._set_mouse(not getattr(self, 'mouse_capture', False))
+            self.chat_error = ('Mouse wheel scrolling ON (Ctrl-G) - hold Shift/Option to select text'
+                               if self.mouse_capture else 'Text selection ON, wheel scrolling off (Ctrl-G)')
+            return True
         if k == curses.KEY_BTAB:
             self.session_auto_mode = not self._next_run_unattended()
             self.chat_error = ('Next run: UNATTENDED (Shift-Tab)' if self.session_auto_mode
@@ -6025,7 +6030,7 @@ class UncleTUI:
     def _control_hint(self, width, build=True):
         """CB-8/INV-6: control keys, Shift-Tab only when terminfo has kcbt."""
         keys = ['Esc interrupt', 'Esc Esc rewind', '^R transcript', '^B background'] if build else []
-        keys += ['^L redraw', 'Up/Down history']
+        keys += ['^L redraw', '^G wheel/select', 'Up/Down history']
         if getattr(self, 'has_kcbt', False):
             keys.append('Shift-Tab mode')
         return '/homepage  / cmds  Tab chat  ' + '  '.join(keys) if build else '/ cmds  Ctrl-P menu  Tab chat  ' + '  '.join(keys)
@@ -7822,6 +7827,16 @@ class UncleTUI:
             pass
 
     # ---- input ----
+    def _set_mouse(self, on):
+        """Turn wheel capture on or off; off leaves the terminal's own text selection."""
+        try:
+            curses.mouseinterval(0)
+            curses.mousemask((getattr(curses, 'BUTTON4_PRESSED', 0) | getattr(curses, 'BUTTON5_PRESSED', 0))
+                             if on else 0)
+            self.mouse_capture = bool(on)
+        except curses.error:
+            self.mouse_capture = False
+
     def _wheel(self, bstate, lines=3):
         """Scroll the home-page history or build transcript by mouse wheel."""
         # macOS's system ncurses (mouse protocol v1) has no button 5: BUTTON5_PRESSED is 0
@@ -8391,14 +8406,11 @@ class UncleTUI:
         except curses.error:
             pass
         self.stdscr.keypad(True)
-        # Mouse wheel scrolls the transcript, as in Claude Code's fullscreen mode.
-        # Only wheel events are requested; hold Shift (Option in some terminals)
-        # to select text with the terminal's own mouse handling.
-        try:
-            curses.mouseinterval(0)
-            curses.mousemask(getattr(curses, 'BUTTON4_PRESSED', 0) | getattr(curses, 'BUTTON5_PRESSED', 0))
-        except curses.error:
-            pass
+        # Capturing the mouse lets the wheel scroll the transcript but stops the
+        # terminal selecting text, so copy/paste works by default. Ctrl-G toggles
+        # capture; UNCLE_MOUSE=1 starts with it on. PageUp/PageDown always scroll.
+        self.mouse_capture = False
+        self._set_mouse(os.environ.get('UNCLE_MOUSE', '') in ('1', 'true', 'yes', 'on'))
         self.input_timeout = 80
         self.stdscr.timeout(self.input_timeout)
         try:

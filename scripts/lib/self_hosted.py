@@ -73,6 +73,10 @@ def _bedrock_url_ok(url):
     return parts.scheme in ('http', 'https') and bool(parts.netloc) and not (parts.username or parts.password or parts.query or parts.fragment)
 
 
+def _bedrock_model(name):
+    return name.removeprefix('openai/').removeprefix('local/')
+
+
 def local_model(name):
     name = name.removeprefix('openai/')
     return name if name.startswith('local/') else 'local/' + name
@@ -80,6 +84,8 @@ def local_model(name):
 
 def read_keys(config, profile=SELF_HOSTED):
     path = key_file(config, profile)
+    # Bedrock model IDs are used as-is; only self-hosted catalogs carry the local/ provider prefix.
+    local_model = _bedrock_model if profile == BEDROCK else globals()['local_model']
     keys = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     # Read old credentials without rewriting them until the user saves config.
     if '__opencode_models__' not in keys and '__aider_models__' in keys:
@@ -224,7 +230,7 @@ def discover_bedrock_models(region, api_key):
     names = [n for n in bp.parse_models(foundation, profiles) if _MODEL_ID.match(n)]
     if not names:
         raise ValueError(f'AWS Bedrock returned no usable models for region {region}')
-    return [local_model(name) for name in names]
+    return names
 
 
 def connection_settings(keys):
@@ -245,7 +251,7 @@ def refresh_bedrock_models(keys, region, api_key):
     connection = dict(region=region, api_key=api_key)
     # Commit only after a successful discovery; failures retain the old catalog and connection.
     keys['__opencode_connection__'] = connection
-    keys['__opencode_models__'] = {name: dict(connection, model=name.removeprefix('local/')) for name in names}
+    keys['__opencode_models__'] = {name: dict(connection, model=name) for name in names}
     return names
 
 
@@ -332,7 +338,7 @@ def _bedrock_result(values, stage, stored):
     connection = stored.get('__opencode_connection__')
     selected = values.get(stage + '.model', '')
     if selected and selected not in profiles:
-        selected = local_model(selected)
+        selected = _bedrock_model(selected)
     entry = profiles.get(selected) if selected in profiles else None
     if not isinstance(entry, dict):
         entry = None
@@ -351,9 +357,16 @@ def _bedrock_result(values, stage, stored):
             region = bp.region_from_url(url) if isinstance(url, str) else None
             if region:
                 break
+    if not region:  # shell fallbacks come last: anything configured wins
+        for source in (os.environ.get('AWS_REGION'), os.environ.get('AWS_DEFAULT_REGION'), os.environ.get('REGION')):
+            text = _text_or_empty(source)
+            if text:
+                region = bp.validate_region(text)
+                break
     if not region:
         raise ValueError('AWS Bedrock Region is not set; set Region in Configure → AWS Bedrock')
-    token = os.environ.get('UNCLE_AWS_BEDROCK_API_KEY') or conn.get('api_key') or stored.get(stage) or (stale or {}).get('api_key') or ''
+    token = (os.environ.get('UNCLE_AWS_BEDROCK_API_KEY') or conn.get('api_key') or stored.get(stage) or (stale or {}).get('api_key')
+             or os.environ.get('AWS_BEARER_TOKEN_BEDROCK') or '')
     model = (os.environ.get('UNCLE_AWS_BEDROCK_MODEL') or (entry or {}).get('model', selected if entry else '')
              or values.get(stage + '.model') or values.get(BEDROCK + '.model', ''))
     if not model and profiles:

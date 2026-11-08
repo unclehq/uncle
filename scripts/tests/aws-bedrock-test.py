@@ -27,7 +27,8 @@ URL = RUNTIME  # legacy base_url form
 TOKEN = 'bedrock-secret-token-xyz'
 SH_TOKEN = 'selfhosted-secret-token-abc'
 SCHEMA = {'type': 'object', 'properties': {'a': {'type': 'string'}}}
-ENV_KEYS = ('UNCLE_CONFIG', 'UNCLE_STATUS_STAGE', 'WORKFLOW_SELF_HOSTED_TEMPERATURE')
+ENV_KEYS = ('UNCLE_CONFIG', 'UNCLE_STATUS_STAGE', 'WORKFLOW_SELF_HOSTED_TEMPERATURE',
+            'AWS_BEARER_TOKEN_BEDROCK', 'AWS_REGION', 'AWS_DEFAULT_REGION', 'REGION')
 
 
 def clean_env():
@@ -555,6 +556,18 @@ class StorageTest(Base):
         self.write_config('runner aws-bedrock\naws-bedrock.model m\n')
         self.assertEqual(self_hosted.settings(str(self.config), 'implementation')['region'], 'eu-west-1')
 
+    def test_configured_token_and_region_beat_shell_fallbacks(self):
+        self.write_config('runner aws-bedrock\naws-bedrock.model m\n')
+        self_hosted.save_keys(str(self.config), {'__opencode_connection__': {'region': 'eu-west-1', 'api_key': TOKEN}}, profile='aws-bedrock')
+        os.environ.update({'AWS_BEARER_TOKEN_BEDROCK': 'shell-token', 'AWS_REGION': 'us-west-2', 'REGION': 'us-west-1'})
+        values = self_hosted.settings(str(self.config), 'implementation')
+        self.assertEqual((values['region'], values['api_key']), ('eu-west-1', TOKEN))
+        # Configured legacy base_url also outranks the shell region.
+        self.write_config('runner aws-bedrock\naws-bedrock.base_url https://bedrock-runtime.ap-south-1.amazonaws.com\naws-bedrock.model m\n')
+        self_hosted.save_keys(str(self.config), {}, profile='aws-bedrock')
+        os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = TOKEN
+        self.assertEqual(self_hosted.settings(str(self.config), 'implementation')['region'], 'ap-south-1')
+
     def test_legacy_base_url_migration(self):
         os.environ['UNCLE_AWS_BEDROCK_API_KEY'] = TOKEN
         for url in ('https://bedrock-runtime.eu-west-1.amazonaws.com', 'https://bedrock.eu-west-1.amazonaws.com'):
@@ -803,6 +816,25 @@ class NativeTransportTests(unittest.TestCase):
         self.assertEqual(seen['body']['inferenceConfig'], {'maxTokens': 9})
         self.assertEqual(out['usage']['completion_tokens'], 2)
 
+    def test_inference_profile_error_retries_with_geo_prefix(self):
+        import io
+        from urllib.error import HTTPError
+        import self_hosted_http as h
+        urls = []
+
+        def fake(url, token, payload, timeout, headers=None):
+            urls.append(url)
+            if len(urls) == 1:
+                raise HTTPError(url, 400, 'bad', {}, io.BytesIO(json.dumps(
+                    {'message': 'on-demand throughput isn\'t supported. Retry with an inference profile'}).encode()))
+            return {'output': {'message': {'content': [{'text': 'ok'}]}}, 'stopReason': 'end_turn',
+                    'usage': {'inputTokens': 1, 'outputTokens': 1}}
+        values = {'_profile': 'aws-bedrock', 'api_key': 'TOK', 'model': 'anthropic.claude-haiku-4-5', 'region': 'us-east-2'}
+        with mock.patch.object(h, '_request', fake):
+            out = h.compatible_post(values, {'messages': [{'role': 'user', 'content': 'x'}], 'max_tokens': 9}, 5)
+        self.assertEqual(out['choices'][0]['message']['content'], 'ok')
+        self.assertTrue(urls[1].endswith('/model/us.anthropic.claude-haiku-4-5/converse'), urls)
+
     def test_missing_content_names_converse_and_model(self):
         for reply in ({}, {'output': {}}):
             with self.assertRaises(ValueError) as caught:
@@ -916,7 +948,7 @@ class DiscoveryTest(Base):
             self.CONTROL + '/inference-profiles?maxResults=100'])
         for _, headers in calls:
             self.assertEqual(headers['Authorization'], 'Bearer ' + TOKEN)
-        self.assertEqual(sorted(names), ['local/amazon.a:0', 'local/amazon.b', 'local/us.amazon.a:0'])
+        self.assertEqual(sorted(names), ['amazon.a:0', 'amazon.b', 'us.amazon.a:0'])
         self.assertEqual(keys['__opencode_connection__'], {'region': REGION, 'api_key': TOKEN})
         self.assertEqual(set(keys['__opencode_models__']), set(names))
 
@@ -966,7 +998,7 @@ class DiscoveryTest(Base):
                                            {'modelId': '/leading'}, {'modelId': 'new\nline'}]}
             return {'inferenceProfileSummaries': []}
         _, names, _ = self.run_discovery(responder)
-        self.assertEqual(names, ['local/ok.model'])
+        self.assertEqual(names, ['ok.model'])
         exc = self.assert_kept(lambda url, n: {'modelSummaries': [{'modelId': 'has space'}, {'modelId': '#x'}]})
         self.assertIn('no usable models', str(exc))
         self.assert_kept(lambda url, n: {})

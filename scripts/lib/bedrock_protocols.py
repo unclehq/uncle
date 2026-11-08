@@ -117,5 +117,10 @@ def parse_models(foundation, profiles):
                 raise ValueError('AWS Bedrock model list response is malformed')
             for item in page.get(summaries, []):
                 if isinstance(item, dict) and isinstance(item.get(field), str) and item[field]:
+                    # A foundation model that lists its inference types but not ON_DEMAND can only be
+                    # invoked through an inference profile (e.g. us.anthropic...); the bare ID returns HTTP 400.
+                    types = item.get('inferenceTypesSupported')
+                    if field == 'modelId' and isinstance(types, list) and types and 'ON_DEMAND' not in types:
+                        continue
                     names.add(item[field])
     return sorted(names)

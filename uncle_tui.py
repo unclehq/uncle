@@ -1000,6 +1000,42 @@ def restore_tty(fd, saved):
 
 
 class UncleTUI:
+    @property
+    def input_buf(self):
+        return self._input_buf
+
+    @input_buf.setter
+    def input_buf(self, value):
+        # Assigning a whole value puts the cursor at its end.
+        self._input_buf = value
+        self.input_cur = len(value)
+
+    def _edit_input(self, k):
+        """Line editing for the text fields: arrows, Home/End, ^A ^E ^K, backspace, delete."""
+        buf = self._input_buf
+        cur = max(0, min(self.input_cur, len(buf)))
+        if k == curses.KEY_LEFT:
+            cur = max(0, cur - 1)
+        elif k == curses.KEY_RIGHT:
+            cur = min(len(buf), cur + 1)
+        elif k in (1, curses.KEY_HOME):
+            cur = 0
+        elif k in (5, curses.KEY_END):
+            cur = len(buf)
+        elif k == 11:
+            buf, cur = "", 0
+        elif k in (curses.KEY_BACKSPACE, 127, 8):
+            if cur:
+                buf, cur = buf[:cur - 1] + buf[cur:], cur - 1
+        elif k == curses.KEY_DC:
+            buf = buf[:cur] + buf[cur + 1:]
+        elif 32 <= k <= 126:
+            buf, cur = buf[:cur] + chr(k) + buf[cur:], cur + 1
+        else:
+            return
+        self._input_buf = buf
+        self.input_cur = cur
+
     VIEWER_PROGRAMS =("cursor", "code", "glow", "bat", "less", "more", "cat")
 
     # Assigning the composer (the ~20 sites that clear or fill it) puts the
@@ -7405,7 +7441,7 @@ class UncleTUI:
         if self.state == "config_edit":
             if getattr(self, "notice", ""):
                 return self.notice
-            return "%s %s (Enter save, Esc back)" % (self.picker_target, self.picker_kind)
+            return "%s %s (Enter save, Esc back, ←/→ move, ^A start, ^E end, ^K clear)" % (self.picker_target, self.picker_kind)
         if self.state == "stage":
             if getattr(self, "notice", ""):
                 return self.notice
@@ -7606,7 +7642,8 @@ class UncleTUI:
             except curses.error:
                 pass
             try:
-                self.stdscr.addstr(row, cx + len(self.input_buf), "█", self.color["cursor"])
+                c = min(self.input_cur, len(shown_input))
+                self.stdscr.addstr(row, cx + c, shown_input[c] if c < len(shown_input) else "█", self.color["cursor"])
             except curses.error:
                 pass
 
@@ -8049,10 +8086,8 @@ class UncleTUI:
         if self.state in ("issue", "config_edit"):
             if k in (10, 13):
                 self._confirm_text()
-            elif k in (curses.KEY_BACKSPACE, 127, 8):
-                self.input_buf = self.input_buf[:-1]
-            elif 32 <= k <= 126:
-                self.input_buf += chr(k)
+            else:
+                self._edit_input(k)
             return
 
     def _go_back(self):

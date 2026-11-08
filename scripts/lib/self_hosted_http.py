@@ -191,6 +191,11 @@ def compatible_post(values, body, timeout, url=None):
         ANSWER_CAP.reset(token)
 
 
+def _profile_prefix(region):
+    head = (region or '').split('-', 1)[0]
+    return {'eu': 'eu', 'ap': 'apac', 'us': 'us'}.get(head, 'global')
+
+
 _CONVERSE_REASONS = {'end_turn': 'stop', 'max_tokens': 'length', 'tool_use': 'tool_calls'}
 
 
@@ -206,14 +211,72 @@ def _bedrock_converse_post(values, body, timeout):
     native = _strip_temperature(bp.build_body(body['messages'], body.get('max_tokens', 4096), body.get('tools'), schema, name))
     region = values.get('region') or bp.region_from_url(values.get('base_url')) or ''
     url = bp.build_url(region, model)
+    def attempt(payload):
+        nonlocal url, model
+        try:
+            return _request(url, token, payload, timeout, headers=bp.build_headers(token))
+        except HTTPError as error:
+            # Newer models only accept an inference-profile ID (geo prefix) for on-demand use.
+            prefix = _profile_prefix(region)
+            if error.code != 400 or model.split('.', 1)[0] in ('us', 'eu', 'apac', 'global', 'jp', 'au', 'ca', 'us-gov'):
+                raise
+            try:
+                raw_body = error.read() or b'{}'
+                error.fp = __import__('io').BytesIO(raw_body)  # keep the body for detail()
+                note = json.loads(raw_body).get('message', '')
+            except (ValueError, AttributeError, OSError):
+                note = ''
+            if 'inference profile' not in str(note).lower():
+                raise
+            model = prefix + '.' + model
+            url = bp.build_url(region, model)
+            return _request(url, token, payload, timeout, headers=bp.build_headers(token))
+
+    def detail(error):
+        # AWS's own explanation (never the token: _request already redacted it), bounded.
+        try:
+            message = json.loads(error.read() or b'{}').get('message', '')
+        except (ValueError, AttributeError, OSError):
+            return ''
+        return ': ' + message[:300].replace('\n', ' ') if isinstance(message, str) and message else ''
+
     try:
-        raw = _request(url, token, native, timeout, headers=bp.build_headers(token))
+        try:
+            raw = attempt(native)
+        except HTTPError as error:
+            # Models differ in their output ceiling; retry once at the smallest common one.
+            limit = native['inferenceConfig']['maxTokens']
+            note = detail(error)
+            if error.code == 400 and 'toolConfig' in native and any(w in note.lower() for w in ('tool', 'schema')):
+                # The model rejects forced tool schemas: ask for the JSON in plain text instead
+                # (the callers already request it in the prompt and validate it).
+                native.pop('toolConfig')
+                try:
+                    return _converse_result(attempt(native), None, model)
+                except HTTPError as again:
+                    again.detail = detail(again)
+                    raise
+            if error.code != 400 or limit <= 4096 or 'token' not in note.lower():
+                error.detail = note
+                raise
+            native['inferenceConfig']['maxTokens'] = 4096
+            try:
+                raw = attempt(native)
+            except HTTPError as again:
+                again.detail = detail(again)
+                raise
     except HTTPError as error:
         if 300 <= error.code < 400:
             raise ValueError('AWS Bedrock request for model %s was redirected (HTTP %d); not followed' % (model, error.code)) from None
-        raise ValueError('AWS Bedrock request failed (HTTP %d); check the Region, token and model %s' % (error.code, model)) from None
+        raise ValueError('AWS Bedrock request failed (HTTP %d); check the Region, token and model %s%s'
+                         % (error.code, model, getattr(error, 'detail', ''))) from None
+    return _converse_result(raw, name if schema else None, model)
+
+
+def _converse_result(raw, schema_name, model):
+    import bedrock_protocols as bp
     try:
-        parsed = bp.parse_response(raw, name if schema else None)
+        parsed = bp.parse_response(raw, schema_name)
     except (ValueError, KeyError, TypeError, AttributeError):
         raise ValueError('AWS Bedrock Converse response for model %s has no output.message.content' % model) from None
     message = {'role': 'assistant', 'content': parsed['text']}

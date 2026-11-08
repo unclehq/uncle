@@ -29,7 +29,7 @@ run_publish() {
         if [[ "${REAL_ASSERT:-0}" == 1 ]]; then
             git init -q . && git config user.email t@t && git config user.name t && git config commit.gpgsign false
             printf '.uncle/\norigin\nverdict\n' > .gitignore; echo a > a.txt
-            git add -A && git commit -q -m init
+            git add -A && git commit --no-gpg-sign -q -m init
             printf '{"audit":"json"}\n' > .uncle/workflow/documents/FINAL_AUDIT.json
             printf 'rendered markdown\n' > .uncle/docs/FINAL_AUDIT.md
             printf 'run1\t%s\t%s\n' "${VCLASS:-READY}" "$(shasum -a 256 .uncle/workflow/documents/FINAL_AUDIT.json | cut -d' ' -f1)" > verdict

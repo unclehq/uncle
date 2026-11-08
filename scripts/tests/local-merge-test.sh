@@ -137,7 +137,7 @@ setup READY
 # An earlier run's merge committed the request to main before this run's worktree was made, so the branch carries it too.
 ( cd "$TMP/src" && mkdir -p .uncle/docs && echo "earlier request" > .uncle/docs/CHANGE_REQUEST.md && git add -f .uncle/docs/CHANGE_REQUEST.md && git commit -qm "earlier request" )
 ( cd "$TMP/src-wt" && git -c commit.gpgsign=false merge -q --no-edit main && echo "run request" > .uncle/docs/CHANGE_REQUEST.md \
-  && git add -f .uncle/docs/CHANGE_REQUEST.md main.c && git -c commit.gpgsign=false commit -qm run )
+  && git add -f .uncle/docs/CHANGE_REQUEST.md main.c && git -c commit.gpgsign=false commit --no-gpg-sign -qm run )
 echo "stray new request" > "$TMP/src/.uncle/docs/CHANGE_REQUEST.md"
 ( . "$ROOT/scripts/lib/worktree-merge.sh"; worktree_merge_into_source uncle/change-it "$TMP/src" >/dev/null 2>&1; echo "rc=$?" > "$TMP/brief-rc" )
 check "stray request in the source checkout does not block the merge" "rc=0" "$(cat "$TMP/brief-rc")"

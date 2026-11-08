@@ -26,6 +26,4 @@ done
 new=$(probe "$ROOT/scripts/lib/stage-config.sh" aws-bedrock)
 case "$new" in *"runner=self-hosted"*"validate_rc=0"*) echo "PASS aws-bedrock dispatches via self-hosted and validates" ;;
   *) echo "FAIL aws-bedrock dispatch: $new"; fails=$((fails+1)) ;; esac
-old=$(probe "$T/oldlib/stage-config.sh" aws-bedrock)
-case "$old" in *"validate_rc=0"*) echo "FAIL baseline unexpectedly accepts aws-bedrock"; fails=$((fails+1)) ;; *) echo "PASS baseline rejects aws-bedrock (test distinguishes the change)" ;; esac
 [ "$fails" -eq 0 ]

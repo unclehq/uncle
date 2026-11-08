@@ -1,64 +1,68 @@
-# Change Spec — Issue 187
+# Change Spec
 
-Omitted sections: Performance (none); Security (none); Migration (none); Prototype isolation (not a prototype)
+Omitted sections: Migration (none); Prototype isolation (not a prototype); Performance (negligible); Security (see 10, brief)
 
 ## 1. Change type
-Feature (TUI layout).
+Feature + bug fix (multi-line paste currently submits per line).
 
 ## 2. Problem statement
-On the home page the status bar floats above the bottom edge with a blank row between composer and status (baseline B-1).
+Home composer cannot take multi-line pasted text (each newline submits) and offers no first-class newline key; Issue 190.
 
 ## 3. Current behavior
-See baseline B-1, B-2.
+See baseline B-1..B-9.
 
 ## 4. Desired behavior
-On the home page the status bar occupies the last screen row; no blank row separates the composer's bottom rule from the status row.
+Enter submits; Ctrl+Enter inserts newline at cursor; pasted text (single or multi-line) is inserted at the cursor verbatim (newlines normalized to LF) without submitting; copy works with the system shortcut.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| S-1 | MODIFY | Draw home page at any height >= minimum usable | Status not on last row | Status text drawn on row h-1 | Fake-screen unit test; manual run |
-| S-2 | MODIFY | Draw home page, non-compact | Blank row between bottom rule and status | Status row = bottom rule row + 1 | Fake-screen unit test |
-| S-3 | PRESERVE | Home page compact | Status adjacent to rule (B-2) | Adjacent and on last row | Unit test |
-| S-4 | PRESERVE | Composer wraps to N rows (1..6) | Status shifts with extra (B-5) | Status stays on h-1; composer block moves up so adjacency holds | Unit test parametrized |
-| S-5 | PRESERVE | chat_error / file choice / '/' typed | Feedback visible (B-6) | Feedback still visible on some row not overlapping the status | Unit test |
-| S-6 | PRESERVE | Build page draw | Layout per B-3 | Identical row positions to baseline | Unit test comparing row offsets |
-| S-7 | PRESERVE | Status text, hints, greeting, logo | B-7 | Unchanged text | Unit test string checks |
-| S-8 | PRESERVE | Chat history on home page | B-4 | History still renders above composer and scrolls | Unit test + manual |
+| SB-1 | PRESERVE | Enter with non-empty text, no picker/menu, not edit mode | submits, clears composer (B-1) | unchanged | unit test AC-1 |
+| SB-2 | ADD | Ctrl+Enter reported by terminal as CSI-u `ESC[13;5u` or modifyOtherKeys `ESC[27;5;13~` | submits (or nothing) | newline inserted at cursor, no submit, cursor advances | unit test AC-2 + manual |
+| SB-3 | ADD | Esc immediately followed by Enter (Alt+Enter / terminals mapping Ctrl+Enter to ESC CR) | Esc handled, Enter submits | newline inserted at cursor, no submit | unit test AC-2 |
+| SB-4 | MODIFY | Bracketed paste `ESC[200~ ... ESC[201~` | each newline submits (B-6) | whole payload inserted at cursor; CR/CRLF normalized to LF; no submit; honors COMPOSER_LIMIT; control chars other than LF/TAB dropped | unit test AC-3 |
+| SB-5 | MODIFY | Terminal without bracketed paste: Enter key arrives while further input already queued | submits per line | treated as newline (paste burst); a lone Enter still submits | unit test AC-3 |
+| SB-6 | ADD | UI start / exit | no paste or enhanced-key modes | bracketed paste and enhanced-key reporting enabled at start and always disabled at exit/crash teardown | unit test + manual |
+| SB-7 | PRESERVE | Backslash-Enter continuation, `\\` escape, edit-mode Enter, picker/slash Enter, Esc+other key, Meta b/f/d | per B-2..B-5, B-8 | unchanged | existing + new tests AC-4 |
+| SB-8 | PRESERVE | Copy selected composer text with system shortcut | works via terminal selection (mouse capture off or terminal bypass modifier) | unchanged; Ctrl-C still quits | manual AC-5 |
+| SB-9 | PRESERVE | Enter with empty composer | no message sent | unchanged | unit test AC-1 |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| V-1 | NEW | On the home page the status row is h-1 and no blank row lies between bottom rule and status | _draw_homepage | draw code | home-layout test |
-| V-2 | EXISTING | Drawing never raises and writes only inside the screen (I-1) | Home/build | put guards | home-layout test at tiny sizes |
-| V-3 | EXISTING | Build page layout unchanged (B-3) | _draw_running | composer offsets | home-layout test |
-| V-4 | EXISTING | Cursor stays on screen and on the composer row (I-2) | composer | cursor guard | home-layout test |
+| SI-1 | NEW | No newline contained in pasted or Ctrl+Enter input ever triggers `send_home_chat` | composer | paste/newline branches never call submit | unit test |
+| SI-2 | EXISTING | Composer length <= COMPOSER_LIMIT; cursor within text | composer | `edit_insert` limit | unit test with oversize paste |
+| SI-3 | NEW | Terminal mode enabled at start is disabled on every exit path | TUI lifecycle | teardown | unit test + manual |
+| SI-4 | EXISTING | `_read_meta_key` restores input timeout on all paths and never blocks indefinitely on a truncated sequence | key reader | try/finally + bounded wait | unit test |
+| SI-5 | EXISTING | Plain Enter semantics B-1..B-5 unchanged | composer | `_chat_key` | existing test + new |
 
 No RELAXED or REMOVED invariants.
 
-## 7. Compatibility requirements
-`_draw_chat_composer` stays callable from `_draw_chat_panel` unchanged.
+## 7. Compatibility
+Backslash-Enter continuation retained as fallback for terminals that cannot signal Ctrl+Enter. Existing `_chat_key(10)` must still submit.
 
-## 8. Error and failure behavior
-On terminals too short to fit all rows, drawing degrades without exceptions (V-2); status row has priority for the last row.
+## 8. Error behavior
+Unterminated bracketed paste (no `ESC[201~` within bounded wait): insert what was received, resume normal input; never hang. Unknown CSI sequences after Esc are pushed back as today.
 
-## 12. Rollback expectations
-Revert the edit to `uncle_tui.py`; no persisted state.
+## 10. Security
+Pasted bytes are sanitized (drop ESC and other C0 controls except LF/TAB) so a paste cannot inject terminal escape sequences or fake paste-end markers into the composer.
 
-## 14. Explicit non-goals
-Any other home layout or status content change; build-page layout; logo/greeting/hint text.
+## 12. Rollback
+Revert the commit; no persistence or schema.
 
-## 15. Assumptions and unresolved questions
-Assumptions A1-A3 from baseline. Feedback line placement is a planning decision (see plan D-2).
+## 14. Non-goals
+Changing mouse-capture defaults; build-page triage composer; custom key-binding config; clipboard integration (OSC 52/pbcopy); making Ctrl+Enter work on terminals that cannot report it.
+
+## 15. Assumptions
+Terminals lacking enhanced-key reporting use backslash-Enter or Esc+Enter. Copy needs no code change (terminal-native selection).
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | On the home page (state menu) at heights of at least 12 rows and widths 40, 80 and 120, the status text is drawn on row h-1. | Automated fake-screen test captures addnstr calls and asserts the status string's row equals h-1; manual run in a real terminal. |
-| AC-2 | On the home page there is no empty row between the composer's bottom rule and the status row, for composers of 1 through 6 wrapped rows and for compact and non-compact heights. | Automated test asserts status_row == bottom_rule_row + 1 across the parametrized cases. |
-| AC-3 | Pending feedback (chat_error, file choice, slash-command hint) remains visible on the home page and never overlaps the status row. | Automated test sets each condition and asserts the feedback text appears on a row different from h-1. |
-| AC-4 | The build page (state running) composer and status row positions are unchanged from before the change, and the status/hint/greeting text is unchanged. | Automated test records row offsets relative to the composer for build state and asserts the baseline offsets (status = composer_row + extra + 2); text assertions. |
-| AC-5 | Drawing the home page at very small sizes (e.g. 5x20, 1x10) raises no exception, and chat history on the home page still renders above the composer. | Automated test draws at tiny sizes and with history entries, asserting no exception and history text present above the composer row. |
-| AC-6 | Existing shell and Python suites show no new failures relative to baseline. | Driver re-runs bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh and compares against baseline. |
+| AC-1 | Enter with non-empty text (no picker/menu/edit mode) sends it via send_home_chat and clears the composer; Enter with empty composer sends nothing. | Python unit test driving handle_key/_chat_key with stub UI (existing home-actions-test.py:396 still passes plus new case). |
+| AC-2 | Ctrl+Enter (CSI-u `ESC[13;5u`, modifyOtherKeys `ESC[27;5;13~`) and Esc+Enter insert a newline at the cursor, advance the cursor, and do not submit or clear the composer. | Python unit test feeding byte sequences through the key reader with a fake screen; plus manual check in a CSI-u capable terminal. |
+| AC-3 | Pasting single- or multi-line text (bracketed paste, or Enter-with-queued-input burst) inserts it at the cursor with CR/CRLF normalized to LF, never submits, respects COMPOSER_LIMIT, and drops escape/control characters other than LF and TAB; an unterminated paste does not hang. | Python unit tests of pure paste parser and key reader; manual paste in real terminal. |
+| AC-4 | Existing composer behaviors are unchanged: backslash-Enter continuation, `\\` escape, edit-mode Enter, picker/slash Enter, Esc+non-Enter key pushback, Meta b/f/d, Ctrl-C quit. | bash scripts/run-python-tests.sh including home-actions-test.py and new home-composer-keys-test.py. |
+| AC-5 | Copying selected composer text works with the standard system shortcut in the terminal (unchanged mechanism), and terminal paste/enhanced-key modes are disabled on exit. | Manual checklist: select composer text (mouse capture off via Ctrl-G or terminal bypass modifier), copy, paste elsewhere; after quitting, run `cat` and confirm pasted text has no ESC[200~ markers; unit test that teardown emits disable sequences. |
 

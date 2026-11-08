@@ -902,6 +902,34 @@ def edit_insert(text, cursor, value, limit=COMPOSER_LIMIT):
     return text[:cursor] + value + text[cursor:], cursor + len(value), ''
 
 
+_PASTE_DROP = set(range(0, 32)) - {9, 10} | {127} | set(range(0x80, 0xA0)) \
+    | set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A))
+
+
+def sanitize_paste(text):
+    """CRLF/CR -> LF; drop ESC, C0 (except LF/TAB), DEL, C1 and bidi controls."""
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    return ''.join(ch for ch in text if ord(ch) not in _PASTE_DROP)
+
+
+def classify_escape(seq):
+    """Classify the bytes that follow ESC: 'paste', 'newline' or None.
+
+    Only Ctrl (modifier 5) Enter is a newline; other modifiers are plain Enter."""
+    if isinstance(seq, bytes):
+        seq = seq.decode('latin-1')
+    if seq in ('\r', '\n'):
+        return 'newline'
+    if not seq.startswith('['):
+        return None
+    body = seq[1:]
+    if body == '200~':
+        return 'paste'
+    if body in ('13;5u', '27;5;13~'):
+        return 'newline'
+    return None
+
+
 def edit_backspace(text, cursor):
     if cursor <= 0:
         return text, 0, ''
@@ -1028,6 +1056,41 @@ def _tty_write(text):
         os.write(_tty_fd(), text.encode('utf-8', 'replace'))
     except (OSError, ValueError, AttributeError):
         pass
+
+
+TERMINAL_MODES_ENABLE = '\x1b[?2004h\x1b[>4;2m'   # bracketed paste + modifyOtherKeys 2 (D-2)
+TERMINAL_MODES_DISABLE = '\x1b[?2004l\x1b[>4;0m'
+
+
+def _terminal_modes_default_enabled():
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except (ValueError, AttributeError):
+        return False
+
+
+class TerminalModes:
+    """Enable/disable bracketed paste and enhanced keys; disable is idempotent
+    and only written if enable was written."""
+
+    def __init__(self, writer=None, enabled=None):
+        self.writer = writer or _tty_write
+        self.enabled = enabled or _terminal_modes_default_enabled
+        self.active = False
+
+    def enable(self):
+        if self.active or not self.enabled():
+            return False
+        self.active = True
+        self.writer(TERMINAL_MODES_ENABLE)
+        return True
+
+    def disable(self):
+        if not self.active:
+            return False
+        self.active = False
+        self.writer(TERMINAL_MODES_DISABLE)
+        return True
 
 
 def _sgr_color(code, base):
@@ -6262,6 +6325,15 @@ class UncleTUI:
             if follow in (ord('b'), ord('f'), ord('d'), curses.KEY_BACKSPACE, 127, 8):
                 self._chat_meta(follow)
                 return follow
+            if follow in (10, 13) and self._plain_composing():
+                self._composer_newline()
+                return follow
+            if follow == ord('['):
+                handled = self._read_csi(screen)
+                if handled is not None:
+                    return handled
+                self.esc_follow = True
+                return None
             try:
                 curses.ungetch(follow)
             except curses.error:
@@ -6270,6 +6342,119 @@ class UncleTUI:
             return None
         finally:
             screen.timeout(saved)
+
+    def _plain_composing(self):
+        return not (getattr(self, 'chat_picker', False) or getattr(self, 'chat_choices', None)
+                    or getattr(self, 'chat_edit', False) or self._chat_menu())
+
+    def _composer_newline(self):
+        cursor = self._composer_cursor()
+        self._set_composer(self.chat_composer[:cursor] + '\n' + self.chat_composer[cursor:], cursor + 1)
+
+    def _read_csi(self, screen):
+        """After ESC [, read one CSI sequence. Returns a key when handled, else
+        None with every byte pushed back unchanged (reverse order)."""
+        screen.timeout(50)
+        read = [ord('[')]
+        body = ''
+        while len(body) < 32:
+            ch = screen.getch()
+            if not isinstance(ch, int) or ch == -1:
+                break
+            read.append(ch)
+            if 0x40 <= ch <= 0x7e:
+                body += chr(ch)
+                break
+            body += chr(ch) if ch < 256 else '?'
+        final = body[-1:] if body and 0x40 <= ord(body[-1]) <= 0x7e and read[-1] == ord(body[-1]) else ''
+        if body == '200~':
+            self._read_paste(screen)
+            return 27
+        enter_mod = None
+        m = re.fullmatch(r'13;(\d+)u|27;(\d+);13~', body)
+        if m:
+            enter_mod = int(m.group(1) or m.group(2))
+        if enter_mod is not None:
+            if enter_mod == 5:
+                if self._plain_composing():
+                    self._composer_newline()
+                return 13
+            self._chat_key(13)
+            return 13
+        m = re.fullmatch(r'(?:27;(\d+);(\d+)~|(\d+);(\d+)u)', body)
+        if m:
+            mod = int(m.group(1) or m.group(4))
+            code = int(m.group(2) or m.group(3))
+            if mod == 5 and code == 99:
+                self._chat_key(3)
+                return 3
+            if mod == 3 and code in (98, 102, 100):
+                self._chat_meta(code)
+                return code
+        if final or read:
+            for ch in reversed(read):
+                try:
+                    curses.ungetch(ch)
+                except curses.error:
+                    pass
+        return None
+
+    def _read_paste(self, screen):
+        """Read a bracketed paste to ESC[201~ (or timeout) and insert it."""
+        screen.timeout(100)
+        end = b'\x1b[201~'
+        data = bytearray()
+        timed_out = False
+        while True:
+            ch = screen.getch()
+            if not isinstance(ch, int) or ch == -1:
+                timed_out = True
+                break
+            if len(data) < COMPOSER_LIMIT * 4:
+                data.append(ch & 0xFF)
+            if data.endswith(end):
+                del data[-len(end):]
+                break
+        payload = bytes(data).replace(b'\x1b[200~', b'')
+        if timed_out:
+            self._paste_tail_until = time.monotonic() + 0.15
+        if not self._plain_composing():
+            return
+        text = sanitize_paste(payload.decode('utf-8', errors='replace'))
+        room = COMPOSER_LIMIT - len(self.chat_composer.encode('utf-8'))
+        text = text.encode('utf-8')[:max(room, 0)].decode('utf-8', errors='ignore')
+        if text:
+            cursor = self._composer_cursor()
+            new, cur, _ = edit_insert(self.chat_composer, cursor, text)
+            self._set_composer(new, cur)
+
+    def _enter_is_burst(self, k):
+        """Nodelay peek: Enter with 2+ keys already pending is a newline."""
+        now = time.monotonic()
+        tail = getattr(self, '_paste_tail_until', 0)
+        if tail and now < tail:
+            self._paste_tail_until = now + 0.15
+            return True
+        screen = getattr(self, 'stdscr', None)
+        if screen is None:
+            return False
+        saved = getattr(self, 'input_timeout', 80)
+        pending = []
+        try:
+            screen.timeout(0)
+            for _ in range(2):
+                nxt = screen.getch()
+                if not isinstance(nxt, int) or nxt == -1:
+                    break
+                pending.append(nxt)
+        finally:
+            screen.timeout(saved)
+        for nxt in reversed(pending):
+            try:
+                curses.ungetch(nxt)
+            except curses.error:
+                pass
+        return len(pending) >= 2
 
     # ---- incremental search (issue 97) ----
     def _chat_search(self, k):
@@ -8476,6 +8661,12 @@ class UncleTUI:
             except (OSError, ValueError) as exc:
                 self.chat_error = sanitize(str(exc))
                 return
+        if k in (10, 13) and chat_composing and self._plain_composing() and self._enter_is_burst(k):
+            try:
+                self._composer_newline()
+            except (OSError, ValueError) as exc:
+                self.chat_error = sanitize(str(exc))
+            return
         if k == 9 and chat_composing and self._chat_menu():
             try:
                 self._chat_accept()
@@ -8878,9 +9069,44 @@ class UncleTUI:
         # answer. A failure here is not an error -- the per-call path remains.
         threading.Thread(target=self._warm_supervisor, daemon=True).start()
         self._start_model_refresh()
+        import atexit
+        modes = getattr(self, 'terminal_modes', None) or TerminalModes()
+        self.terminal_modes = modes
+        atexit.register(modes.disable)
+        saved_signals = {}
+        for name in ('SIGHUP', 'SIGTSTP', 'SIGCONT'):
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue
+            try:
+                saved_signals[sig] = signal.getsignal(sig)
+            except (ValueError, OSError):
+                continue
+        def stopped(signum, frame):
+            modes.disable()
+            signal.signal(signal.SIGTSTP, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGTSTP)
+            signal.signal(signal.SIGTSTP, stopped)
+        def resumed(signum, frame):
+            modes.enable()
+        try:
+            if hasattr(signal, 'SIGTSTP'):
+                signal.signal(signal.SIGTSTP, stopped)
+                signal.signal(signal.SIGCONT, resumed)
+        except (ValueError, OSError):
+            pass
+        modes.enable()
         try:
             self._run_loop()
         finally:
+            modes.disable()
+            for sig, handler in saved_signals.items():
+                if sig == getattr(signal, 'SIGHUP', None):
+                    continue
+                try:
+                    signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
+                except (ValueError, OSError):
+                    pass
             self._close_supervisor_session()
             self._close_home_agent()
             try:

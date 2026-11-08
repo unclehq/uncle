@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 187
+Issue 190
 
-Seeded from [unclehq/uncle#187](https://github.com/unclehq/uncle/issues/187).
+Seeded from [unclehq/uncle#190](https://github.com/unclehq/uncle/issues/190).
 
 ## Change Type
 
@@ -10,19 +10,25 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Home page: move status bar to the very bottom and remove gap above it
+Home composer: Enter submits, Ctrl+Enter inserts newline; support Claude CLI-style copy/paste
 
 ## Motivation
 
 ## Summary
-Change the home page layout so the status bar sits at the very bottom of the page, and remove the blank line (newline) between the composer and the status line.
+Two improvements to the home page composer.
 
-## Desired behavior
-- The status bar is pinned to the very bottom of the home page.
-- No empty line/gap between the composer and the status line.
+## 1. Key bindings
+- **Enter** submits the composer text to the home supervisor.
+- **Ctrl+Enter** inserts a newline in the composer instead of submitting.
 
-## Out of scope
-Any other home page layout or status content changes.
+## 2. Copy/paste
+Allow copy and paste in the composer the way the Claude CLI does, including pasting multi-line text without it being submitted or mangled.
+
+## Acceptance criteria
+- Pressing Enter with non-empty text sends it to the home supervisor and clears the composer.
+- Pressing Ctrl+Enter inserts a newline at the cursor and does not submit.
+- Pasting text (single or multi-line) inserts it at the cursor; newlines in pasted text do not trigger submit.
+- Copying selected composer text works with the standard system shortcut.
 
 ## Observed Current Behavior
 

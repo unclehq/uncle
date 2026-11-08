@@ -1,152 +1,184 @@
-## AR-001: Feedback placement contradicts the unchanged-hint rule in compact mode.
+## AR-001: Plain Enter can arrive as byte 10 or 13 (ICRNL), and key 10 must submit per the protected test, yet the burst detector a
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2 vs CHANGE_SPEC S-7 and AC-3.
-- Failure: Feedback placement contradicts the unchanged-hint rule in compact mode. D-2 replaces the hint row with feedback, but S-7/AC-4 say hints are unchanged. Plan should say: 'In compact anchored mode the feedback line replaces the hint row only while feedback is active; the hint is redrawn when it clears.'
+- References: CHANGE_PLAN s1 (Esc followed by 10/13; burst k in (10,13)) vs R-1 (_chat_key(10) submits). Plan should state: 'Burst detection and Esc+Enter apply to both 10 and 13; lone 10/13 with no pending input and no preceding Esc always submits.'
+- Failure: Plain Enter can arrive as byte 10 or 13 (ICRNL), and key 10 must submit per the protected test, yet the burst detector and Esc+10/13 treat both bytes as newline triggers. Plan does not say whether a lone Esc then Enter(10) is newline or submit, or whether burst applies equally to 10 and 13.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: AC-1 covers only h>=12, but V-1 and AC-2 demand adjacency everywhere.
+## AR-002: Plan never states whether paste, Ctrl+Enter, or burst-Enter apply when the composer is not in plain composing state (pic
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-1 (h>=12) vs V-1/AC-5 (5x20, 1x10); CHANGE_PLAN s12.
-- Failure: AC-1 covers only h>=12, but V-1 and AC-2 demand adjacency everywhere. Behavior for h<12, or a composer taller than the screen, is unspecified. Plan should say: 'Status stays at h-1 and the bottom rule at h-2 whenever h>=2; upper rows are clipped from the top.'
+- References: CHANGE_SPEC SB-4 has no state qualifier; D-3 limits only burst. Plan should say: 'Outside plain composing state (picker, slash menu, edit mode), bracketed paste and Ctrl+Enter sequences are consumed and discarded; they never insert or submit.'
+- Failure: Plan never states whether paste, Ctrl+Enter, or burst-Enter apply when the composer is not in plain composing state (picker/slash menu open, edit mode, empty composer). Burst detection is limited to 'composing' but SB-2/SB-4 are unconditional, and a paste in a picker is undefined.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Clamping row to >=0 conflicts with keeping the status at h-1 with adjacency.
+## AR-003: Paste exceeding COMPOSER_LIMIT is ambiguous: plan caps the read at COMPOSER_LIMIT bytes, but it does not say whether the
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s12 and Risk row 3 ('clamp row >= 0') vs s1 (status_row == h-1).
-- Failure: Clamping row to >=0 conflicts with keeping the status at h-1 with adjacency. A raised row would move the composer or bottom rule. Plan should say: 'The clamp applies only to upper rows (greeting, hint, top rule); composer, bottom rule and status positions derive from h-1 and are never raised.'
+- References: CHANGE_PLAN s12 'total cap COMPOSER_LIMIT bytes'; SI-2 limit on characters. Plan should say: 'The reader drains and discards all paste bytes through ESC[201~ (or timeout) after truncating the insert to the remaining capacity in characters.'
+- Failure: Paste exceeding COMPOSER_LIMIT is ambiguous: plan caps the read at COMPOSER_LIMIT bytes, but it does not say whether the remainder is drained until ESC[201~ or left in the input stream, where it would be interpreted as keystrokes, including Enter submits. Bytes vs characters and the existing composer content also collide with the limit.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: History area size is unspecified when the shifted block leaves no space, e.g.
+## AR-004: Timeout and truncated-paste behavior conflict: partial paste is inserted 'on timeout and continue', but the remaining pa
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 (body_rows/top) and AC-5.
-- Failure: History area size is unspecified when the shifted block leaves no space, e.g. a 6+ row composer. It is unclear whether body_rows goes to 0 or negative, and what _text_view holds. Plan should say: 'body_rows = max(0, greeting_block_start - top); with 0 rows no history is drawn and _text_view is empty.'
+- References: CHANGE_PLAN s12 'on timeout insert partial and continue'; SI-1. Plan should say: 'After an unterminated paste times out, the composer stays in paste-tail mode so that Enter within the next burst is treated as newline per SB-5.'
+- Failure: Timeout and truncated-paste behavior conflict: partial paste is inserted 'on timeout and continue', but the remaining paste bytes arriving later would then be handled as ordinary keys, where their newlines submit. This contradicts SI-1 and AC-3.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Cursor placement when anchored is unspecified.
+## AR-005: D-2 is undecided: it contains conflicting text on kitty flags (1 vs 5, 'use ...
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC V-4 vs CHANGE_PLAN s1.
-- Failure: Cursor placement when anchored is unspecified. V-4 says the cursor stays on the composer row, but the composer now moves as it wraps and may be clipped. Plan should say: 'The cursor goes on the last wrapped composer row at the computed column, clamped to the screen.'
+- References: CHANGE_PLAN s1 'ESC[>1u ... use ESC[>5u? see D-2'; D-2. Plan should say: 'Startup emits exactly ESC[?2004h and ESC[>4;2m; kitty protocol is not enabled; teardown emits ESC[?2004l and ESC[>4;0m.'
+- Failure: D-2 is undecided: it contains conflicting text on kitty flags (1 vs 5, 'use ... choose ... or skip') and the code uses ESC[<u pop without a matching push guarantee. Implementers, tests and checklists cannot agree on which exact strings are emitted at start.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: D-2 provides one feedback row, but three feedback conditions (chat_error, file choice, slash hint) can be active togethe
+## AR-006: Control-character handling for pasted TAB and for modifiers other than Ctrl (e.g.
 
 - Severity: LOW
-- References: CHANGE_PLAN D-2 (single row at row+4) vs CHANGE_SPEC AC-3.
-- Failure: D-2 provides one feedback row, but three feedback conditions (chat_error, file choice, slash hint) can be active together. Priority is unspecified. Plan should say: 'When several are active, show chat_error first, then file choice, then slash hint; only one is drawn.'
+- References: CHANGE_SPEC AC-2 lists only 13;5u and 27;5;13~. Plan should say: 'CSI-u/modifyOtherKeys Enter with any modifier other than Ctrl is treated as plain Enter (submit), and all other unknown CSI sequences are pushed back unchanged.'
+- Failure: Control-character handling for pasted TAB and for modifiers other than Ctrl (e.g. Shift+Enter ESC[13;2u, Alt+Enter ESC[13;3u) is unspecified. Modifyotherkeys level 2 will also report these for other keys, and the plan states only the 5-modifier cases.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: AC-1/AC-2 hold for h>=12, but the plan clamps row>=0 and keeps status at h-1 on tiny terminals, so V-1 adjacency can't h
+## AR-007: Burst detection (Enter with any pending input becomes newline) conflicts with SB-1/SI-5 'plain Enter unchanged' and AC-1
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-1 says h>=12, AC-2 has no height bound; CHANGE_PLAN section 12 and risk row 3 clamp row>=0.
-- Failure: AC-1/AC-2 hold for h>=12, but the plan clamps row>=0 and keeps status at h-1 on tiny terminals, so V-1 adjacency can't hold there. Plan should say: below the height that fits all rows, only status==h-1 and no exception are required, and upper rows drop in order greeting, hint, top rule.
+- References: CHANGE_PLAN s1 (handle_key burst check) vs s3 'byte-for-byte unchanged'; risk s22 accepts rapid double Enter as newline.
+- Failure: Burst detection (Enter with any pending input becomes newline) conflicts with SB-1/SI-5 'plain Enter unchanged' and AC-1: key-repeat or fast typing submits as newline. Settle: 'Burst detection applies only when at least 2 further bytes are already pending; otherwise Enter submits.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The plan doesn't say what happens when the wrapped composer rows exceed the available space.
+## AR-008: modifyOtherKeys level 2 makes Ctrl-C, Meta b/f/d and other modified keys arrive as CSI 27;..~ sequences that are only 'p
 
 - Severity: HIGH
-- References: CHANGE_PLAN section 1 pre-computes extra with no cap; the test strategy says '6+' rows.
-- Failure: The plan doesn't say what happens when the wrapped composer rows exceed the available space. Anchoring derives row from extra, so a 6+ row composer can cover history or go negative. Plan should say: composer rows are capped at min(extra, h-4), with the cursor on the last visible composer row (V-4).
+- References: CHANGE_PLAN D-2 and risk s22 item 1 ('Not blocking'); AC-4 lists Ctrl-C quit and Meta b/f/d.
+- Failure: modifyOtherKeys level 2 makes Ctrl-C, Meta b/f/d and other modified keys arrive as CSI 27;..~ sequences that are only 'pushed back as unknown', risking AC-4 regressions. Settle: 'Map 27;mod;code~ and CSI-u for Ctrl-C and Meta-b/f/d to legacy keycodes, or use level 1 only.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: D-2 hides the compact hint while feedback is active, which conflicts with S-5/S-7 (hint text unchanged).
+## AR-009: D-2 is self-contradictory on whether kitty flags are emitted (ESC[>1u vs ESC[>5u vs none), yet teardown writes ESC[<u un
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-2 vs CHANGE_SPEC S-5, S-7 and AC-3.
-- Failure: D-2 hides the compact hint while feedback is active, which conflicts with S-5/S-7 (hint text unchanged). Behavior is also unspecified when the greeting is hidden or the feedback text is wider than the terminal. Plan should say: the hint is intentionally hidden during feedback in compact mode, and S-7 carves out this exception.
+- References: CHANGE_PLAN s1 ('use ESC[>5u? see D-2') and D-2 text; teardown list includes ESC[<u.
+- Failure: D-2 is self-contradictory on whether kitty flags are emitted (ESC[>1u vs ESC[>5u vs none), yet teardown writes ESC[<u unconditionally. Settle: 'Emit only ESC[>4;2m and ESC[?2004h; no kitty sequences; teardown writes ESC[>4;0m and ESC[?2004l only.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: The history area (body_rows/top) is undefined when the shifted block leaves zero or negative rows above it, so the _text
+## AR-010: Paste and Ctrl+Enter behavior is unspecified when the composer isn't in plain composing state (picker/slash menu, edit m
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 1 and risk row 1 say top equals the first history row, with no rule for body_rows<=0.
-- Failure: The history area (body_rows/top) is undefined when the shifted block leaves zero or negative rows above it, so the _text_view mouse mapping is unspecified. Plan should say: when body_rows<=0, no history is drawn and _text_view is an empty region.
+- References: CHANGE_PLAN D-3 gates burst only; SB-2/SB-4 triggers carry no state qualifier; AC-4 preserves picker/edit Enter.
+- Failure: Paste and Ctrl+Enter behavior is unspecified when the composer isn't in plain composing state (picker/slash menu, edit mode). Only burst detection is gated on composing. Settle: 'Paste and Ctrl+Enter/Esc+Enter are consumed with no insert and no submit unless the plain composer has focus.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The AC-4 baseline offsets are cited but never given as values, so the regression test has no recorded oracle.
+## AR-011: Over-limit or timed-out paste is ambiguous: leftover bytes and the ESC[201~ marker may be read as keystrokes, including
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-4 'status = composer_row + extra + 2'; CHANGE_PLAN section 10 gives no numbers.
-- Failure: The AC-4 baseline offsets are cited but never given as values, so the regression test has no recorded oracle. Plan should say: baseline offsets are captured as literal constants in the test, taken from the unmodified code before the change.
+- References: CHANGE_PLAN s12 (total cap COMPOSER_LIMIT bytes; on timeout insert partial and continue) vs SI-1.
+- Failure: Over-limit or timed-out paste is ambiguous: leftover bytes and the ESC[201~ marker may be read as keystrokes, including Enter that submits. Settle: 'Read to the end marker even past the limit, discarding excess; after a timeout, LF/CR within the same burst remain newlines.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Compact mode with feedback active is ambiguous: D-2 says feedback replaces the hint row, but the plan never says how lon
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-2 and CHANGE_SPEC AC-3; the plan never states clipping or hint suppression.
-- Failure: Compact mode with feedback active is ambiguous: D-2 says feedback replaces the hint row, but the plan never says how long text is clipped or whether the hint is hidden. Add: 'In compact anchored mode, feedback is clipped to the screen width at row+1 and the hint is not drawn while feedback is active.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-013: Feedback text carries user-controlled content (a file choice, or a chat_error that may embed a path or typed text).
+## AR-012: Esc followed by Enter changes meaning to newline, but behavior with a picker or edit mode open is unspecified.
 
 - Severity: LOW
-- References: CHANGE_PLAN D-2 relocates feedback drawing and says nothing about sanitization; S-7 only requires that the text be unchanged.
-- Failure: Feedback text carries user-controlled content (a file choice, or a chat_error that may embed a path or typed text). The plan does not say it is stripped of control characters before addnstr. Add: 'Feedback and composer text is drawn through put with non-printable characters replaced, unchanged from the current behavior.'
+- References: CHANGE_SPEC SB-3 vs SB-7 (Esc+other key pushback preserved).
+- Failure: Esc followed by Enter changes meaning to newline, but behavior with a picker or edit mode open is unspecified. Settle: 'Esc+Enter inserts a newline only when the plain composer has focus; otherwise old Esc then Enter behavior stays.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: AC-1 requires status on h-1 only for h>=12, while AC-5 and plan section 12 cover h<12 (5x20, 1x10).
+## AR-013: Burst detection turns any Enter with queued input into a newline, so behavior depends on timing, and it is unspecified w
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-1 ('at least 12 rows') vs AC-5 and CHANGE_PLAN section 12; the plan's own test heights include 5.
-- Failure: AC-1 requires status on h-1 only for h>=12, while AC-5 and plan section 12 cover h<12 (5x20, 1x10). The plan doesn't say whether status must be on h-1 at tiny heights. Settle it: 'For h<12 only no-exception, in-bounds writes and history above the composer are asserted; status is on h-1 whenever h>=2.'
+- References: CHANGE_PLAN D-3 and section 1 (handle_key peek via nodelay getch+ungetch); SB-5 says only 'further input already queued'.
+- Failure: Burst detection turns any Enter with queued input into a newline, so behavior depends on timing, and it is unspecified whether it applies during an active bracketed paste. Plan should say: 'Burst detection applies only when bracketed paste is not active, and never submits.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: The plan never says which rows win when the composer's 1 to 6+ wrapped rows plus greeting, hint and rules exceed the hei
+## AR-014: Sanitization drops ESC and C0 only.
 
 - Severity: HIGH
-- References: CHANGE_PLAN section 12 ('upper rows clip via put') vs section 16 ('1..6+ wrapped rows' at height 5) and V-4.
-- Failure: The plan never says which rows win when the composer's 1 to 6+ wrapped rows plus greeting, hint and rules exceed the height. Settle it: 'Priority from h-1 upward: status, bottom rule, composer rows (newest kept, cursor row visible), top rule, hint, greeting; lower-priority rows are dropped, never overlapped.'
+- References: CHANGE_PLAN D-4; CHANGE_SPEC section 10 and AC-3 list only ESC and C0.
+- Failure: Sanitization drops ESC and C0 only. C1 controls (including 8-bit CSI 0x9B), DEL and Unicode bidi/format characters are unspecified. Plan should say: 'sanitize_paste also drops DEL, C1 controls and U+202A-202E, U+2066-2069.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: D-2 places feedback on row+4 (or over the hint in compact mode) but doesn't cover clipping, several feedbacks active at
+## AR-015: The plan does not say how a fake paste-end marker inside a payload is handled.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC section 10 ('fake paste-end markers'); CHANGE_PLAN section 12 says only 'read until ESC[201~ or timeout/limit'.
+- Failure: The plan does not say how a fake paste-end marker inside a payload is handled. Bytes after an early ESC[201~ could be parsed as keys, including Enter. Plan should say: 'The reader returns at the first ESC[201~. Nested ESC[200~ is dropped as data.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: Paste overflow and timeout behavior is unspecified.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN section 12 ('total cap COMPOSER_LIMIT bytes; on timeout insert partial and continue'); SB-4.
+- Failure: Paste overflow and timeout behavior is unspecified. After COMPOSER_LIMIT is reached, the remaining bytes may be dispatched as keystrokes (including Enter, which submits). Plan should say: 'On overflow, discard remaining bytes until ESC[201~ or timeout; never dispatch them as keys.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: Mode teardown does not name signal exits (SIGTERM, SIGHUP) or suspend/resume (SIGTSTP).
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN R-3, section 15 and SI-3 ('every exit path') against only 'teardown (~9102)'.
+- Failure: Mode teardown does not name signal exits (SIGTERM, SIGHUP) or suspend/resume (SIGTSTP). 'Not in test' detection is also undefined. Plan should say: 'Disable strings are emitted from finally, atexit and SIGTERM/SIGHUP handlers, and modes are re-emitted on resume from SIGTSTP.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: Burst detection is untestable as written: 'input pending' has no stated window and no fake-screen contract.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2 and AC-3 ('each feedback condition').
-- Failure: D-2 places feedback on row+4 (or over the hint in compact mode) but doesn't cover clipping, several feedbacks active at once, or multi-row file choices. Settle it: 'At most one feedback line is drawn (error, then file choice, then slash hint); with no free row it replaces the hint row, then the greeting.'
+- References: CHANGE_PLAN s1 'peek (nodelay getch + ungetch)'; SB-5 'further input already queued'.
+- Failure: Burst detection is untestable as written: 'input pending' has no stated window and no fake-screen contract. Say: 'Enter is a newline iff a nodelay getch immediately returns a key, which is pushed back; otherwise Enter submits.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: The plan has no definition of 'compact', yet tests parametrize compact and non-compact heights.
+## AR-019: D-2 and the approach text contradict each other (ESC[>1u vs ESC[>5u vs skip kitty), so the exact startup and teardown st
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-2; CHANGE_PLAN D-1 and risk row 3 cite line 7323 with no threshold.
-- Failure: The plan has no definition of 'compact', yet tests parametrize compact and non-compact heights. Settle it: 'Compact is the existing condition at line 7323, stated as a height threshold, and each test height {5,12,20,30,50} is labeled compact or non-compact.'
+- Severity: HIGH
+- References: CHANGE_PLAN s1 and D-2; section 16 'teardown emits disable strings'.
+- Failure: D-2 and the approach text contradict each other (ESC[>1u vs ESC[>5u vs skip kitty), so the exact startup and teardown strings have no oracle. Say: 'Startup writes exactly ESC[?2004h and ESC[>4;2m, no kitty; teardown writes ESC[?2004l and ESC[>4;0m.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: The plan doesn't say how long history is cut or what _text_view['top'] is with empty history.
+## AR-020: Paste overflow is unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 1 (body_rows/top) and risk row 1; AC-5.
-- Failure: The plan doesn't say how long history is cut or what _text_view['top'] is with empty history. Settle it: 'History shows the newest entries that fit above the greeting block; with no history rows, _text_view[top] is the greeting row.'
+- References: CHANGE_PLAN s12 'total cap COMPOSER_LIMIT bytes' vs SI-2 and AC-3.
+- Failure: Paste overflow is unspecified. A byte cap on the read and a character limit in edit_insert coexist, and nothing says whether the excess is truncated or drained. Say: 'Paste is read to ESC[201~, truncated to remaining composer capacity, and the rest is discarded.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: AC-4 says build status = composer_row + extra + 2, but the plan's alternative A calls the old offset '+3'.
+## AR-021: Paste and Ctrl+Enter in non-composing states (picker, menu, edit mode) are undefined.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-4 vs CHANGE_PLAN section 2 alternative A ('+3').
-- Failure: AC-4 says build status = composer_row + extra + 2, but the plan's alternative A calls the old offset '+3'. The offsets conflict and no fixed oracle is named. Settle it: 'The test hard-codes the baseline build offsets from BASELINE_REPORT B-3 rather than computing them from the code under test.'
+- References: CHANGE_PLAN D-3 'composing state'; SB-2 and SB-4 have no state qualifier; AC-1 excludes picker/menu/edit.
+- Failure: Paste and Ctrl+Enter in non-composing states (picker, menu, edit mode) are undefined. Say: 'Outside plain composing, paste and Ctrl+Enter are swallowed and never reach picker or edit-mode Enter handlers.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: After a paste read timeout, 'insert partial and continue' lets the remaining pasted lines arrive as plain Enters and sub
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s12 'per-read timeout ~50 ms'; CHANGE_SPEC s8; SI-1.
+- Failure: After a paste read timeout, 'insert partial and continue' lets the remaining pasted lines arrive as plain Enters and submit, violating SI-1. Say: 'After a paste timeout, Enter is a newline until input has been idle for N ms.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-023: The UNCLE_ENHANCED_KEYS=0 and 'not in test' gating is undefined for the teardown test.
+
+- Severity: LOW
+- References: CHANGE_PLAN s15 vs R-3 and s16.
+- Failure: The UNCLE_ENHANCED_KEYS=0 and 'not in test' gating is undefined for the teardown test. Say: 'Disable strings are written iff enable strings were written, and the writer is injectable.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

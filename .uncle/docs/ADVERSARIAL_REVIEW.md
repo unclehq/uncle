@@ -1,152 +1,184 @@
-## AR-001: Feedback placement contradicts the unchanged-hint rule in compact mode.
+## AR-001: Operator's early message queues behind preload on session.lock, but preload has a 60s deadline, so the first message cou
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2 vs CHANGE_SPEC S-7 and AC-3.
-- Failure: Feedback placement contradicts the unchanged-hint rule in compact mode. D-2 replaces the hint row with feedback, but S-7/AC-4 say hints are unchanged. Plan should say: 'In compact anchored mode the feedback line replaces the hint row only while feedback is active; the hint is redrawn when it clears.'
+- References: CHANGE_PLAN s1 (60s deadline) and R-5/SI-1 'Queue, never interleave' versus CHANGE_SPEC AC-5 and AC-9.
+- Failure: Operator's early message queues behind preload on session.lock, but preload has a 60s deadline, so the first message could wait up to 60s, contradicting AC-9. Plan should say: an operator turn arriving during preload cancels the preload (or the wait is capped at N seconds) rather than queueing.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: AC-1 covers only h>=12, but V-1 and AC-2 demand adjacency everywhere.
+## AR-002: Guard placement conflicts: spec puts the SB-4 guard in run() and in _preload_home_agent, and D-1 covers only opt-out/run
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-1 (h>=12) vs V-1/AC-5 (5x20, 1x10); CHANGE_PLAN s12.
-- Failure: AC-1 covers only h>=12, but V-1 and AC-2 demand adjacency everywhere. Behavior for h<12, or a composer taller than the screen, is unspecified. Plan should say: 'Status stays at h-1 and the bottom rule at h-2 whenever h>=2; upper rows are clipped from the top.'
+- References: CHANGE_SPEC SB-4 'run guard' and SI-5 'guard in _preload_home_agent'; CHANGE_PLAN s9 D-1.
+- Failure: Guard placement conflicts: spec puts the SB-4 guard in run() and in _preload_home_agent, and D-1 covers only opt-out/runner. Plan should say: _preload_home_agent returns before any session call if UNCLE_NOUI=='1', UNCLE_HOME_AGENT=='0' or runner != 'claude', and run() starts the thread only when the same checks pass.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Clamping row to >=0 conflicts with keeping the status at h-1 with adjacency.
+## AR-003: Unspecified: the operator's first message creating the session lazily before the preload thread does.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s12 and Risk row 3 ('clamp row >= 0') vs s1 (status_row == h-1).
-- Failure: Clamping row to >=0 conflicts with keeping the status at h-1 with adjacency. A raised row would move the composer or bottom rule. Plan should say: 'The clamp applies only to upper rows (greeting, hint, top rule); composer, bottom rule and status positions derive from h-1 and are never raised.'
+- References: CHANGE_PLAN s10 'agent_lock guards session creation'; SB-3 only covers preload already in flight.
+- Failure: Unspecified: the operator's first message creating the session lazily before the preload thread does. Plan should say: whichever caller holds agent_lock first creates the session, the other reuses it, and the preload turn is sent only if no operator turn has started.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: History area size is unspecified when the shifted block leaves no space, e.g.
+## AR-004: Behavior on preload timeout is unspecified: after 60s the session may hold a partial turn, and no rule says keep or clos
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 (body_rows/top) and AC-5.
-- Failure: History area size is unspecified when the shifted block leaves no space, e.g. a 6+ row composer. It is unclear whether body_rows goes to 0 or negative, and what _text_view holds. Plan should say: 'body_rows = max(0, greeting_block_start - top); with 0 rows no history is drawn and _text_view is empty.'
+- References: CHANGE_PLAN s1 '60s deadline', s10 D-2, SB-8 'timeout' silent with 'lazy start remains'.
+- Failure: Behavior on preload timeout is unspecified: after 60s the session may hold a partial turn, and no rule says keep or close. Plan should say: on timeout the session is closed and agent_session cleared so the next message restarts it lazily.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Cursor placement when anchored is unspecified.
+## AR-005: Snapshot rules unspecified: whether the 6000-char cap is total or per-section, which section is truncated first, and wha
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC V-4 vs CHANGE_PLAN s1.
-- Failure: Cursor placement when anchored is unspecified. V-4 says the cursor stays on the composer row, but the composer now moves as it wraps and may be clipped. Plan should say: 'The cursor goes on the last wrapped composer row at the computed column, clamped to the screen.'
+- References: CHANGE_PLAN step 1 '6000-char cap'; CHANGE_SPEC AC-3 'total size is capped', s10 'sanitized'; D-3.
+- Failure: Snapshot rules unspecified: whether the 6000-char cap is total or per-section, which section is truncated first, and what happens in a non-git directory or when every source fails. Plan should say: the cap is total, truncating gh, then worktrees, then listing; if no source returns data, preload is skipped.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: D-2 provides one feedback row, but three feedback conditions (chat_error, file choice, slash hint) can be active togethe
+## AR-006: After root change or build quiesce the cancel event is set, but whether a fresh Event is created and whether preload may
 
 - Severity: LOW
-- References: CHANGE_PLAN D-2 (single row at row+4) vs CHANGE_SPEC AC-3.
-- Failure: D-2 provides one feedback row, but three feedback conditions (chat_error, file choice, slash hint) can be active together. Priority is unspecified. Plan should say: 'When several are active, show chat_error first, then file choice, then slash hint; only one is drawn.'
+- References: CHANGE_PLAN s7 agent_preload_cancel and D-4; CHANGE_SPEC SB-7 'no preload re-run'.
+- Failure: After root change or build quiesce the cancel event is set, but whether a fresh Event is created and whether preload may run again is unspecified. Plan should say: each preload gets a fresh Event and preload runs at most once per process start.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: AC-1/AC-2 hold for h>=12, but the plan clamps row>=0 and keeps status at h-1 on tiny terminals, so V-1 adjacency can't h
+## AR-007: D-1 skips preload on opt-out or non-claude runner, but the plan never says how without calling `_home_agent_session`, wh
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-1 says h>=12, AC-2 has no height bound; CHANGE_PLAN section 12 and risk row 3 clamp row>=0.
-- Failure: AC-1/AC-2 hold for h>=12, but the plan clamps row>=0 and keeps status at h-1 on tiny terminals, so V-1 adjacency can't hold there. Plan should say: below the height that fits all rows, only status==h-1 and no exception are required, and upper rows drop in order greeting, hint, top rule.
+- References: CHANGE_PLAN s9 and D-1; SB-5 'no new note from preload'.
+- Failure: D-1 skips preload on opt-out or non-claude runner, but the plan never says how without calling `_home_agent_session`, which can call `_agent_note_unavailable`. Duplicated guard logic can drift and add a history note (SB-5). Plan should say: 'The preload guard reuses the helper `_home_agent_session` uses and never calls `_agent_note_unavailable`.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The plan doesn't say what happens when the wrapped composer rows exceed the available space.
+## AR-008: Mid-spawn races are unspecified: if the main thread calls `_agent_turn` while the preload holds `agent_lock`, it is uncl
 
 - Severity: HIGH
-- References: CHANGE_PLAN section 1 pre-computes extra with no cap; the test strategy says '6+' rows.
-- Failure: The plan doesn't say what happens when the wrapped composer rows exceed the available space. Anchoring derives row from extra, so a 6+ row composer can cover history or go negative. Plan should say: composer rows are capped at min(extra, h-4), with the cursor on the last visible composer row (V-4).
+- References: CHANGE_PLAN s10 'agent_lock guards session creation/close'; SI-6 covers only close before the post-create check.
+- Failure: Mid-spawn races are unspecified: if the main thread calls `_agent_turn` while the preload holds `agent_lock`, it is unclear whether the operator path waits for the preload session or spawns a second process. Plan should say: '`_home_agent_session` returns the existing `agent_session` if set; creation and assignment are atomic under `agent_lock`.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: D-2 hides the compact hint while feedback is active, which conflicts with S-5/S-7 (hint text unchanged).
+## AR-009: The plan does not say what happens to the session on preload timeout (60s) or turn error.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-2 vs CHANGE_SPEC S-5, S-7 and AC-3.
-- Failure: D-2 hides the compact hint while feedback is active, which conflicts with S-5/S-7 (hint text unchanged). Behavior is also unspecified when the greeting is hidden or the feedback text is wider than the terminal. Plan should say: the hint is intentionally hidden during feedback in compact mode, and S-7 carves out this exception.
+- References: CHANGE_PLAN s1 '60s deadline', s11 'except Exception: pass', SB-8.
+- Failure: The plan does not say what happens to the session on preload timeout (60s) or turn error. A half-primed session could be reused for the operator's first message. Plan should say: 'On timeout or error the preload closes and clears `agent_session`, so the next `_agent_turn` starts fresh.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: The history area (body_rows/top) is undefined when the shifted block leaves zero or negative rows above it, so the _text
+## AR-010: Lifecycle of `agent_preload_cancel` is unspecified, so a stale cancel event could cancel a later session or preload afte
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 1 and risk row 1 say top equals the first history row, with no rule for body_rows<=0.
-- Failure: The history area (body_rows/top) is undefined when the shifted block leaves zero or negative rows above it, so the _text_view mouse mapping is unspecified. Plan should say: when body_rows<=0, no history is drawn and _text_view is an empty region.
+- References: CHANGE_PLAN s7 'agent_preload_cancel (Event or None)'; D-4 no re-preload.
+- Failure: Lifecycle of `agent_preload_cancel` is unspecified, so a stale cancel event could cancel a later session or preload after root change or close. Plan should say: 'Each preload creates a fresh cancel Event; `_close_home_agent` sets it and then sets it to None under the lock.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The AC-4 baseline offsets are cited but never given as values, so the regression test has no recorded oracle.
+## AR-011: Plan does not say whether the preload turn advances counters or log numbering that operator turns use.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-4 'status = composer_row + extra + 2'; CHANGE_PLAN section 10 gives no numbers.
-- Failure: The AC-4 baseline offsets are cited but never given as values, so the regression test has no recorded oracle. Plan should say: baseline offsets are captured as literal constants in the test, taken from the unmodified code before the change.
+- References: CHANGE_PLAN s6 'log to io.BytesIO', s16 manual check, AC-9.
+- Failure: Plan does not say whether the preload turn advances counters or log numbering that operator turns use. The manual check reads home-agent-chat-1.jsonl and existing tests may assume chat-1 is the first operator message. Plan should say: 'The preload writes to an in-memory buffer and increments no counter or log index used for operator turns.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Compact mode with feedback active is ambiguous: D-2 says feedback replaces the hint row, but the plan never says how lon
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-2 and CHANGE_SPEC AC-3; the plan never states clipping or hint suppression.
-- Failure: Compact mode with feedback active is ambiguous: D-2 says feedback replaces the hint row, but the plan never says how long text is clipped or whether the hint is hidden. Add: 'In compact anchored mode, feedback is clipped to the screen width at row+1 and the hint is not drawn while feedback is active.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-013: Feedback text carries user-controlled content (a file choice, or a chat_error that may embed a path or typed text).
+## AR-012: The UNCLE_NOUI guard location is inconsistent: R-1 says guards live in `_preload_home_agent`, while SB-4 says unit test
 
 - Severity: LOW
-- References: CHANGE_PLAN D-2 relocates feedback drawing and says nothing about sanitization; S-7 only requires that the text be unchanged.
-- Failure: Feedback text carries user-controlled content (a file choice, or a chat_error that may embed a path or typed text). The plan does not say it is stripped of control characters before addnstr. Add: 'Feedback and composer text is drawn through put with non-printable characters replaced, unchanged from the current behavior.'
+- References: CHANGE_PLAN s9, R-1, s15; CHANGE_SPEC SB-4.
+- Failure: The UNCLE_NOUI guard location is inconsistent: R-1 says guards live in `_preload_home_agent`, while SB-4 says unit test of the `run` guard. Existing suites never call `run()`, so the thread-start path is untested. Plan should say: 'The `UNCLE_NOUI` check is in `run()` before the thread starts, tested with thread start patched.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: AC-1 requires status on h-1 only for h>=12, while AC-5 and plan section 12 cover h<12 (5x20, 1x10).
+## AR-013: Plan says repo/issue text is 'sanitized' and delimited but never defines either.
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-1 ('at least 12 rows') vs AC-5 and CHANGE_PLAN section 12; the plan's own test heights include 5.
-- Failure: AC-1 requires status on h-1 only for h>=12, while AC-5 and plan section 12 cover h<12 (5x20, 1x10). The plan doesn't say whether status must be on h-1 at tiny heights. Settle it: 'For h<12 only no-exception, in-bounds writes and history above the composer are asserted; status is on h-1 whenever h>=2.'
+- References: CHANGE_SPEC §10 'sanitized, delimited'; CHANGE_PLAN Risks 'delimiters'; SI-4 test checks only 'prompt text and delimiters'.
+- Failure: Plan says repo/issue text is 'sanitized' and delimited but never defines either. A title or filename containing the closing delimiter can escape the data block. Say: strip control chars, truncate each item, use a per-run random-nonce delimiter removed from all gathered strings.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: The plan never says which rows win when the composer's 1 to 6+ wrapped rows plus greeting, hint and rules exceed the hei
+## AR-014: Plan does not say whether the preload session has operator-granted tool rules or what happens on a tool request mid-prel
 
 - Severity: HIGH
-- References: CHANGE_PLAN section 12 ('upper rows clip via put') vs section 16 ('1..6+ wrapped rows' at height 5) and V-4.
-- Failure: The plan never says which rows win when the composer's 1 to 6+ wrapped rows plus greeting, hint and rules exceed the height. Settle it: 'Priority from h-1 upward: status, bottom rule, composer rows (newest kept, cursor row visible), top rule, hint, greeting; lower-priority rows are dropped, never overlapped.'
+- References: CHANGE_SPEC SI-3 'read-only base tools plus granted rules'; CHANGE_PLAN R-3 only says build_command is unchanged.
+- Failure: Plan does not say whether the preload session has operator-granted tool rules or what happens on a tool request mid-preload. Injected issue text could trigger tool calls unattended. Say: preload runs with no granted rules, and any tool-use request during preload is denied and cancels the turn.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: D-2 places feedback on row+4 (or over the hint in compact mode) but doesn't cover clipping, several feedbacks active at
+## AR-015: Snapshot may expose secret-named files via the top-level listing or git status, sent to the model unprompted at startup.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC §10 'no secrets beyond repo state the agent could read anyway'; CHANGE_PLAN §1 gather list.
+- Failure: Snapshot may expose secret-named files via the top-level listing or git status, sent to the model unprompted at startup. Say: filter secret-like names (.env*, *key*, *.pem, credentials*) from the listing and send names only, never contents.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: Gather subprocess argv, cwd and env are unspecified; git/gh run in an untrusted repo can execute repo-configured helpers
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN §1 and step 1 give only 'injectable runner, per-command 5s timeout'.
+- Failure: Gather subprocess argv, cwd and env are unspecified; git/gh run in an untrusted repo can execute repo-configured helpers (fsmonitor, diff drivers). Say: fixed argv lists, no shell, cwd=project root, git with -c core.fsmonitor=false, minimal env, size-bounded output.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: Unspecified: operator message queued when the 60s preload times out or is cancelled, and whether 60s includes lock wait.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN §1 '60s deadline'; §11 D-2 'close() kills the process; turn returns'; SB-3/SB-8 silent on this combination.
+- Failure: Unspecified: operator message queued when the 60s preload times out or is cancelled, and whether 60s includes lock wait. Say: on preload timeout the session is closed and the queued operator turn starts a fresh session lazily.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: The '60s deadline' is not tied to a testable mechanism or an expiry outcome.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2 and AC-3 ('each feedback condition').
-- Failure: D-2 places feedback on row+4 (or over the hint in compact mode) but doesn't cover clipping, several feedbacks active at once, or multi-row file choices. Settle it: 'At most one feedback line is drawn (error, then file choice, then slash hint); with no free row it replaces the hint row, then the greeting.'
+- References: CHANGE_PLAN s1 says '60s deadline' with no mechanism or test hook. SB-8 lists timeout as a failure without saying what state results.
+- Failure: The '60s deadline' is not tied to a testable mechanism or an expiry outcome. Settle it: 'The preload turn is cancelled via the cancel Event after PRELOAD_TIMEOUT_S (default 60, module constant patchable by tests); on expiry the session is closed and agent_session reset to None.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: The plan has no definition of 'compact', yet tests parametrize compact and non-compact heights.
+## AR-019: The plan doesn't say whether the session is kept after the preload turn fails or times out.
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-2; CHANGE_PLAN D-1 and risk row 3 cite line 7323 with no threshold.
-- Failure: The plan has no definition of 'compact', yet tests parametrize compact and non-compact heights. Settle it: 'Compact is the existing condition at line 7323, stated as a height threshold, and each test height {5,12,20,30,50} is labeled compact or non-compact.'
+- Severity: HIGH
+- References: CHANGE_PLAN s7 covers cleanup only for superseded sessions. s12 says only 'except Exception: pass after cleanup'.
+- Failure: The plan doesn't say whether the session is kept after the preload turn fails or times out. Settle it: 'If the preload turn fails or times out, the preload thread closes the session it created and sets agent_session to None.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: The plan doesn't say how long history is cut or what _text_view['top'] is with empty history.
+## AR-020: AC-5 queues an operator message behind the preload, but AC-9 wants first-message latency no worse than later ones, and n
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 1 (body_rows/top) and risk row 1; AC-5.
-- Failure: The plan doesn't say how long history is cut or what _text_view['top'] is with empty history. Settle it: 'History shows the newest entries that fit above the greeting block; with no history rows, _text_view[top] is the greeting row.'
+- References: SB-3 and AC-5 say 'queues behind an in-flight preload'. s1 sets a 60s deadline. AC-9 requires first-message latency no worse than later ones.
+- Failure: AC-5 queues an operator message behind the preload, but AC-9 wants first-message latency no worse than later ones, and no bound on the wait is given. Settle it: 'An operator message queued behind the preload waits at most until the preload finishes or 60s, whichever is first.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: AC-4 says build status = composer_row + extra + 2, but the plan's alternative A calls the old offset '+3'.
+## AR-021: The plan doesn't say what happens when the operator message arrives before the preload thread has created the session.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-4 vs CHANGE_PLAN section 2 alternative A ('+3').
-- Failure: AC-4 says build status = composer_row + extra + 2, but the plan's alternative A calls the old offset '+3'. The offsets conflict and no fixed oracle is named. Settle it: 'The test hard-codes the baseline build offsets from BASELINE_REPORT B-3 rather than computing them from the code under test.'
+- References: CHANGE_PLAN s10 says agent_lock guards creation, but s7's post-create check only compares agent_session to the thread's own session. No test covers this race.
+- Failure: The plan doesn't say what happens when the operator message arrives before the preload thread has created the session. Settle it: 'If the operator creates the session first, the preload reuses that session and skips its turn.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: The size cap is ambiguous: per section or total, and which section is truncated first.
+
+- Severity: MEDIUM
+- References: Implementation step 1 says '6000-char cap'. AC-3 and s16 give no truncation order or boundary tests.
+- Failure: The size cap is ambiguous: per section or total, and which section is truncated first. Settle it: 'Total snapshot is at most 6000 chars; drop issues, then worktrees, then truncate the file listing; git status is never dropped.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-023: No assertion is planned for 'exactly one preload turn' or for home_history and chat_calls being unchanged.
+
+- Severity: LOW
+- References: CHANGE_PLAN s6 says 'Not added to home_history; not counted in chat_calls'. s16 lists no such assertion.
+- Failure: No assertion is planned for 'exactly one preload turn' or for home_history and chat_calls being unchanged. Settle it: 'Tests assert fake session.turn is called exactly once and home_history and chat_calls are unchanged after preload.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

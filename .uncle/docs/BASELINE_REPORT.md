@@ -1,67 +1,77 @@
-# Baseline Report — Issue 187
+# Baseline Report (Issue 188)
 
-Omitted sections: Reproduction (not a bug report); Baseline test results as run output (driver supplies; see section 9); Flaky behavior (none documented)
+Omitted sections: Reproduction result (not a bug); Flaky behavior (none documented)
 
 ## 1. Change-request summary
-See CHANGE_REQUEST.md: on the home page, pin the status bar to the very bottom row and remove the blank row between the composer and the status line. Other layout/status content is out of scope.
+See `.uncle/docs/CHANGE_REQUEST.md`. Warm the home agent (claude session with tools) and preload project context in a background thread when the curses UI runs; never under `--noui`.
 
 ## 2. Repository architecture
-Uncle is a Python curses TUI (`uncle_tui.py`, single large module) plus shell/Python workflow scripts under `scripts/`. Tests are `scripts/tests/*-test.py` (Python) and `*-test.sh` (shell). Home page is state `menu`; the build page is state `running`; both share `_draw_chat_composer`.
+- `uncle_tui.py`: curses UI class `UncleTUI`; home agent glue (lines 3564-3750), `run()` at 8870.
+- `scripts/lib/home_agent_session.py`: `HomeAgentSession(SupervisorSession)`, `build_command`, `persistent_session` (lines 155-179). Read-only base tools plus session grants; deny patterns.
+- `scripts/lib/supervisor_runner.py`: `SupervisorSession` (`prime` 420, `turn` ~447 holds `self.lock` for the whole turn, honours a `cancelled` Event and a deadline), `SupervisorRequest` (186; `_run` 224 calls `session.turn`).
+- `uncle` (bash launcher): `--noui`/`UNCLE_NOUI=1` runs headless action at lines 420-438 and does not start curses/`UncleTUI`.
 
 ## 3. Relevant code paths
-- `uncle_tui.py:6894-6902` `draw()`: state `menu` erases the screen and calls `_draw_homepage(h, w)`.
-- `uncle_tui.py:7168-7257` `_draw_homepage`: `compact = h < len(LOGO)+12` (7183); `footer_rows = 8 if compact else 12` (7184); `body_rows` (7196-7201); `top = max(run_y, h - body_rows - footer_rows)` (7203); `row = top + body_rows` (7250) is passed to `_draw_chat_composer`.
-- `uncle_tui.py:7313-7430` `_draw_chat_composer(row, h, w, left, width, compact)`: greeting at row(+1 non-compact) (7337); hint at row+1/+3 (7353); top rule row+2/+5 (7354); `composer_row = row + (3 if compact else 6)` (7359); `extra` = wrapped composer lines beyond first (7367); bottom rule `composer_row+1+extra` (7385); `status_row = composer_row + extra + (2 if build or compact else 3)` (7418) — the non-compact home page therefore leaves one blank row between the bottom rule and the status; feedback row `status_row+1` (7422-7428: chat_error, file choice, slash-command hint); `_draw_file_picker(composer_row, ...)` (7430).
-- `_draw_chat_panel` (7431) calls the same composer for other pages (chat panel).
-- Build page (`_draw_running`, 7469) also uses the composer with `build=True` (status offset 2).
+- `uncle_tui.py:8879` starts `_warm_supervisor` (4107) thread; warms the old supervisor session only.
+- `_home_agent_session` 3604: honours `UNCLE_HOME_AGENT=0` (3607) and non-`claude` runner (3617); closes+restarts on project-root change (3612-3614); bumps `agent_generation`.
+- `_close_home_agent` 3634, `_agent_quiesce` 3657 (build/recovery start), `_quit` 8860 and `run()` finally 8885 close the agent.
+- `_agent_turn` 3677 creates the `SupervisorRequest` with `session=` so its turn queues on `session.lock`.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Home page, non-compact height | Status row sits 3 rows below composer first row (+extra), i.e. one blank row after the bottom rule; space below status is left blank (footer_rows=12 reserve) | 7203, 7359, 7418 | No (to be modified) |
-| B-2 | Home page, compact height (h < len(LOGO)+12) | Status directly follows bottom rule (offset 2) but is not on the last row | 7418 | Adjacency yes; position modified |
-| B-3 | Build page (state running) | Status offset 2 below composer, no blank row | 7418 | Yes |
-| B-4 | Home page with chat history | History fills rows above composer (`body_rows = h - footer_rows - run_y`) | 7199-7201 | Yes (history still visible, scrollable) |
-| B-5 | Composer text wraps | Composer grows up to 6 rows, status moves down by `extra` | 7364-7367 | Yes |
-| B-6 | chat_error / chat_choices / '/' typed | One-line feedback drawn at status_row+1 | 7422-7428 | Yes (must stay visible) |
-| B-7 | Status text content | model/stage/triage label left, project+branch+mode right | 7386-7421 | Yes, unchanged |
-| B-8 | File picker open | Drawn relative to composer_row | 7430 | Yes |
+| B-1 | UI starts | Only supervisor session warmed; no home agent process | uncle_tui.py:8879 | Yes (supervisor warm) |
+| B-2 | First homepage message | Home agent spawned lazily; first turn pays start + exploration (~25s in log from issue) | uncle_tui.py:3679 | MODIFY (faster) |
+| B-3 | `UNCLE_HOME_AGENT=0` | `_home_agent_session` returns None; supervisor chat used | 3607 | Yes |
+| B-4 | runner != claude | Note once, supervisor chat fallback | 3617-3620 | Yes |
+| B-5 | Build/recovery start | `_agent_quiesce` kills agent, clears grants/pending | 3657 | Yes |
+| B-6 | Project root changes | Next `_home_agent_session` closes with handoff and restarts | 3612 | Yes |
+| B-7 | Quit | Agent closed in `_quit` and `run()` finally | 8866, 8885 | Yes |
+| B-8 | `--noui` | No curses UI, no `UncleTUI` | uncle:420-438 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Drawing never raises on tiny terminals: every addnstr is wrapped in `curses.error` handlers and `put` bounds-checks y | `put` guards (7211-7219, 7327-7335) | None found | Medium |
-| I-2 | Cursor is drawn only within the screen | `cursor_y < h and cursor_x < w-1` (7379) | None found | Medium |
-| I-3 | Composer shows at most 6 rows | `shown = min(6, h-composer_row-3)` (7364) | None found | Medium |
+| I-1 | One turn at a time on an agent's stdin | `SupervisorSession.turn` holds `self.lock` | none direct found | Medium |
+| I-2 | No home agent process after quiesce/exit | `_close_home_agent` returns `not session.alive()`; quiesce raises otherwise | none direct found | Medium |
+| I-3 | Agent uses only read-only base tools + granted rules | `build_command` allow/deny lists | none in scope reviewed | Medium |
+| I-4 | Application-sent turns authorize nothing | wording of `prime()` text | none | Low |
 
 ## 6. Current API, schema, and interface contracts
-No external API/schema. Internal: `_draw_chat_composer(row, h, w, left, width, compact=True)` is also called from `_draw_chat_panel` (7436); signature must remain compatible with that caller.
+No external schema. Env: `UNCLE_HOME_AGENT` (`0` opt-out), `UNCLE_HOME_AGENT_TIMEOUT`, `UNCLE_NOUI`. `SupervisorSession.turn(prompt, log, deadline, cancelled, progress=None)` returns lines or None.
 
 ## 7. Existing automated-test coverage
-No existing test exercises `_draw_homepage` or `_draw_chat_composer` (grep of scripts/tests for draw/stdscr found only supervisor-test.py). Layout is currently unverified by automation. Suites are independent processes with own temp dirs, so the shell and Python runners are safe to group.
-
-## 8. (see verification_commands field)
+- Python suites `scripts/tests/*-test.py` via `scripts/run-python-tests.sh`; shell suites via `scripts/run-shell-tests.sh`. Both use separate temp dirs and no shared ports, so run in parallel (group `1 2`).
+- `home-actions-test.py` and `startup-action-test.py` set `UNCLE_HOME_AGENT=0`. No test calls `UncleTUI.run()` (grep), so wiring in `run()` is not exercised by existing tests.
+- No existing test of `_home_agent_session`, `_agent_quiesce` or home-agent preload.
 
 ## 9. Baseline test results
-No results produced here (driver runs them). Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh`, as mandated by the stage rules and `pytest.ini`/`scripts/run-all-tests.sh`. No pre-existing failure is documented in the repository for the changed area; the stage notes some Python suites already fail on a clean checkout (driver baseline is authoritative).
+Commands from CLAUDE.md/scripts. Not run in this stage by design; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout (per workflow notes).
+
+## 10. Existing failures, warnings, and flaky behavior
+None documented in repo for this area; defer to driver baseline.
 
 ## 12. Likely change surface
-`uncle_tui.py` `_draw_homepage` and `_draw_chat_composer` only; one new Python test file.
+`uncle_tui.py` (`run`, `_home_agent_session`, `_close_home_agent`, new `_preload_home_agent`); new `scripts/lib/home_preload.py`; new `scripts/tests/home-preload-test.py`.
 
 ## 13. Regression-sensitive components
-Build page layout (shared composer), chat panel (`_draw_chat_panel`), file picker placement, cursor placement, short-terminal behavior, history viewport/scroll (`_home_page_rows`, `_text_view` mouse selection coordinates derive from `top`).
+`_home_agent_session` lifecycle/generation counter, `_agent_quiesce`, `_agent_turn` ordering with session lock, thread safety of `self.agent_*` state touched from a new thread.
 
 ## 14. Areas explicitly outside the change
-Status text content, hints, greeting, logo, composer behavior, build page layout, other pages, workflow scripts.
+`_agent_handoff_text`, `prompts/home-agent.md`, supervisor warm-up, `uncle` launcher.
 
 ## 15. Unknowns and assumptions
-- A1: "Status bar" = the model/project status row drawn at `status_row`.
-- A2: "Very bottom" = last screen row `h-1`.
-- A3: Where the one-line feedback (B-6) goes once status owns the last row is unspecified; planner decides.
-- A4: How to instantiate the TUI object under test without a terminal is unknown; implementer must find a stub approach.
+- Assumed `--noui` never constructs `UncleTUI` (launcher inspected, not run).
+- `gh` may be absent/unauthenticated; preload must tolerate it.
+- Exact claude stdin behavior on kill mid-turn assumed same as for existing cancel path.
 
 ## 16. Initial risk assessment
-Medium-low: pure drawing change in one function pair, but zero existing layout tests and shared composer with the build page; mouse selection coordinates depend on `top`.
+| Risk | Level |
+|---|---|
+| Race between preload thread and main-thread close/start of agent state | High |
+| Prompt injection from issue titles/branch names in preload text | Medium |
+| Startup slowdown if preload work runs on UI thread | Medium |
+| Leaked process on quiesce during preload | Medium |
 
 ## Exact build and test commands executed
 

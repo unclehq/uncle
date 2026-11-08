@@ -1,21 +1,36 @@
 # Implementation notes
 
+## Step 1
+
 ### Files changed
 
-- `uncle_tui.py` — Home page bottom anchoring: new _home_anchor helper; _draw_chat_composer(anchor_bottom=True) pins status to row h-1 and bottom rule to h-2; _draw_homepage sizes history above the anchored block; feedback moved above the status. Composer rows capped at min(count, 6, h-3).; 2; S-1..S-5, S-8, V-1, V-2, V-4
-- `scripts/tests/home-layout-test.py` — New fake-screen test (19 tests) for AC-1..AC-5; fixed body-rows-zero case to h=6, where the anchored block starts at row 0.; 1; V-1, V-2, V-3, V-4
+- `scripts/lib/home_preload.py` — Written by isolated step 1; 1
 
-### Unresolved concerns
+## Step 2
 
-- No live-terminal run of the TUI was performed; layout is verified with a fake curses screen only.
+### Files changed
 
-## Acceptance delivery
+- `scripts/tests/home-preload-test.py` — Written by isolated step 2; 2
 
-| ID | Status | Changed code | Observed targeted verification |
-|---|---|---|---|
-| AC-1 | IMPLEMENTED | uncle_tui.py _draw_chat_composer: status_row = h-1 when anchored | python3 scripts/tests/home-layout-test.py: Ran 19 tests OK (test_AC1_status_on_last_row_at_24_and_50) |
-| AC-2 | IMPLEMENTED | uncle_tui.py _home_anchor/_draw_chat_composer: bottom rule at h-2 directly above status, composer capped at 6 rows | home-layout-test OK (test_AC2_no_gap_between_bottom_rule_and_status, test_AC2_non_compact_block_offsets) |
-| AC-3 | IMPLEMENTED | uncle_tui.py _draw_chat_composer: feedback_row = composer_row-2 when anchored; hint suppressed in compact when feedback active | home-layout-test OK (test_AC3_* four tests) |
-| AC-4 | IMPLEMENTED | uncle_tui.py: anchor_bottom defaults False, so build page and chat panel offsets are unchanged | home-layout-test OK (test_AC4_* five tests, hard-coded baseline offsets) |
-| AC-5 | IMPLEMENTED | uncle_tui.py _draw_homepage: body_rows = block_start - top; empty _text_view at 0 rows; tiny heights guarded | home-layout-test OK (test_AC5_* six tests); scripts/tests/home-actions-test.py Ran 39 tests OK |
-| AC-6 | IMPLEMENTED | No change; driver owns the full suites | Full suites not run here (driver pending). home-actions-test.py OK as a related check. |
+## Step 3
+
+### Files changed
+
+- `uncle_tui.py` — Written by isolated step 3; 3
+
+## Step 4
+
+## Post-audit repairs (FA-009, FA-014, FA-002)
+
+- Added the plan-required tests to `scripts/tests/home-preload-test.py` (class `PlanScope`): timeout deadline and timer, cancel-wait bound, creation races, no operator grants, argv/cwd/env hardening, output and size caps. Injecting each of four defects makes a test fail.
+- Fixed `uncle_tui.py`: the preload passed `PRELOAD_TIMEOUT_S` as an absolute deadline to `session.turn`, so the turn was already expired and every preload aborted. It now passes `time.monotonic() + PRELOAD_TIMEOUT_S`.
+- Fixed `scripts/lib/home_preload.py`: `default_runner` read stdout before waiting, so its timeout never fired on a hung command. A timer now kills it.
+- FA-014: `supervisor-test.py` and `attestation-statement-test.py` fail on `main` (a stray `.uncle` line in `.gitignore`; unsigned test commits), and pass on this branch. The test commits now use `--no-gpg-sign`.
+- `uncle verify`: the head-tree check strips Uncle's managed `.gitignore` lines the way the release snapshot does; predicate approvals now carry `view_digest`.
+- FA-002: MC-401/402 reclassified; the opt-out half of MC-401 was run and observed. The `--noui` half and MC-402's responsiveness remain unverified.
+- Known gap: no test drives a stream-level tool-use event into a live session; the tests show only that preload adds no grants.
+
+## Manual checks run without tmux (pty)
+
+- MC-101/MC-200 PASS. MC-106/MC-206 first FAILED: a failed preload wrote "The home agent is unavailable" into the home history at startup. `uncle_tui.py` now suppresses that note while the preload holds the lock; the first operator message still reports it. A regression test covers both.
+- MC-102/MC-201: opt-out half observed; the `--noui` wrapper half is still BLOCKED-SETUP.

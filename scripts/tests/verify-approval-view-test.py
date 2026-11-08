@@ -64,7 +64,7 @@ class ViewDigestTests(unittest.TestCase):
 
     def commit(self):
         self.git('add', '-f', '.uncle/docs')
-        self.git('commit', '-q', '-m', 'docs')
+        self.git('commit', '-q', '--no-gpg-sign', '-m', 'docs')
 
     def test_json_canonical_document_verifies_against_its_committed_view(self):
         self.approve('ADVERSARIAL_REVIEW', '# Review\n\nrendered view\n', canonical='{"kind": "adversarial-review"}\n')
@@ -189,7 +189,7 @@ class ViewDigestTests(unittest.TestCase):
         (self.repo / '.uncle/attestation.json').write_bytes(envelope.canonical(statement))
         (self.repo / '.uncle/docs/CHANGE_PLAN.md').write_text('# changed\n')
         self.git('add', '-f', '.uncle/docs')
-        self.git('commit', '-q', '-m', 'edit')
+        self.git('commit', '-q', '--no-gpg-sign', '-m', 'edit')
         result = subprocess.run([sys.executable, str(VERIFY)], cwd=self.repo, env=self.env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.assertEqual(result.returncode, 1, result.stdout)

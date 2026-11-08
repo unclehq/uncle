@@ -1022,6 +1022,22 @@ def _sgr_color(code, base):
     return ';%d;5;%d' % (base + 8, code)
 
 
+def _sgr_for_attr(attr):
+    """SGR escape for a curses attribute (bold/dim/underline/reverse plus its colour pair)."""
+    codes = ''
+    for flag, code in ((curses.A_BOLD, ';1'), (curses.A_DIM, ';2'), (curses.A_UNDERLINE, ';4'), (curses.A_REVERSE, ';7')):
+        if attr & flag:
+            codes += code
+    pair = curses.pair_number(attr) if hasattr(curses, 'pair_number') else 0
+    if pair:
+        try:
+            fg, bg = curses.pair_content(pair)
+            codes += _sgr_color(fg, 30) + _sgr_color(bg, 40)
+        except curses.error:
+            pass
+    return '\x1b[0%sm' % codes
+
+
 def _window_rows_as_ansi(win, width):
     """The rows of an off-screen curses window as plain text with SGR styling, each at most width columns."""
     rows = []
@@ -1029,7 +1045,8 @@ def _window_rows_as_ansi(win, width):
     columns = max(0, min(width, wide))
     for y in range(height):
         try:
-            text = win.instr(y, 0, columns).decode('utf-8', 'replace')
+            # instr counts bytes, and box-drawing characters are three each: read the whole row, then cut by character.
+            text = win.instr(y, 0, wide * 4).decode('utf-8', 'replace')[:columns]
         except curses.error:
             text = ' ' * columns
         out, current = [], None
@@ -1042,22 +1059,7 @@ def _window_rows_as_ansi(win, width):
             style = (attr & (curses.A_BOLD | curses.A_DIM | curses.A_UNDERLINE | curses.A_REVERSE),
                      curses.pair_number(attr) if hasattr(curses, 'pair_number') else 0)
             if style != current:
-                codes = ''
-                if style[0] & curses.A_BOLD:
-                    codes += ';1'
-                if style[0] & curses.A_DIM:
-                    codes += ';2'
-                if style[0] & curses.A_UNDERLINE:
-                    codes += ';4'
-                if style[0] & curses.A_REVERSE:
-                    codes += ';7'
-                if style[1]:
-                    try:
-                        fg, bg = curses.pair_content(style[1])
-                        codes += _sgr_color(fg, 30) + _sgr_color(bg, 40)
-                    except curses.error:
-                        pass
-                out.append('\x1b[0%sm' % codes)
+                out.append(_sgr_for_attr(attr))
                 current = style
             out.append(ch)
         rows.append(''.join(out).rstrip() + '\x1b[0m' if out else '')
@@ -6088,8 +6090,8 @@ class UncleTUI:
             return True
         if k == 7:  # Ctrl-G
             self._set_mouse(not getattr(self, 'mouse_capture', False))
-            self.chat_error = ('Mouse wheel scrolling ON (Ctrl-G) - hold Shift/Option to select text'
-                               if self.mouse_capture else 'Text selection ON, wheel scrolling off (Ctrl-G)')
+            self.chat_error = ('Mouse ON (Ctrl-G): wheel scrolls, drag selects and copies; Shift/Option-drag uses the terminal'
+                               if self.mouse_capture else 'Mouse OFF (Ctrl-G): the terminal selects text and scrolls')
             return True
         if k == curses.KEY_BTAB:
             self.session_auto_mode = not self._next_run_unattended()
@@ -6320,7 +6322,7 @@ class UncleTUI:
             self._quit()
             return True
         if k == 9:
-            other = 'menu' if self.state == 'menu' else 'gate'
+            other = 'gate'  # the home page has no menu to focus
             self.chat_focus = other if self.chat_focus == 'chat' else 'chat'
             return True
         if self.state == 'menu' and self.chat_focus == 'menu':
@@ -6352,7 +6354,7 @@ class UncleTUI:
                     self.chat_edit = False
                 elif self.state in ('chat', 'menu'):
                     self.state = 'menu'
-                    self.chat_focus = 'menu'
+                    self.chat_focus = 'chat'
                     self.sel = 0
                 elif self.state == 'running' and not self.chat_composer:
                     self._composer_esc()
@@ -6639,11 +6641,16 @@ class UncleTUI:
         return entries, live
 
     def _inline_new_home_lines(self, width):
-        done, _ = self._home_entries()
+        done, live = self._home_entries()
         emitted = getattr(self, '_home_emitted', None)
-        lines = []
+        banner = []
         if emitted is None:
-            lines = [''] + list(LOGO) + [''] if not done else []
+            if not done:
+                pad = ' ' * max(0, (width - LOGO_W) // 2)
+                paint = _sgr_for_attr(getattr(self, 'color', {}).get('title', 0))
+                # The pin leaves blank rows above the banner; the same number below it centres the logo vertically.
+                gap = max(1, (getattr(self, '_inline_avail', 0) - len(LOGO)) // 2)
+                banner = [pad + paint + row + '\x1b[0m' for row in LOGO] + [''] * gap
             emitted = []
         common = 0
         for old, new in zip(emitted, done):
@@ -6651,7 +6658,36 @@ class UncleTUI:
                 break
             common += 1
         self._home_emitted = list(done[-2000:])
-        return lines + [line for _, text in done[common:] for line in self._inline_wrap(text, width)]
+        # A streaming reply flows into the scrollback as it renders: every finished line is printed at once and only the
+        # unfinished last line stays in the footer. `printed` is how many of its lines are already out, so when the
+        # reply lands in the history as a finished entry only the remainder is printed.
+        stream_text = getattr(self, '_home_stream_text', '')
+        printed = getattr(self, '_home_stream_printed', 0)
+        out = []
+        for _, text in done[common:]:
+            wrapped = self._inline_wrap(text, width)
+            if printed and stream_text and text.startswith(stream_text[:40]):
+                wrapped = wrapped[printed:]
+                printed, stream_text = 0, ''
+            out.extend(wrapped)
+        if live:
+            text = 'Supervisor: ' + live
+            if stream_text and not text.startswith(stream_text[:40]):
+                printed = 0  # a different reply began; nothing of it has been printed
+            complete = self._inline_wrap(text, width)[:-1]
+            out.extend(complete[printed:])
+            printed, stream_text = max(printed, len(complete)), text
+        else:
+            printed, stream_text = 0, ''
+        self._home_stream_text, self._home_stream_printed = stream_text, printed
+        return banner + out
+
+    def _home_live_tail(self, width):
+        """The unfinished last line of the streaming reply: one line, no control characters."""
+        live = self._home_entries()[1]
+        if not live:
+            return ''
+        return self._inline_wrap('Supervisor: ' + live, width)[-1].strip()
 
     def _home_menu_bar(self, w):
         """The old top menu bar as [(row, col, text, selected)] plus its row count."""
@@ -6689,6 +6725,7 @@ class UncleTUI:
         self._inline_live = 0
         self._inline_size = None
         self._inline_shown = None
+        self._inline_pin = True  # first frame: start the block so the composer sits at the bottom of the screen
 
     def _inline_leave(self):
         if not getattr(self, '_inline_on', False):
@@ -6707,23 +6744,27 @@ class UncleTUI:
         status_rows = self.INLINE_STATUS_ROWS
         chat_height = modal = comp_rows = popup = 0
         bar, live = [], ''
+        # The stage sidebar: a column at the right of the pinned block, as on the full-screen build page.
+        panel = min(34, w // 3) if kind == 'build' and w >= 60 else 0
+        left_w = w - panel
+        if panel:
+            status_rows = 1  # the streaming line, just above the composer
         if kind == 'build':
             if getattr(self, 'chat_open', False):
                 text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
-                extra = min(len(self._wrap_input(text, max(8, w - 2))), 6) - 1 if text else 0
+                extra = min(len(self._wrap_input(text, max(8, left_w - 2))), 6) - 1 if text else 0
                 chat_height = min(6 + extra, max(0, h - 4))
             if self.prompt_kind:
                 modal = max(8, min(h // 2, h - 4 - chat_height - status_rows))
         else:
-            bar, bar_rows = self._home_menu_bar(w)
-            live = self._home_entries()[1]
-            status_rows = bar_rows + 1
+            live = self._home_live_tail(w - 3)
+            status_rows = 1  # just the streaming-reply row: the old top menu is gone, its actions are slash commands
             text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
             extra = min(len(self._wrap_input(text, max(8, w - 6))), 6) - 1 if text else 0
             popup = 6 if (getattr(self, 'chat_picker', False) or self._slash_choices() or self._chat_menu()) else 0
             comp_rows = min(8 + extra, max(3, h - status_rows - popup - 1))
             chat_height = comp_rows + popup
-        rows = max(2, min(h - 2, status_rows + chat_height + modal))
+        rows = max(2, min(h - 2, max(status_rows + chat_height + modal, min(20, max(10, h - 12)) if panel else 0)))
         out = ''
         size = (h, w)
         if getattr(self, '_inline_size', None) not in (None, size):
@@ -6731,7 +6772,6 @@ class UncleTUI:
             self._inline_live = 0
             self._inline_shown = None
         self._inline_size = size
-        new_lines = (self._inline_new_build_lines if kind == 'build' else self._inline_new_home_lines)(w - 1)
         # Off-screen window: drawn with the existing code, never refreshed, then read back as text.
         win = curses.newwin(rows, w, 0, 0)
         win.erase()
@@ -6740,26 +6780,31 @@ class UncleTUI:
         try:
             try:
                 if kind == 'build':
-                    win.addnstr(0, 0, self._inline_status_text(w), w - 1, curses.A_BOLD)
-                    tail = self.partial.strip() if not self.prompt_kind else ''
+                    if not panel:
+                        win.addnstr(0, 0, self._inline_status_text(w), w - 1, curses.A_BOLD)
+                    tail = ' '.join(self.partial.split()) if not self.prompt_kind else ''
                 else:
                     color = getattr(self, 'color', {})
                     for y, x, text, selected in bar:
                         win.addnstr(y, x, text, min(len(text), max(0, w - x - 1)),
                                     color.get('sel', curses.A_REVERSE) if selected else color.get('accent', 0))
-                    tail = live.strip()
+                    tail = live
                 if tail and rows > 1:
-                    win.addnstr(status_rows - 1 if kind == 'home' else 1, 0, ' ' + tail[-(w - 3):], w - 1)
+                    row_for_tail = (rows - chat_height - 1 if panel else 1) if kind == 'build' else status_rows - 1
+                    win.addnstr(row_for_tail, 0, ' ' + tail[-(left_w - 3):], left_w - 1)
             except curses.error:
                 pass
             if kind == 'build':
+                top_rows = 0 if panel else status_rows
                 if self.prompt_kind and modal:
-                    area = win.derwin(rows - chat_height - status_rows, w, status_rows, 0)
+                    area = win.derwin(rows - chat_height - top_rows, left_w, top_rows, 0)
                     self.stdscr = area
-                    self._draw_modal(rows - chat_height - status_rows, w)
+                    self._draw_modal(rows - chat_height - top_rows, left_w)
                     self.stdscr = win
                 if chat_height:
-                    self._draw_chat_panel(rows - chat_height, rows, 0, w)
+                    self._draw_chat_panel(rows - chat_height, rows, 0, left_w)
+                if panel:
+                    self._draw_session_stats(rows + 1, w, panel)
             else:
                 self._draw_chat_composer(rows - comp_rows, rows, w, 2, max(1, w - 4), True)
         finally:
@@ -6768,11 +6813,20 @@ class UncleTUI:
         while footer and not footer[-1].strip('\x1b[0m'):
             footer.pop()  # trailing blank rows add nothing but height
         footer = footer or ['']
+        self._inline_avail = h - len(footer)  # rows above the visible footer: the logo is centred in them
+        new_lines = (self._inline_new_build_lines if kind == 'build' else self._inline_new_home_lines)(w - 1)
         if not new_lines and footer == getattr(self, '_inline_shown', None):
             return
         self._inline_shown = footer
-        out += self._inline_erase_live() + ''.join(line + '\r\n' for line in new_lines) + '\r\n'.join(footer)
-        self._inline_live = len(footer)
+        if getattr(self, '_inline_pin', False):
+            self._inline_pin = False
+            out += '\n' * (h - 1) + ('\x1b[%dA' % (len(footer) - 1) if len(footer) > 1 else '')
+        # A block that shrinks (a popup closing) keeps its height: the freed rows become blank space above the composer,
+        # so the composer stays at the bottom of the screen. New output printed above it uses that space up.
+        previous = getattr(self, '_inline_live', 0)
+        pad = max(0, previous - len(new_lines) - len(footer)) if previous else 0
+        out += self._inline_erase_live() + ''.join(line + '\r\n' for line in new_lines) + '\r\n' * pad + '\r\n'.join(footer)
+        self._inline_live = len(footer) + pad
         _tty_write('\x1b[?25l' + out)
 
     def draw(self):
@@ -6832,6 +6886,8 @@ class UncleTUI:
         self._paint_support_link()
 
     def _homepage_key(self, k):
+        if k in (9, 16) and not (k == 9 and self.chat_focus == 'chat' and self._chat_menu()):
+            return True  # the home page has no menu; Tab still completes a slash command
         if k in (curses.KEY_PPAGE, curses.KEY_NPAGE):
             step = max(1, getattr(self, '_home_page_rows', 5) - 1)
             offset = getattr(self, 'home_scroll', 0) + (step if k == curses.KEY_PPAGE else -step)
@@ -7076,22 +7132,9 @@ class UncleTUI:
         left = max(0, (w - width) // 2)
         compact = h < len(LOGO) + 12
         footer_rows = 8 if compact else 12
-        # The menu is a bar along the very top; Ctrl-P/Tab only change focus.
-        focused = self.chat_focus == 'menu'
-        bar = []
-        x = 0
-        bar_y = 0
-        for i, label in enumerate(items):
-            selected = focused and i == self.sel
-            text = ('› ' if selected else '') + label
-            if x:
-                if x + 3 + len(text) > w - 1:
-                    bar_y += 1
-                    x = 0
-                else:
-                    text = '   ' + text
-            bar.append((bar_y, x, text, selected))
-            x += len(text)
+        # The home page has no menu: everything it offered is a slash command (/requirements, /issue, /change,
+        # /configure, /quit).
+        bar, bar_y = [], -1
         # The homepage is the menu and the prompt. Listing every worktree run
         # here put a growing block of paths above both -- and now that an issue
         # run takes its own worktree by default, that list only gets longer.
@@ -7124,6 +7167,7 @@ class UncleTUI:
                 self.stdscr.addnstr(y, x, text, min(width, max(0, w - x - 1)), attr)
             except curses.error:
                 pass
+        self._text_view = None
         if history:
             joined = '\n'.join(history)
             tail = joined[-200000:]
@@ -7147,6 +7191,9 @@ class UncleTUI:
             visible = lines[max(0, end - room):end] if room else []
             for i, (role, line) in enumerate(visible):
                 put(top + 1 + i, line, self.chat_attr(role, color.get('accent', 0)))
+            self._text_view = {'state': self.state, 'top': top + 1, 'left': left, 'width': width, 'rows': len(visible),
+                               'start': max(0, end - room), 'lines': [text for _, text in lines]}
+            self._paint_selection()
             if self.home_scroll:
                 put(top, '↓ %d newer lines · PgDn to follow' % self.home_scroll,
                     color.get('muted', curses.A_DIM), True)
@@ -7250,6 +7297,9 @@ class UncleTUI:
                     else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52
                     else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 35
                     else '@ files  Ctrl-P menu Tab chat' if width >= 29 else 'Ctrl-P menu')
+        if not build and not self._background_status():
+            hint = ('/ commands   @ files   # issues   /configure   /quit' if width >= 56
+                    else '/ commands  @ files  # issues' if width >= 32 else '/ cmds @ files')
         put(row + (1 if compact else 3), hint, color.get('muted', curses.A_DIM), not build)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
@@ -7395,11 +7445,16 @@ class UncleTUI:
         self.build_wrapped_count = len(wrapped)
         self.build_scroll = min(offset, max(0, len(wrapped) - rows))
         end = len(wrapped) - self.build_scroll
-        for i, (role, line) in enumerate(wrapped[max(0, end - rows):end] if rows else []):
+        shown = wrapped[max(0, end - rows):end] if rows else []
+        for i, (role, line) in enumerate(shown):
             try:
                 self.stdscr.addnstr(i, 0, line, message_width, self.chat_attr(role))
             except curses.error:
                 pass
+        # Where the transcript sits, so the mouse can select it (the stage sidebar is outside this column).
+        self._text_view = {'state': self.state, 'top': 0, 'left': 0, 'width': message_width, 'rows': len(shown), 'start': max(0, end - rows),
+                           'lines': [line for _, line in wrapped]}
+        self._paint_selection()
         if self.prompt_kind:
             self._draw_modal(h, w)
 
@@ -8140,14 +8195,146 @@ class UncleTUI:
 
     # ---- input ----
     def _set_mouse(self, on):
-        """Turn wheel capture on or off; off leaves the terminal's own text selection."""
+        """Mouse capture on or off. On: the wheel scrolls and a drag selects text in the output column (copied on
+        release). Off: the terminal's own selection and scrollback."""
         try:
             curses.mouseinterval(0)
-            curses.mousemask((getattr(curses, 'BUTTON4_PRESSED', 0) | getattr(curses, 'BUTTON5_PRESSED', 0))
-                             if on else 0)
+            curses.mousemask((curses.ALL_MOUSE_EVENTS | getattr(curses, 'REPORT_MOUSE_POSITION', 0)) if on else 0)
             self.mouse_capture = bool(on)
         except curses.error:
             self.mouse_capture = False
+        # curses asks the terminal for press/release only. 1002 adds motion reports while a button is held (a drag),
+        # and nothing for plain movement.
+        _tty_write('\x1b[?1002h' if self.mouse_capture else '\x1b[?1002l')
+        if not self.mouse_capture:
+            self._sel = None
+
+    # ---- text selection in the output column ----
+    def _view_cell(self, x, y, clamp=False):
+        """(line index, column) of a screen cell in the recorded text view, or None outside it."""
+        view = getattr(self, '_text_view', None)
+        if not view or view.get('state') != self.state or not view['rows']:
+            return None
+        row, col = y - view['top'], x - view['left']
+        if not clamp and not (0 <= row < view['rows'] and 0 <= col < view['width']):
+            return None
+        row = max(0, min(row, view['rows'] - 1))
+        col = max(0, min(col, view['width']))
+        return (view['start'] + row, col)
+
+    def _selection_span(self):
+        sel = getattr(self, '_sel', None)
+        if not sel:
+            return None
+        a, b = sel['a'], sel['b']
+        return (a, b) if a <= b else (b, a)
+
+    def _selected_text(self):
+        span, view = self._selection_span(), getattr(self, '_text_view', None)
+        if not span or not view:
+            return ''
+        (l1, c1), (l2, c2) = span
+        out = []
+        for idx in range(l1, l2 + 1):
+            if not 0 <= idx < len(view['lines']):
+                continue
+            text = view['lines'][idx]
+            start = c1 if idx == l1 else 0
+            end = c2 + 1 if idx == l2 else len(text)
+            out.append(text[start:end].rstrip())
+        return '\n'.join(out)
+
+    def _paint_selection(self):
+        """Reverse-video the selected cells; called at the end of a draw that recorded a text view."""
+        span, view = self._selection_span(), getattr(self, '_text_view', None)
+        if not span or not view:
+            return
+        (l1, c1), (l2, c2) = span
+        for i in range(view['rows']):
+            idx = view['start'] + i
+            if not l1 <= idx <= l2 or idx >= len(view['lines']):
+                continue
+            start = c1 if idx == l1 else 0
+            end = c2 + 1 if idx == l2 else max(len(view['lines'][idx]), start + 1)
+            count = min(end, view['width']) - start
+            if count > 0:
+                try:
+                    self.stdscr.chgat(view['top'] + i, view['left'] + start, count, curses.A_REVERSE)
+                except curses.error:
+                    pass
+
+    def _copy_to_clipboard(self, text):
+        """System clipboard tool when there is one, plus the terminal's OSC 52 (works over ssh)."""
+        import base64
+        copied = False
+        for command in (['pbcopy'], ['wl-copy'], ['xclip', '-selection', 'clipboard'],
+                        ['xsel', '--clipboard', '--input'], ['clip.exe']):
+            if shutil.which(command[0]):
+                try:
+                    subprocess.run(command, input=text.encode('utf-8'), check=True, timeout=3)
+                    copied = True
+                    break
+                except (OSError, subprocess.SubprocessError):
+                    continue
+        payload = base64.b64encode(text.encode('utf-8')).decode()
+        if len(payload) < 100000:
+            _tty_write('\x1b]52;c;%s\x07' % payload)
+        return copied
+
+    def _scroll_view(self, delta):
+        if self.state == 'menu':
+            self.home_scroll = max(0, getattr(self, 'home_scroll', 0) + delta)
+        elif self.state == 'running':
+            self.build_scroll = max(0, getattr(self, 'build_scroll', 0) + delta)
+
+    def _handle_mouse(self, x, y, bstate):
+        """Wheel scrolls; press-drag-release selects text in the output column and copies it."""
+        sel = getattr(self, '_sel', None)
+        dragging = bool(sel and sel.get('drag'))
+        press, release = getattr(curses, 'BUTTON1_PRESSED', 0), getattr(curses, 'BUTTON1_RELEASED', 0)
+        report = getattr(curses, 'REPORT_MOUSE_POSITION', 0)
+        if bstate is None:  # getmouse failed: wheel-down on an ncurses without BUTTON5
+            if not dragging:
+                self._wheel(None)
+            return
+        if bstate & getattr(curses, 'BUTTON4_PRESSED', 0):
+            self._wheel(bstate)
+        elif release and bstate & release:
+            if dragging:
+                cell = self._view_cell(x, y, clamp=True)
+                if cell:
+                    sel['b'] = cell
+                sel['drag'] = False
+                if sel['a'] == sel['b']:
+                    self._sel = None  # a plain click clears
+                else:
+                    text = self._selected_text()
+                    if text:
+                        self._copy_to_clipboard(text)
+                        self.chat_error = 'Copied %d characters' % len(text)
+        elif press and bstate & press:
+            cell = None if getattr(self, 'prompt_kind', '') else self._view_cell(x, y)
+            self._sel = {'a': cell, 'b': cell, 'drag': True} if cell else None
+        elif report and bstate & report:
+            if dragging:
+                cell = self._view_cell(x, y, clamp=True)
+                if cell:
+                    sel['b'] = cell
+                view = getattr(self, '_text_view', None)
+                if view and y <= view['top']:
+                    self._scroll_view(1)  # dragging past the top edge scrolls back
+                elif view and y >= view['top'] + view['rows'] - 1:
+                    self._scroll_view(-1)
+            else:
+                self._wheel(None)  # wheel-down arrives as a bare position report; plain movement sends nothing
+
+    def _on_mouse_key(self):
+        try:
+            _, x, y, _, bstate = curses.getmouse()
+        except curses.error:
+            x = y = 0
+            bstate = None
+        self._handle_mouse(x, y, bstate)
 
     def _wheel(self, bstate, lines=3):
         """Scroll the home-page history or build transcript by mouse wheel."""
@@ -8164,6 +8351,7 @@ class UncleTUI:
             self.build_scroll = max(0, getattr(self, 'build_scroll', 0) + delta)
 
     def handle_key(self, k):
+        self._sel = None  # any key clears the highlighted selection
         self.esc_follow = None  # what _read_meta_key saw behind this key's Esc
         # Ctrl-L redraws everywhere; triage keeps its own keys otherwise.
         if (k == 12 or self.state != 'triage') and self._control_key(k):
@@ -8724,7 +8912,8 @@ class UncleTUI:
         # terminal selecting text, so copy/paste works by default. Ctrl-G toggles
         # capture; UNCLE_MOUSE=1 starts with it on. PageUp/PageDown always scroll.
         self.mouse_capture = False
-        self._set_mouse(os.environ.get('UNCLE_MOUSE', '') in ('1', 'true', 'yes', 'on'))
+        self._set_mouse(os.environ.get('UNCLE_MOUSE', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+                        and not _inline_enabled())
         self.input_timeout = 80
         self.stdscr.timeout(self.input_timeout)
         try:
@@ -8770,11 +8959,7 @@ class UncleTUI:
                     dirty = self.maybe_reload() or dirty
             k = self.stdscr.getch()
             if k == curses.KEY_MOUSE:
-                try:
-                    state = curses.getmouse()[4]
-                except curses.error:
-                    state = None  # wheel-down on ncurses without BUTTON5
-                self._wheel(state)
+                self._on_mouse_key()
                 dirty = True
             elif k != -1:
                 self.handle_key(k)
@@ -8833,6 +9018,7 @@ def main(stdscr):
                 ui._inline_leave()
             except Exception:
                 pass
+            _tty_write('\x1b[?1002l')  # button-drag mouse reporting off
             try:
                 _EXIT_SUMMARY_LINES = ui.exit_token_summary_lines()
             except Exception:

@@ -117,13 +117,20 @@ printf 'Previous state: %s\n' "$(clean "$PREV")"
 START="$(date +%s)"
 
 cd "$TARGET" || exit "$REFUSE"
+# The launcher exports UNCLE_PROJECT_ROOT as the caller's directory, and the driver cd's to
+# it; without this the driver would audit the caller's checkout, not the named branch's.
+export UNCLE_PROJECT_ROOT="$TARGET"
+# An audit rerun never publishes a PR or closes an issue. With issue closing on, an unattended
+# worktree run that publishes no PR is reported as a failure (exit 1) and may try to publish.
+export WORKFLOW_CLOSE_ISSUE=0
 bash "$ROOT/scripts/change-workflow.sh"
 DRIVER_STATUS=$?
 
-# If the driver could not take the lock (another process holds it) and nothing moved the
-# state off what we wrote, put the previous state back.
+# If the driver failed without moving the state off what we wrote, it made no progress:
+# put the previous state back rather than leave the run parked in FINAL_AUDIT.
 if [[ "$DRIVER_STATUS" != 0 ]] && [[ "$(head -n 1 "$STATE_FILE" 2>/dev/null)" == "$NEW" ]]; then
-    if ! python3 - "$LOCK_FILE" <<'PY'
+    printf '%s\n' "$PREV_RAW" > "$STATE_FILE"
+    if python3 - "$LOCK_FILE" <<'PY'
 import fcntl, sys
 fd = open(sys.argv[1], "a+")
 try:
@@ -132,10 +139,16 @@ except OSError:
     sys.exit(1)
 PY
     then
-        lock_write_restore=1
-        printf '%s\n' "$PREV_RAW" > "$STATE_FILE"
+        echo "Error: driver failed before changing the state; previous state restored" >&2
+    else
         echo "Error: driver could not take the lock; previous state restored" >&2
     fi
+fi
+
+# The audit rewrites tracked files (FINAL_AUDIT.md) and leaves them uncommitted; say so.
+dirty="$(git -C "$TARGET" status --porcelain --untracked-files=no 2>/dev/null | head -n 5)"
+if [[ -n "$dirty" ]]; then
+    echo "Note: the audit left tracked changes uncommitted in $(clean "$TARGET"); commit them to keep the new audit." >&2
 fi
 
 verdict="UNKNOWN"

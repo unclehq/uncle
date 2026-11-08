@@ -1,77 +1,68 @@
-# Change Spec (Issue 188)
+# Change Spec
 
-Omitted sections: Migration (none); Prototype isolation (not a prototype); Performance numbers beyond criteria (covered by AC)
+Omitted sections: Migration (none); Prototype isolation (not a prototype); Performance (negligible); Security (see 10, brief)
 
 ## 1. Change type
-Feature (performance of first homepage message).
+Feature + bug fix (multi-line paste currently submits per line).
 
 ## 2. Problem statement
-The first homepage message pays home-agent process start, lazy connection and project exploration (~25s vs ~6.6s follow-up).
+Home composer cannot take multi-line pasted text (each newline submits) and offers no first-class newline key; Issue 190.
 
 ## 3. Current behavior
-Baseline B-1, B-2.
+See baseline B-1..B-9.
 
 ## 4. Desired behavior
-When the curses UI runs, a background thread starts the home agent and sends one application-sent preload turn carrying a project snapshot, so it is ready and informed before the operator types. Never under `--noui`; never when `UNCLE_HOME_AGENT=0` or runner is not `claude`.
+Enter submits; Ctrl+Enter inserts newline at cursor; pasted text (single or multi-line) is inserted at the cursor verbatim (newlines normalized to LF) without submitting; copy works with the system shortcut.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| SB-1 | ADD | UI starts, claude runner, `UNCLE_HOME_AGENT` != 0 | No home agent process | Home agent process alive shortly after start, before any message | unit test with fake session + manual `ps` |
-| SB-2 | ADD | Preload runs | None | One application-sent turn with snapshot (branch/status, worktrees, open issues, key-file listing) marked not-from-operator, authorizing nothing, snapshot-time + re-check note | unit test of prompt text |
-| SB-3 | MODIFY | First operator message | Lazy start + exploration | Reuses the preloaded session; queues behind an in-flight preload on the session lock | unit test |
-| SB-4 | PRESERVE | `--noui`/`UNCLE_NOUI=1` | No UI | No home agent started | unit test (`run` guard) + manual `ps` |
-| SB-5 | PRESERVE | `UNCLE_HOME_AGENT=0` or non-claude runner | Nothing / fallback note | Nothing started by preload; no new note from preload | unit test |
-| SB-6 | PRESERVE | Build start (`_agent_quiesce`), quit | Agent closed | Preload cancelled and its process dead; no leaked process | unit test |
-| SB-7 | PRESERVE | Project root changes | Restart with handoff on next message | Preload session discarded the same way; no preload re-run | unit test |
-| SB-8 | PRESERVE | Preload fails (spawn error, gather error, timeout) | n/a | Silent; no history line; lazy start remains | unit test |
-| SB-9 | PRESERVE | UI draw/input | Responsive | Preload does no work on the UI thread beyond starting a thread | code review + manual |
+| SB-1 | PRESERVE | Enter with non-empty text, no picker/menu, not edit mode | submits, clears composer (B-1) | unchanged | unit test AC-1 |
+| SB-2 | ADD | Ctrl+Enter reported by terminal as CSI-u `ESC[13;5u` or modifyOtherKeys `ESC[27;5;13~` | submits (or nothing) | newline inserted at cursor, no submit, cursor advances | unit test AC-2 + manual |
+| SB-3 | ADD | Esc immediately followed by Enter (Alt+Enter / terminals mapping Ctrl+Enter to ESC CR) | Esc handled, Enter submits | newline inserted at cursor, no submit | unit test AC-2 |
+| SB-4 | MODIFY | Bracketed paste `ESC[200~ ... ESC[201~` | each newline submits (B-6) | whole payload inserted at cursor; CR/CRLF normalized to LF; no submit; honors COMPOSER_LIMIT; control chars other than LF/TAB dropped | unit test AC-3 |
+| SB-5 | MODIFY | Terminal without bracketed paste: Enter key arrives while further input already queued | submits per line | treated as newline (paste burst); a lone Enter still submits | unit test AC-3 |
+| SB-6 | ADD | UI start / exit | no paste or enhanced-key modes | bracketed paste and enhanced-key reporting enabled at start and always disabled at exit/crash teardown | unit test + manual |
+| SB-7 | PRESERVE | Backslash-Enter continuation, `\\` escape, edit-mode Enter, picker/slash Enter, Esc+other key, Meta b/f/d | per B-2..B-5, B-8 | unchanged | existing + new tests AC-4 |
+| SB-8 | PRESERVE | Copy selected composer text with system shortcut | works via terminal selection (mouse capture off or terminal bypass modifier) | unchanged; Ctrl-C still quits | manual AC-5 |
+| SB-9 | PRESERVE | Enter with empty composer | no message sent | unchanged | unit test AC-1 |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| SI-1 | EXISTING | One turn at a time on agent stdin | HomeAgentSession | `SupervisorSession.turn` lock | unit test: operator request waits for preload |
-| SI-2 | EXISTING | No home agent process survives quiesce/exit | TUI | `_close_home_agent` | unit test |
-| SI-3 | EXISTING | Only read-only base tools plus granted rules | agent command | `build_command` unchanged | existing; preload gathers data in-app so needs no tools |
-| SI-4 | NEW | Preload turn is application-sent, authorizes nothing, and treats repo/issue text as data | preload prompt | `home_preload.preload_prompt` | unit test on prompt text and delimiters |
-| SI-5 | NEW | Preload never runs under `--noui`, `UNCLE_HOME_AGENT=0`, non-claude runner | `run()` | guard in `_preload_home_agent` | unit test |
-| SI-6 | NEW | A superseded preload (closed/generation changed) leaves no process | TUI thread | lock + cancel event + post-create check | unit test |
-| SI-7 | NEW | Preload failure is silent | TUI | try/except in thread | unit test |
+| SI-1 | NEW | No newline contained in pasted or Ctrl+Enter input ever triggers `send_home_chat` | composer | paste/newline branches never call submit | unit test |
+| SI-2 | EXISTING | Composer length <= COMPOSER_LIMIT; cursor within text | composer | `edit_insert` limit | unit test with oversize paste |
+| SI-3 | NEW | Terminal mode enabled at start is disabled on every exit path | TUI lifecycle | teardown | unit test + manual |
+| SI-4 | EXISTING | `_read_meta_key` restores input timeout on all paths and never blocks indefinitely on a truncated sequence | key reader | try/finally + bounded wait | unit test |
+| SI-5 | EXISTING | Plain Enter semantics B-1..B-5 unchanged | composer | `_chat_key` | existing test + new |
 
 No RELAXED or REMOVED invariants.
 
-## 7. Compatibility requirements
-No change to `_agent_handoff_text`, system prompt, env var names, or log filenames.
+## 7. Compatibility
+Backslash-Enter continuation retained as fallback for terminals that cannot signal Ctrl+Enter. Existing `_chat_key(10)` must still submit.
 
-## 8. Error and failure behavior
-Any failure in gather/spawn/turn is swallowed; the next `_agent_turn` starts lazily as today.
+## 8. Error behavior
+Unterminated bracketed paste (no `ESC[201~` within bounded wait): insert what was received, resume normal input; never hang. Unknown CSI sequences after Esc are pushed back as today.
 
-## 9. Performance requirements
-No UI-thread blocking beyond a short lock held for process spawn; snapshot gather subprocesses each time-limited (<=5s) and capped in size.
+## 10. Security
+Pasted bytes are sanitized (drop ESC and other C0 controls except LF/TAB) so a paste cannot inject terminal escape sequences or fake paste-end markers into the composer.
 
-## 10. Security requirements
-Preload text is bounded, sanitized, delimited as untrusted data; no new tool grants; no secrets sent beyond repo state the agent could read anyway.
+## 12. Rollback
+Revert the commit; no persistence or schema.
 
-## 12. Rollback expectations
-Setting `UNCLE_HOME_AGENT=0` disables; reverting the `run()` call removes the feature.
-
-## 14. Explicit non-goals
-Handoff text, system prompt, re-preloading after root change/build, preload under `--noui`.
+## 14. Non-goals
+Changing mouse-capture defaults; build-page triage composer; custom key-binding config; clipboard integration (OSC 52/pbcopy); making Ctrl+Enter work on terminals that cannot report it.
 
 ## 15. Assumptions
-Preload content is chosen by the plan (in scope per request). Stale-state note is embedded in the preload turn.
+Terminals lacking enhanced-key reporting use backslash-Enter or Esc+Enter. Copy needs no code change (terminal-native selection).
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | With the UI running, claude runner and UNCLE_HOME_AGENT unset, a home agent session is created and primed in a background thread before any operator message. | Unit test with patched persistent_session; manual ps check. |
-| AC-2 | The preload turn is application-sent, states it is not from the operator and authorizes nothing, wraps repo/issue text as untrusted data, and notes the snapshot time and that state must be re-checked before acting. | Unit test on home_preload.preload_prompt output. |
-| AC-3 | The snapshot contains git branch/status, worktrees, open issues (when gh works) and a key-file listing, each source time-limited and failures skipped; total size is capped. | Unit test with fake runner including timeout/failure cases. |
-| AC-4 | No home agent is started or preloaded under UNCLE_NOUI=1, UNCLE_HOME_AGENT=0, or a non-claude runner, and preload adds no home-history note. | Unit tests of the guard. |
-| AC-5 | An operator message sent while preload is running queues behind it on the session lock; turns never interleave. | Unit test with a blocking fake session turn. |
-| AC-6 | _agent_quiesce, root change, and quit cancel an in-flight preload and leave no live process, including when the session is created after the close. | Unit tests for each path. |
-| AC-7 | Any preload failure is silent and the lazy start path still works. | Unit test raising from gather and from session creation. |
-| AC-8 | Startup does no preload work on the UI thread; existing shell and Python suites do not regress. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh versus baseline; code inspection. |
-| AC-9 | Time to first text for the first homepage message is no worse than for later ones and a question about branches/issues is answered without repeating the preloaded inspection. | Manual: launch uncle in a repo, wait, ask about branches, inspect home-agent-chat-1.jsonl for tool calls and timing. |
+| AC-1 | Enter with non-empty text (no picker/menu/edit mode) sends it via send_home_chat and clears the composer; Enter with empty composer sends nothing. | Python unit test driving handle_key/_chat_key with stub UI (existing home-actions-test.py:396 still passes plus new case). |
+| AC-2 | Ctrl+Enter (CSI-u `ESC[13;5u`, modifyOtherKeys `ESC[27;5;13~`) and Esc+Enter insert a newline at the cursor, advance the cursor, and do not submit or clear the composer. | Python unit test feeding byte sequences through the key reader with a fake screen; plus manual check in a CSI-u capable terminal. |
+| AC-3 | Pasting single- or multi-line text (bracketed paste, or Enter-with-queued-input burst) inserts it at the cursor with CR/CRLF normalized to LF, never submits, respects COMPOSER_LIMIT, and drops escape/control characters other than LF and TAB; an unterminated paste does not hang. | Python unit tests of pure paste parser and key reader; manual paste in real terminal. |
+| AC-4 | Existing composer behaviors are unchanged: backslash-Enter continuation, `\\` escape, edit-mode Enter, picker/slash Enter, Esc+non-Enter key pushback, Meta b/f/d, Ctrl-C quit. | bash scripts/run-python-tests.sh including home-actions-test.py and new home-composer-keys-test.py. |
+| AC-5 | Copying selected composer text works with the standard system shortcut in the terminal (unchanged mechanism), and terminal paste/enhanced-key modes are disabled on exit. | Manual checklist: select composer text (mouse capture off via Ctrl-G or terminal bypass modifier), copy, paste elsewhere; after quitting, run `cat` and confirm pasted text has no ESC[200~ markers; unit test that teardown emits disable sequences. |
 

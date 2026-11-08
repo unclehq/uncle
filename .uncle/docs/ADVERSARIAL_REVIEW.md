@@ -1,184 +1,184 @@
-## AR-001: Operator's early message queues behind preload on session.lock, but preload has a 60s deadline, so the first message cou
+## AR-001: Plain Enter can arrive as byte 10 or 13 (ICRNL), and key 10 must submit per the protected test, yet the burst detector a
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 (60s deadline) and R-5/SI-1 'Queue, never interleave' versus CHANGE_SPEC AC-5 and AC-9.
-- Failure: Operator's early message queues behind preload on session.lock, but preload has a 60s deadline, so the first message could wait up to 60s, contradicting AC-9. Plan should say: an operator turn arriving during preload cancels the preload (or the wait is capped at N seconds) rather than queueing.
+- References: CHANGE_PLAN s1 (Esc followed by 10/13; burst k in (10,13)) vs R-1 (_chat_key(10) submits). Plan should state: 'Burst detection and Esc+Enter apply to both 10 and 13; lone 10/13 with no pending input and no preceding Esc always submits.'
+- Failure: Plain Enter can arrive as byte 10 or 13 (ICRNL), and key 10 must submit per the protected test, yet the burst detector and Esc+10/13 treat both bytes as newline triggers. Plan does not say whether a lone Esc then Enter(10) is newline or submit, or whether burst applies equally to 10 and 13.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Guard placement conflicts: spec puts the SB-4 guard in run() and in _preload_home_agent, and D-1 covers only opt-out/run
+## AR-002: Plan never states whether paste, Ctrl+Enter, or burst-Enter apply when the composer is not in plain composing state (pic
 
 - Severity: HIGH
-- References: CHANGE_SPEC SB-4 'run guard' and SI-5 'guard in _preload_home_agent'; CHANGE_PLAN s9 D-1.
-- Failure: Guard placement conflicts: spec puts the SB-4 guard in run() and in _preload_home_agent, and D-1 covers only opt-out/runner. Plan should say: _preload_home_agent returns before any session call if UNCLE_NOUI=='1', UNCLE_HOME_AGENT=='0' or runner != 'claude', and run() starts the thread only when the same checks pass.
+- References: CHANGE_SPEC SB-4 has no state qualifier; D-3 limits only burst. Plan should say: 'Outside plain composing state (picker, slash menu, edit mode), bracketed paste and Ctrl+Enter sequences are consumed and discarded; they never insert or submit.'
+- Failure: Plan never states whether paste, Ctrl+Enter, or burst-Enter apply when the composer is not in plain composing state (picker/slash menu open, edit mode, empty composer). Burst detection is limited to 'composing' but SB-2/SB-4 are unconditional, and a paste in a picker is undefined.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Unspecified: the operator's first message creating the session lazily before the preload thread does.
+## AR-003: Paste exceeding COMPOSER_LIMIT is ambiguous: plan caps the read at COMPOSER_LIMIT bytes, but it does not say whether the
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s10 'agent_lock guards session creation'; SB-3 only covers preload already in flight.
-- Failure: Unspecified: the operator's first message creating the session lazily before the preload thread does. Plan should say: whichever caller holds agent_lock first creates the session, the other reuses it, and the preload turn is sent only if no operator turn has started.
+- References: CHANGE_PLAN s12 'total cap COMPOSER_LIMIT bytes'; SI-2 limit on characters. Plan should say: 'The reader drains and discards all paste bytes through ESC[201~ (or timeout) after truncating the insert to the remaining capacity in characters.'
+- Failure: Paste exceeding COMPOSER_LIMIT is ambiguous: plan caps the read at COMPOSER_LIMIT bytes, but it does not say whether the remainder is drained until ESC[201~ or left in the input stream, where it would be interpreted as keystrokes, including Enter submits. Bytes vs characters and the existing composer content also collide with the limit.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Behavior on preload timeout is unspecified: after 60s the session may hold a partial turn, and no rule says keep or clos
+## AR-004: Timeout and truncated-paste behavior conflict: partial paste is inserted 'on timeout and continue', but the remaining pa
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 '60s deadline', s10 D-2, SB-8 'timeout' silent with 'lazy start remains'.
-- Failure: Behavior on preload timeout is unspecified: after 60s the session may hold a partial turn, and no rule says keep or close. Plan should say: on timeout the session is closed and agent_session cleared so the next message restarts it lazily.
+- References: CHANGE_PLAN s12 'on timeout insert partial and continue'; SI-1. Plan should say: 'After an unterminated paste times out, the composer stays in paste-tail mode so that Enter within the next burst is treated as newline per SB-5.'
+- Failure: Timeout and truncated-paste behavior conflict: partial paste is inserted 'on timeout and continue', but the remaining paste bytes arriving later would then be handled as ordinary keys, where their newlines submit. This contradicts SI-1 and AC-3.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Snapshot rules unspecified: whether the 6000-char cap is total or per-section, which section is truncated first, and wha
+## AR-005: D-2 is undecided: it contains conflicting text on kitty flags (1 vs 5, 'use ...
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN step 1 '6000-char cap'; CHANGE_SPEC AC-3 'total size is capped', s10 'sanitized'; D-3.
-- Failure: Snapshot rules unspecified: whether the 6000-char cap is total or per-section, which section is truncated first, and what happens in a non-git directory or when every source fails. Plan should say: the cap is total, truncating gh, then worktrees, then listing; if no source returns data, preload is skipped.
+- References: CHANGE_PLAN s1 'ESC[>1u ... use ESC[>5u? see D-2'; D-2. Plan should say: 'Startup emits exactly ESC[?2004h and ESC[>4;2m; kitty protocol is not enabled; teardown emits ESC[?2004l and ESC[>4;0m.'
+- Failure: D-2 is undecided: it contains conflicting text on kitty flags (1 vs 5, 'use ... choose ... or skip') and the code uses ESC[<u pop without a matching push guarantee. Implementers, tests and checklists cannot agree on which exact strings are emitted at start.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: After root change or build quiesce the cancel event is set, but whether a fresh Event is created and whether preload may
+## AR-006: Control-character handling for pasted TAB and for modifiers other than Ctrl (e.g.
 
 - Severity: LOW
-- References: CHANGE_PLAN s7 agent_preload_cancel and D-4; CHANGE_SPEC SB-7 'no preload re-run'.
-- Failure: After root change or build quiesce the cancel event is set, but whether a fresh Event is created and whether preload may run again is unspecified. Plan should say: each preload gets a fresh Event and preload runs at most once per process start.
+- References: CHANGE_SPEC AC-2 lists only 13;5u and 27;5;13~. Plan should say: 'CSI-u/modifyOtherKeys Enter with any modifier other than Ctrl is treated as plain Enter (submit), and all other unknown CSI sequences are pushed back unchanged.'
+- Failure: Control-character handling for pasted TAB and for modifiers other than Ctrl (e.g. Shift+Enter ESC[13;2u, Alt+Enter ESC[13;3u) is unspecified. Modifyotherkeys level 2 will also report these for other keys, and the plan states only the 5-modifier cases.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: D-1 skips preload on opt-out or non-claude runner, but the plan never says how without calling `_home_agent_session`, wh
+## AR-007: Burst detection (Enter with any pending input becomes newline) conflicts with SB-1/SI-5 'plain Enter unchanged' and AC-1
 
 - Severity: HIGH
-- References: CHANGE_PLAN s9 and D-1; SB-5 'no new note from preload'.
-- Failure: D-1 skips preload on opt-out or non-claude runner, but the plan never says how without calling `_home_agent_session`, which can call `_agent_note_unavailable`. Duplicated guard logic can drift and add a history note (SB-5). Plan should say: 'The preload guard reuses the helper `_home_agent_session` uses and never calls `_agent_note_unavailable`.'
+- References: CHANGE_PLAN s1 (handle_key burst check) vs s3 'byte-for-byte unchanged'; risk s22 accepts rapid double Enter as newline.
+- Failure: Burst detection (Enter with any pending input becomes newline) conflicts with SB-1/SI-5 'plain Enter unchanged' and AC-1: key-repeat or fast typing submits as newline. Settle: 'Burst detection applies only when at least 2 further bytes are already pending; otherwise Enter submits.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Mid-spawn races are unspecified: if the main thread calls `_agent_turn` while the preload holds `agent_lock`, it is uncl
+## AR-008: modifyOtherKeys level 2 makes Ctrl-C, Meta b/f/d and other modified keys arrive as CSI 27;..~ sequences that are only 'p
 
 - Severity: HIGH
-- References: CHANGE_PLAN s10 'agent_lock guards session creation/close'; SI-6 covers only close before the post-create check.
-- Failure: Mid-spawn races are unspecified: if the main thread calls `_agent_turn` while the preload holds `agent_lock`, it is unclear whether the operator path waits for the preload session or spawns a second process. Plan should say: '`_home_agent_session` returns the existing `agent_session` if set; creation and assignment are atomic under `agent_lock`.'
+- References: CHANGE_PLAN D-2 and risk s22 item 1 ('Not blocking'); AC-4 lists Ctrl-C quit and Meta b/f/d.
+- Failure: modifyOtherKeys level 2 makes Ctrl-C, Meta b/f/d and other modified keys arrive as CSI 27;..~ sequences that are only 'pushed back as unknown', risking AC-4 regressions. Settle: 'Map 27;mod;code~ and CSI-u for Ctrl-C and Meta-b/f/d to legacy keycodes, or use level 1 only.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: The plan does not say what happens to the session on preload timeout (60s) or turn error.
+## AR-009: D-2 is self-contradictory on whether kitty flags are emitted (ESC[>1u vs ESC[>5u vs none), yet teardown writes ESC[<u un
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 '60s deadline', s11 'except Exception: pass', SB-8.
-- Failure: The plan does not say what happens to the session on preload timeout (60s) or turn error. A half-primed session could be reused for the operator's first message. Plan should say: 'On timeout or error the preload closes and clears `agent_session`, so the next `_agent_turn` starts fresh.'
+- References: CHANGE_PLAN s1 ('use ESC[>5u? see D-2') and D-2 text; teardown list includes ESC[<u.
+- Failure: D-2 is self-contradictory on whether kitty flags are emitted (ESC[>1u vs ESC[>5u vs none), yet teardown writes ESC[<u unconditionally. Settle: 'Emit only ESC[>4;2m and ESC[?2004h; no kitty sequences; teardown writes ESC[>4;0m and ESC[?2004l only.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Lifecycle of `agent_preload_cancel` is unspecified, so a stale cancel event could cancel a later session or preload afte
+## AR-010: Paste and Ctrl+Enter behavior is unspecified when the composer isn't in plain composing state (picker/slash menu, edit m
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s7 'agent_preload_cancel (Event or None)'; D-4 no re-preload.
-- Failure: Lifecycle of `agent_preload_cancel` is unspecified, so a stale cancel event could cancel a later session or preload after root change or close. Plan should say: 'Each preload creates a fresh cancel Event; `_close_home_agent` sets it and then sets it to None under the lock.'
+- References: CHANGE_PLAN D-3 gates burst only; SB-2/SB-4 triggers carry no state qualifier; AC-4 preserves picker/edit Enter.
+- Failure: Paste and Ctrl+Enter behavior is unspecified when the composer isn't in plain composing state (picker/slash menu, edit mode). Only burst detection is gated on composing. Settle: 'Paste and Ctrl+Enter/Esc+Enter are consumed with no insert and no submit unless the plain composer has focus.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: Plan does not say whether the preload turn advances counters or log numbering that operator turns use.
+## AR-011: Over-limit or timed-out paste is ambiguous: leftover bytes and the ESC[201~ marker may be read as keystrokes, including
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s6 'log to io.BytesIO', s16 manual check, AC-9.
-- Failure: Plan does not say whether the preload turn advances counters or log numbering that operator turns use. The manual check reads home-agent-chat-1.jsonl and existing tests may assume chat-1 is the first operator message. Plan should say: 'The preload writes to an in-memory buffer and increments no counter or log index used for operator turns.'
+- References: CHANGE_PLAN s12 (total cap COMPOSER_LIMIT bytes; on timeout insert partial and continue) vs SI-1.
+- Failure: Over-limit or timed-out paste is ambiguous: leftover bytes and the ESC[201~ marker may be read as keystrokes, including Enter that submits. Settle: 'Read to the end marker even past the limit, discarding excess; after a timeout, LF/CR within the same burst remain newlines.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: The UNCLE_NOUI guard location is inconsistent: R-1 says guards live in `_preload_home_agent`, while SB-4 says unit test
+## AR-012: Esc followed by Enter changes meaning to newline, but behavior with a picker or edit mode open is unspecified.
 
 - Severity: LOW
-- References: CHANGE_PLAN s9, R-1, s15; CHANGE_SPEC SB-4.
-- Failure: The UNCLE_NOUI guard location is inconsistent: R-1 says guards live in `_preload_home_agent`, while SB-4 says unit test of the `run` guard. Existing suites never call `run()`, so the thread-start path is untested. Plan should say: 'The `UNCLE_NOUI` check is in `run()` before the thread starts, tested with thread start patched.'
+- References: CHANGE_SPEC SB-3 vs SB-7 (Esc+other key pushback preserved).
+- Failure: Esc followed by Enter changes meaning to newline, but behavior with a picker or edit mode open is unspecified. Settle: 'Esc+Enter inserts a newline only when the plain composer has focus; otherwise old Esc then Enter behavior stays.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Plan says repo/issue text is 'sanitized' and delimited but never defines either.
+## AR-013: Burst detection turns any Enter with queued input into a newline, so behavior depends on timing, and it is unspecified w
 
 - Severity: HIGH
-- References: CHANGE_SPEC §10 'sanitized, delimited'; CHANGE_PLAN Risks 'delimiters'; SI-4 test checks only 'prompt text and delimiters'.
-- Failure: Plan says repo/issue text is 'sanitized' and delimited but never defines either. A title or filename containing the closing delimiter can escape the data block. Say: strip control chars, truncate each item, use a per-run random-nonce delimiter removed from all gathered strings.
+- References: CHANGE_PLAN D-3 and section 1 (handle_key peek via nodelay getch+ungetch); SB-5 says only 'further input already queued'.
+- Failure: Burst detection turns any Enter with queued input into a newline, so behavior depends on timing, and it is unspecified whether it applies during an active bracketed paste. Plan should say: 'Burst detection applies only when bracketed paste is not active, and never submits.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Plan does not say whether the preload session has operator-granted tool rules or what happens on a tool request mid-prel
+## AR-014: Sanitization drops ESC and C0 only.
 
 - Severity: HIGH
-- References: CHANGE_SPEC SI-3 'read-only base tools plus granted rules'; CHANGE_PLAN R-3 only says build_command is unchanged.
-- Failure: Plan does not say whether the preload session has operator-granted tool rules or what happens on a tool request mid-preload. Injected issue text could trigger tool calls unattended. Say: preload runs with no granted rules, and any tool-use request during preload is denied and cancels the turn.
+- References: CHANGE_PLAN D-4; CHANGE_SPEC section 10 and AC-3 list only ESC and C0.
+- Failure: Sanitization drops ESC and C0 only. C1 controls (including 8-bit CSI 0x9B), DEL and Unicode bidi/format characters are unspecified. Plan should say: 'sanitize_paste also drops DEL, C1 controls and U+202A-202E, U+2066-2069.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: Snapshot may expose secret-named files via the top-level listing or git status, sent to the model unprompted at startup.
+## AR-015: The plan does not say how a fake paste-end marker inside a payload is handled.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC §10 'no secrets beyond repo state the agent could read anyway'; CHANGE_PLAN §1 gather list.
-- Failure: Snapshot may expose secret-named files via the top-level listing or git status, sent to the model unprompted at startup. Say: filter secret-like names (.env*, *key*, *.pem, credentials*) from the listing and send names only, never contents.
+- References: CHANGE_SPEC section 10 ('fake paste-end markers'); CHANGE_PLAN section 12 says only 'read until ESC[201~ or timeout/limit'.
+- Failure: The plan does not say how a fake paste-end marker inside a payload is handled. Bytes after an early ESC[201~ could be parsed as keys, including Enter. Plan should say: 'The reader returns at the first ESC[201~. Nested ESC[200~ is dropped as data.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: Gather subprocess argv, cwd and env are unspecified; git/gh run in an untrusted repo can execute repo-configured helpers
+## AR-016: Paste overflow and timeout behavior is unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN §1 and step 1 give only 'injectable runner, per-command 5s timeout'.
-- Failure: Gather subprocess argv, cwd and env are unspecified; git/gh run in an untrusted repo can execute repo-configured helpers (fsmonitor, diff drivers). Say: fixed argv lists, no shell, cwd=project root, git with -c core.fsmonitor=false, minimal env, size-bounded output.
+- References: CHANGE_PLAN section 12 ('total cap COMPOSER_LIMIT bytes; on timeout insert partial and continue'); SB-4.
+- Failure: Paste overflow and timeout behavior is unspecified. After COMPOSER_LIMIT is reached, the remaining bytes may be dispatched as keystrokes (including Enter, which submits). Plan should say: 'On overflow, discard remaining bytes until ESC[201~ or timeout; never dispatch them as keys.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: Unspecified: operator message queued when the 60s preload times out or is cancelled, and whether 60s includes lock wait.
+## AR-017: Mode teardown does not name signal exits (SIGTERM, SIGHUP) or suspend/resume (SIGTSTP).
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN §1 '60s deadline'; §11 D-2 'close() kills the process; turn returns'; SB-3/SB-8 silent on this combination.
-- Failure: Unspecified: operator message queued when the 60s preload times out or is cancelled, and whether 60s includes lock wait. Say: on preload timeout the session is closed and the queued operator turn starts a fresh session lazily.
+- References: CHANGE_PLAN R-3, section 15 and SI-3 ('every exit path') against only 'teardown (~9102)'.
+- Failure: Mode teardown does not name signal exits (SIGTERM, SIGHUP) or suspend/resume (SIGTSTP). 'Not in test' detection is also undefined. Plan should say: 'Disable strings are emitted from finally, atexit and SIGTERM/SIGHUP handlers, and modes are re-emitted on resume from SIGTSTP.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: The '60s deadline' is not tied to a testable mechanism or an expiry outcome.
+## AR-018: Burst detection is untestable as written: 'input pending' has no stated window and no fake-screen contract.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 says '60s deadline' with no mechanism or test hook. SB-8 lists timeout as a failure without saying what state results.
-- Failure: The '60s deadline' is not tied to a testable mechanism or an expiry outcome. Settle it: 'The preload turn is cancelled via the cancel Event after PRELOAD_TIMEOUT_S (default 60, module constant patchable by tests); on expiry the session is closed and agent_session reset to None.'
+- References: CHANGE_PLAN s1 'peek (nodelay getch + ungetch)'; SB-5 'further input already queued'.
+- Failure: Burst detection is untestable as written: 'input pending' has no stated window and no fake-screen contract. Say: 'Enter is a newline iff a nodelay getch immediately returns a key, which is pushed back; otherwise Enter submits.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: The plan doesn't say whether the session is kept after the preload turn fails or times out.
+## AR-019: D-2 and the approach text contradict each other (ESC[>1u vs ESC[>5u vs skip kitty), so the exact startup and teardown st
 
 - Severity: HIGH
-- References: CHANGE_PLAN s7 covers cleanup only for superseded sessions. s12 says only 'except Exception: pass after cleanup'.
-- Failure: The plan doesn't say whether the session is kept after the preload turn fails or times out. Settle it: 'If the preload turn fails or times out, the preload thread closes the session it created and sets agent_session to None.'
+- References: CHANGE_PLAN s1 and D-2; section 16 'teardown emits disable strings'.
+- Failure: D-2 and the approach text contradict each other (ESC[>1u vs ESC[>5u vs skip kitty), so the exact startup and teardown strings have no oracle. Say: 'Startup writes exactly ESC[?2004h and ESC[>4;2m, no kitty; teardown writes ESC[?2004l and ESC[>4;0m.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: AC-5 queues an operator message behind the preload, but AC-9 wants first-message latency no worse than later ones, and n
+## AR-020: Paste overflow is unspecified.
 
 - Severity: MEDIUM
-- References: SB-3 and AC-5 say 'queues behind an in-flight preload'. s1 sets a 60s deadline. AC-9 requires first-message latency no worse than later ones.
-- Failure: AC-5 queues an operator message behind the preload, but AC-9 wants first-message latency no worse than later ones, and no bound on the wait is given. Settle it: 'An operator message queued behind the preload waits at most until the preload finishes or 60s, whichever is first.'
+- References: CHANGE_PLAN s12 'total cap COMPOSER_LIMIT bytes' vs SI-2 and AC-3.
+- Failure: Paste overflow is unspecified. A byte cap on the read and a character limit in edit_insert coexist, and nothing says whether the excess is truncated or drained. Say: 'Paste is read to ESC[201~, truncated to remaining composer capacity, and the rest is discarded.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: The plan doesn't say what happens when the operator message arrives before the preload thread has created the session.
+## AR-021: Paste and Ctrl+Enter in non-composing states (picker, menu, edit mode) are undefined.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s10 says agent_lock guards creation, but s7's post-create check only compares agent_session to the thread's own session. No test covers this race.
-- Failure: The plan doesn't say what happens when the operator message arrives before the preload thread has created the session. Settle it: 'If the operator creates the session first, the preload reuses that session and skips its turn.'
+- References: CHANGE_PLAN D-3 'composing state'; SB-2 and SB-4 have no state qualifier; AC-1 excludes picker/menu/edit.
+- Failure: Paste and Ctrl+Enter in non-composing states (picker, menu, edit mode) are undefined. Say: 'Outside plain composing, paste and Ctrl+Enter are swallowed and never reach picker or edit-mode Enter handlers.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: The size cap is ambiguous: per section or total, and which section is truncated first.
+## AR-022: After a paste read timeout, 'insert partial and continue' lets the remaining pasted lines arrive as plain Enters and sub
 
 - Severity: MEDIUM
-- References: Implementation step 1 says '6000-char cap'. AC-3 and s16 give no truncation order or boundary tests.
-- Failure: The size cap is ambiguous: per section or total, and which section is truncated first. Settle it: 'Total snapshot is at most 6000 chars; drop issues, then worktrees, then truncate the file listing; git status is never dropped.'
+- References: CHANGE_PLAN s12 'per-read timeout ~50 ms'; CHANGE_SPEC s8; SI-1.
+- Failure: After a paste read timeout, 'insert partial and continue' lets the remaining pasted lines arrive as plain Enters and submit, violating SI-1. Say: 'After a paste timeout, Enter is a newline until input has been idle for N ms.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-023: No assertion is planned for 'exactly one preload turn' or for home_history and chat_calls being unchanged.
+## AR-023: The UNCLE_ENHANCED_KEYS=0 and 'not in test' gating is undefined for the teardown test.
 
 - Severity: LOW
-- References: CHANGE_PLAN s6 says 'Not added to home_history; not counted in chat_calls'. s16 lists no such assertion.
-- Failure: No assertion is planned for 'exactly one preload turn' or for home_history and chat_calls being unchanged. Settle it: 'Tests assert fake session.turn is called exactly once and home_history and chat_calls are unchanged after preload.'
+- References: CHANGE_PLAN s15 vs R-3 and s16.
+- Failure: The UNCLE_ENHANCED_KEYS=0 and 'not in test' gating is undefined for the teardown test. Say: 'Disable strings are written iff enable strings were written, and the writer is injectable.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

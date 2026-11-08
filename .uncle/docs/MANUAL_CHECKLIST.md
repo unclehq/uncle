@@ -1,44 +1,86 @@
 # Manual checklist
 
-## Coverage
+## Coverage: Enter and newline
 
 ### MC-101
 - Required for acceptance: YES
-- Exclusive resources: tui:home-agent-session
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: In a repo with an authenticated claude CLI and UNCLE_HOME_AGENT unset, launch uncle with the curses UI and, before typing anything, run `ps` to list child processes.
-- Expected result: A claude home-agent child process is alive shortly after startup, before any operator message.
-- Evidence to capture: ps output showing the claude process and its start time relative to the UI launch.
+- Exact action: In a live home composer in a CSI-u or modifyOtherKeys capable terminal, type 'hello', press Enter; then type 'a', press Ctrl+Enter, type 'b'; then press Esc followed by Enter in a plain composer.
+- Expected result: Plain Enter submits 'hello' and clears the composer. Ctrl+Enter and Esc+Enter insert a newline at the cursor, advance it, and send nothing.
+- Evidence to capture: Screenshots or transcript after each key showing the composer content and whether a message was sent.
 - Actual result: 
 - Status: NOT RUN
+
+## Coverage: Paste
 
 ### MC-102
 - Required for acceptance: YES
-- Exclusive resources: tui:home-agent-session
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: Run `uncle --noui` with a headless action, then separately launch the UI with UNCLE_HOME_AGENT=0, and run `ps` in each case.
-- Expected result: No claude home-agent process exists in either case, and no preload-related note appears in the home chat history when the UI is used.
-- Evidence to capture: ps output for both runs and a screenshot or transcript of the home page history.
+- Exact action: Paste a 3-line block ('l1\nl2\nl3') into the home composer mid-text with the cursor in the middle, then paste text containing an embedded ESC sequence or control characters.
+- Expected result: The block is inserted at the cursor with newlines preserved and nothing is submitted. Control and escape characters are dropped but TAB and LF are kept.
+- Evidence to capture: Screenshot of the composer before and after each paste and confirmation no message was sent.
 - Actual result: 
 - Status: NOT RUN
+
+## Coverage: Paste in non-composing states
+
+### MC-103
+- Required for acceptance: YES
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: Open the slash menu or issue picker (and separately edit mode with F4), then paste a multi-line block and press Ctrl+Enter.
+- Expected result: The paste and Ctrl+Enter are swallowed: no text inserted, no newline, nothing submitted, and the picker or edit state is unchanged.
+- Evidence to capture: Screenshots of each state before and after the paste and Ctrl+Enter.
+- Actual result: 
+- Status: NOT RUN
+
+## Coverage: Preserved behaviors
 
 ### MC-104
 - Required for acceptance: YES
-- Exclusive resources: tui:home-agent-session
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: Launch the UI and immediately submit a message while the preload is still running, then submit a second message.
-- Expected result: The early message is answered promptly, within about 3 seconds of extra wait and without waiting out the preload. Turns never interleave, both messages are answered in order, and exactly one claude process exists.
-- Evidence to capture: Screen capture of both replies with timings, and ps output showing a single claude process.
+- Exact action: In the home composer, verify backslash then Enter continues onto a new line, double backslash then Enter sends one trailing backslash, picker or slash Enter still accepts the entry, Ctrl-C quits, and Meta b/f/d move by word.
+- Expected result: All pre-existing behaviors work as before with the enhanced key modes enabled.
+- Evidence to capture: Transcript or screenshots of each action and its result.
 - Actual result: 
 - Status: NOT RUN
 
+## Coverage: Copy
+
+### MC-105
+- Required for acceptance: YES
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: Toggle mouse capture off with Ctrl-G (or use the terminal bypass modifier), select composer text, copy with the system shortcut, and paste it into another application.
+- Expected result: The selected composer text is copied and pasted correctly; Ctrl-C inside the app still quits.
+- Evidence to capture: Screenshot of the selection and the text pasted elsewhere.
+- Actual result: 
+- Status: NOT RUN
+
+## Coverage: Terminal teardown
+
 ### MC-106
 - Required for acceptance: YES
-- Exclusive resources: tui:home-agent-session
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: Launch the UI with claude unavailable, for example PATH without claude or a failing claude binary. Then send a homepage message.
-- Expected result: No error, note or history line appears at startup. Sending a message follows the normal path with no preload-caused breakage.
-- Evidence to capture: Screen capture of the home page at startup and after the message.
+- Exact action: After quitting the app normally, then separately after kill -TERM and kill -HUP, run 'cat' in the shell, paste text and type keys; also Ctrl-Z suspend then fg resume the app and test Ctrl+Enter.
+- Expected result: No ESC[200~ markers or modifyOtherKeys residue appear in the shell after any exit. While suspended modes are off, and after fg Ctrl+Enter and paste work again.
+- Evidence to capture: Terminal transcript of the cat output after each exit and after resume.
+- Actual result: 
+- Status: NOT RUN
+
+## Coverage: Fallback terminals
+
+### MC-107
+- Required for acceptance: NO
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: In a terminal lacking enhanced-key support (or with UNCLE_ENHANCED_KEYS=0), paste a multi-line block and press Enter once after typing.
+- Expected result: Multi-line paste does not submit per line, and a lone Enter after typing still submits.
+- Evidence to capture: Screenshot of the composer after the paste and after the lone Enter.
 - Actual result: 
 - Status: NOT RUN
 
@@ -46,9 +88,19 @@
 - Required for acceptance: YES
 - Exclusive resources: tui:home-agent-session
 - Depends on: none
-- Exact action: Launch the UI in a repo with a large directory and open issues. Type and navigate on the home page while the preload runs.
-- Expected result: Drawing and keyboard input stay responsive during startup, with no visible stall.
-- Evidence to capture: Operator observation notes on input responsiveness, and a screen recording or capture if available.
+- Exact action: In a CSI-u/modifyOtherKeys-capable terminal, launch the TUI, type 'abc', then press Ctrl+Enter, type 'def', and press Ctrl+Enter again.
+- Expected result: Each Ctrl+Enter inserts a newline at the cursor and advances it; nothing is submitted and the composer retains 'abc', 'def' on separate lines (SI-1).
+- Evidence to capture: Screenshot or transcript of the composer showing multi-line text and no sent message.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-201
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In the home composer, paste a 3-line text block (including CRLF line endings) from the system clipboard, then press Enter once.
+- Expected result: The whole block appears at the cursor as 3 lines without submitting; only the final plain Enter submits it as a single message (SI-1, AC-3).
+- Evidence to capture: Screenshots before and after the Enter showing the composer content and a single sent message.
 - Actual result: 
 - Status: NOT RUN
 
@@ -58,9 +110,19 @@
 - Required for acceptance: YES
 - Exclusive resources: tui:home-agent-session
 - Depends on: none
-- Exact action: Launch uncle with the curses UI in a project with claude authenticated and UNCLE_HOME_AGENT unset; before typing anything, run `ps` and list claude processes started by uncle.
-- Expected result: Exactly one home-agent claude child process is alive before any operator message (preload spawned it in the background) and the UI is responsive to keystrokes.
-- Evidence to capture: ps output showing a single home-agent claude process; note of UI responsiveness during startup.
+- Exact action: Paste a text block far larger than the composer limit (over 1 MiB, e.g. generated with multibyte characters and many newlines) into the composer.
+- Expected result: The composer is truncated at the limit, the app does not hang, nothing is submitted, and no leftover paste bytes act as keystrokes afterwards (SI-2).
+- Evidence to capture: Screenshot of the composer after paste and confirmation that no message was sent.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-203
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Open the slash menu (type '/') and, separately, an issue picker, then paste a multi-line block and press Ctrl+Enter in each state.
+- Expected result: The paste and Ctrl+Enter are swallowed: no text inserted, no newline, no picker/menu selection, nothing submitted (D-6).
+- Evidence to capture: Screenshots of the menu/picker state before and after each action.
 - Actual result: 
 - Status: NOT RUN
 
@@ -68,53 +130,91 @@
 - Required for acceptance: YES
 - Exclusive resources: tui:home-agent-session
 - Depends on: none
-- Exact action: Run `uncle --noui` with a headless action, and separately launch the UI with UNCLE_HOME_AGENT=0, then run `ps` in each case.
-- Expected result: No home-agent claude process is started in either case and no home-history note about preload appears.
-- Evidence to capture: ps output for both runs and screenshot or text of the home history in the UNCLE_HOME_AGENT=0 UI.
+- Exact action: Launch the TUI in a capable terminal, then quit normally; run `cat`, paste multi-line text and press Ctrl+D. Repeat quitting via `kill -TERM` and via `kill -HUP` of the TUI process.
+- Expected result: After each exit path the shell is clean: pasted text shows no ESC[200~ markers and keys behave normally, confirming modes were disabled (SI-3).
+- Evidence to capture: Terminal transcript of the cat output for each of the three exit paths.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-203
-- Required for acceptance: YES
-- Exclusive resources: tui:home-agent-session
+### MC-205
+- Required for acceptance: NO
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Launch the UI and immediately (within a second or two) send a homepage message while the preload is still in flight.
-- Expected result: The message is answered, begins within about 3 seconds, never interleaves with the preload turn, and only one home-agent process exists afterwards.
-- Evidence to capture: Time from submission to first reply text, the reply itself, and ps output showing one claude process.
+- Exact action: With the TUI running, press Ctrl-Z to suspend, run `cat` and paste to check for residue, then `fg` to resume and paste again in the composer.
+- Expected result: While suspended, pasted text has no markers; after resume, bracketed paste and Ctrl+Enter work again in the composer (SI-3).
+- Evidence to capture: Transcript of the suspended-shell paste and screenshot of the resumed composer.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-206
 - Required for acceptance: YES
-- Exclusive resources: tui:home-agent-session
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Launch the UI with the claude binary made unavailable (for example, PATH without claude or a failing runner), wait, then send a homepage message.
-- Expected result: No error or note appears from the failed preload and the message is still handled by the lazy start path or the normal fallback.
-- Evidence to capture: Screenshot or text of the UI and home history after startup and after the reply.
+- Exact action: With enhanced key modes active, press plain Enter with text, backslash-then-Enter, type text and press Alt/Meta b, f, d for word movement, and press Ctrl-C.
+- Expected result: Plain Enter submits, backslash-Enter inserts a newline without submitting, Meta b/f/d move/delete by word, and Ctrl-C quits as before (SI-5, AC-4).
+- Evidence to capture: Transcript or screenshots of each key's observed outcome.
 - Actual result: 
 - Status: NOT RUN
 
-## Resources: process lifecycle
+## Resources: terminal mode lifecycle
 
 ### MC-301
-- Required for acceptance: YES
-- Exclusive resources: tui:session-A
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: Launch uncle with the curses UI in a repo with the claude runner and UNCLE_HOME_AGENT unset, wait about 10 seconds without typing, and list processes with `ps` for a claude child of uncle.
-- Expected result: Exactly one claude home-agent child process is alive before any operator message is sent.
-- Evidence to capture: ps output showing the single claude child and its parent PID, captured before typing.
+- Exact action: In a real terminal, launch the TUI, then quit normally with Ctrl-C. At the shell, run `cat`, paste a multi-line text, press Ctrl-D, and press Enter on an empty line.
+- Expected result: After exit, `cat` echoes the paste with no ESC[200~ / ESC[201~ markers, and keys behave normally (no CSI-u/modifyOtherKeys residue).
+- Evidence to capture: Terminal transcript or screenshot of the cat output and shell key behavior.
 - Actual result: 
 - Status: NOT RUN
 
-## Resources: opt-outs
-
 ### MC-302
-- Required for acceptance: YES
-- Exclusive resources: tui:session-B
+- Exclusive resources: browser:system
 - Depends on: none
-- Exact action: Run `uncle --noui` (or UNCLE_NOUI=1) with a headless action, then separately launch the UI with UNCLE_HOME_AGENT=0, and run `ps` for claude children in each case.
-- Expected result: No home-agent claude process is started in either case, and the UI with UNCLE_HOME_AGENT=0 shows no preload-related note in the home history.
-- Evidence to capture: ps output for both runs and a screenshot or text of the home history.
+- Exact action: Launch the TUI in a terminal, then from a second terminal run `kill -TERM <pid>`; repeat in a fresh launch with `kill -HUP <pid>`. In the original terminal, run `cat` and paste multi-line text.
+- Expected result: The shell is clean after each signal exit: no bracketed-paste markers in pasted text and normal key behavior.
+- Evidence to capture: Transcript of both kill runs and the cat paste output.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-303
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: Launch the TUI, press Ctrl-Z to suspend, run `cat` and paste text at the shell, Ctrl-D, then run `fg` and paste multi-line text into the composer.
+- Expected result: While suspended, paste has no markers; after `fg`, bracketed paste is active again (multi-line paste inserts without submitting).
+- Evidence to capture: Transcript/screenshots of suspended-shell paste and the composer after resume.
+- Actual result: 
+- Status: NOT RUN
+
+## Resources: composer paste and Ctrl+Enter
+
+### MC-304
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: In a Ctrl+Enter-capable terminal (e.g. kitty, WezTerm, iTerm2, Ghostty), launch the TUI, type text, press Ctrl+Enter, type more, then paste a 3-line text at the cursor mid-text, then press Enter.
+- Expected result: Ctrl+Enter inserts a newline without submitting; the 3-line paste inserts at the cursor without submitting; plain Enter then submits and clears the composer.
+- Evidence to capture: Screenshots of the composer after each step and the sent message.
+- Actual result: 
+- Status: NOT RUN
+
+## Resources: composer picker and fallback
+
+### MC-305
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: Open the slash menu or issue picker in the composer, then paste multi-line text and press Ctrl+Enter. Afterward, close the picker, press Esc then Enter, and also test backslash-Enter at the end of a line.
+- Expected result: Paste and Ctrl+Enter while the picker is open are ignored with no insert or submit; with plain composer focus, Esc+Enter inserts a newline, and backslash-Enter still continues the line.
+- Evidence to capture: Screenshots of the picker state after paste/Ctrl+Enter and of the composer after Esc+Enter and backslash-Enter.
+- Actual result: 
+- Status: NOT RUN
+
+## Resources: copy and key smoke
+
+### MC-306
+- Exclusive resources: browser:system
+- Depends on: none
+- Exact action: With composer text present, toggle mouse capture off with Ctrl-G (or use the terminal's bypass modifier), select composer text and copy with the system shortcut, paste into another app. Then test Meta b/f/d word movement and Ctrl-C quit.
+- Expected result: Selected text copies and pastes correctly elsewhere; Meta b/f/d still move/delete by word; Ctrl-C quits the app.
+- Evidence to capture: Screenshot of the pasted text in the other app and notes on word-movement and quit behavior.
 - Actual result: 
 - Status: NOT RUN
 
@@ -122,11 +222,11 @@
 
 ### MC-303
 - Required for acceptance: YES
-- Exclusive resources: tui:session-A
-- Depends on: MC-301
-- Exact action: After the preload has started in a UI session, quit uncle normally, wait a few seconds, then run `ps` for any leftover claude processes from that session.
-- Expected result: No claude home-agent process remains after quit.
-- Evidence to capture: ps output before and after quit.
+- Exclusive resources: none
+- Depends on: none
+- Exact action: In the home composer of the running TUI, type 'hello' and press plain Enter; then type 'build #45' with an issue picker/slash menu open and press Enter; then type '/help' and press Enter.
+- Expected result: Plain Enter submits non-empty text and clears the composer; with the picker/menu open Enter accepts the entry; slash command runs; Enter on an empty composer sends nothing.
+- Evidence to capture: Screenshot or terminal transcript after each Enter showing composer cleared/message sent/command output.
 - Actual result: 
 - Status: NOT RUN
 
@@ -136,9 +236,9 @@
 - Required for acceptance: NO
 - Exclusive resources: tui:session-E
 - Depends on: none
-- Exact action: Launch the UI and type and navigate with the keyboard immediately during the first seconds of startup while the preload runs.
-- Expected result: Drawing and key input stay responsive with no visible freeze caused by the preload.
-- Evidence to capture: Observer notes on responsiveness during startup, with a screenshot.
+- Exact action: In the home composer, type 'line one\' and press Enter, then type 'x\\' and press Enter; then press F4 for edit mode, type text and press Enter.
+- Expected result: Trailing single backslash plus Enter becomes a newline without submitting; double backslash sends one trailing backslash; Enter in edit mode inserts a newline at the cursor without submitting.
+- Evidence to capture: Screenshots of composer contents after each step and the sent message text for the double-backslash case.
 - Actual result: 
 - Status: NOT RUN
 
@@ -148,18 +248,28 @@
 - Required for acceptance: YES
 - Exclusive resources: terminal:uncle-tui
 - Depends on: none
-- Exact action: Run `uncle --noui` with a headless action (and separately `UNCLE_HOME_AGENT=0 uncle` UI launch, then quit), then run `ps` in another terminal while each is running.
-- Expected result: Neither run leaves any home-agent `claude` child process; --noui shows no curses UI and UNCLE_HOME_AGENT=0 UI starts normally with no preload process.
-- Evidence to capture: ps output captured during each run and the terminal output of each launch.
+- Exact action: With text in the composer, press Ctrl-C; separately in a fresh session with a word-filled composer press Meta/Alt+b, Alt+f, Alt+d, and Esc followed by a non-Enter key (e.g. 'x'), in a terminal with enhanced key reporting enabled.
+- Expected result: Ctrl-C still quits the app; Alt+b/f/d move/delete by word as before; Esc then 'x' behaves as before (key delivered, no newline inserted, no submit).
+- Evidence to capture: Terminal transcript/screenshots showing cursor positions after each key and the app exiting on Ctrl-C.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-402
 - Required for acceptance: YES
-- Exclusive resources: terminal:uncle-tui
+- Exclusive resources: terminal:interactive
 - Depends on: none
-- Exact action: Launch `uncle` with the curses UI in a repo using the claude runner, and immediately type into the UI and navigate screens while the preload is starting; then quit with the normal quit command and run `ps`.
-- Expected result: UI draws and responds to keys with no perceptible stall during startup, and after quit no home-agent `claude` process remains.
-- Evidence to capture: Observation notes on responsiveness and ps output after quit.
+- Exact action: Launch the TUI in a terminal, quit normally, then launch again and terminate it with kill -TERM and again with kill -HUP; after each, run 'cat' in the shell, paste multi-line text and type arrow keys, then press Ctrl-D.
+- Expected result: After every exit path the shell is clean: no '^[[200~' or '^[[201~' markers appear on paste and keys behave normally; the terminal is not left in a modified key-reporting mode.
+- Evidence to capture: Terminal transcript of the cat session after each exit showing pasted text without escape markers.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-406
+- Required for acceptance: YES
+- Exclusive resources: clipboard
+- Depends on: none
+- Exact action: Turn mouse capture off with Ctrl-G (or use the terminal's bypass modifier), select text in the home composer with the mouse, copy with the system shortcut, and paste into another application; then toggle Ctrl-G back.
+- Expected result: Selected composer text copies and pastes elsewhere unchanged; mouse capture toggling still works; Ctrl-C in the TUI still quits rather than copying.
+- Evidence to capture: Screenshot of selection and of the pasted text in the other application.
 - Actual result: 
 - Status: NOT RUN

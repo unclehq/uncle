@@ -1,64 +1,77 @@
-# Change Spec — Issue 187
+# Change Spec (Issue 188)
 
-Omitted sections: Performance (none); Security (none); Migration (none); Prototype isolation (not a prototype)
+Omitted sections: Migration (none); Prototype isolation (not a prototype); Performance numbers beyond criteria (covered by AC)
 
 ## 1. Change type
-Feature (TUI layout).
+Feature (performance of first homepage message).
 
 ## 2. Problem statement
-On the home page the status bar floats above the bottom edge with a blank row between composer and status (baseline B-1).
+The first homepage message pays home-agent process start, lazy connection and project exploration (~25s vs ~6.6s follow-up).
 
 ## 3. Current behavior
-See baseline B-1, B-2.
+Baseline B-1, B-2.
 
 ## 4. Desired behavior
-On the home page the status bar occupies the last screen row; no blank row separates the composer's bottom rule from the status row.
+When the curses UI runs, a background thread starts the home agent and sends one application-sent preload turn carrying a project snapshot, so it is ready and informed before the operator types. Never under `--noui`; never when `UNCLE_HOME_AGENT=0` or runner is not `claude`.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| S-1 | MODIFY | Draw home page at any height >= minimum usable | Status not on last row | Status text drawn on row h-1 | Fake-screen unit test; manual run |
-| S-2 | MODIFY | Draw home page, non-compact | Blank row between bottom rule and status | Status row = bottom rule row + 1 | Fake-screen unit test |
-| S-3 | PRESERVE | Home page compact | Status adjacent to rule (B-2) | Adjacent and on last row | Unit test |
-| S-4 | PRESERVE | Composer wraps to N rows (1..6) | Status shifts with extra (B-5) | Status stays on h-1; composer block moves up so adjacency holds | Unit test parametrized |
-| S-5 | PRESERVE | chat_error / file choice / '/' typed | Feedback visible (B-6) | Feedback still visible on some row not overlapping the status | Unit test |
-| S-6 | PRESERVE | Build page draw | Layout per B-3 | Identical row positions to baseline | Unit test comparing row offsets |
-| S-7 | PRESERVE | Status text, hints, greeting, logo | B-7 | Unchanged text | Unit test string checks |
-| S-8 | PRESERVE | Chat history on home page | B-4 | History still renders above composer and scrolls | Unit test + manual |
+| SB-1 | ADD | UI starts, claude runner, `UNCLE_HOME_AGENT` != 0 | No home agent process | Home agent process alive shortly after start, before any message | unit test with fake session + manual `ps` |
+| SB-2 | ADD | Preload runs | None | One application-sent turn with snapshot (branch/status, worktrees, open issues, key-file listing) marked not-from-operator, authorizing nothing, snapshot-time + re-check note | unit test of prompt text |
+| SB-3 | MODIFY | First operator message | Lazy start + exploration | Reuses the preloaded session; queues behind an in-flight preload on the session lock | unit test |
+| SB-4 | PRESERVE | `--noui`/`UNCLE_NOUI=1` | No UI | No home agent started | unit test (`run` guard) + manual `ps` |
+| SB-5 | PRESERVE | `UNCLE_HOME_AGENT=0` or non-claude runner | Nothing / fallback note | Nothing started by preload; no new note from preload | unit test |
+| SB-6 | PRESERVE | Build start (`_agent_quiesce`), quit | Agent closed | Preload cancelled and its process dead; no leaked process | unit test |
+| SB-7 | PRESERVE | Project root changes | Restart with handoff on next message | Preload session discarded the same way; no preload re-run | unit test |
+| SB-8 | PRESERVE | Preload fails (spawn error, gather error, timeout) | n/a | Silent; no history line; lazy start remains | unit test |
+| SB-9 | PRESERVE | UI draw/input | Responsive | Preload does no work on the UI thread beyond starting a thread | code review + manual |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| V-1 | NEW | On the home page the status row is h-1 and no blank row lies between bottom rule and status | _draw_homepage | draw code | home-layout test |
-| V-2 | EXISTING | Drawing never raises and writes only inside the screen (I-1) | Home/build | put guards | home-layout test at tiny sizes |
-| V-3 | EXISTING | Build page layout unchanged (B-3) | _draw_running | composer offsets | home-layout test |
-| V-4 | EXISTING | Cursor stays on screen and on the composer row (I-2) | composer | cursor guard | home-layout test |
+| SI-1 | EXISTING | One turn at a time on agent stdin | HomeAgentSession | `SupervisorSession.turn` lock | unit test: operator request waits for preload |
+| SI-2 | EXISTING | No home agent process survives quiesce/exit | TUI | `_close_home_agent` | unit test |
+| SI-3 | EXISTING | Only read-only base tools plus granted rules | agent command | `build_command` unchanged | existing; preload gathers data in-app so needs no tools |
+| SI-4 | NEW | Preload turn is application-sent, authorizes nothing, and treats repo/issue text as data | preload prompt | `home_preload.preload_prompt` | unit test on prompt text and delimiters |
+| SI-5 | NEW | Preload never runs under `--noui`, `UNCLE_HOME_AGENT=0`, non-claude runner | `run()` | guard in `_preload_home_agent` | unit test |
+| SI-6 | NEW | A superseded preload (closed/generation changed) leaves no process | TUI thread | lock + cancel event + post-create check | unit test |
+| SI-7 | NEW | Preload failure is silent | TUI | try/except in thread | unit test |
 
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility requirements
-`_draw_chat_composer` stays callable from `_draw_chat_panel` unchanged.
+No change to `_agent_handoff_text`, system prompt, env var names, or log filenames.
 
 ## 8. Error and failure behavior
-On terminals too short to fit all rows, drawing degrades without exceptions (V-2); status row has priority for the last row.
+Any failure in gather/spawn/turn is swallowed; the next `_agent_turn` starts lazily as today.
+
+## 9. Performance requirements
+No UI-thread blocking beyond a short lock held for process spawn; snapshot gather subprocesses each time-limited (<=5s) and capped in size.
+
+## 10. Security requirements
+Preload text is bounded, sanitized, delimited as untrusted data; no new tool grants; no secrets sent beyond repo state the agent could read anyway.
 
 ## 12. Rollback expectations
-Revert the edit to `uncle_tui.py`; no persisted state.
+Setting `UNCLE_HOME_AGENT=0` disables; reverting the `run()` call removes the feature.
 
 ## 14. Explicit non-goals
-Any other home layout or status content change; build-page layout; logo/greeting/hint text.
+Handoff text, system prompt, re-preloading after root change/build, preload under `--noui`.
 
-## 15. Assumptions and unresolved questions
-Assumptions A1-A3 from baseline. Feedback line placement is a planning decision (see plan D-2).
+## 15. Assumptions
+Preload content is chosen by the plan (in scope per request). Stale-state note is embedded in the preload turn.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | On the home page (state menu) at heights of at least 12 rows and widths 40, 80 and 120, the status text is drawn on row h-1. | Automated fake-screen test captures addnstr calls and asserts the status string's row equals h-1; manual run in a real terminal. |
-| AC-2 | On the home page there is no empty row between the composer's bottom rule and the status row, for composers of 1 through 6 wrapped rows and for compact and non-compact heights. | Automated test asserts status_row == bottom_rule_row + 1 across the parametrized cases. |
-| AC-3 | Pending feedback (chat_error, file choice, slash-command hint) remains visible on the home page and never overlaps the status row. | Automated test sets each condition and asserts the feedback text appears on a row different from h-1. |
-| AC-4 | The build page (state running) composer and status row positions are unchanged from before the change, and the status/hint/greeting text is unchanged. | Automated test records row offsets relative to the composer for build state and asserts the baseline offsets (status = composer_row + extra + 2); text assertions. |
-| AC-5 | Drawing the home page at very small sizes (e.g. 5x20, 1x10) raises no exception, and chat history on the home page still renders above the composer. | Automated test draws at tiny sizes and with history entries, asserting no exception and history text present above the composer row. |
-| AC-6 | Existing shell and Python suites show no new failures relative to baseline. | Driver re-runs bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh and compares against baseline. |
+| AC-1 | With the UI running, claude runner and UNCLE_HOME_AGENT unset, a home agent session is created and primed in a background thread before any operator message. | Unit test with patched persistent_session; manual ps check. |
+| AC-2 | The preload turn is application-sent, states it is not from the operator and authorizes nothing, wraps repo/issue text as untrusted data, and notes the snapshot time and that state must be re-checked before acting. | Unit test on home_preload.preload_prompt output. |
+| AC-3 | The snapshot contains git branch/status, worktrees, open issues (when gh works) and a key-file listing, each source time-limited and failures skipped; total size is capped. | Unit test with fake runner including timeout/failure cases. |
+| AC-4 | No home agent is started or preloaded under UNCLE_NOUI=1, UNCLE_HOME_AGENT=0, or a non-claude runner, and preload adds no home-history note. | Unit tests of the guard. |
+| AC-5 | An operator message sent while preload is running queues behind it on the session lock; turns never interleave. | Unit test with a blocking fake session turn. |
+| AC-6 | _agent_quiesce, root change, and quit cancel an in-flight preload and leave no live process, including when the session is created after the close. | Unit tests for each path. |
+| AC-7 | Any preload failure is silent and the lazy start path still works. | Unit test raising from gather and from session creation. |
+| AC-8 | Startup does no preload work on the UI thread; existing shell and Python suites do not regress. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh versus baseline; code inspection. |
+| AC-9 | Time to first text for the first homepage message is no worse than for later ones and a question about branches/issues is answered without repeating the preloaded inspection. | Manual: launch uncle in a repo, wait, ask about branches, inspect home-agent-chat-1.jsonl for tool calls and timing. |
 

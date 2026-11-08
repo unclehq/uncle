@@ -2460,6 +2460,14 @@ class UncleTUI:
             env.pop("UNCLE_ATTENDED_STDIN", None)
             if not self.workflow_unattended:
                 env["UNCLE_ATTENDED_STDIN"] = "1"
+                # The launcher exported UNCLE_MODE_RESOLVED=1/UNCLE_UNATTENDED=1
+                # for the session's default mode. A session override (Shift-Tab)
+                # that makes this run attended would otherwise be refused by
+                # mode.sh as "already resolved as unattended".
+                env.pop("UNCLE_MODE_RESOLVED", None)
+                env.pop("UNCLE_UNATTENDED", None)
+                env.pop("UNCLE_MODE_SOURCE", None)
+                env.pop("UNCLE_MODE", None)
             self.proc = subprocess.Popen(command, cwd=_project_root(), env=env,
                                          stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

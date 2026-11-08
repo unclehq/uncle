@@ -74,7 +74,7 @@ try {
     Assert (Test-Path $archive) 'Local archive disappeared after installation'
     Assert ($manifest.hash -eq (Get-FileHash $archive -Algorithm SHA256).Hash) 'Incorrect manifest hash'
     Assert ($manifest.extract_dir -eq 'uncle-package') 'Wrong extraction root'
-    Assert ($manifest.depends -contains 'python') 'Missing Python dependency'
+    Assert ($manifest.depends -contains 'versions/python313') 'Missing Python dependency'
     Assert-InstallerArchive $archive
     # Model Scoop's 7-Zip path: extract into the destination, then move the
     # wrapper's children up in place. A wrapper named "uncle" collides with

@@ -9,6 +9,10 @@
 # TUI a copy (UNCLE_MODEL_REFRESH_KEY) for the model-list refresh; a stray one
 # is dropped here so a driver never inherits it.
 unset ANTHROPIC_API_KEY UNCLE_MODEL_REFRESH_KEY
+# Bearer credentials override the login the same way, and a stale one makes every
+# stage fail with "401 Invalid bearer token". The launcher keeps ANTHROPIC_AUTH_TOKEN
+# aside (UNCLE_MODEL_REFRESH_AUTH_TOKEN) for the TUI's model-list refresh only.
+unset ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN UNCLE_MODEL_REFRESH_AUTH_TOKEN
 # Per-stage settings, read from the project's .uncle/config at the moment a
 # stage starts.
 #

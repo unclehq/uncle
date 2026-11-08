@@ -104,7 +104,8 @@ class Stage:
         self.env = os.environ.copy()
         for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG', 'UNCLE_STEERING',
                     'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'DOCUMENT_BUDGET_SOURCE',
-                    'UNCLE_SUPERVISION_NOTE', 'UNCLE_SUPERVISION_HOST', 'UNCLE_RUNNER_POOL_OWNER_PID'):
+                    'UNCLE_SUPERVISION_NOTE', 'UNCLE_SUPERVISION_HOST', 'UNCLE_RUNNER_POOL_OWNER_PID',
+                    'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'UNCLE_MODEL_REFRESH_AUTH_TOKEN'):
             self.env.pop(key, None)
 
     def option(self, *names):

@@ -7824,8 +7824,10 @@ class UncleTUI:
     # ---- input ----
     def _wheel(self, bstate, lines=3):
         """Scroll the home-page history or build transcript by mouse wheel."""
-        up = bool(bstate & getattr(curses, 'BUTTON4_PRESSED', 0))
-        down = bool(bstate & getattr(curses, 'BUTTON5_PRESSED', 0))
+        # macOS's system ncurses (mouse protocol v1) has no button 5: BUTTON5_PRESSED is 0
+        # and a wheel-down event makes getmouse() raise, so the caller passes bstate=None.
+        up = bool(bstate) and bool(bstate & getattr(curses, 'BUTTON4_PRESSED', 0))
+        down = bstate is None or bool(bstate & getattr(curses, 'BUTTON5_PRESSED', 0))
         if not (up or down):
             return
         delta = lines if up else -lines
@@ -8443,10 +8445,11 @@ class UncleTUI:
             k = self.stdscr.getch()
             if k == curses.KEY_MOUSE:
                 try:
-                    self._wheel(curses.getmouse()[4])
-                    dirty = True
+                    state = curses.getmouse()[4]
                 except curses.error:
-                    pass
+                    state = None  # wheel-down on ncurses without BUTTON5
+                self._wheel(state)
+                dirty = True
             elif k != -1:
                 self.handle_key(k)
                 dirty = True

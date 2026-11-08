@@ -7,6 +7,8 @@ set -euo pipefail
 # The TUI moves it out of its environment before it starts anything, so no
 # stage, supervisor, reviewer or helper ever inherits it.
 uncle_model_key="${ANTHROPIC_API_KEY:-}"
+# Same treatment for a gateway bearer token: the refresh may use it, no stage may.
+uncle_model_auth_token="${ANTHROPIC_AUTH_TOKEN:-}"
 
 # The caller's working directory is the project being configured; the scripts
 # cd to the install dir ($ROOT), so capture it before that happens.
@@ -480,7 +482,7 @@ uncle_run_tui() {
     # this lock needs is recorded by uncle_tui.py itself at startup instead.
     mkdir -p "$PROJECT_ROOT/.uncle"
     uncle_kill_stale_tui
-    UNCLE_MODEL_REFRESH_KEY="$uncle_model_key" "$@"
+    UNCLE_MODEL_REFRESH_KEY="$uncle_model_key" UNCLE_MODEL_REFRESH_AUTH_TOKEN="$uncle_model_auth_token" "$@"
 }
 
 # Early-exit commands have already left above. Check before either UI starts.

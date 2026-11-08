@@ -1,43 +1,22 @@
 # Defects
 
-## None. A person must supply a real Bedrock bearer token and region (LV-1).
+## None
 
 - **Status:** BLOCKED-HUMAN
-- **Evidence:** Harness output for the 401 mode and the stubbed 'Loaded 2 AWS Bedrock models'.
-- **Expected result:** Picker lists foundation and inference-profile IDs from all pages; with a bad token an actionable error naming region/token shows and the prior catalog is kept.
-- **Actual result:** Bad-token half verified: HTTP 401 gives 'check the Region and token', the prior catalog is kept and the key file is byte-identical. Stubbed discovery loaded both foundation and profile IDs, but the live multi-page listing needs a real token.
+- **Evidence:** None. No captures were taken.
+- **Expected result:** All 12 rows are reachable by scrolling. The filter narrows the list correctly, and nothing renders garbled or is cut off.
+- **Actual result:** Not performed. The check needs a person to look at the curses picker at two terminal heights, and no such observation was made.
+
+## None. Needed action: install tmux (or pyte) so the TUI can be driven in a 15-row pty, then rerun MC-302. Alternatively a human can open the Claude model picker in a 15-row terminal.
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Probe output printed in the worker session. Probe script: .uncle/tests/mc302_probe.py. The check requires screen captures from a real ~15-row terminal, which could not be made in this environment because tmux and pyte are not installed.
+- **Expected result:** In a short terminal (about 15 rows), all 12 Claude entries are reachable by scrolling with arrow keys without rendering glitches, and the filter 'opus' narrows the list to the Opus entries.
+- **Actual result:** The probe observed the expected behavior in the real picker logic and draw code, but not in a live terminal with real keystrokes. The catalog has exactly 12 model rows. The picker opens on claude-sonnet-5-5 (<current>). At height 15 the whole list (header, 12 models, Custom row) fits with no clipping. At height 8 the window scrolled correctly: rows moved up and the selection wrapped from the last entry back to claude-haiku-5-5. No out-of-range draw rows occurred and 13 distinct model ids were rendered across the steps. The filter 'opus' left 5 Opus entries (5.5, 4.8, 4.7, 4.6, 4.5) plus the Custom row. Clearing the filter restored all rows (14: header, 12 models, Custom). The live check as specified (real terminal, arrow keys, typed filter, captures) was not performed.
 
 ## None
 
 - **Status:** BLOCKED-HUMAN
-- **Evidence:** env grep for AWS_BEARER_TOKEN_BEDROCK returned a count of 0. No region, model ID, HTTP status or reply excerpt was captured because no request was made.
-- **Expected result:** The Converse call returns text and the stage completes using Converse only; no temperature is sent. This is BLOCKED-HUMAN if no token is available.
-- **Actual result:** No Bedrock bearer token is available in the environment (AWS_BEARER_TOKEN_BEDROCK is unset). The live call needs a human to supply a token, so it was not performed.
-
-## None
-
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** uncle_tui.py:372-377 PROFILES, :1275-1277 stage_fields for @bedrock vs generic '@' stage, :1457 and :1462-1465 menu items, :1491-1494 _stage_items. Headless output: ['base_url', 'api_key'] / Base URL / API key / ['Connection — Base URL and API key', 'Refresh supported models (0 loaded)'].
-- **Expected result:** Self Hosted still shows Base URL, API key and its existing fields and model picker unchanged; no Region field or Bedrock wording appears there.
-- **Actual result:** Headless: Self Hosted connection fields are ['base_url','api_key'], labelled 'Base URL' and 'API key'. The Configure > 'Configure self hosting' menu rows are 'Connection — Base URL and API key' and 'Refresh supported models (0 loaded)', with no Region or Bedrock text. Region and Bedrock wording sits only in the separate @bedrock stage and the 'Configure AWS Bedrock' menu. Other HTTP-runner stage fields are ['runner','effort','model'] (the model picker is intact). The live screen was not seen and no screenshot was captured. The 'other non-Bedrock runner' screen (claude/codex/kimi) was not opened live; code shows its fields are runner/effort/(network)/model with no Region.
-
-## None. The operator must supply a valid Bedrock bearer token and region (live reference LV-1) and rerun this check.
-
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** env grep for bedrock/AWS_BEARER returned a count of 0. ls .uncle/aws-bedrock-keys.json returned 'No such file or directory'.
-- **Expected result:** Catalog lists foundation model IDs and inference profile IDs from all pages; a stage request completes via Converse at bedrock-runtime.<region>.amazonaws.com; if no token is available this is recorded BLOCKED-HUMAN, not passed.
-- **Actual result:** No Bedrock token or region is configured. The environment has no matching variables and .uncle/aws-bedrock-keys.json does not exist, so the live model refresh and Converse request could not be run.
-
-## MC-106
-
-- **Status:** NOT RUN
-- **Evidence:** No worker observation was supplied for this checklist item.
-- **Expected result:** Catalog includes both foundation model IDs and inference profile IDs (including profiles beyond the first page, if any).
-- **Actual result:** Not performed.
-
-## MC-107
-
-- **Status:** NOT RUN
-- **Evidence:** No worker observation was supplied for this checklist item.
-- **Expected result:** The request succeeds via Converse with text output and no temperature-related error; the Configure screens show no temperature option for Bedrock.
-- **Actual result:** Not performed.
+- **Evidence:** Probe output: 'stage shows: claude-sonnet-5'; '12 [claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8, claude-opus-4-7, claude-sonnet-4-6, claude-opus-4-6, claude-opus-4-5-20251101, claude-haiku-4-5-20251001, claude-sonnet-4-5-20250929]'; "sel row: ('model', 'claude-haiku-5-5') state picker"; 'matches stored: []'. Code: uncle_tui.py _open_picker lines 1743-1776 and the Escape handler around line 8699. No rendered terminal capture was taken.
+- **Expected result:** The stage shows claude-sonnet-5 verbatim; the picker lists exactly 12 entries with no row wrongly selected; after Escape the stored value remains claude-sonnet-5, unrewritten.
+- **Actual result:** Stage model read back as 'claude-sonnet-5' verbatim. The picker returned exactly 12 model rows (haiku-5-5 through sonnet-4-5-20250929), and none equals claude-sonnet-5. _set_field was never called while the picker opened. In the Escape handler, state == 'picker' only sets self.state to 'stage' or 'config' and has no write path, so the stored value stays unrewritten. One open point: pick_sel falls back to the first selectable row (claude-haiku-5-5), because no row matches the stored id. That is the cursor position and not a stored-value match, but I did not see how the curses UI draws it, so I cannot confirm that the cursor on row 1 does not look 'wrongly selected'. The prepared unit test test_stored_old_id_not_in_catalog covers the 12-row and no-rewrite assertions, but I did not re-run it.

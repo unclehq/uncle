@@ -1,80 +1,60 @@
-# Change spec — Issue 182
+# Change Spec — Issue 185
 
-Omitted sections: Performance (none); Migration of data stores beyond config (see section 11 inline); Prototype isolation (not a prototype)
+Omitted sections: Performance, Security, Migration (no impact); Prototype isolation (not a prototype)
 
 ## 1. Change type
-Feature + Refactor + Security (AWS Bedrock runner only).
+Feature / configuration default change.
 
 ## 2. Problem statement
-Bedrock Configure asks for a URL and wire protocol although the region determines endpoints and Converse works for all providers. Extra surface, extra failure modes, protocol-dependent discovery.
+The Claude runner's picker and defaults offer outdated models, and the default literal is duplicated across TUI and shell drivers with a stale comment.
 
 ## 3. Current behavior
-Baseline B1-B3.
+See baseline B-1, B-2.
 
 ## 4. Desired behavior
-Connection = `region` + AWS Bedrock Token. Control `https://bedrock.<region>.amazonaws.com`, runtime `https://bedrock-runtime.<region>.amazonaws.com`. Always Converse. Model picker offers foundation model IDs and inference profile IDs (all pages).
+Claude picker lists exactly 12 models (see AC-1) in the stated order; the single Claude default is `claude-sonnet-5-5` in TUI, `stagegate.sh`, `reviewer-claude.sh`; the stale "opus" comment is corrected.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| S1 | MODIFY | Configure → AWS Bedrock (TUI and shell) | URL, token, API Compatibility | Only Region and AWS Bedrock Token; no URL/compat field or picker | TUI + shell configure tests |
-| S2 | MODIFY | Set region + token | Discovery per protocol | Discovery GET `{control}/foundation-models` and `{control}/inference-profiles?maxResults=100` with `Authorization: Bearer`, following `nextToken` (URL-encoded) until absent; catalog = union of modelId and inferenceProfileId | discovery tests with fake transport |
-| S3 | MODIFY | Any Bedrock stage request | OpenAI default; URL from config | POST `{runtime}/model/<quote(modelId,safe='')>/converse`, `content-type: application/json`, bearer auth; `:`→`%3A`; reply text from `output.message.content` | request-capture tests |
-| S4 | PRESERVE | Any Bedrock request with temperature configured (config key, env, request-options, per-stage) | no temperature | body has no `temperature` anywhere in `inferenceConfig` or elsewhere; config ignored; reuse key not affected | body-inspection test (B4, I1, I2) |
-| S5 | PRESERVE | Self Hosted request | temperature as before | unchanged | existing Self Hosted tests (B5) |
-| S6 | MODIFY | Discovery failure (HTTP error, network, bad JSON, any page failing) | error | prior catalog kept; actionable error naming region/token | failure tests (B7) |
-| S7 | ADD | Invalid region (not `^[a-z]{2,}(-[a-z]+)+-\d+$`-style) or multi-line token | n/a | rejected at save/settings with clear message; no request sent | validation tests |
-| S8 | MODIFY | Existing config with `base_url`/`api_compatibility` and no region | works per protocol | region derived from legacy URL host when it matches a Bedrock host pattern; else a clear error telling the user to set Region in Configure → AWS Bedrock; legacy keys never used for requests and not an obscure failure | migration tests |
-| S9 | REMOVE | `WORKFLOW_AWS_BEDROCK_API_COMPATIBILITY`, `UNCLE_AWS_BEDROCK_BASE_URL`, `aws-bedrock.base_url` | honored | ignored for Bedrock requests | tests |
-| S10 | ADD | Region override | n/a | `UNCLE_AWS_BEDROCK_REGION` env and `aws-bedrock.region` config key | settings tests |
-| S11 | PRESERVE | Token storage (B6), isolation from Self Hosted (B8), redaction (B9) | as baseline | unchanged | existing tests |
-| S12 | MODIFY | Docs | describe URL/compat | docs/aws-bedrock.md and README describe region+token+Converse | doc grep test/inspection |
+| SB-1 | MODIFY | Claude picker opened | 3 entries | Exactly the 12 (label,id) pairs, in order, no others | New catalog test |
+| SB-2 | MODIFY | Stage with no stored model, TUI | `claude-sonnet-5` | `claude-sonnet-5-5`, label "Claude Sonnet 5.5" | New test |
+| SB-3 | MODIFY | Shell driver defaults | `claude-sonnet-5` | `claude-sonnet-5-5` in stagegate.sh and reviewer-claude.sh | New agreement test |
+| SB-4 | MODIFY | Reading the DEFAULT_MODEL_FOR_RUNNER comment | Says "opus" tier alias | Accurately describes the current default | Inspection / test of no "opus" tier claim |
+| SB-5 | PRESERVE | Codex/Kimi picker and defaults | Unchanged | Unchanged | Existing suites |
+| SB-6 | PRESERVE | Model override env vars; non-Claude fallback | Override wins; fallback warns | Unchanged | Existing suites |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| V1 | STRENGTHENED | No Bedrock request contains any temperature/sampling field regardless of config/env | Bedrock only | body builder + `_strip_temperature` + `sampling` | outgoing-body test |
-| V2 | EXISTING | Self Hosted temperature behavior unchanged | Self Hosted | unchanged code | existing suites |
-| V3 | STRENGTHENED | Token only sent over https to hosts derived from a validated region; no http loopback exception | Bedrock | URL builders | URL tests |
-| V4 | EXISTING | Token single-line | Bedrock | settings/save | tests |
-| V5 | EXISTING | Failed discovery keeps prior catalog | Bedrock | refresh | tests |
-| V6 | EXISTING | Bedrock never falls back to Self Hosted credentials | Bedrock | settings | tests |
-| V7 | NEW | Configured temperature does not alter reuse/cache keys for Bedrock | Bedrock | self_hosted_performance.py | test |
-
-RELAXED/REMOVED invariants: none. (Removal of the loopback http allowance in I3 is a strengthening.)
+| SI-1 | NEW | Every Claude catalog id matches `claude*|opus*|sonnet*|haiku*` | MODEL_CATALOG_CLAUDE | New test reading the allowlist from reviewer-claude.sh | New test |
+| SI-2 | NEW | TUI claude default == stagegate.sh DEFAULT_MODEL == reviewer-claude.sh DEFAULT_MODEL | Claude default | New test parsing the scripts | New test |
+| SI-3 | NEW | Claude default is a member of the Claude catalog | Claude default | New test | New test |
+| SI-4 | EXISTING | Codex ids are not in the codex blanked-tier set | Codex catalog | Unchanged | Existing coverage (none found); unchanged |
+No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Self Hosted and other runners unchanged. Legacy Bedrock key files readable; stale fields ignored, not rewritten until user saves.
+Stored per-stage model values (including old ids such as `claude-sonnet-5`) are not migrated or rejected; they still pass the allowlist. Env overrides keep precedence.
 
-## 8. Error behavior
-Actionable messages for: missing/invalid region, missing token, HTTP status on discovery (names region and token), unreachable endpoint, malformed response, Converse response lacking `output.message.content`.
-
-## 10. Security
-Bearer token https-only, no redirects on discovery, redaction preserved, key file 0600 and gitignored.
-
-## 11. Migration
-Legacy `base_url` → region derivation (S8); no automatic file rewrite.
+## 8. Error and failure behavior
+Unchanged: non-Claude ids to reviewer-claude.sh warn and use the default.
 
 ## 12. Rollback
-Revert commit; key file format additive (adds `region`), legacy readers ignore it.
+Revert the three source edits and the new test file.
 
 ## 14. Non-goals
-SigV4/IAM credentials, other runners, streaming Converse, changing Self Hosted.
+Changing Codex/Kimi lists; validating ids against the live API; migrating stored configs; changing the allowlist; adding grouping/sub-headers to the picker.
 
 ## 15. Assumptions
-Default region when none: none — region required. Live Bedrock verification is manual only.
+The catalog stays a single group named "Claude". The order in the request is the display order.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | No Bedrock request body ever contains a temperature (or sampling) field, even when temperature is configured globally, per stage, via env, or in request-options; configured values do not change Bedrock reuse keys. Self Hosted temperature handling is unchanged. | Python test inspects the outgoing Converse body with temperature configured in each place; existing Self Hosted temperature tests still pass. |
-| AC-2 | Configure → AWS Bedrock (TUI and shell) asks only for Region and AWS Bedrock Token; no Bedrock URL or API Compatibility field, picker, or label remains. | TUI field-list test and shell configure test; grep for removed labels. |
-| AC-3 | Region is validated (format) and token must be a single line; endpoints are https URLs derived only from the region. | Validation unit tests including invalid region, multi-line token, and URL builders. |
-| AC-4 | Model discovery GETs {control}/foundation-models and {control}/inference-profiles?maxResults=100 with bearer auth, follows nextToken (URL-encoded) across all pages, and the catalog contains both modelId and inferenceProfileId values. | Fake-transport test with multi-page profiles incl. a token needing URL encoding. |
-| AC-5 | A discovery failure (any page) keeps the prior catalog and surfaces an actionable error. | Failure-injection tests for HTTP error, network error, malformed JSON, and failure on page 2. |
-| AC-6 | All Bedrock stage requests POST to https://bedrock-runtime.<region>.amazonaws.com/model/<url-encoded modelId>/converse with bearer auth and content-type application/json; ':' is encoded %3A; text, tool-call and schema outputs parse from the Converse response. | Request-capture test asserting URL, headers, body shape; response parsing tests. |
-| AC-7 | Existing configs with base_url/api_compatibility are migrated: region derived from the old Bedrock host when possible, otherwise a clear message instructs setting Region; legacy fields and WORKFLOW_AWS_BEDROCK_API_COMPATIBILITY/UNCLE_AWS_BEDROCK_BASE_URL are never used for requests. | Migration tests with legacy key files and env vars. |
-| AC-8 | OpenAI and Anthropic adapters and protocol selection are removed from Bedrock code. | grep shows no openai/anthropic adapter or api_compatibility reference in Bedrock code; protocols test updated. |
-| AC-9 | docs/aws-bedrock.md and README describe region + token + Converse; Bedrock tests updated; both full suites show no new failures versus baseline. | Doc inspection; run-shell-tests.sh and run-python-tests.sh compared to baseline. |
+| AC-1 | MODEL_CATALOG_CLAUDE contains exactly these (label,id) pairs in order and no others: Claude Haiku 5.5/claude-haiku-5-5; Claude Sonnet 5.5/claude-sonnet-5-5; Claude Opus 5.5/claude-opus-5-5; Claude Fable 5.1/claude-fable-5-1; Claude Fable 5/claude-fable-5; Claude Opus 4.8/claude-opus-4-8; Claude Opus 4.7/claude-opus-4-7; Claude Sonnet 4.6/claude-sonnet-4-6; Claude Opus 4.6/claude-opus-4-6; Claude Opus 4.5/claude-opus-4-5-20251101; Claude Haiku 4.5/claude-haiku-4-5-20251001; Claude Sonnet 4.5/claude-sonnet-4-5-20250929. | New Python test asserts the flattened catalog equals this list. |
+| AC-2 | DEFAULT_MODEL_FOR_RUNNER['claude'], stagegate.sh DEFAULT_MODEL and reviewer-claude.sh DEFAULT_MODEL fallback are all `claude-sonnet-5-5`, and that id is in the Claude catalog. | New Python test imports uncle_tui and parses both scripts, asserting equality. |
+| AC-3 | Every Claude catalog id passes reviewer-claude.sh's allowlist `claude*\|opus*\|sonnet*\|haiku*`. | New test extracts the case pattern from reviewer-claude.sh and matches each id (fnmatch), also running the script's pattern via bash case for each id. |
+| AC-4 | The comment above DEFAULT_MODEL_FOR_RUNNER no longer claims the Claude default is the "opus" tier alias and describes the actual default. | Inspection of uncle_tui.py comment; test asserts no 'opus" is the tier alias' wording. |
+| AC-5 | Existing tests pass and Codex/Kimi catalogs and defaults are unchanged. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh compared with driver baseline. |
 

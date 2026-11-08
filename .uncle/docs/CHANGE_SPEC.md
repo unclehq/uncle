@@ -1,68 +1,66 @@
-# Change Spec
+# Change spec: `uncle --audit [BRANCH]`
 
-Omitted sections: Migration (none); Prototype isolation (not a prototype); Performance (negligible); Security (see 10, brief)
+Omitted sections: Performance (none); Migration (none: no schema); Prototype isolation (not a prototype)
 
 ## 1. Change type
-Feature + bug fix (multi-line paste currently submits per line).
+Feature (new CLI command).
 
 ## 2. Problem statement
-Home composer cannot take multi-line pasted text (each newline submits) and offers no first-class newline key; Issue 190.
+Rerunning the final auditor requires hand-editing `.uncle/workflow/state` and rerunning the driver. Operators want one command.
 
 ## 3. Current behavior
-See baseline B-1..B-9.
+B-1..B-7 in the baseline. `--audit` is an unknown argument.
 
 ## 4. Desired behavior
-Enter submits; Ctrl+Enter inserts newline at cursor; pasted text (single or multi-line) is inserted at the cursor verbatim (newlines normalized to LF) without submitting; copy works with the system shortcut.
+`uncle --audit [BRANCH]` sets the change workflow of the branch's checkout back to its `FINAL_AUDIT` state and runs the existing change driver, which runs the unchanged auditor, writes `.uncle/docs/FINAL_AUDIT.md` in that checkout, and routes the verdict as it does today. The command then prints the verdict class and the audit file path. BRANCH defaults to the current branch. Settled questions: auditor = FINAL_AUDIT stage; optional positional branch; output stays in `<checkout>/.uncle/docs/FINAL_AUDIT.md`.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| SB-1 | PRESERVE | Enter with non-empty text, no picker/menu, not edit mode | submits, clears composer (B-1) | unchanged | unit test AC-1 |
-| SB-2 | ADD | Ctrl+Enter reported by terminal as CSI-u `ESC[13;5u` or modifyOtherKeys `ESC[27;5;13~` | submits (or nothing) | newline inserted at cursor, no submit, cursor advances | unit test AC-2 + manual |
-| SB-3 | ADD | Esc immediately followed by Enter (Alt+Enter / terminals mapping Ctrl+Enter to ESC CR) | Esc handled, Enter submits | newline inserted at cursor, no submit | unit test AC-2 |
-| SB-4 | MODIFY | Bracketed paste `ESC[200~ ... ESC[201~` | each newline submits (B-6) | whole payload inserted at cursor; CR/CRLF normalized to LF; no submit; honors COMPOSER_LIMIT; control chars other than LF/TAB dropped | unit test AC-3 |
-| SB-5 | MODIFY | Terminal without bracketed paste: Enter key arrives while further input already queued | submits per line | treated as newline (paste burst); a lone Enter still submits | unit test AC-3 |
-| SB-6 | ADD | UI start / exit | no paste or enhanced-key modes | bracketed paste and enhanced-key reporting enabled at start and always disabled at exit/crash teardown | unit test + manual |
-| SB-7 | PRESERVE | Backslash-Enter continuation, `\\` escape, edit-mode Enter, picker/slash Enter, Esc+other key, Meta b/f/d | per B-2..B-5, B-8 | unchanged | existing + new tests AC-4 |
-| SB-8 | PRESERVE | Copy selected composer text with system shortcut | works via terminal selection (mouse capture off or terminal bypass modifier) | unchanged; Ctrl-C still quits | manual AC-5 |
-| SB-9 | PRESERVE | Enter with empty composer | no message sent | unchanged | unit test AC-1 |
+| B-1 | ADD | `uncle --audit` | Unknown argument | Audits current branch's checkout; prints verdict and FINAL_AUDIT.md path; exit = driver status | AC-2 test |
+| B-8 | ADD | `uncle --audit BRANCH` | n/a | Audits checkout where BRANCH is checked out (this or another worktree); caller's checkout untouched | AC-3 test |
+| B-9 | ADD | `--audit` cannot run | n/a | One-line `Error: ...` on stderr naming the cause, nonzero exit (`$UNCLE_REFUSE_CODE`), state file unchanged | AC-4 tests |
+| B-2 | MODIFY | `uncle --help` | usage without audit | usage lists `--audit [BRANCH]` | AC-1 |
+| B-5 | MODIFY | near-miss like `--audt` | Did-you-mean from fixed list | list includes `--audit` | AC-1 |
+| B-3,B-4,B-6,B-7 | PRESERVE | existing flags / driver | as baseline | unchanged | AC-5 |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| SI-1 | NEW | No newline contained in pasted or Ctrl+Enter input ever triggers `send_home_chat` | composer | paste/newline branches never call submit | unit test |
-| SI-2 | EXISTING | Composer length <= COMPOSER_LIMIT; cursor within text | composer | `edit_insert` limit | unit test with oversize paste |
-| SI-3 | NEW | Terminal mode enabled at start is disabled on every exit path | TUI lifecycle | teardown | unit test + manual |
-| SI-4 | EXISTING | `_read_meta_key` restores input timeout on all paths and never blocks indefinitely on a truncated sequence | key reader | try/finally + bounded wait | unit test |
-| SI-5 | EXISTING | Plain Enter semantics B-1..B-5 unchanged | composer | `_chat_key` | existing test + new |
-
+| I-1 | EXISTING | One driver per checkout | driver | driver.lock | AC-4 lock case |
+| I-3 | EXISTING | Audit binding/verdict routing unchanged | driver | `change-workflow.sh` untouched | AC-7 diff check |
+| I-4 | EXISTING | Unknown args refused with `$UNCLE_REFUSE_CODE` | launcher | `uncle` | AC-5 |
+| I-6 | NEW | `--audit` never modifies state unless every precondition passed | audit command | precondition order in new script | AC-4 tests assert state bytes unchanged |
+| I-7 | NEW | `--audit` never switches or modifies the caller's checkout/branch | audit command | no `git checkout`/`switch` used | AC-3 test asserts HEAD unchanged |
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Backslash-Enter continuation retained as fallback for terminals that cannot signal Ctrl+Enter. Existing `_chat_key(10)` must still submit.
+All existing flags, exit codes, and driver options unchanged. `--audit` composes with `--attended`/`--unattended`/`--noui`; refused with `--application`, `--issue`, `--change-request`, `verify`-style early exits are not combinable.
 
-## 8. Error behavior
-Unterminated bracketed paste (no `ESC[201~` within bounded wait): insert what was received, resume normal input; never hang. Unknown CSI sequences after Esc are pushed back as today.
+## 8. Error and failure behavior
+Clear refusal (B-9) for: not a git repo; detached HEAD without BRANCH; BRANCH not a local branch; BRANCH not checked out in any worktree; checkout has no change-family workflow state; driver lock held; more than one BRANCH; BRANCH beginning with `--`; combined with another startup action. A driver failure or a not-READY audit surfaces the driver's own message and nonzero exit.
 
 ## 10. Security
-Pasted bytes are sanitized (drop ESC and other C0 controls except LF/TAB) so a paste cannot inject terminal escape sequences or fake paste-end markers into the composer.
+Branch name is validated with `git check-ref-format --branch` and passed only as a quoted argument; never evaluated. No new env override for the driver path. `UNCLE_HOME_AGENT` rule (I-2) applies: refuse `--audit` from the home agent subtree without the app marker, as other startup actions do.
 
 ## 12. Rollback
-Revert the commit; no persistence or schema.
+Revert the commit: removes flag and script. State left at FINAL_AUDIT after a run is harmless: resuming reruns the audit; previous state is printed so an operator can restore it.
 
 ## 14. Non-goals
-Changing mouse-capture defaults; build-page triage composer; custom key-binding config; clipboard integration (OSC 52/pbcopy); making Ctrl+Enter work on terminals that cannot report it.
+Changing what the auditor checks; other commands; app-family (stagegate) audits; creating worktrees or checking out branches; cleanup.
 
 ## 15. Assumptions
-Terminals lacking enhanced-key reporting use backslash-Enter or Esc+Enter. Copy needs no code change (terminal-native selection).
+A1/A2 from the baseline. Exit status equals the driver's; the verdict is printed for information.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | Enter with non-empty text (no picker/menu/edit mode) sends it via send_home_chat and clears the composer; Enter with empty composer sends nothing. | Python unit test driving handle_key/_chat_key with stub UI (existing home-actions-test.py:396 still passes plus new case). |
-| AC-2 | Ctrl+Enter (CSI-u `ESC[13;5u`, modifyOtherKeys `ESC[27;5;13~`) and Esc+Enter insert a newline at the cursor, advance the cursor, and do not submit or clear the composer. | Python unit test feeding byte sequences through the key reader with a fake screen; plus manual check in a CSI-u capable terminal. |
-| AC-3 | Pasting single- or multi-line text (bracketed paste, or Enter-with-queued-input burst) inserts it at the cursor with CR/CRLF normalized to LF, never submits, respects COMPOSER_LIMIT, and drops escape/control characters other than LF and TAB; an unterminated paste does not hang. | Python unit tests of pure paste parser and key reader; manual paste in real terminal. |
-| AC-4 | Existing composer behaviors are unchanged: backslash-Enter continuation, `\\` escape, edit-mode Enter, picker/slash Enter, Esc+non-Enter key pushback, Meta b/f/d, Ctrl-C quit. | bash scripts/run-python-tests.sh including home-actions-test.py and new home-composer-keys-test.py. |
-| AC-5 | Copying selected composer text works with the standard system shortcut in the terminal (unchanged mechanism), and terminal paste/enhanced-key modes are disabled on exit. | Manual checklist: select composer text (mouse capture off via Ctrl-G or terminal bypass modifier), copy, paste elsewhere; after quitting, run `cat` and confirm pasted text has no ESC[200~ markers; unit test that teardown emits disable sequences. |
+| AC-1 | `uncle --help` lists `--audit [BRANCH]` and exits 0; the did-you-mean hint for a near miss such as `--audt` suggests `--audit`. | Shell test greps help output and hint output. |
+| AC-2 | `uncle --audit` with no argument in a checkout with a change-family workflow sets state to FINAL_AUDIT, runs the change driver in that checkout, prints the verdict class and the path of `.uncle/docs/FINAL_AUDIT.md`, and exits with the driver's status. | Fixture test with stub driver via UNCLE_RUNTIME_ROOT records state, cwd and flags at invocation; asserts output and exit codes 0 and nonzero cases. |
+| AC-3 | `uncle --audit BRANCH` runs the driver in the worktree where BRANCH is checked out, without changing the caller's checkout, branch or HEAD. | Fixture with two worktrees; stub driver records cwd; caller HEAD and branch compared before and after. |
+| AC-4 | Each unrunnable case (not a git repo, detached HEAD without BRANCH, unknown branch, branch not checked out, no change workflow state or app-family state, driver lock held, extra positional, option-like BRANCH, combined with --application/--issue/--change-request) prints a one-line `Error:` message naming the cause, exits `$UNCLE_REFUSE_CODE`, and leaves the state file byte-identical. | One shell test case per condition checking stderr, exit code, and state checksum. |
+| AC-5 | Existing launcher behavior is unchanged: existing launcher-* tests and the full shell and Python suites show no new failures versus baseline. | `bash scripts/run-shell-tests.sh` and `bash scripts/run-python-tests.sh` compared with baseline by the driver. |
+| AC-6 | New automated tests (`scripts/tests/audit-command-test.sh`) cover AC-1 to AC-4 and fail when the command is absent or skips a precondition. | Run the test against the unmodified launcher (fails) and against a copy with one precondition removed (fails). |
+| AC-7 | The auditor and driver are not modified: no diff in `scripts/change-workflow.sh`, `scripts/stagegate.sh`, `scripts/lib/audit-verdict.sh`, or `prompts/`. | `git diff --stat` against the change-impact table scope. |
 

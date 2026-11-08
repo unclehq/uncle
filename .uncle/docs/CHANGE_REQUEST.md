@@ -1,61 +1,34 @@
-# Change Request
-
-Issue 190
-
-Seeded from [unclehq/uncle#190](https://github.com/unclehq/uncle/issues/190).
+# Add --audit command to uncle
 
 ## Change Type
-
-Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
+Feature (new CLI command).
 
 ## Summary
-
-Home composer: Enter submits, Ctrl+Enter inserts newline; support Claude CLI-style copy/paste
+Add an `--audit` command to the `uncle` CLI so the auditor can be rerun on a branch.
 
 ## Motivation
-
-## Summary
-Two improvements to the home page composer.
-
-## 1. Key bindings
-- **Enter** submits the composer text to the home supervisor.
-- **Ctrl+Enter** inserts a newline in the composer instead of submitting.
-
-## 2. Copy/paste
-Allow copy and paste in the composer the way the Claude CLI does, including pasting multi-line text without it being submitted or mangled.
-
-## Acceptance criteria
-- Pressing Enter with non-empty text sends it to the home supervisor and clears the composer.
-- Pressing Ctrl+Enter inserts a newline at the cursor and does not submit.
-- Pasting text (single or multi-line) inserts it at the cursor; newlines in pasted text do not trigger submit.
-- Copying selected composer text works with the standard system shortcut.
+The operator wants to rerun the auditor on a branch without redoing the whole workflow.
 
 ## Observed Current Behavior
-
-Describe what the system currently does.
+None stated. There is no `--audit` command. How the auditor is currently run is not yet established; the workflow should inspect the code to find out.
 
 ## Desired Behavior
-
-Describe what the system should do after the change.
+Running `uncle --audit` reruns the auditor on a branch. Which branch is used when none is given, and how a branch is named, are to be settled in planning (see below).
 
 ## Reproduction
-
-For a bug, provide exact steps to reproduce it.
-
-For other change types, write "Not applicable."
+Run `uncle --audit`. Today the command does not exist.
 
 ## Constraints
-
-List compatibility, security, performance, timing, or scope constraints.
+Follow existing CLI conventions in the repository. Do not change existing commands or the behavior of the auditor itself.
 
 ## Known Relevant Files
-
-List files or components if known.
+None identified yet; to be found during baseline analysis (CLI entry point `uncle`, auditor code under `lib` or `scripts`).
 
 ## Out of Scope
-
-List behavior or components that must not be changed.
+Changes to what the auditor checks, other new commands, and unrelated cleanup.
 
 ## Success Criteria
+`uncle --audit` exists, runs the auditor on a branch, reports the auditor's result, and fails with a clear message when it cannot run. Existing tests still pass and new tests cover the command.
 
-Describe the observable evidence that proves the change works.
+## Open Questions
+How is the auditor invoked today? Does `--audit` take a branch argument, or default to the current branch? Where does the audit output go (for example FINAL_AUDIT.md)?

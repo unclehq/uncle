@@ -1,21 +1,5 @@
 # Implementation notes
 
-## Step 1
+### Deviations
 
-### Files changed
-
-- `scripts/tests/home-composer-keys-test.py` — Written by isolated step 1; 1
-
-## Step 2
-
-### Files changed
-
-- `uncle_tui.py` — Written by isolated step 2; 2
-
-## Step 3
-
-### Files changed
-
-- `uncle_tui.py` — Written by isolated step 3; 3
-
-## Step 4
+- `.gitignore`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.

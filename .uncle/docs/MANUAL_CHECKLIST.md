@@ -1,106 +1,74 @@
 # Manual checklist
 
-## Coverage: Enter and newline
+## Coverage
 
 ### MC-101
 - Required for acceptance: YES
-- Exclusive resources: browser:system
+- Exclusive resources: none
 - Depends on: none
-- Exact action: In a live home composer in a CSI-u or modifyOtherKeys capable terminal, type 'hello', press Enter; then type 'a', press Ctrl+Enter, type 'b'; then press Esc followed by Enter in a plain composer.
-- Expected result: Plain Enter submits 'hello' and clears the composer. Ctrl+Enter and Esc+Enter insert a newline at the cursor, advance it, and send nothing.
-- Evidence to capture: Screenshots or transcript after each key showing the composer content and whether a message was sent.
+- Exact action: Run `uncle --help` and then `uncle --audt` in a scratch directory.
+- Expected result: Help lists `--audit [BRANCH]` and exits 0; the near-miss prints `Did you mean --audit?` and exits non-zero.
+- Evidence to capture: Captured stdout/stderr and exit codes of both commands.
 - Actual result: 
 - Status: NOT RUN
-
-## Coverage: Paste
 
 ### MC-102
 - Required for acceptance: YES
-- Exclusive resources: browser:system
+- Exclusive resources: file:audit-target-checkout-state
 - Depends on: none
-- Exact action: Paste a 3-line block ('l1\nl2\nl3') into the home composer mid-text with the cursor in the middle, then paste text containing an embedded ESC sequence or control characters.
-- Expected result: The block is inserted at the cursor with newlines preserved and nothing is submitted. Control and escape characters are dropped but TAB and LF are kept.
-- Evidence to capture: Screenshot of the composer before and after each paste and confirmation no message was sent.
+- Exact action: In a finished change-family worktree whose state is a post-implementation stage, run `uncle --audit` (or against a stub driver install via UNCLE_RUNTIME_ROOT if reviewer credentials are unavailable).
+- Expected result: State is set to FINAL_AUDIT, the driver runs in that checkout, output prints the previous state, a `verdict:` line and the `.uncle/docs/FINAL_AUDIT.md` path; exit equals the driver's status.
+- Evidence to capture: Terminal output, exit code, and the resulting FINAL_AUDIT.md and audit-verdict files.
 - Actual result: 
 - Status: NOT RUN
-
-## Coverage: Paste in non-composing states
 
 ### MC-103
 - Required for acceptance: YES
-- Exclusive resources: browser:system
+- Exclusive resources: file:audit-target-checkout-state
 - Depends on: none
-- Exact action: Open the slash menu or issue picker (and separately edit mode with F4), then paste a multi-line block and press Ctrl+Enter.
-- Expected result: The paste and Ctrl+Enter are swallowed: no text inserted, no newline, nothing submitted, and the picker or edit state is unchanged.
-- Evidence to capture: Screenshots of each state before and after the paste and Ctrl+Enter.
+- Exact action: From a different checkout run `uncle --audit <branch>` for a branch checked out in a second worktree, noting the caller's branch and HEAD before and after.
+- Expected result: The driver runs with cwd in the other worktree and its FINAL_AUDIT.md is updated; the caller's checkout, branch and HEAD are unchanged.
+- Evidence to capture: Before/after `git rev-parse HEAD` and branch name, plus the output summary.
 - Actual result: 
 - Status: NOT RUN
-
-## Coverage: Preserved behaviors
 
 ### MC-104
 - Required for acceptance: YES
-- Exclusive resources: browser:system
+- Exclusive resources: none
 - Depends on: none
-- Exact action: In the home composer, verify backslash then Enter continues onto a new line, double backslash then Enter sends one trailing backslash, picker or slash Enter still accepts the entry, Ctrl-C quits, and Meta b/f/d move by word.
-- Expected result: All pre-existing behaviors work as before with the enhanced key modes enabled.
-- Evidence to capture: Transcript or screenshots of each action and its result.
+- Exact action: Run `uncle --audit` in a non-git directory, in detached HEAD, with an unknown branch, with a branch that has no worktree, with `--audit ''`, with `--audit a b`, and with `--audit=--x`.
+- Expected result: Each prints a one-line `Error:` naming the cause and exits with the refusal code (1, or 2 under --noui).
+- Evidence to capture: Stderr and exit code per case.
 - Actual result: 
 - Status: NOT RUN
-
-## Coverage: Copy
-
-### MC-105
-- Required for acceptance: YES
-- Exclusive resources: browser:system
-- Depends on: none
-- Exact action: Toggle mouse capture off with Ctrl-G (or use the terminal bypass modifier), select composer text, copy with the system shortcut, and paste it into another application.
-- Expected result: The selected composer text is copied and pasted correctly; Ctrl-C inside the app still quits.
-- Evidence to capture: Screenshot of the selection and the text pasted elsewhere.
-- Actual result: 
-- Status: NOT RUN
-
-## Coverage: Terminal teardown
 
 ### MC-106
 - Required for acceptance: YES
-- Exclusive resources: browser:system
+- Exclusive resources: file:audit-target-checkout-state
 - Depends on: none
-- Exact action: After quitting the app normally, then separately after kill -TERM and kill -HUP, run 'cat' in the shell, paste text and type keys; also Ctrl-Z suspend then fg resume the app and test Ctrl+Enter.
-- Expected result: No ESC[200~ markers or modifyOtherKeys residue appear in the shell after any exit. While suspended modes are off, and after fg Ctrl+Enter and paste work again.
-- Evidence to capture: Terminal transcript of the cat output after each exit and after resume.
-- Actual result: 
-- Status: NOT RUN
-
-## Coverage: Fallback terminals
-
-### MC-107
-- Required for acceptance: NO
-- Exclusive resources: browser:system
-- Depends on: none
-- Exact action: In a terminal lacking enhanced-key support (or with UNCLE_ENHANCED_KEYS=0), paste a multi-line block and press Enter once after typing.
-- Expected result: Multi-line paste does not submit per line, and a lone Enter after typing still submits.
-- Evidence to capture: Screenshot of the composer after the paste and after the lone Enter.
+- Exact action: For targets whose state file is a mid-flight state (planning, approval gate, implementation in progress) and for a checkout lacking change-family state, run `uncle --audit`, checksumming the state file before and after.
+- Expected result: Each is refused with an `Error:` naming the state or family and the state file is byte-identical.
+- Evidence to capture: Error text and before/after checksums.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-107
 - Required for acceptance: YES
-- Exclusive resources: tui:home-agent-session
+- Exclusive resources: file:audit-target-checkout-state
 - Depends on: none
-- Exact action: In a CSI-u/modifyOtherKeys-capable terminal, launch the TUI, type 'abc', then press Ctrl+Enter, type 'def', and press Ctrl+Enter again.
-- Expected result: Each Ctrl+Enter inserts a newline at the cursor and advances it; nothing is submitted and the composer retains 'abc', 'def' on separate lines (SI-1).
-- Evidence to capture: Screenshot or transcript of the composer showing multi-line text and no sent message.
+- Exact action: Hold the target's `.uncle/workflow/driver.lock` with flock in another terminal and run `uncle --audit` there.
+- Expected result: Refusal naming the lock with the refusal exit code; state file unchanged and no driver started.
+- Evidence to capture: Error text, exit code, state checksum before/after.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-201
+### MC-108
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: file:audit-target-checkout-state
 - Depends on: none
-- Exact action: In the home composer, paste a 3-line text block (including CRLF line endings) from the system clipboard, then press Enter once.
-- Expected result: The whole block appears at the cursor as 3 lines without submitting; only the final plain Enter submits it as a single message (SI-1, AC-3).
-- Evidence to capture: Screenshots before and after the Enter showing the composer content and a single sent message.
+- Exact action: Run `uncle --audit` where the driver exits 0 but writes no audit-verdict, then where the verdict is not READY, and with a state value containing an ESC byte.
+- Expected result: Missing verdict prints unknown verdict and exits per the plan; not-READY keeps the driver's status; no raw control characters appear in output.
+- Evidence to capture: Output captured with `cat -v` and exit codes.
 - Actual result: 
 - Status: NOT RUN
 
@@ -108,11 +76,21 @@
 
 ### MC-200
 - Required for acceptance: YES
-- Exclusive resources: tui:home-agent-session
+- Exclusive resources: file:fixture-state
 - Depends on: none
-- Exact action: Paste a text block far larger than the composer limit (over 1 MiB, e.g. generated with multibyte characters and many newlines) into the composer.
-- Expected result: The composer is truncated at the limit, the app does not hang, nothing is submitted, and no leftover paste bytes act as keystrokes afterwards (SI-2).
-- Evidence to capture: Screenshot of the composer after paste and confirmation that no message was sent.
+- Exact action: In a fixture change-family checkout whose state is a mid-flight stage (e.g. plan approval or implementation in progress), checksum .uncle/workflow/state, run `uncle --audit`, then checksum again. Repeat for a non-git directory, an unknown branch, and `uncle --audit ''`.
+- Expected result: Each run prints a one-line `Error:` naming the cause, exits with the refusal code (1, or 2 under --noui), and the state file checksum is identical before and after.
+- Evidence to capture: Stderr text, exit code and before/after checksum for each refusal case.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-201
+- Required for acceptance: YES
+- Exclusive resources: file:fixture-worktrees
+- Depends on: none
+- Exact action: With two worktrees (main checkout on branch A, second worktree on branch B, both with finished change state), record `git rev-parse HEAD` and `git branch --show-current` in the caller checkout, run `uncle --audit B`, then record them again.
+- Expected result: The audit runs in B's worktree (its state and FINAL_AUDIT.md are updated), while the caller checkout's HEAD, branch and working tree are unchanged.
+- Evidence to capture: Before/after HEAD and branch output, plus timestamps of FINAL_AUDIT.md in each worktree.
 - Actual result: 
 - Status: NOT RUN
 
@@ -120,156 +98,97 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Open the slash menu (type '/') and, separately, an issue picker, then paste a multi-line block and press Ctrl+Enter in each state.
-- Expected result: The paste and Ctrl+Enter are swallowed: no text inserted, no newline, no picker/menu selection, nothing submitted (D-6).
-- Evidence to capture: Screenshots of the menu/picker state before and after each action.
+- Exact action: Run `uncle --issue --audit` with `echo 5 |` piped on stdin, and `uncle --audit --application x`, and `uncle --audit verify`.
+- Expected result: The first two are refused as mutually exclusive with the refusal code before stdin is consumed; `--audit verify` treats verify as a branch name (not running the verifier) and fails with an `Error:` for an unknown branch. No state changes.
+- Evidence to capture: Output and exit code of each command.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-201
+### MC-204
 - Required for acceptance: YES
-- Exclusive resources: tui:home-agent-session
+- Exclusive resources: file:fixture-state
 - Depends on: none
-- Exact action: Launch the TUI in a capable terminal, then quit normally; run `cat`, paste multi-line text and press Ctrl+D. Repeat quitting via `kill -TERM` and via `kill -HUP` of the TUI process.
-- Expected result: After each exit path the shell is clean: pasted text shows no ESC[200~ markers and keys behave normally, confirming modes were disabled (SI-3).
-- Evidence to capture: Terminal transcript of the cat output for each of the three exit paths.
+- Exact action: In a fixture checkout with a decoy `scripts/change-workflow.sh` that writes a marker file, run `uncle --audit` on a finished-state checkout using the installed uncle, then check for the marker. Also create a branch name containing an ESC byte and run `uncle --audit` with it, inspecting output.
+- Expected result: Only the install-dir driver runs (no marker from the decoy), and no raw control characters appear in any printed message.
+- Evidence to capture: Marker file presence and a hexdump (`| cat -v`) of the output.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-205
-- Required for acceptance: NO
-- Exclusive resources: none
-- Depends on: none
-- Exact action: With the TUI running, press Ctrl-Z to suspend, run `cat` and paste to check for residue, then `fg` to resume and paste again in the composer.
-- Expected result: While suspended, pasted text has no markers; after resume, bracketed paste and Ctrl+Enter work again in the composer (SI-3).
-- Evidence to capture: Transcript of the suspended-shell paste and screenshot of the resumed composer.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-206
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: With enhanced key modes active, press plain Enter with text, backslash-then-Enter, type text and press Alt/Meta b, f, d for word movement, and press Ctrl-C.
-- Expected result: Plain Enter submits, backslash-Enter inserts a newline without submitting, Meta b/f/d move/delete by word, and Ctrl-C quits as before (SI-5, AC-4).
-- Evidence to capture: Transcript or screenshots of each key's observed outcome.
-- Actual result: 
-- Status: NOT RUN
-
-## Resources: terminal mode lifecycle
+## resources
 
 ### MC-301
-- Exclusive resources: browser:system
+- Required for acceptance: YES
+- Exclusive resources: file:fixture-driver.lock
 - Depends on: none
-- Exact action: In a real terminal, launch the TUI, then quit normally with Ctrl-C. At the shell, run `cat`, paste a multi-line text, press Ctrl-D, and press Enter on an empty line.
-- Expected result: After exit, `cat` echoes the paste with no ESC[200~ / ESC[201~ markers, and keys behave normally (no CSI-u/modifyOtherKeys residue).
-- Evidence to capture: Terminal transcript or screenshot of the cat output and shell key behavior.
+- Exact action: In a fixture change-family checkout whose state is a post-implementation stage, hold driver.lock from a background process (flock), snapshot the state file bytes, then run `uncle --audit` and release the lock afterward.
+- Expected result: Output is a one-line `Error:` naming the driver lock, exit code is $UNCLE_REFUSE_CODE (1, or 2 under --noui), the state file is byte-identical, and the driver does not run.
+- Evidence to capture: Captured stderr, exit code, and before/after checksum of .uncle/workflow/state.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-302
-- Exclusive resources: browser:system
+- Required for acceptance: YES
+- Exclusive resources: file:fixture-worktrees
 - Depends on: none
-- Exact action: Launch the TUI in a terminal, then from a second terminal run `kill -TERM <pid>`; repeat in a fresh launch with `kill -HUP <pid>`. In the original terminal, run `cat` and paste multi-line text.
-- Expected result: The shell is clean after each signal exit: no bracketed-paste markers in pasted text and normal key behavior.
-- Evidence to capture: Transcript of both kill runs and the cat paste output.
+- Exact action: In a fixture repo with a second worktree on branch B (state post-implementation), run `uncle --audit B` from the primary checkout, recording HEAD and current branch of the caller before and after.
+- Expected result: The driver runs with cwd in B's worktree, FINAL_AUDIT.md path and a verdict line are printed, and the caller's checkout, branch and HEAD are unchanged.
+- Evidence to capture: Stdout, exit code, driver-recorded cwd, and caller `git rev-parse HEAD` and branch before/after.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-303
-- Exclusive resources: browser:system
+- Required for acceptance: YES
+- Exclusive resources: file:fixture-state
 - Depends on: none
-- Exact action: Launch the TUI, press Ctrl-Z to suspend, run `cat` and paste text at the shell, Ctrl-D, then run `fg` and paste multi-line text into the composer.
-- Expected result: While suspended, paste has no markers; after `fg`, bracketed paste is active again (multi-line paste inserts without submitting).
-- Evidence to capture: Transcript/screenshots of suspended-shell paste and the composer after resume.
+- Exact action: Run `uncle --audit` against fixtures whose state is each of: planning, a plan approval gate, implementation in progress, and a post-implementation stage; snapshot the state file bytes before each.
+- Expected result: Mid-flight states are refused with `Error:` naming the state, state is byte-identical and the driver is not run; the post-implementation state is accepted and set to FINAL_AUDIT before the driver runs.
+- Evidence to capture: Per-state stderr, exit code, state checksums, and driver invocation record.
 - Actual result: 
 - Status: NOT RUN
-
-## Resources: composer paste and Ctrl+Enter
 
 ### MC-304
-- Exclusive resources: browser:system
+- Required for acceptance: YES
+- Exclusive resources: file:fixture-worktrees
 - Depends on: none
-- Exact action: In a Ctrl+Enter-capable terminal (e.g. kitty, WezTerm, iTerm2, Ghostty), launch the TUI, type text, press Ctrl+Enter, type more, then paste a 3-line text at the cursor mid-text, then press Enter.
-- Expected result: Ctrl+Enter inserts a newline without submitting; the 3-line paste inserts at the cursor without submitting; plain Enter then submits and clears the composer.
-- Evidence to capture: Screenshots of the composer after each step and the sent message.
+- Exact action: With a decoy scripts/change-workflow.sh placed in the target worktree that writes a marker file, run `uncle --audit` there; also run it once with a branch checked out in no worktree and once with a worktree lacking .uncle.
+- Expected result: Only the install-dir driver runs (no decoy marker), cwd is the target checkout, and the no-worktree and missing-.uncle cases are refused with `Error:` and no state write.
+- Evidence to capture: Presence/absence of marker file, driver-recorded cwd, stderr, exit codes, and state checksums.
 - Actual result: 
 - Status: NOT RUN
-
-## Resources: composer picker and fallback
 
 ### MC-305
-- Exclusive resources: browser:system
-- Depends on: none
-- Exact action: Open the slash menu or issue picker in the composer, then paste multi-line text and press Ctrl+Enter. Afterward, close the picker, press Esc then Enter, and also test backslash-Enter at the end of a line.
-- Expected result: Paste and Ctrl+Enter while the picker is open are ignored with no insert or submit; with plain composer focus, Esc+Enter inserts a newline, and backslash-Enter still continues the line.
-- Evidence to capture: Screenshots of the picker state after paste/Ctrl+Enter and of the composer after Esc+Enter and backslash-Enter.
-- Actual result: 
-- Status: NOT RUN
-
-## Resources: copy and key smoke
-
-### MC-306
-- Exclusive resources: browser:system
-- Depends on: none
-- Exact action: With composer text present, toggle mouse capture off with Ctrl-G (or use the terminal's bypass modifier), select composer text and copy with the system shortcut, paste into another app. Then test Meta b/f/d word movement and Ctrl-C quit.
-- Expected result: Selected text copies and pastes correctly elsewhere; Meta b/f/d still move/delete by word; Ctrl-C quits the app.
-- Evidence to capture: Screenshot of the pasted text in the other app and notes on word-movement and quit behavior.
-- Actual result: 
-- Status: NOT RUN
-
-## Resources: cleanup on quit
-
-### MC-303
 - Required for acceptance: YES
+- Exclusive resources: file:fixture-state
+- Depends on: none
+- Exact action: Run `uncle --audit` with a stub driver that writes no audit-verdict file and exits 0, then with one writing a not-READY verdict and exiting 3, and with a state file value containing an ESC byte.
+- Expected result: Missing verdict prints `verdict: UNKNOWN` and exits $UNCLE_REFUSE_CODE; the not-READY run exits with the driver's status 3; no control characters appear in any printed output.
+- Evidence to capture: Stdout/stderr (checked for control bytes via hexdump), and exit codes.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-403
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In the home composer of the running TUI, type 'hello' and press plain Enter; then type 'build #45' with an issue picker/slash menu open and press Enter; then type '/help' and press Enter.
-- Expected result: Plain Enter submits non-empty text and clears the composer; with the picker/menu open Enter accepts the entry; slash command runs; Enter on an empty composer sends nothing.
-- Evidence to capture: Screenshot or terminal transcript after each Enter showing composer cleared/message sent/command output.
+- Exact action: Run `uncle --runs`, `uncle --performance` and `uncle verify` from a scratch checkout, and run `uncle --help --audit` and `uncle --runs --audit`.
+- Expected result: The three early-exit helpers behave as before. With `--help` or `--runs` first, they act in argument order and `--audit` is never parsed: help prints and exits 0, and runs lists runs.
+- Evidence to capture: Outputs and exit codes of each invocation.
 - Actual result: 
 - Status: NOT RUN
 
-## Resources: UI responsiveness
-
-### MC-306
-- Required for acceptance: NO
-- Exclusive resources: tui:session-E
+### MC-405
+- Exclusive resources: file:scratch-state
 - Depends on: none
-- Exact action: In the home composer, type 'line one\' and press Enter, then type 'x\\' and press Enter; then press F4 for edit mode, type text and press Enter.
-- Expected result: Trailing single backslash plus Enter becomes a newline without submitting; double backslash sends one trailing backslash; Enter in edit mode inserts a newline at the cursor without submitting.
-- Evidence to capture: Screenshots of composer contents after each step and the sent message text for the double-backslash case.
-- Actual result: 
-- Status: NOT RUN
-
-## Regressions
-
-### MC-401
-- Required for acceptance: YES
-- Exclusive resources: terminal:uncle-tui
-- Depends on: none
-- Exact action: With text in the composer, press Ctrl-C; separately in a fresh session with a word-filled composer press Meta/Alt+b, Alt+f, Alt+d, and Esc followed by a non-Enter key (e.g. 'x'), in a terminal with enhanced key reporting enabled.
-- Expected result: Ctrl-C still quits the app; Alt+b/f/d move/delete by word as before; Esc then 'x' behaves as before (key delivered, no newline inserted, no submit).
-- Evidence to capture: Terminal transcript/screenshots showing cursor positions after each key and the app exiting on Ctrl-C.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-402
-- Required for acceptance: YES
-- Exclusive resources: terminal:interactive
-- Depends on: none
-- Exact action: Launch the TUI in a terminal, quit normally, then launch again and terminate it with kill -TERM and again with kill -HUP; after each, run 'cat' in the shell, paste multi-line text and type arrow keys, then press Ctrl-D.
-- Expected result: After every exit path the shell is clean: no '^[[200~' or '^[[201~' markers appear on paste and keys behave normally; the terminal is not left in a modified key-reporting mode.
-- Evidence to capture: Terminal transcript of the cat session after each exit showing pasted text without escape markers.
+- Exact action: In a scratch change-family checkout, set the state to a mid-flight value such as an approval gate or implementation in progress, and checksum the state file. Run `uncle --audit`, then recheck the checksum.
+- Expected result: The command refuses with an `Error:` naming the state, exits with the refusal code, and does not run the driver. The state file is byte-identical.
+- Evidence to capture: Error message, exit code, and state checksum before and after.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-406
-- Required for acceptance: YES
-- Exclusive resources: clipboard
+- Exclusive resources: file:scratch-worktrees
 - Depends on: none
-- Exact action: Turn mouse capture off with Ctrl-G (or use the terminal's bypass modifier), select text in the home composer with the mouse, copy with the system shortcut, and paste into another application; then toggle Ctrl-G back.
-- Expected result: Selected composer text copies and pastes elsewhere unchanged; mouse capture toggling still works; Ctrl-C in the TUI still quits rather than copying.
-- Evidence to capture: Screenshot of selection and of the pasted text in the other application.
+- Exact action: With two worktrees of a repo, record `git rev-parse HEAD` and `git branch --show-current` in the caller worktree. Run `uncle --audit OTHER_BRANCH` from the caller, where OTHER_BRANCH is checked out in the other worktree and in a post-implementation state. Use a stubbed or real driver.
+- Expected result: The audit runs in the other worktree and writes its `.uncle/docs/FINAL_AUDIT.md` there. The caller's checkout, branch and HEAD are unchanged. The output shows the verdict line and the audit file path.
+- Evidence to capture: Command output, exit code, and the caller's HEAD and branch before and after.
 - Actual result: 
 - Status: NOT RUN

@@ -40,7 +40,7 @@ class References:
         for part in path.parts:
             lower = part.lower()
             if (lower.startswith('.env') or lower in
-                    ('.git', '.uncle', '.ssh', '.aws', '.codex', '.cline', '.kimi', 'node_modules',
+                    ('.git', '.ssh', '.aws', '.codex', '.cline', '.kimi', 'node_modules',
                      'credentials', 'credentials.json', 'auth.json', 'providers.json') or
                     lower.startswith(('id_rsa', 'id_ed25519', 'id_ecdsa')) or
                     lower.endswith(('.pem', '.key', '.p12', '.pfx', 'self-hosted-keys.json'))):
@@ -123,11 +123,7 @@ class References:
             if child.is_dir():
                 result.append(name + '/')
             elif not child.is_symlink() and self._allowed(name):
-                try:
-                    self.read(name)
-                    result.append(name)
-                except ValueError:
-                    continue
+                result.append(name)
         return result
 
     def suggestions(self, prefix):
@@ -152,8 +148,23 @@ class References:
         except ValueError:
             return False
 
+    def _is_text(self, name):
+        """True when the file is readable text; False for binary or oversized files."""
+        target, relative = self._parent_reference(name)
+        if target is not self:
+            return target._is_text(relative)
+        try:
+            with os.fdopen(self.open(name), 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o444:
+                    raise ValueError('Reference is not a readable regular file')
+                return b'\0' not in stream.read(8192)
+        except OSError:
+            raise ValueError('File not found or unsafe reference') from None
+
     def reference(self, name):
-        self.read(name)
+        if self._is_text(name):
+            self.read(name)
         if '"' in name or '\n' in name:
             raise ValueError('Unsupported reference name')
         return '@"' + name + '"' if any(c.isspace() for c in name) else '@' + name
@@ -164,6 +175,8 @@ class References:
         def replace(match):
             nonlocal total
             name = match.group(1) or match.group(2)
+            if not self._is_text(name):
+                return '\n[file ' + name + ': binary file, not inlined]\n'
             body = self.read(name)
             total += len(body.encode('utf-8'))
             if total > REFERENCE_LIMIT:

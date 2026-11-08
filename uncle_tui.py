@@ -5951,8 +5951,15 @@ class UncleTUI:
         self.chat_picker_kind = 'file'
         self.chat_picker = bool(match)
         self.chat_ref_start = match.start() if match else len(self.chat_composer)
-        self.chat_choices = self.chat.refs.browse(match.group(1) if match.group(1) is not None else match.group(2)) if match else []
+        self.chat_choices = self._browse_with_up(match.group(1) if match.group(1) is not None else match.group(2)) if match else []
         self.chat_pick = 0
+
+    def _browse_with_up(self, prefix):
+        """Directory listing with a leading '..' row when browsing a directory."""
+        rows = self.chat.refs.browse(prefix)
+        if prefix.endswith('/') and prefix != '/':
+            rows = ['..'] + rows
+        return rows
 
     def _complete_chat_file(self):
         if getattr(self, 'chat_picker_kind', 'file') == 'issue':
@@ -5969,8 +5976,21 @@ class UncleTUI:
             self.chat_error = 'No matching files. Keep typing or press Esc to close.'
             return
         name = self.chat_choices[self.chat_pick]
+        if name == '..':
+            current = self.chat_composer[self.chat_ref_start:].lstrip('@').lstrip('"')
+            parts = current.rstrip('/').split('/') if current.rstrip('/') else []
+            if parts and parts[-1] not in ('..', '~'):
+                name = '/'.join(parts[:-1]) + '/' if len(parts) > 1 else ''
+                if current.startswith('/') and len(parts) == 1:
+                    name = '/'
+            else:
+                name = current + '../' if current not in ('~',) and not current.startswith('/') else '/'.join(parts[:-1]) + '/'
+            choices = self._browse_with_up(name)
+            self.chat_composer = self.chat_composer[:self.chat_ref_start] + '@' + name
+            self.chat_choices, self.chat_pick, self.chat_error = choices, 0, ''
+            return
         if name.endswith('/'):
-            choices = self.chat.refs.browse(name)
+            choices = self._browse_with_up(name)
             reference = '@"' + name if any(c.isspace() for c in name) else '@' + name
             self.chat_composer = self.chat_composer[:self.chat_ref_start] + reference
             self.chat_choices = choices
@@ -6189,7 +6209,7 @@ class UncleTUI:
             self.chat_picker = False
             self.chat_choices = []
         elif self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'file' and not self.chat_composer[self.chat_ref_start:].startswith('@'):
-            self.chat_choices = self.chat.refs.browse(self.chat_composer[self.chat_ref_start:])
+            self.chat_choices = self._browse_with_up(self.chat_composer[self.chat_ref_start:])
             self.chat_pick = 0
         else:
             self._chat_suggestions()

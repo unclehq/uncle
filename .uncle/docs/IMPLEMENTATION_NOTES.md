@@ -29,3 +29,8 @@
 - `uncle verify`: the head-tree check strips Uncle's managed `.gitignore` lines the way the release snapshot does; predicate approvals now carry `view_digest`.
 - FA-002: MC-401/402 reclassified; the opt-out half of MC-401 was run and observed. The `--noui` half and MC-402's responsiveness remain unverified.
 - Known gap: no test drives a stream-level tool-use event into a live session; the tests show only that preload adds no grants.
+
+## Manual checks run without tmux (pty)
+
+- MC-101/MC-200 PASS. MC-106/MC-206 first FAILED: a failed preload wrote "The home agent is unavailable" into the home history at startup. `uncle_tui.py` now suppresses that note while the preload holds the lock; the first operator message still reports it. A regression test covers both.
+- MC-102/MC-201: opt-out half observed; the `--noui` wrapper half is still BLOCKED-SETUP.

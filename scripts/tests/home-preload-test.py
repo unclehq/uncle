@@ -334,6 +334,19 @@ class PlanScope(unittest.TestCase):
         self.assertIsNone(self.ui.agent_session)
         self.assertIsNone(self.ui.agent_preload_cancel)
 
+    def test_unavailable_claude_leaves_no_note_at_startup_but_first_message_reports_it(self):
+        # MC-106/206, observed in a real pty run: the preload surfaced "The home agent is unavailable" at startup.
+        with patch.object(home_preload, 'gather', return_value='SNAP'), \
+                patch.object(tui.home_agent_session, 'persistent_session',
+                             side_effect=ValueError('unavailable: claude is not on PATH')):
+            self.ui._preload_home_agent()
+        self.assertEqual(self.ui.home_history, [])
+        self.assertFalse(self.ui.agent_unavailable_noted)
+        with patch.object(tui.home_agent_session, 'persistent_session',
+                          side_effect=ValueError('unavailable: claude is not on PATH')):
+            self.assertIsNone(self.ui._home_agent_session())
+        self.assertTrue(any('unavailable' in text for _, text in self.ui.home_history))
+
     def test_operator_session_wins_creation_race(self):
         self.ui.agent_session = self.session
         with patch.object(home_preload, 'gather', return_value='SNAP'), self.spawn() as sp:

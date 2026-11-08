@@ -3619,7 +3619,11 @@ class UncleTUI:
                 if self.agent_session is not None or self.chat_calls:
                     return  # an operator turn got there first; never preload over it
                 self.agent_preload_cancel = event
-                session = self._home_agent_session()
+                self.agent_preloading = True  # read only under agent_lock, by _agent_note_unavailable
+                try:
+                    session = self._home_agent_session()
+                finally:
+                    self.agent_preloading = False
                 if session is None:
                     return
                 created = True
@@ -3657,6 +3661,8 @@ class UncleTUI:
                 and self.agent_pending is None and not self.agent_closing)
 
     def _agent_note_unavailable(self, text):
+        if getattr(self, 'agent_preloading', False):
+            return  # a failed startup preload is silent; the operator's first message reports it if it still applies
         if not self.agent_unavailable_noted:
             self.agent_unavailable_noted = True
             self.home_history.append(('system', text))

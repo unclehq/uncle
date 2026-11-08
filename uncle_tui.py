@@ -337,6 +337,7 @@ STAGES = [
     ("requirements", AGENT),
     ("project-plan", AGENT),
     ("change-plan", AGENT),
+    ("classify-change", AGENT),
     ("adversarial-review", REVIEWER),
     ("updated-plan", AGENT),
     ("updated-change-plan", AGENT),
@@ -585,6 +586,12 @@ CONFIG_DESC = {
         "ordered set of work. This stage benefits from a strong planning model. "
         "Leave it at (default) to use the global model, or set a specific model "
         "ID if you always want planning to run on a particular model."
+    ),
+    "classify-change": (
+        "A small judgment call that sizes the plan and decides how many "
+        "adversarial review lenses run. Left unset it runs on the supervisor's "
+        "runner (or the planning stage's runner when that is not installed). "
+        "It fails open: a runner that errors just gets the full review."
     ),
     "updated-plan": (
         "Revises the project plan after the adversarial review catches gaps or "

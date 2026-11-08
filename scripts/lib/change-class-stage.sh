@@ -46,7 +46,10 @@ classify_change_stage() {
     # The supervisor's defaults (the stage config alias supplies a configured runner and model; these supply what it leaves out).
     if [[ "$(UNCLE_CLASSIFY_FALLBACK_STAGE=x uncle_config_stage classify-change)" == supervision ]]; then
         export WORKFLOW_MODEL_CLASSIFY_CHANGE="${WORKFLOW_MODEL_CLASSIFY_CHANGE-$(uncle_config_get supervision.model || true)}"
-        [[ -n "$WORKFLOW_MODEL_CLASSIFY_CHANGE" ]] || export WORKFLOW_MODEL_CLASSIFY_CHANGE=sonnet
+        # "sonnet" is a Claude model alias; any other runner would reject it and the fail-open stage would hide that.
+        if [[ -z "$WORKFLOW_MODEL_CLASSIFY_CHANGE" && "$(uncle_config_get supervision.runner || true)" =~ ^(claude)?$ ]]; then
+            export WORKFLOW_MODEL_CLASSIFY_CHANGE=sonnet
+        fi
         export WORKFLOW_EFFORT_CLASSIFY_CHANGE="${WORKFLOW_EFFORT_CLASSIFY_CHANGE-$(uncle_config_get supervision.effort || true)}"
         [[ -n "$WORKFLOW_EFFORT_CLASSIFY_CHANGE" ]] || export WORKFLOW_EFFORT_CLASSIFY_CHANGE=low
     fi

@@ -1,184 +1,184 @@
-## AR-001: Plain Enter can arrive as byte 10 or 13 (ICRNL), and key 10 must submit per the protected test, yet the burst detector a
+## AR-001: Mode handling is contradictory: the plan forwards a mode flag to the driver, yet the driver is untouched and nothing say
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 (Esc followed by 10/13; burst k in (10,13)) vs R-1 (_chat_key(10) submits). Plan should state: 'Burst detection and Esc+Enter apply to both 10 and 13; lone 10/13 with no pending input and no preceding Esc always submits.'
-- Failure: Plain Enter can arrive as byte 10 or 13 (ICRNL), and key 10 must submit per the protected test, yet the burst detector and Esc+10/13 treat both bytes as newline triggers. Plan does not say whether a lone Esc then Enter(10) is newline or submit, or whether burst applies equally to 10 and 13.
+- References: CHANGE_PLAN s8 'forwarded to the driver' and s20 step 1 'run driver with mode flag' vs s5 not modifying change-workflow.sh.
+- Failure: Mode handling is contradictory: the plan forwards a mode flag to the driver, yet the driver is untouched and nothing says it accepts one. Settle: 'The helper passes mode only via exported UNCLE_UNATTENDED, adds no driver CLI flags; unset means driver default.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Plan never states whether paste, Ctrl+Enter, or burst-Enter apply when the composer is not in plain composing state (pic
+## AR-002: Unspecified: target state already mid-flight (implementation, pending gate).
 
 - Severity: HIGH
-- References: CHANGE_SPEC SB-4 has no state qualifier; D-3 limits only burst. Plan should say: 'Outside plain composing state (picker, slash menu, edit mode), bracketed paste and Ctrl+Enter sequences are consumed and discarded; they never insert or submit.'
-- Failure: Plan never states whether paste, Ctrl+Enter, or burst-Enter apply when the composer is not in plain composing state (picker/slash menu open, edit mode, empty composer). Burst detection is limited to 'composing' but SB-2/SB-4 are unconditional, and a paste in a picker is undefined.
+- References: CHANGE_SPEC s8 refusal list has no stage condition; plan s7 writes FINAL_AUDIT unconditionally after preconditions.
+- Failure: Unspecified: target state already mid-flight (implementation, pending gate). Overwriting with FINAL_AUDIT could skip approval gates. Settle: 'Refuse unless state is a post-implementation stage or FINAL_AUDIT; otherwise Error: and state untouched.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Paste exceeding COMPOSER_LIMIT is ambiguous: plan caps the read at COMPOSER_LIMIT bytes, but it does not say whether the
+## AR-003: Exit contract conflicts: AC-2 says driver's status, but a driver exit 0 with missing verdict file or a not-READY verdict
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s12 'total cap COMPOSER_LIMIT bytes'; SI-2 limit on characters. Plan should say: 'The reader drains and discards all paste bytes through ESC[201~ (or timeout) after truncating the insert to the remaining capacity in characters.'
-- Failure: Paste exceeding COMPOSER_LIMIT is ambiguous: plan caps the read at COMPOSER_LIMIT bytes, but it does not say whether the remainder is drained until ESC[201~ or left in the input stream, where it would be interpreted as keystrokes, including Enter submits. Bytes vs characters and the existing composer content also collide with the limit.
+- References: CHANGE_SPEC s15 'Exit status equals the driver's' vs s8 'not-READY audit ... nonzero exit'; AC-2.
+- Failure: Exit contract conflicts: AC-2 says driver's status, but a driver exit 0 with missing verdict file or a not-READY verdict has no stated output or code. Settle: 'If audit-verdict is missing print UNKNOWN and exit $UNCLE_REFUSE_CODE; otherwise exit with driver status.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Timeout and truncated-paste behavior conflict: partial paste is inserted 'on timeout and continue', but the remaining pa
+## AR-004: D-1 leaves cases open: empty-string BRANCH, 'uncle --audit verify', and a single-dash token.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s12 'on timeout insert partial and continue'; SI-1. Plan should say: 'After an unterminated paste times out, the composer stays in paste-tail mode so that Enter within the next burst is treated as newline per SB-5.'
-- Failure: Timeout and truncated-paste behavior conflict: partial paste is inserted 'on timeout and continue', but the remaining paste bytes arriving later would then be handled as ordinary keys, where their newlines submit. This contradicts SI-1 and AC-3.
+- References: CHANGE_PLAN s8/s10 D-1; uncle line 244 treats 'verify' as an early exec case.
+- Failure: D-1 leaves cases open: empty-string BRANCH, 'uncle --audit verify', and a single-dash token. Settle: 'Token after --audit is BRANCH iff present, non-empty and not starting with -; empty is refused; verify is refused as extra positional.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: D-2 is undecided: it contains conflicting text on kitty flags (1 vs 5, 'use ...
+## AR-005: Branch checked out in zero or multiple worktrees, or BRANCH equal to the current branch, is not defined.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 'ESC[>1u ... use ESC[>5u? see D-2'; D-2. Plan should say: 'Startup emits exactly ESC[?2004h and ESC[>4;2m; kitty protocol is not enabled; teardown emits ESC[?2004l and ESC[>4;0m.'
-- Failure: D-2 is undecided: it contains conflicting text on kitty flags (1 vs 5, 'use ... choose ... or skip') and the code uses ESC[<u pop without a matching push guarantee. Implementers, tests and checklists cannot agree on which exact strings are emitted at start.
+- References: CHANGE_SPEC AC-3 and s8 list only 'not checked out in any worktree'; plan step 1 does not define ambiguity.
+- Failure: Branch checked out in zero or multiple worktrees, or BRANCH equal to the current branch, is not defined. Settle: 'Resolve via worktree_branch_dir; zero or multiple matches are refused; BRANCH equal to current branch audits the current checkout.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Control-character handling for pasted TAB and for modifiers other than Ctrl (e.g.
+## AR-006: Placement of the exclusivity check is unspecified; the pre-scan only counts three options, so --audit with stdin-reading
 
 - Severity: LOW
-- References: CHANGE_SPEC AC-2 lists only 13;5u and 27;5;13~. Plan should say: 'CSI-u/modifyOtherKeys Enter with any modifier other than Ctrl is treated as plain Enter (submit), and all other unknown CSI sequences are pushed back unchanged.'
-- Failure: Control-character handling for pasted TAB and for modifiers other than Ctrl (e.g. Shift+Enter ESC[13;2u, Alt+Enter ESC[13;3u) is unspecified. Modifyotherkeys level 2 will also report these for other keys, and the plan states only the 5-modifier cases.
+- References: uncle lines 219-227 pre-scan only --application/--issue/--change-request; plan step 2 gives no placement.
+- Failure: Placement of the exclusivity check is unspecified; the pre-scan only counts three options, so --audit with stdin-reading options could read stdin first. Settle: 'Add --audit to the pre-scan exclusivity loop so combinations are refused before any stdin read.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Burst detection (Enter with any pending input becomes newline) conflicts with SB-1/SI-5 'plain Enter unchanged' and AC-1
+## AR-007: The plan does not say how the existing exclusivity pre-scan treats --audit.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 (handle_key burst check) vs s3 'byte-for-byte unchanged'; risk s22 accepts rapid double Enter as newline.
-- Failure: Burst detection (Enter with any pending input becomes newline) conflicts with SB-1/SI-5 'plain Enter unchanged' and AC-1: key-repeat or fast typing submits as newline. Settle: 'Burst detection applies only when at least 2 further bytes are already pending; otherwise Enter submits.'
+- References: uncle:217-227 counts only three flags; :276-285 --issue treats a following --* token as 'read stdin', so `--issue --audit` is ambiguous.
+- Failure: The plan does not say how the existing exclusivity pre-scan treats --audit. Settle with: '--audit counts as a startup action in the pre-scan, so --audit with --application/--issue/--change-request is refused before any stdin read.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: modifyOtherKeys level 2 makes Ctrl-C, Meta b/f/d and other modified keys arrive as CSI 27;..~ sequences that are only 'p
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-2 and risk s22 item 1 ('Not blocking'); AC-4 lists Ctrl-C quit and Meta b/f/d.
-- Failure: modifyOtherKeys level 2 makes Ctrl-C, Meta b/f/d and other modified keys arrive as CSI 27;..~ sequences that are only 'pushed back as unknown', risking AC-4 regressions. Settle: 'Map 27;mod;code~ and CSI-u for Ctrl-C and Meta-b/f/d to legacy keycodes, or use level 1 only.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: D-2 is self-contradictory on whether kitty flags are emitted (ESC[>1u vs ESC[>5u vs none), yet teardown writes ESC[<u un
+## AR-008: The exit code for --audit combined with another startup action is stated two ways.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 ('use ESC[>5u? see D-2') and D-2 text; teardown list includes ESC[<u.
-- Failure: D-2 is self-contradictory on whether kitty flags are emitted (ESC[>1u vs ESC[>5u vs none), yet teardown writes ESC[<u unconditionally. Settle: 'Emit only ESC[>4;2m and ESC[?2004h; no kitty sequences; teardown writes ESC[>4;0m and ESC[?2004l only.'
+- References: AC-4 and plan section 8 say $UNCLE_REFUSE_CODE; uncle:224-227 and :253-256 use literal exit 1.
+- Failure: The exit code for --audit combined with another startup action is stated two ways. Settle with: 'Combining --audit with another startup action exits $UNCLE_REFUSE_CODE (2 under --noui).'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Paste and Ctrl+Enter behavior is unspecified when the composer isn't in plain composing state (picker/slash menu, edit m
+## AR-009: BRANCH token parsing is unspecified for edge values.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-3 gates burst only; SB-2/SB-4 triggers carry no state qualifier; AC-4 preserves picker/edit Enter.
-- Failure: Paste and Ctrl+Enter behavior is unspecified when the composer isn't in plain composing state (picker/slash menu, edit mode). Only burst detection is gated on composing. Settle: 'Paste and Ctrl+Enter/Esc+Enter are consumed with no insert and no submit unless the plain composer has focus.'
+- References: Plan section 8 excludes only '--' prefixes; uncle:244 has a `verify` case; `-x` and '' are undefined.
+- Failure: BRANCH token parsing is unspecified for edge values. Settle with: 'BRANCH is the next token only if non-empty and not starting with -; `verify` is taken as BRANCH; an empty string is refused; a second positional hits the Error path.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: Over-limit or timed-out paste is ambiguous: leftover bytes and the ESC[201~ marker may be read as keystrokes, including
+## AR-010: Ordering of --audit relative to early-exit flags is undefined.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s12 (total cap COMPOSER_LIMIT bytes; on timeout insert partial and continue) vs SI-1.
-- Failure: Over-limit or timed-out paste is ambiguous: leftover bytes and the ESC[201~ marker may be read as keystrokes, including Enter that submits. Settle: 'Read to the end marker even past the limit, discarding excess; after a timeout, LF/CR within the same burst remain newlines.'
+- References: uncle:242-246 exec during the parse loop; CHANGE_SPEC section 7 says only 'not combinable'.
+- Failure: Ordering of --audit relative to early-exit flags is undefined. Settle with: 'Early-exit flags (--help, verify, --runs, --performance) act in argument order as today; --audit after them is never parsed; --audit before them is refused as a combination.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Esc followed by Enter changes meaning to newline, but behavior with a picker or edit mode open is unspecified.
+## AR-011: The plan does not say whether the upgrade check and other pre-dispatch steps run on the --audit path.
+
+- Severity: MEDIUM
+- References: Plan section 1 dispatches after uncle:~381 while section 16 sets UNCLE_SKIP_UPGRADE=1, implying an upgrade step sits on the path.
+- Failure: The plan does not say whether the upgrade check and other pre-dispatch steps run on the --audit path. Settle with: 'The --audit path skips upgrade checks and never reads stdin or starts the TUI.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: The summary is undefined when the driver exits 0 but audit-verdict is missing or stale.
 
 - Severity: LOW
-- References: CHANGE_SPEC SB-3 vs SB-7 (Esc+other key pushback preserved).
-- Failure: Esc followed by Enter changes meaning to newline, but behavior with a picker or edit mode open is unspecified. Settle: 'Esc+Enter inserts a newline only when the plain composer has focus; otherwise old Esc then Enter behavior stays.'
+- References: CHANGE_SPEC section 15 says the verdict is printed 'for information'; plan step 1 reads .uncle/workflow/audit-verdict with no missing-file behavior.
+- Failure: The summary is undefined when the driver exits 0 but audit-verdict is missing or stale. Settle with: 'If audit-verdict is absent or older than the run, print verdict: unknown and still return the driver status.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Burst detection turns any Enter with queued input into a newline, so behavior depends on timing, and it is unspecified w
+## AR-013: Plan validates BRANCH with check-ref-format but never states how git is invoked with it.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-3 and section 1 (handle_key peek via nodelay getch+ungetch); SB-5 says only 'further input already queued'.
-- Failure: Burst detection turns any Enter with queued input into a newline, so behavior depends on timing, and it is unspecified whether it applies during an active bracketed paste. Plan should say: 'Burst detection applies only when bracketed paste is not active, and never submits.'
+- References: CHANGE_PLAN s8 says BRANCH is 'not starting with `--`'; CHANGE_SPEC s10 relies on `git check-ref-format --branch`, which expands '@{-N}' forms.
+- Failure: Plan validates BRANCH with check-ref-format but never states how git is invoked with it. Settle: 'Git calls pass the branch only as refs/heads/<name> after "--", and BRANCH beginning with "-" (not just "--") is refused.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Sanitization drops ESC and C0 only.
+## AR-014: Checkout path from worktree_branch_dir is never required to be verified.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-4; CHANGE_SPEC section 10 and AC-3 list only ESC and C0.
-- Failure: Sanitization drops ESC and C0 only. C1 controls (including 8-bit CSI 0x9B), DEL and Unicode bidi/format characters are unspecified. Plan should say: 'sanitize_paste also drops DEL, C1 controls and U+202A-202E, U+2066-2069.'
+- References: CHANGE_PLAN s1 and step 1: 'checkout via current branch or worktree_branch_dir'; no validation of the returned path.
+- Failure: Checkout path from worktree_branch_dir is never required to be verified. Settle: 'Target dir comes only from `git worktree list --porcelain` of the caller repo, is realpath-resolved, must exist and contain .uncle owned by the current user, else refuse.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: The plan does not say how a fake paste-end marker inside a payload is handled.
+## AR-015: Which change-workflow.sh runs is ambiguous: install dir copy or the target worktree's copy (branch-controlled content).
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 10 ('fake paste-end markers'); CHANGE_PLAN section 12 says only 'read until ESC[201~ or timeout/limit'.
-- Failure: The plan does not say how a fake paste-end marker inside a payload is handled. Bytes after an early ESC[201~ could be parsed as keys, including Enter. Plan should say: 'The reader returns at the first ESC[201~. Nested ESC[200~ is dropped as data.'
+- References: CHANGE_PLAN s1 'runs the existing scripts/change-workflow.sh there'; CHANGE_SPEC s10 'No new env override for the driver path'.
+- Failure: Which change-workflow.sh runs is ambiguous: install dir copy or the target worktree's copy (branch-controlled content). Settle: 'The helper always runs $ROOT/scripts/change-workflow.sh from the install dir, never a script from the target checkout.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: Paste overflow and timeout behavior is unspecified.
+## AR-016: Lock probe then state write is a check-then-act race that can alter state under a live driver, contradicting I-6.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 12 ('total cap COMPOSER_LIMIT bytes; on timeout insert partial and continue'); SB-4.
-- Failure: Paste overflow and timeout behavior is unspecified. After COMPOSER_LIMIT is reached, the remaining bytes may be dispatched as keystrokes (including Enter, which submits). Plan should say: 'On overflow, discard remaining bytes until ESC[201~ or timeout; never dispatch them as keys.'
+- References: CHANGE_PLAN s11 D-2 and s7: the driver lock is the final guard only after the state write in step 1.
+- Failure: Lock probe then state write is a check-then-act race that can alter state under a live driver, contradicting I-6. Settle: 'The state write happens while holding the driver lock, or is restored if the driver cannot acquire it.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: Mode teardown does not name signal exits (SIGTERM, SIGHUP) or suspend/resume (SIGTSTP).
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN R-3, section 15 and SI-3 ('every exit path') against only 'teardown (~9102)'.
-- Failure: Mode teardown does not name signal exits (SIGTERM, SIGHUP) or suspend/resume (SIGTSTP). 'Not in test' detection is also undefined. Plan should say: 'Disable strings are emitted from finally, atexit and SIGTERM/SIGHUP handlers, and modes are re-emitted on resume from SIGTSTP.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: Burst detection is untestable as written: 'input pending' has no stated window and no fake-screen contract.
-
-- Severity: HIGH
-- References: CHANGE_PLAN s1 'peek (nodelay getch + ungetch)'; SB-5 'further input already queued'.
-- Failure: Burst detection is untestable as written: 'input pending' has no stated window and no fake-screen contract. Say: 'Enter is a newline iff a nodelay getch immediately returns a key, which is pushed back; otherwise Enter submits.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-019: D-2 and the approach text contradict each other (ESC[>1u vs ESC[>5u vs skip kitty), so the exact startup and teardown st
-
-- Severity: HIGH
-- References: CHANGE_PLAN s1 and D-2; section 16 'teardown emits disable strings'.
-- Failure: D-2 and the approach text contradict each other (ESC[>1u vs ESC[>5u vs skip kitty), so the exact startup and teardown strings have no oracle. Say: 'Startup writes exactly ESC[?2004h and ESC[>4;2m, no kitty; teardown writes ESC[?2004l and ESC[>4;0m.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: Paste overflow is unspecified.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s12 'total cap COMPOSER_LIMIT bytes' vs SI-2 and AC-3.
-- Failure: Paste overflow is unspecified. A byte cap on the read and a character limit in edit_insert coexist, and nothing says whether the excess is truncated or drained. Say: 'Paste is read to ESC[201~, truncated to remaining composer capacity, and the rest is discarded.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-021: Paste and Ctrl+Enter in non-composing states (picker, menu, edit mode) are undefined.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-3 'composing state'; SB-2 and SB-4 have no state qualifier; AC-1 excludes picker/menu/edit.
-- Failure: Paste and Ctrl+Enter in non-composing states (picker, menu, edit mode) are undefined. Say: 'Outside plain composing, paste and Ctrl+Enter are swallowed and never reach picker or edit-mode Enter handlers.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-022: After a paste read timeout, 'insert partial and continue' lets the remaining pasted lines arrive as plain Enters and sub
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s12 'per-read timeout ~50 ms'; CHANGE_SPEC s8; SI-1.
-- Failure: After a paste read timeout, 'insert partial and continue' lets the remaining pasted lines arrive as plain Enters and submit, violating SI-1. Say: 'After a paste timeout, Enter is a newline until input has been idle for N ms.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-023: The UNCLE_ENHANCED_KEYS=0 and 'not in test' gating is undefined for the teardown test.
+## AR-017: Echoed previous state, branch names and paths may carry terminal escapes.
 
 - Severity: LOW
-- References: CHANGE_PLAN s15 vs R-3 and s16.
-- Failure: The UNCLE_ENHANCED_KEYS=0 and 'not in test' gating is undefined for the teardown test. Say: 'Disable strings are written iff enable strings were written, and the writer is injectable.'
+- References: CHANGE_PLAN s7 'Previous state is printed'; CHANGE_SPEC s8 error messages naming the cause.
+- Failure: Echoed previous state, branch names and paths may carry terminal escapes. Settle: 'Any branch name, path or state value printed has control characters stripped.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: AC-6 defect injection is vague: stubbing the whole precondition block can fail without proving each refusal test catches
+
+- Severity: HIGH
+- References: CHANGE_PLAN s16 'precondition block stubbed out'; CHANGE_SPEC AC-6 says 'one precondition removed'.
+- Failure: AC-6 defect injection is vague: stubbing the whole precondition block can fail without proving each refusal test catches its own check. Plan should say: 'One mutant per AC-4 refusal; each must fail its matching test.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-019: AC-4 refusals are split between launcher and helper with no stated owner, and defect injection targets only the helper.
+
+- Severity: HIGH
+- References: CHANGE_PLAN s20 steps 1 and 2; s16 stubs only the helper.
+- Failure: AC-4 refusals are split between launcher and helper with no stated owner, and defect injection targets only the helper. Plan should say: 'Argument-shape, exclusivity and home-agent refusals live in uncle; git, state and lock refusals in audit-command.sh; injection covers both.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: Output and exit are unspecified when the verdict file is absent or unparsable, or when the verdict is not READY and the
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC AC-2 and A2; s16 stub 'may write a verdict file'.
+- Failure: Output and exit are unspecified when the verdict file is absent or unparsable, or when the verdict is not READY and the driver exits 0. Plan should say: 'Missing verdict prints "verdict: unknown"; exit always equals the driver status.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: Lock probe is left unresolved with a fallback, so the AC-4 lock test cannot be written deterministically (helper vs driv
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s11 D-2 and s22 non-blocking probe item.
+- Failure: Lock probe is left unresolved with a fallback, so the AC-4 lock test cannot be written deterministically (helper vs driver refusal differ in message and code). Plan should say: 'Helper refuses via a non-blocking flock probe on driver.lock with $UNCLE_REFUSE_CODE; test holds the lock in a background process.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: Unspecified inputs: empty-string BRANCH, --audit combined with verify/--runs/--performance (which exec early and swallow
+
+- Severity: MEDIUM
+- References: uncle:244-246 early exec for verify, --performance, --runs; CHANGE_SPEC s8 refusal list omits them.
+- Failure: Unspecified inputs: empty-string BRANCH, --audit combined with verify/--runs/--performance (which exec early and swallow it), and an existing FINAL_AUDIT state. Plan should say: 'Empty BRANCH is refused; --audit with those flags is refused; existing FINAL_AUDIT state is accepted and re-run.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-023: D-1 (--audit --attended parses as no BRANCH) conflicts with the spec's 'BRANCH beginning with --' refusal; the test expe
+
+- Severity: LOW
+- References: CHANGE_PLAN s10 D-1 and s8 versus CHANGE_SPEC s8.
+- Failure: D-1 (--audit --attended parses as no BRANCH) conflicts with the spec's 'BRANCH beginning with --' refusal; the test expectation is ambiguous. Plan should say: 'A -- token after --audit is never a BRANCH and falls to the existing handler; the option-like refusal applies only to --audit=--x.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

@@ -758,8 +758,19 @@ stdin and stdout are real terminals it opens a full-screen TUI (`uncle_tui.py`);
 otherwise it falls back to a line menu. `uncle --runs` lists the runs across
 the project's git worktrees (see `from-issue.sh --worktree`); the line menu's
 "From GitHub issue" entry asks `Run in a new worktree? [y/N]` for change
-runs, and the TUI offers `change request in worktree` as an issue mode. The
-config is `STAGE VALUE` lines:
+runs, and the TUI offers `change request in worktree` as an issue mode.
+
+`uncle --audit [BRANCH]` re-runs the final audit of a finished change run
+(current checkout, or the worktree of `BRANCH`) via `scripts/audit-command.sh`,
+then prints the verdict class and the `.uncle/docs/FINAL_AUDIT.md` path
+(`verdict: unknown` when no fresh verdict was written). The exit status is the
+driver's. It refuses, without touching state, when not in a git repo, when the
+run is not a change run past implementation (or at `FINAL_AUDIT`), when the
+driver lock is held, from a home-agent session, or when combined with
+`--application`, `--issue`, `--change-request`, `verify`, `--runs`, or
+`--performance`. It never reads stdin or starts the TUI.
+
+The config is `STAGE VALUE` lines:
 
 | Key | Meaning |
 |---|---|

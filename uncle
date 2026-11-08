@@ -69,6 +69,7 @@ Usage: uncle [-h|--help|--performance|--runs] [--attended] [--noui]
        uncle --application [TEXT] [--attended]
        uncle --issue [ISSUE] [--attended]
        uncle --change-request [--attended] < request.md
+       uncle --audit [BRANCH]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -84,6 +85,9 @@ and per-stage overrides from `.uncle/config` (menu option 4).
   q) Quit
 
 Runs with no arguments. -h / --help print this message and exit 0.
+--audit [BRANCH] re-runs the final audit of a finished change in the current
+checkout (or the worktree of BRANCH) and prints the verdict. It cannot be
+combined with other startup options and never reads stdin or opens the TUI.
 Mode: --application, --issue and --change-request run unattended
 by default (approval gates are delegated to the agent and recorded as unreviewed).
 --attended (or UNCLE_ATTENDED=1) makes every gate wait for you and needs a
@@ -225,6 +229,29 @@ if [[ "$_exclusive" -gt 1 ]]; then
     printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
     exit 1
 fi
+# --audit combined with another startup option is refused here too, before any
+# stdin read. Early-exit flags act in argument order: one before --audit means
+# --audit is never parsed, so it is not counted.
+_audit_n=0
+_audit_other=0
+_skip=""
+for _a in "$@"; do
+    if [[ -n "$_skip" ]]; then
+        _skip=""
+        if [[ -n "$_a" && "$_a" != -* ]]; then continue; fi
+    fi
+    case "$_a" in
+        -h|--help|verify|--performance|--runs)
+            if [[ "$_audit_n" -eq 0 ]]; then break; fi
+            _audit_other=$((_audit_other + 1)) ;;
+        --audit) _audit_n=$((_audit_n + 1)); _skip=1 ;;
+        --application|--application=*|--issue|--change-request) _audit_other=$((_audit_other + 1)) ;;
+    esac
+done
+if [[ "$_audit_n" -gt 0 && ( "$_audit_n" -gt 1 || "$_audit_other" -gt 0 ) ]]; then
+    printf 'Error: --audit cannot be combined with other startup options or early-exit flags\n' >&2
+    exit "$UNCLE_REFUSE_CODE"
+fi
 UNCLE_FLAG_NOUI=""
 _noinput_seen=""
 _noui_seen=""
@@ -244,6 +271,29 @@ while [[ $# -gt 0 ]]; do
         verify)        shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/uncle-verify.py" "$@" ;;
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
         --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
+        --audit)
+            if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
+                printf 'Error: --audit cannot be combined with other startup options\n' >&2
+                exit "$UNCLE_REFUSE_CODE"
+            fi
+            shift
+            UNCLE_AUDIT_BRANCH=""
+            if [[ $# -gt 0 && "$1" != -* ]]; then
+                if [[ -z "$1" ]]; then
+                    printf 'Error: --audit BRANCH cannot be empty\n' >&2
+                    exit "$UNCLE_REFUSE_CODE"
+                fi
+                UNCLE_AUDIT_BRANCH="$1"
+                shift
+            elif [[ $# -gt 0 && -z "$1" ]]; then
+                printf 'Error: --audit BRANCH cannot be empty\n' >&2
+                exit "$UNCLE_REFUSE_CODE"
+            fi
+            UNCLE_STARTUP_ACTION="audit"
+            ;;
+        --audit=*)
+            printf 'Error: --audit takes BRANCH as a separate argument, not %s\n' "$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177')" >&2
+            exit "$UNCLE_REFUSE_CODE" ;;
         --unattended)  UNCLE_FLAG_UNATTENDED=1; shift ;;
         --attended)    UNCLE_FLAG_ATTENDED=1; shift ;;
         --noui)        UNCLE_FLAG_NOUI=1; shift ;;
@@ -320,6 +370,10 @@ while [[ $# -gt 0 ]]; do
             shift "$issue_shift"
             ;;
         *)
+            if [[ "$UNCLE_STARTUP_ACTION" == audit && "$1" != -* ]]; then
+                printf 'Error: --audit takes at most one BRANCH; unexpected argument: %s\n' "$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177')" >&2
+                exit "$UNCLE_REFUSE_CODE"
+            fi
             printf 'Unknown argument: %s\n' "$1" >&2
             if [[ -n "$UNCLE_PENDING_STDIN" && "$1" == --* ]]; then
                 printf 'If the text for %s begins with --, use %s=TEXT.\n' "$UNCLE_PENDING_STDIN" "$UNCLE_PENDING_STDIN" >&2
@@ -329,7 +383,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request --audit verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else
@@ -393,6 +447,12 @@ UNCLE_UNATTENDED=""
 [[ "$UNATTENDED" != 1 ]] || UNCLE_UNATTENDED=1
 export UNCLE_MODE_RESOLVED=1
 if [[ -n "$UNCLE_UNATTENDED" ]]; then export UNCLE_UNATTENDED=1; else export UNCLE_UNATTENDED=0; fi
+# --audit: no upgrade check, no stdin, no TUI. Hand off to the helper.
+if [[ "$UNCLE_STARTUP_ACTION" == audit ]]; then
+    cd "$PROJECT_ROOT" || exit "$UNCLE_REFUSE_CODE"
+    export UNCLE_AUDIT_BRANCH UNCLE_REFUSE_CODE
+    exec bash "$ROOT/scripts/audit-command.sh" ${UNCLE_AUDIT_BRANCH:+"$UNCLE_AUDIT_BRANCH"}
+fi
 [[ -z "$UNCLE_PENDING_STDIN" ]] || read_stdin_option
 
 # Per-project paths/config. Resolve and export these BEFORE launching the TUI:

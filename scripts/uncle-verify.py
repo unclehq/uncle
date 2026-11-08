@@ -254,7 +254,11 @@ def check_3(statement, tree):
         name = entry.get('gate')
         if name not in DOCUMENTS:
             continue
-        recorded = entry.get('digest') or ''
+        # `digest` is what the driver's gate hashed, which for a document with a
+        # canonical JSON artifact is that JSON, not the committed Markdown view.
+        # `view_digest` is the Markdown's own hash at attestation time; older
+        # attestations lack it, and for those the two are the same file.
+        recorded = entry.get('view_digest') or entry.get('digest') or ''
         path = '.uncle/docs/' + name + '.md'
         blob = git('rev-parse', '--verify', '-q', tree + ':' + path, check=False).decode().strip()
         if blob:
@@ -398,17 +402,6 @@ def main(argv):
         tree, raw, sig = resolve_target(args)
         statement, line = check_1(raw)
         print('✓ ' + line)
-        line, verdict = check_2(raw, statement, sig, args)
-        print(('✓ ' if verdict == 'VERIFIED' else '○ ') + line)
-        for line in check_3(statement, tree):
-            print('✓ ' + line)
-        line, release = check_4(statement)
-        print('✓ ' + line)
-        for line in check_5(statement):
-            print('✓ ' + line)
-        print('✓ ' + check_6(statement))
-        print('✓ ' + check_7(statement))
-        print('✓ ' + check_8(statement, tree, release))
     except Usage as error:
         print(str(error))
         print()
@@ -421,7 +414,66 @@ def main(argv):
         print()
         print('NOT VERIFIED')
         return 1
+    # Past the statement itself, every check runs and reports: stopping at the
+    # first refusal hid whether anything else was wrong, and made each fix
+    # cost a rerun to discover the next failure.
+    failed = False
+    state = {}
+
+    def run(label, check):
+        nonlocal failed
+        try:
+            return check()
+        except Refused as error:
+            failed = True
+            print('✗ ' + error.args[0][0])
+            for extra in error.args[0][1:]:
+                print(extra)
+        return None
+
+    def signature():
+        nonlocal verdict
+        line, verdict = check_2(raw, statement, sig, args)
+        print(('✓ ' if verdict == 'VERIFIED' else '○ ') + line)
+
+    def approved():
+        for line in check_3(statement, tree):
+            print('✓ ' + line)
+
+    def artifact():
+        line, state['release'] = check_4(statement)
+        print('✓ ' + line)
+
+    def results():
+        for line in check_5(statement):
+            print('✓ ' + line)
+
+    def single(check, *extra):
+        def go():
+            print('✓ ' + check(statement, *extra))
+        return go
+
+    try:
+        run('signature', signature)
+        run('approvals', approved)
+        run('artifact', artifact)
+        run('results', results)
+        run('check 6', single(check_6))
+        run('check 7', single(check_7))
+        if 'release' in state:
+            run('check 8', single(check_8, tree, state['release']))
+        else:
+            print('○ check 8 skipped: it needs the release artifact, which check 4 did not establish')
+            failed = True
+    except Usage as error:
+        print(str(error))
+        print()
+        print('NOT VERIFIED')
+        return 2 if 'not installed' in str(error) else 1
     print()
+    if failed:
+        print('NOT VERIFIED')
+        return 1
     print(verdict)
     return 0 if verdict == 'VERIFIED' else 3
 

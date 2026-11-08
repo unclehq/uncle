@@ -190,7 +190,9 @@ severity_gate_test_review() {
     [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical ]] || return 0
     [[ -s "$canonical" && -n "${GREEN_CLASS:-}" && -s "$GREEN_CLASS" ]] || return 0
     reason="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" critical "$GREEN_CLASS" "${LOG_DIR:-$STATE_DIR/logs}/green-check.log")" && return 0
-    rows="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" downgrade "$canonical")" || return 0
+    local symptoms=""
+    python3 -B "$ROOT/scripts/lib/failure_severity.py" isolated "$GREEN_CLASS" "${LOG_DIR:-$STATE_DIR/logs}/green-check.log" > /dev/null && symptoms="--symptoms"
+    rows="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" downgrade "$canonical" $symptoms)" || return 0
     [[ -n "$rows" ]] || return 0
     local id severity
     while IFS=$'\t' read -r id severity; do

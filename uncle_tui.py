@@ -419,6 +419,10 @@ def parent_stage(stage):
         return "project-plan"
     if stage.startswith("preview-build-part-"):
         return "preview-build"
+    # Tests: the harness, unit, e2e and mutation authors (and the closing defect-list call) are one stage, drawn as one row
+    # with an indicator per author.
+    if stage.startswith("tests-"):
+        return "tests"
     if stage in ("manual-checklist-base", "manual-checklist-delta"):
         return "manual-checklist"
     # The investigate/format split's first call always names itself

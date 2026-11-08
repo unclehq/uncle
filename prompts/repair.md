@@ -15,6 +15,10 @@ This is a focused repair pass, not a new implementation of the approved plan.
    If the report has no structured findings, locate its failure summary and
    read enough surrounding evidence to identify the defect. Do not guess or
    silently drop blockers when the report is ambiguous.
+   If `.uncle/workflow/REPAIR_SCOPE.md` exists it is the whole job. Repair is for critical failures only: fix exactly the failures it
+   lists and nothing else. The rows it names as not to be addressed are not critical, cannot be fixed by a repair pass and go to the
+   final audit; do not add tests, edit protected tests or the defect-injection list, or change anything for them, even if a report
+   shows them failing. The paragraph below applies only when that file does not exist.
    The repair source is the failure that triggered this pass, and it comes first. Other open failures can sit beside it: required
    FAIL rows in `.uncle/docs/TEST_REVIEW.md`, entries in `.uncle/docs/DEFECTS.md` whose status is FAIL, and FAIL rows in
    `.uncle/docs/VERIFICATION_REPORT.md`. Fix every one that a change to the project's files can fix, in this one pass. A pass that
@@ -125,3 +129,11 @@ contracts. Do not add a framework or browser dependency to unrelated projects.
 Repair the cause, verify startup and the failing behavior, then let the driver
 rerun all approved checks. Never hide exceptions, skip assertions, extend timeouts
 to mask a broken startup, or claim unexecuted tests passed after fail-fast.
+
+
+## Frozen tests (only when `.uncle/docs/TESTS_NOTES.md` exists)
+
+The tests were written before the code and approved. Repair the source so they pass; a failing frozen test is evidence about the code
+until shown otherwise. If a finding can only be fixed by changing a frozen test, because the test contradicts the approved plan, change
+it and append `<path><TAB><reason>` to `.uncle/workflow/tests/amendments.tsv`; without that line the driver rejects the edit.
+Files marked completable (the defect list) are meant to be edited, but their ids, `breaks` and `expected_failing_tests` must not change.

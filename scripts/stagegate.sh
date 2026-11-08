@@ -124,6 +124,8 @@ fi
 # because it costs 9 to 26 s on the critical path and nothing had shown it helped. Run 28 then lost a repair (67 s and a re-review) to
 # two modules that disagreed on whether `initialState` is a function. WORKFLOW_MODULE_INTERFACES=1 runs it for every plan, 0 never.
 WORKFLOW_MODULE_INTERFACES="${WORKFLOW_MODULE_INTERFACES:-auto}"
+# Tests lanes are written in isolation from each other and from the code, so they always need the shared contract.
+[[ "${WORKFLOW_TESTS:-0}" != 1 ]] || WORKFLOW_MODULE_INTERFACES="${WORKFLOW_MODULE_INTERFACES/auto/1}"
 
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
@@ -177,6 +179,7 @@ fi
 . "$ROOT/scripts/lib/plan-recovery.sh"
 . "$ROOT/scripts/lib/plan-scope.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
+. "$ROOT/scripts/lib/tests-stage.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
 . "$ROOT/scripts/lib/change-class-stage.sh"
 . "$ROOT/scripts/lib/review-schema.sh"
@@ -969,6 +972,7 @@ stage_model() {
     case "$1" in
         requirements|requirements-investigate) lookup_stage="project-plan" ;;
         preview-build-part-*) lookup_stage="preview-build" ;;
+        tests|tests-*) lookup_stage="implementation" ;;
         execute-checklist) fallback="kimi" ;;
     esac
     if uncle_has_config || [[ -n "${UNCLE_RESOLVED_RUNNER:-}" ]]; then
@@ -992,7 +996,7 @@ stage_effort() {
 stage_turns() {
     local fallback=40
     case "$1" in
-        implementation|repair) fallback=200 ;;
+        implementation|repair|tests|tests-*) fallback=200 ;;
         # Read the brief, write one file, stop.  A longer leash only lets it explore and install.
         preview-build|preview-build-part-*) fallback=8 ;;
         implementation-report) fallback=20 ;;
@@ -1021,7 +1025,7 @@ stage_tools() {
         # The preview is one hand-written file: with Bash it scaffolds and installs, with Edit and
         # Glob it explores, and each of those is minutes of a stage that exists to be quick.
         preview-build|preview-build-part-*) fallback="Read,Write" ;;
-        implementation|implementation-investigate|implementation-report|repair|repair-investigate|execute-checklist|preflight|preflight-investigate)
+        implementation|implementation-investigate|implementation-report|tests|tests-*|repair|repair-investigate|execute-checklist|preflight|preflight-investigate)
             fallback="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
             ;;
     esac
@@ -1030,7 +1034,7 @@ stage_tools() {
 
 # New application pipeline stage order, used to report "stage N/M" to the TUI.
 # Matches run_stage's case arms.
-STATUS_STAGE_SEQ="derive-brief requirements project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
+STATUS_STAGE_SEQ="derive-brief requirements project-plan adversarial-review updated-plan preflight tests implementation test-review manual-checklist execute-checklist final-audit"
 
 
 # Map state-machine destinations which immediately launch an agent to the
@@ -1047,6 +1051,7 @@ unattended_prewarm_stage_for_state() {
         PROJECT_PLAN) stage=project-plan ;;
         PREFLIGHT) stage=preflight ;;
         IMPLEMENT) stage=implementation ;;
+        TESTS) stage=tests ;;
         REPAIR) stage=repair ;;
         # One packet worker is enough to warm the shared reviewer pool: all
         # same-config workers attach to that process concurrently.
@@ -3623,6 +3628,36 @@ _stagegate_parallel_build_step_prompt() {
         else
             echo '- `*`'
         fi
+        if declare -F tests_frozen_for_step > /dev/null; then
+            local frozen_here="" frozen_step
+            for frozen_step in $step ${UNCLE_ABSORBED_STEPS:-}; do
+                frozen_here="${frozen_here:+$frozen_here$'\n'}$(tests_frozen_for_step "$frozen_step" < "$STATE_DIR/implement-owns.all.tsv")"
+            done
+            frozen_here="$(printf '%s\n' "$frozen_here" | sed '/^$/d')"
+            if [[ -n "$frozen_here" ]]; then
+                echo; echo '## Frozen files for this step (read-only, binding)'
+                echo 'The plan lists these under this step, but separate test authors write them from the same plan and module contract (before you'
+                echo 'or at the same time as you), and they are frozen. They may not exist yet when you start.'
+                echo 'Do NOT write, edit, delete or overwrite them, and do not recreate their contents elsewhere. Implement the source files above'
+                echo 'to the plan and the module interfaces so that tests written against them pass. The driver rejects the merge of any step that touches them.'
+                printf '%s\n' "$frozen_here"
+            fi
+        fi
+        if declare -F tests_mutable_for_step > /dev/null; then
+            local mutable_here="" mutable_step
+            for mutable_step in $step ${UNCLE_ABSORBED_STEPS:-}; do
+                mutable_here="${mutable_here:+$mutable_here$'\n'}$(tests_mutable_for_step "$mutable_step" < "$STATE_DIR/implement-owns.all.tsv")"
+            done
+            mutable_here="$(printf '%s\n' "$mutable_here" | sed '/^$/d')"
+            if [[ -n "$mutable_here" ]]; then
+                echo; echo '## Completable files for this step (binding)'
+                echo 'These files were started before any code existed and cannot be finished without it. Keep every existing entry'"'"'s `id`, `breaks`'
+                echo 'and `expected_failing_tests` exactly as written, and add to each entry the fields the defect-injection runner needs once the source'
+                echo 'it names exists: `file` (the source path), `find` (text that occurs EXACTLY ONCE in that file, copied from the final source) and'
+                echo '`replace` (the wrong implementation). Verify each `find` occurs once. Do not delete or merge entries.'
+                printf '%s\n' "$mutable_here"
+            fi
+        fi
         echo; echo "Work only on this approved step and its declared owned files."
         echo "Do not edit workflow documents."
         if [[ "$owned_paths" == *'`package.json`'* ]]; then
@@ -3862,7 +3897,15 @@ run_parallel_application_implementation() {
     # `.uncle/launch.json`; the ownership guard then threw away every parallel
     # result and forced a long serial implementation pass.  Keep the compact
     # prompt, while statefully attaching its exact file boundary.
-    plan_step_owns .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-owns.tsv"
+    plan_step_owns .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-owns.all.tsv"
+    # Tests: tests that already exist and are frozen are not the implementation's to write, whatever the plan's Owns says.
+    if declare -F tests_filter_owns > /dev/null; then
+        tests_filter_owns < "$STATE_DIR/implement-owns.all.tsv" > "$STATE_DIR/implement-owns.tsv"
+        tests_frozen_paths > "$STATE_DIR/tests.frozen.list"
+        if [[ -s "$STATE_DIR/tests.frozen.list" ]]; then export UNCLE_FROZEN_LIST="$STATE_DIR/tests.frozen.list"; else unset UNCLE_FROZEN_LIST; fi
+    else
+        cp "$STATE_DIR/implement-owns.all.tsv" "$STATE_DIR/implement-owns.tsv"
+    fi
     # Preserve worker handoffs in one canonical input for the report-only
     # reconciliation stage. A worker may record its narrow check here, but it
     # cannot truthfully attest to the whole merged application.
@@ -5745,6 +5788,13 @@ while true; do
 
         MODULE_INTERFACES)
             module_interfaces_stage "$PLAN_DOC"
+            # Experimental: with WORKFLOW_TESTS=1 the tests are written and frozen before IMPLEMENT.
+            if tests_enabled && ! tests_locked && ! tests_concurrent; then set_state TESTS; fi
+            ;;
+
+        TESTS)
+            verify_approval "$PLAN_DOC" "$PLAN_DOC_NAME"
+            tests_stage
             ;;
 
         IMPLEMENT)
@@ -5804,7 +5854,10 @@ while true; do
             plan_status=0
             plan_before_write || plan_status=$?
             case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
+            # Concurrent tests: the test authors start now and run beside the implementation; the join is the barrier.
+            tests_background_start || exit 1
             [[ "$plan_status" == 22 ]] || run_stage IMPLEMENT
+            tests_join || exit 1
             python3 -B "$ROOT/scripts/lib/completion_preview.py" --normalize "$PWD" || exit 1
             plan_status=0
             plan_after_write || plan_status=$?
@@ -6126,6 +6179,29 @@ while true; do
                 set_state WAIT_IMPLEMENT_APPROVAL
                 continue
             fi
+            # Repair is for critical failures only (scripts/lib/failure_severity.py): a failed driver verification command, an application
+            # that cannot be built or served, a runner that executed no tests, a protected input that changed, or a final audit that is
+            # not ready. Anything else -- thoroughness rows of the test review, a mutation check, a checklist failure while the driver's
+            # own verification is clean -- is evidence for the final audit, not a defect a repair pass can fix.
+            # WORKFLOW_REPAIR_SEVERITY=all restores repair for every failure.
+            if [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical && -s "${GREEN_CLASS:-/nonexistent}" ]]; then
+                case "$(basename "$repair_source")" in
+                    FINAL_AUDIT.md|VERIFICATION_INTEGRITY.md|runtime-unrunnable-application) ;;   # blocking by nature
+                    *)
+                        if ! repair_critical="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" critical "$GREEN_CLASS" "$LOG_DIR/green-check.log")"; then
+                            echo "Repair not run: no critical failure. The driver's verification is clean and the application runs, so $(basename "$repair_source") goes to the final audit as unresolved evidence."
+                            echo "(WORKFLOW_REPAIR_SEVERITY=all repairs every failure.)"
+                            record_nonblocking_failure "$(basename "$repair_source")" 'no critical failure; repair not run'
+                            record_test_failure_disposition || true
+                            case "$(basename "$repair_source")" in
+                                TEST_REVIEW.md|green-check.md)
+                                    if [[ -e "$STATE_DIR/checklist-ran" ]]; then set_state FINAL_AUDIT; else set_state MANUAL_CHECKLIST; fi ;;
+                                *) set_state FINAL_AUDIT ;;
+                            esac
+                            continue
+                        fi ;;
+                esac
+            fi
             if [[ "$WORKFLOW_AUTO_REPAIR" != 1 \
                     || ( "$repair_source" != "$GREEN_MD" && "$repair_source" != .uncle/docs/TEST_REVIEW.md \
                          && "$repair_source" != .uncle/docs/FINAL_AUDIT.md \
@@ -6217,6 +6293,19 @@ while true; do
             PREVIOUS_VERIFICATION_SNAPSHOT="$(cat "$STATE_DIR/verification-snapshot" 2>/dev/null || true)"
             if [[ "$plan_status" != 22 ]]; then
                 printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
+                # Say, in the driver's own words and from its own records, what this repair is for.
+                # The agent's whole job: the critical failures, not every row that happens to be failing.
+                if [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical ]]; then
+                    python3 -B "$ROOT/scripts/lib/failure_severity.py" scope "$GREEN_CLASS" "$LOG_DIR/green-check.log" \
+                        "$STATE_DIR/documents/TEST_REVIEW.json" > "$STATE_DIR/REPAIR_SCOPE.md" 2>/dev/null || rm -f "$STATE_DIR/REPAIR_SCOPE.md"
+                else
+                    rm -f "$STATE_DIR/REPAIR_SCOPE.md"
+                fi
+                echo
+                python3 -B "$ROOT/scripts/lib/repair_reason.py" "$STATE_DIR" "$repair_source" "$repair_count" "$MAX_REPAIRS" \
+                    | tee "$STATE_DIR/REPAIR_REASON.md" || true
+                { printf '\n--- %s ---\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; cat "$STATE_DIR/REPAIR_REASON.md"; } >> "$STATE_DIR/repair-history.md" 2>/dev/null || true
+                echo
                 repair_begin || exit 1
                 run_stage REPAIR
                 repair_status=0

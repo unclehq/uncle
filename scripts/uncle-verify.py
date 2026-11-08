@@ -257,7 +257,10 @@ def check_3(statement, tree):
         # `digest` is what the driver's gate hashed, which for a document with a
         # canonical JSON artifact is that JSON, not the committed Markdown view.
         # `view_digest` is the Markdown's own hash at attestation time; older
-        # attestations lack it, and for those the two are the same file.
+        # attestations lack it. Without it, `digest` may be the canonical JSON's
+        # hash, which the verifier cannot recompute: a Markdown that differs is
+        # then reported as NOT VERIFIED (never as approved), not as tampering.
+        no_view_digest = 'view_digest' not in entry
         recorded = entry.get('view_digest') or entry.get('digest') or ''
         path = '.uncle/docs/' + name + '.md'
         blob = git('rev-parse', '--verify', '-q', tree + ':' + path, check=False).decode().strip()
@@ -267,13 +270,23 @@ def check_3(statement, tree):
         else:
             actual = embedded.get(path, '')
             where = 'embedded'
+        if recorded and actual and actual != recorded and no_view_digest:
+            lines.append('NOT VERIFIED: %s markdown view not verified (digest is not the Markdown hash)'
+                         % name.lower().replace('_', ' '))
+            continue
         if not recorded or actual != recorded:
             raise Refused(['approved %s digest mismatch (%s copy)' % (name, where),
                            '  approved:  ' + (recorded or 'missing'), '  present:   ' + (actual or 'missing')])
         lines.append('approved %s %s' % (name.lower().replace('_', ' '), short(recorded)))
     if not lines:
         raise Refused(['no approved document is recorded in the attestation'])
+    if all(line.startswith('NOT VERIFIED:') for line in lines):
+        raise Refused(['no approved gate could be verified against its Markdown view'] + lines)
     return lines
+
+
+def unverified(line):
+    return line.startswith('NOT VERIFIED:')
 
 
 def check_4(statement):
@@ -437,8 +450,14 @@ def main(argv):
         print(('✓ ' if verdict == 'VERIFIED' else '○ ') + line)
 
     def approved():
+        nonlocal verdict
         for line in check_3(statement, tree):
-            print('✓ ' + line)
+            if unverified(line):
+                print('○ ' + line)
+                if verdict == 'VERIFIED':
+                    verdict = 'NOT VERIFIED'
+            else:
+                print('✓ ' + line)
 
     def artifact():
         line, state['release'] = check_4(statement)

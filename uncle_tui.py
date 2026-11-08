@@ -6488,6 +6488,15 @@ class UncleTUI:
             if mod == 3 and code in (98, 102, 100):
                 self._chat_meta(code)
                 return code
+            # With modifyOtherKeys 2 the terminal reports EVERY modified key this way, Shift+i included, as ESC [ 27 ; 2 ; 73 ~ (or
+            # ESC [ 73 ; 2 u): a capital letter or a shifted symbol is the character itself, typed. Before this it fell through,
+            # was pushed back unread, and the composer printed "[27;2;73~" after the letter.
+            if mod in (1, 2) and (32 <= code < 127 or code >= 160):
+                self._type_reported_char(code)
+                return code
+            # Any other well-formed report (Ctrl+Shift+letter, Alt+symbol, Shift+Tab, ...) has no meaning here. Consume it: showing the
+            # raw sequence as text is never right.
+            return code
         if final or read:
             for ch in reversed(read):
                 try:
@@ -6495,6 +6504,14 @@ class UncleTUI:
                 except curses.error:
                     pass
         return None
+
+    def _type_reported_char(self, code):
+        """A printable character a terminal reported as an escape sequence (a Shift key under modifyOtherKeys): type it."""
+        if code < 127:
+            self._chat_key(code)
+        elif self._plain_composing():
+            cursor = self._composer_cursor()
+            self._set_composer(self.chat_composer[:cursor] + chr(code) + self.chat_composer[cursor:], cursor + 1)
 
     def _read_paste(self, screen):
         """Read a bracketed paste to ESC[201~ (or timeout) and insert it."""

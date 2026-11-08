@@ -19,7 +19,7 @@ make_install() {
     : > "$d/uncle_tui.py"
     cat > "$d/scripts/change-workflow.sh" <<'EOF'
 #!/usr/bin/env bash
-{ echo "cwd=$(pwd -P)"; echo "args=$*"; echo "unattended=${UNCLE_UNATTENDED-unset}";
+{ echo "cwd=$(pwd -P)"; echo "root=$(cd "${UNCLE_PROJECT_ROOT:-$(dirname "${BASH_SOURCE[0]}")/..}" && pwd -P)"; echo "close=${WORKFLOW_CLOSE_ISSUE-unset}"; echo "args=$*"; echo "unattended=${UNCLE_UNATTENDED-unset}";
   echo "state=$(cat .uncle/workflow/state 2>/dev/null)"; } > "$STUB_LOG"
 [[ -z "${STUB_NOLOCK:-}" ]] || { python3 -c 'import fcntl,sys,time
 f=open(sys.argv[1],"a");fcntl.flock(f,fcntl.LOCK_EX);time.sleep(8)' .uncle/workflow/driver.lock </dev/null >/dev/null 2>&1 &
@@ -79,6 +79,11 @@ STUB_VERDICT=NOT_READY STUB_RC=0 ua "$INST" "$T/r3" --audit
 make_repo "$T/r4"
 STUB_VERDICT=NOT_READY STUB_RC=5 ua "$INST" "$T/r4" --audit
 [[ $RC -eq 5 ]]; check "driver rc 5 propagates" $?
+{ [[ "$(cat "$T/r4/.uncle/workflow/state")" == MANUAL_CHECKLIST ]] && grep -q 'previous state restored' <<<"$OUT"; }; check "driver failure without progress restores the previous state" $?
+make_repo "$T/r4b"; STUB_VERDICT=READY STUB_RC=0 ua "$INST" "$T/r4b" --audit
+[[ "$(cat "$T/r4b/.uncle/workflow/state")" == FINAL_AUDIT ]]; check "successful driver leaves the state it set (no restore)" $?
+make_repo "$T/r4c"; echo changed >> "$T/r4c/f"; STUB_VERDICT=READY ua "$INST" "$T/r4c" --audit
+{ [[ $RC -eq 0 ]] && grep -q 'left tracked changes uncommitted' <<<"$OUT"; }; check "tracked changes left by the audit are reported, rc 0" $?
 make_repo "$T/r5"
 STUB_VERDICT=garbage STUB_RC=0 ua "$INST" "$T/r5" --audit
 { [[ $RC -eq 1 ]] && grep -q '^verdict: UNKNOWN$' <<<"$OUT"; }; check "unparsable verdict, driver 0 -> UNKNOWN, refusal code" $?
@@ -102,6 +107,11 @@ echo MANUAL_CHECKLIST > "$REPO/.uncle/workflow/state"
 ua "$INST" "$REPO" --audit feat
 { stub_ran && grep -q "cwd=$(cd "$T/wt-feat" && pwd -P)" "$T/stub.log" && [[ "$(cat "$REPO/.uncle/workflow/state")" == MANUAL_CHECKLIST ]]; }
 check "AC-3 audits named worktree, current checkout untouched" $?
+# The real driver cd's to ${UNCLE_PROJECT_ROOT:-<install root>}; the --audit route execs before
+# the launcher exports it, so audit-command.sh must set it or the driver audits the install dir.
+{ stub_ran && grep -q "^root=$(cd "$T/wt-feat" && pwd -P)$" "$T/stub.log"; }; check "driver project root is the named worktree, not the caller" $?
+WORKFLOW_CLOSE_ISSUE=1 ua "$INST" "$REPO" --audit feat
+{ stub_ran && grep -q '^close=0$' "$T/stub.log"; }; check "issue closing/PR publishing disabled for the driver, even if enabled in the caller" $?
 ua "$INST" "$REPO" --audit main
 { stub_ran && grep -q "cwd=$(cd "$REPO" && pwd -P)" "$T/stub.log"; }; check "BRANCH == current branch audits current checkout" $?
 

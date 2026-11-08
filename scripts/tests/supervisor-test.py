@@ -1751,8 +1751,9 @@ class DocsTests(unittest.TestCase):
     """AT-9 documentation half: every key, default and the authority boundary are documented."""
 
     def test_every_key_documented(self):
-        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
-        # README is the documentation of record; .uncle/config.example was removed in the repo cleanup.
+        # The README links to docs/supervision.md, which holds the key reference;
+        # .uncle/config.example was removed in the repo cleanup.
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8') + (ROOT / 'docs' / 'supervision.md').read_text(encoding='utf-8')
         for key, _, default in sv.CONTROLS:
             line = 'supervision.%s %s' % (key, sv.format_value(key, default))
             self.assertIn(line, readme, line)

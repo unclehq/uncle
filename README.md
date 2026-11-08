@@ -2,173 +2,98 @@
 
 <img src="uncle.png" alt="Uncle" width="180">
 
+# Uncle
 
-
-# uncle
+**AI coding agents build the software. Uncle makes them prove their work.**
 
 </div>
 
-**Describe an app or give Uncle an issue. Watch a preview in seconds. Get a verified build in minutes.**
+Uncle is an open-source, terminal-native development system that orchestrates Claude, Codex, local models, and other coding agents.
 
-Uncle is a terminal-native build system and integrity layer for AI coding
-agents. Describe what you want, and it plans, implements, independently
-reviews, verifies, and ships it — a live preview on screen in seconds, a
-complete, verified application in minutes.
+Describe an application or give Uncle a GitHub issue. It plans, implements, independently reviews, verifies, and prepares a pull request, with portable evidence tying the result to the code that was actually reviewed. You can watch a live preview as it builds and talk to it while it works.
 
-Use Claude, Codex, self-hosted models, AWS Bedrock, Kimi, or the agents you already have.
-Uncle coordinates the work while keeping implementation, independent
-review, verification, human authority, and publication separate.
+**Build with the agents you already use. Verify without trusting their claims.**
 
-**Delegate the work, not the responsibility.**
+## See Uncle in action
+
+Recordings have not been added yet. This is what each one will show.
+
+**Demo A: build an application.** A one-sentence request, a live preview while it builds, then independent review, verification and the finished result.
+
+**Demo B: catch an unverified change.** A change passes review and verification. Someone then edits the Git tree. `uncle verify` notices that the tree no longer matches what was reviewed and refuses to call it verified:
 
 ```text
-                    YOU
-                     ↕
-                   UNCLE
-                     │
-                     ▼
-              approved plan
-                     │
-                     ▼
-              implementation
-                     │
-                     ▼
-           independent review
-                     │
-                     ▼
-                verification
-                     │
-                     ▼
-               human approval
-                     │
-                     ▼
-                 GitHub PR
-                     │
-                     ▼
-              change evidence
-````
+✗ head tree does not match the release artifact
+
+NOT VERIFIED
+```
+
+That is the refusal message from [scripts/uncle-verify.py](scripts/uncle-verify.py). The recording will show the full run.
 
 ## Quick start
 
-See Uncle build something from a single sentence, start to finish, on its
-own — a live preview opens in seconds, and the complete, verified
-application is usually done in minutes:
+You need at least one supported AI client installed and authenticated (Claude, Codex, Kimi, a self-hosted model, or AWS Bedrock). See [Prerequisites](PREREQUISITES.md).
 
-**macOS / Linux / WSL**
+**macOS / Linux / WSL** (Homebrew is required on macOS)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh && bash install.sh
-uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support'
+uncle --application 'build a groovy 1970s themed calculator react webapp with keyboard support'
 ```
 
-**Windows (PowerShell)**
+**Windows (PowerShell)** (Scoop is required)
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support'
+uncle --application 'build a groovy 1970s themed calculator react webapp with keyboard support'
 ```
 
-Runs are unattended by default: planning, implementation, independent
-review, and verification go straight through with no approval gates, so you
-can just watch it build. You'll need at least one AI client configured; see
-[Prerequisites](PREREQUISITES.md).
-
-Add `--attended` (or set `UNCLE_ATTENDED=1`) if you'd rather review each stage
-yourself as it goes. `--attended` needs a terminal; without one it refuses
-rather than running unattended. `--unattended` and the `UNCLE_UNATTENDED`,
-and `WORKFLOW_UNATTENDED` variables still work
-as no-ops with a deprecation notice on stderr; see
-[docs/UNATTENDED_DEFAULT_MIGRATION.md](docs/UNATTENDED_DEFAULT_MIGRATION.md).
-
-Or, in an existing repository:
+In an existing repository:
 
 ```sh
 cd my-project
 uncle
 ```
 
-Give Uncle a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
+Give Uncle a `REQUIREMENTS.md`, a `CHANGE_REQUEST.md`, or a GitHub issue. You can also pipe a request in with `cat request.md | uncle --change-request`. Treat piped text as untrusted input to tool-using agents.
 
-To start a change from a prepared request, pipe it in:
+Runs are unattended by default, so a build goes straight through without approval gates. Add `--attended` to approve each stage yourself. Unattended runs record every gate as delegated rather than approved by a person, and `uncle verify` refuses such a change, so use `--attended` when you want a change that verifies. See [docs/UNATTENDED_DEFAULT_MIGRATION.md](docs/UNATTENDED_DEFAULT_MIGRATION.md). Windows support is newer than macOS and Linux.
 
-```sh
-cat request.md | uncle --change-request
-```
+## Help build Uncle
 
-### Running without the TUI (`--noui`)
+Uncle is an open-source project (MIT licensed) and we are looking for contributors. It is a small project, and early feedback has an outsized effect.
 
-For ssh sessions without a pty, `docker run` without `-t`, and CI, pass
-`--noui` (or set `UNCLE_NOUI=1`). Uncle runs the driver directly, streams its
-output as plain text with a `[+HH:MM:SS]` elapsed prefix (no escape sequences),
-prints the finished-build summary, and exits with a code you can script on:
+Whether you are interested in AI agents, developer tooling, software supply-chain security, or improving the developer experience, there are useful ways to get involved:
 
-| Exit | Meaning |
-|---|---|
-| 0 | The run completed (completion banner seen) |
-| 1 | The driver failed (its own exit code is printed on stderr) |
-| 2 | Refused before starting (nothing is written): no startup action or more than one, empty startup text, `--noinput` combined with `--noui`, `--attended` without `--noui`, `--attended` without a tty on stdin, or `--attended` combined with `--change-request` |
-| 3 | Stopped at a human gate or a signing handoff (the gate is named on stderr), or EOF/blank input at an attended gate |
-| 128+n | Stopped by SIGINT (130) or SIGTERM (143); the driver's process group is stopped too (SIGKILL after a 10 s grace; a second signal kills it immediately) |
+* New coding-agent and model integrations. A runner is one wrapper script that accepts `claude -p`-style flags; see `scripts/agent-codex.sh` and `scripts/agent-kimi.sh`.
+* Tests, reliability and edge-case handling.
+* Terminal UI and developer experience.
+* Installation and platform compatibility, especially Windows.
+* Documentation and examples. Stage prompts are Markdown files in `prompts/`.
+* Integrity verification and portable attestations.
 
-Precedence when several apply: signal (130/143) > gate or signing stop (3) >
-driver nonzero or failed check (1) > 0.
+Small contributions and constructive criticism are welcome, including "this was confusing" and "this claim is not true". Start with [CONTRIBUTING.md](CONTRIBUTING.md), open an [issue](../../issues) for a concrete bug or request, or start a [discussion](../../discussions) for an idea.
 
-Only the exact value `UNCLE_NOUI=1` enables `--noui`; any other value (unset,
-empty, `0`, `true`) is ignored and the launcher behaves as before.
+## What makes Uncle different?
 
-Without `--attended`, `--noui` never reads stdin and never answers a human gate:
-it stops, records nothing as approved, names the gate on stderr and exits 3.
-Output values of environment variables whose names contain `KEY`, `TOKEN`,
-`SECRET` or `PASSWORD` are masked.
+* **Independent review.** The agent implementing a change cannot approve its own implementation. Review is a separate stage run by a separate reviewer process, and you can point it at a different runner or model than the implementer. See [How Uncle works](#how-uncle-works).
+* **Artifact identity.** Review, verification, approval and publication are tied to the relevant Git tree. See [The change is the unit of trust](#the-change-is-the-unit-of-trust).
+* **Verifiable change provenance.** Uncle produces machine-readable evidence and portable attestations using established standards (in-toto, DSSE). See [Verifiable change provenance](#verifiable-change-provenance).
+* **Model flexibility.** Use different supported runners and models for implementation, review and other stages: Claude, Codex, Kimi, self-hosted models, and AWS Bedrock ([docs/aws-bedrock.md](docs/aws-bedrock.md)).
+* **Local-first operation.** Uncle runs on your machine in a terminal UI, with no Uncle-hosted backend, account or telemetry. Your model runners and GitHub still receive what they need to do the work; see the [privacy policy](PRIVACY_POLICY.md).
 
-`--noui` never shows the menu, so give it a startup action such as
-`--application`. `--attended` works only if stdin is a real terminal; there,
-EOF or a blank answer at a gate means not approved (exit 3). Under
-`--noui` the desktop launch is skipped and recorded in `desktop-launch.json`
-(`decision=skipped`, `reason=noui`). `--noinput` is a different feature and is
-unchanged. Uncle never signs commits on your behalf here: when a signature is
-needed it prints the git command for you to run.
-
-`--change-request` reads all of stdin (UTF-8, at most 1 MiB, no NUL or control characters), writes it unchanged (CRLF becomes LF) to `CHANGE_REQUEST.md`, and starts the change workflow. It refuses to overwrite an existing `CHANGE_REQUEST.md` and cannot be combined with `--application` or `--issue`. Treat piped text as untrusted input to tool-using agents, especially in the default unattended mode.
-
-## Why Uncle?
-
-Coding agents can write code. They should not be trusted to approve their own work or describe their own work as verified.
-
-Uncle separates the people and agents doing the work from the system establishing the integrity of the change.
-
-* **Work with Uncle while it works.** Ask questions, provide context, redirect implementation, or discuss failures without leaving the terminal.
-* **Use the agents you already have.** Uncle works with Claude, Codex, Kimi, self-hosted models, AWS Bedrock (Region + token, Converse API; see [docs/aws-bedrock.md](docs/aws-bedrock.md)), and other coding agents.
-* **Independent review.** The agent that writes the code does not approve its own implementation.
-* **Human authority.** Consequential decisions remain explicit human approval gates.
-* **Pinned intent.** Approved specifications and plans are cryptographically identified so they cannot silently change.
-* **Artifact identity.** Review and verification apply to an exact Git tree, not an agent's description of the code.
-* **Driver-controlled verification.** Trusted workflow state comes from Uncle, not from agent-authored prose.
-* **Audited publication.** The artifact being published must be the artifact that passed the required review, verification, and approval stages.
-
-The coding agent is untrusted and swappable. A broken or hostile agent can fail Uncle's checks, but it cannot declare itself verified.
-
-### What makes Uncle different
-
-* **Mix models per stage.** Pick the runner and model for each stage in `.uncle/config`: Claude, Codex, Kimi, a self-hosted model, or AWS Bedrock. For example, Bedrock can implement, a local model can review and Claude can audit. The implementing model never reviews or audits its own work.
-* **Local and private.** Uncle runs on your machine in a terminal UI (or `--noui`), with a self-hosted runner for local models. It has no telemetry, no accounts and no Uncle backend; see the [privacy policy](PRIVACY_POLICY.md).
-* **Evidence the agent cannot write.** The driver seals the PR attestation and the stage envelopes from its own workflow state, never from an agent-authored file. Missing evidence is recorded as `unavailable`, and a blocked or unrun check is never reported as a pass.
-* **Approvals that pin what you approved.** Each human gate records a SHA-256 of the approved artifact, so the plan you approved is the one that ships.
-* **Plain files, no build step.** Uncle is Bash and Python. Prompts are Markdown files in `prompts/`, and configuration is one text file. Adding a runner is a wrapper script that accepts `claude -p`-style flags.
-
-Limits to know about: the two drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) and `uncle_tui.py` are large, so changing the core takes more effort than changing prompts or config. Bedrock uses a bearer token, not an IAM role or SSO profile. Windows support is newer than macOS and Linux. The attestation is a driver-sealed in-toto/DSSE record signed with your own key; it is not SLSA provenance signed by GitHub (see [ATTESTATIONS.md](ATTESTATIONS.md) for that).
+Limits worth knowing: the core drivers and `uncle_tui.py` are large, so changing the core takes more effort than changing prompts or config. Bedrock uses a bearer token, not an IAM role or SSO profile.
 
 ## The change is the unit of trust
 
-Most coding tools focus on the agent doing the work.
+Most coding tools focus on the agent doing the work. Uncle focuses on the **change**.
 
-Uncle focuses on the **change**.
+The coding agent is untrusted and swappable. A broken or hostile agent can fail Uncle's checks, but it cannot declare itself verified.
 
-For a change to be verified, the artifact that was reviewed, verified, approved, and published must be the same artifact.
+For a change to be verified, the artifact that was reviewed, verified, approved and published must be the same artifact.
 
 ```text
-
 Implementation       tree f12b8...
                          │
                          ▼
@@ -197,123 +122,52 @@ Publication          tree 91ae3...
                     NOT VERIFIED
 ```
 
-The review may have been valid. It just was not a review of the code being published.
+The review may have been valid. It just was not a review of the code being published. Uncle treats that distinction as an invariant.
 
-Uncle treats that distinction as an invariant.
+This does not mean the software is correct. It means the process Uncle claims to have followed was followed on the code you have.
 
 ## Verifiable change provenance
 
-Uncle produces a portable attestation for each completed change.
-
-Each trusted stage produces canonical, machine-readable evidence describing what actually happened, including the artifact involved, the result, evidence digests, and producer metadata.
-
-Results distinguish between:
-
-```text
-pass
-fail
-unavailable
-```
-
-Evidence records what happened. Policy decides whether that evidence is sufficient to publish.
-
-The resulting change attestation binds together:
-
-```text
-requirements hash
-       │
-       ▼
-approved plan hash
-       │
-       ▼
-implementation tree
-       │
-       ├──────────────┐
-       ▼              ▼
- review evidence   verification evidence
-       │              │
-       └──────┬───────┘
-              ▼
-        human approval
-              │
-              ▼
-        publication tree
-              │
-              ▼
-         attestation
-```
-
-The attestation uses existing software supply-chain standards rather than a proprietary provenance format: an **in-toto** Statement (v1) wrapped in a **DSSE** envelope, with RFC 8785 canonical JSON so hashes and signatures are reproducible. The driver writes every stage envelope and the release attestation itself, from validator exit codes, gate records and its own hashing. No model writes one.
-
-Uncle signs the attestation with keys you already have, and creates no new key material: Sigstore (`cosign` with a `gitsign` configuration) when available, otherwise your git SSH signing key. With neither, the attestation is written unsigned and a verifier reports integrity only. Both files are kept at `.uncle/attestation.json` and `.uncle/attestation.sig`.
-
-Anyone can check a change with the standalone verifier, which needs only Python and `git`:
+Each completed change gets a machine-readable attestation: an [in-toto](https://in-toto.io/) Statement wrapped in a DSSE envelope, written by Uncle's driver from its own records and never by a model. It binds the requirements, the approved plan, the implementation tree, the review and verification results, and the human approvals to the tree that was published.
 
 ```sh
-uncle verify                 # the current checkout
-uncle verify 123             # a pull request (needs gh)
+uncle verify          # the current checkout
+uncle verify 123      # a pull request
 ```
 
-It exits `0` when verified, `1` when not verified or refused, `2` for usage errors or a missing required tool, and `3` when only integrity could be checked (no signature, an untrusted signature, or a missing optional tool).
+`uncle verify` checks that the tree you have matches the attestation, that the review, verification and audit stages recorded a pass, and that required gates were approved by a person. The verifier is a single Python file that needs only `git`, so you can check a change without installing Uncle; see [docs/verify.md](docs/verify.md).
 
-The question a reviewer can answer independently:
+Its result says four different things, and they should not be confused:
 
-> **Is the software being published the exact software that passed Uncle's required process?**
+| Guarantee | What it means | Covered by `uncle verify`? |
+|---|---|---|
+| Artifact integrity | The tree is the one that was reviewed, verified and approved. | Yes |
+| Signature authenticity | A key you trust signed the attestation. | Only with a trust root you supply. Without one, the result is integrity only (exit 3). |
+| Review and verification evidence | The stages recorded a pass and people approved. | Yes, as a record of what Uncle observed. |
+| Software correctness | The code works and is secure. | No. |
 
-without trusting the coding agent that produced it.
-
-See [#59: Add verifiable change provenance and portable attestations](../../issues/59). [Attestations](ATTESTATIONS.md) covers a different thing: GitHub Actions build provenance for release artifacts.
+Exit codes at a glance: `0` verified, `1` not verified, `2` usage error, `3` integrity only. Signing, the full check list and the exit codes are in [docs/verify.md](docs/verify.md).
 
 ## Talk to Uncle while it works
 
-Uncle is not a fire-and-forget coding agent.
-
-You can talk to it throughout a run.
-
-Ask what the current stage is doing. Give additional context. Redirect implementation. Discuss a failure. Ask what a pending decision means. Tell Uncle to steer the active worker.
+Uncle is not a fire-and-forget coding agent. You can ask what the current stage is doing, add context, redirect the implementation, or discuss a failure, all from the terminal.
 
 ```text
-You
-  │
-  │  "Why is this taking so long?"
-  ▼
-Uncle
-  │
-  │  explains current state
-  ▼
-You
-  │
-  │  "Have it use the existing parser instead."
-  ▼
-Uncle
-  │
-  │  steers active worker
-  ▼
-Coding agent
+You    "Why is this taking so long?"
+Uncle  explains the current state
+
+You    "Have it use the existing parser instead."
+Uncle  steers the active worker
 ```
 
-Uncle supervises the work while maintaining authority boundaries.
+The supervisor can observe, explain, diagnose and steer work. It cannot silently grant itself the authority to waive integrity requirements or publish a change. See [docs/supervision.md](docs/supervision.md).
 
-During a build, native runner processes are pooled by runner, permission side,
-model and command profile. Once started, a compatible runner stays alive for
-later stages and is terminated when the workflow driver exits. Set
-`UNCLE_RUNNER_REUSE=0` to diagnose a runner with the previous one-process-per-stage behavior.
+## How Uncle works
 
-The supervisor can observe, explain, diagnose, and steer work. It cannot silently grant itself the authority to waive integrity requirements or publish changes.
-
-You stay in the loop without having to babysit the underlying agents.
-
-## How it works
-
-A typical change looks like:
+**Delegate the work, not the responsibility.**
 
 ```text
-GitHub Issue / Requirements
-            │
-            ▼
-           Uncle
-            ↕
-           You
+GitHub issue / requirements
             │
             ▼
            Plan
@@ -337,200 +191,41 @@ GitHub Issue / Requirements
         GitHub PR
 ```
 
-Uncle works inside your existing repository and with your existing development tools.
-
-It does not replace your IDE, coding agents, GitHub, or CI.
-
-The terminal is the interface.
-
-The change is the unit of work.
-
-Agents are workers.
-
-Uncle is the supervisor and integrity layer.
-
-GitHub remains the system of record.
-
-### Change plan duties
-
-The new-application flow finishes its sectioned plan with `project-plan-stage-duties`: a consistency check, then `.gitignore` duties.
-A change request now has its counterpart, `change-plan-stage-duties`, as its own timed state (`CHANGE_PLAN_DUTIES`) right after
-planning and before the analysis approval gate. It differs on purpose: the check is deterministic (a file the plan mentions that no
-step owns, that does not exist, and that sits beside files a step does own: one file with two names), the model is asked for a fix
-only when there is a finding, so a consistent plan costs no model call, and there is no `.gitignore` duty, because a change request
-must not make unrelated edits to an existing repository. The fix is a patch applied to the canonical `CHANGE_PLAN.json`. The stage is
-fail-open (a model that fails leaves the plan as it was, with the findings shown at the approval gate). `WORKFLOW_PLAN_DUTIES=0` turns it
-off, and `change-plan-stage-duties.runner|model|effort` configure it (default: the `change-plan` stage's).
+Uncle works inside your existing repository and with your existing tools. It does not replace your IDE, your coding agents, GitHub or CI. The terminal is the interface, the change is the unit of work, agents are workers, and GitHub stays the system of record. In unattended mode the human-approval steps are delegated and recorded as such.
 
 ## Uncle builds Uncle
 
-Uncle is developed using Uncle.
+Uncle is developed with Uncle. Much of the work in this repository starts as an issue and goes through the same plan, review, verification and pull request flow that Uncle provides to other projects, and some of its pull requests carry a change attestation (`.uncle/attestation.json`). You can check one yourself with `uncle verify <PR number>`.
 
-Changes to this repository go through the same workflow Uncle provides to other projects:
+Not every pull request here carries an attestation, and not every one verifies today: the attestation committed here has no signature and there is no trust root, and a change built unattended is refused by design. Some changes are also committed directly. That is the current state, and closing the gap is open work.
 
-```text
-issue
-  ↓
-plan
-  ↓
-human approval
-  ↓
-implementation
-  ↓
-independent review
-  ↓
-verification
-  ↓
-human approval
-  ↓
-pull request
-```
+## GitHub integration
 
-As Uncle's change-attestation support lands, Uncle's own changes will also produce the same portable integrity evidence it provides to other repositories.
+Uncle can start from a GitHub issue and carry the change through planning, implementation, review, verification and publication. It uses your existing `gh` authentication (`gh auth login`).
 
-The process isn't just documented here. It's used here.
+In attended mode, Uncle shows you the audited diff and asks for approval before it creates the commit, branch, push and pull request. In unattended mode it publishes the pull request itself, as a draft when the final audit is not READY. Either way Uncle stops at the pull request, and your normal GitHub review, CI and merge controls remain the final authority. See [GitHub integration](GITHUB_INTEGRATION.md).
 
-## Install
+## Documentation and advanced usage
 
-See [Prerequisites](PREREQUISITES.md) for required tools, AI clients, authentication, and self-hosted model setup.
+* [Quickstart](docs/quickstart.md) and [Prerequisites](PREREQUISITES.md)
+* [Verifying a change](docs/verify.md): `uncle verify`, signing, checks and exit codes
+* [Running without the TUI](docs/noui.md): `--noui`, exit codes, signals
+* [Supervision and recovery](docs/supervision.md): supervision settings, triage, the home chat agent, stdin input
+* [Two issues on one project](docs/worktrees.md): git worktrees
+* [Change plan duties](docs/plan-duties.md)
+* [AWS Bedrock runner](docs/aws-bedrock.md)
+* [Unattended default migration](docs/UNATTENDED_DEFAULT_MIGRATION.md)
+* [GitHub integration](GITHUB_INTEGRATION.md)
+* [Release provenance](ATTESTATIONS.md): GitHub Actions build provenance for release artifacts, a separate topic from change attestations
+* [Script reference](scripts/README.md)
+* [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), [Privacy policy](PRIVACY_POLICY.md), [Code of conduct](CODE_OF_CONDUCT.md), [License](LICENSE)
 
-### macOS or Debian/Ubuntu/WSL
+## Project author and contributors
 
-Homebrew is required on macOS.
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh
-bash install.sh
-```
-
-### Windows PowerShell
-
-Scoop is required.
-
-```powershell
-Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-## GitHub
-
-Uncle can start with a GitHub issue and carry the change through planning, human approval, implementation, independent review, verification, and publication.
-
-When the change is ready, Uncle shows you the audited diff and asks for approval before creating the commit, feature branch, push, and pull request.
-
-Uncle stops at the pull request. Your existing GitHub review, CI, and merge controls remain the final authority.
-
-GitHub workflows use your existing `gh` authentication:
-
-```sh
-gh auth login
-```
-
-See [GitHub integration](GITHUB_INTEGRATION.md) for setup, signing, approvals, and recovery.
-
-### Two issues on one project: worktrees
-
-One run per directory is the rule. To work a second issue at the same time,
-run it in a git worktree beside the project:
-
-```sh
-./scripts/from-issue.sh 64 --worktree          # creates ../<project>-issue-64 on a new branch
-uncle --runs                                    # #64  IMPLEMENT  locked  /path/<project>-issue-64
-```
-
-`--worktree-dir PATH` and `--branch NAME` override the defaults. The worktree
-gets a copy of `.uncle/config` and its own workflow state; the branch becomes
-the PR head. When the run completes, Uncle offers to remove the directory
-(never the branch); `bash scripts/lib/worktrees.sh remove <dir>` does the same
-later and refuses while a run holds the lock or is not `COMPLETE`. Every
-worktree runs the one installed `uncle`, so do not upgrade it mid-run. Details
-in [scripts/README.md](scripts/README.md#--worktree---worktree-dir---branch--run-an-issue-in-a-git-worktree).
-
-## Recovery and supervision
-
-Uncle includes interactive triage for failed stages and supervision for detecting and correcting problems while work is still running.
-
-Supervision is configured with `supervision.enabled`, `supervision.runner`,
-`supervision.model`, `supervision.effort`, `supervision.max_interventions`,
-`supervision.steering_timeout_seconds`, `supervision.stage_time_seconds`,
-`supervision.stage_tokens`, `supervision.call_timeout_seconds`,
-`supervision.max_calls_per_run`, `supervision.call_max_cost_usd`,
-`supervision.delegate_gates`, and `supervision.files_allowlist` in
-`.uncle/config`.
-
-The defaults are:
-
-```text
-supervision.enabled true
-supervision.runner claude
-supervision.model sonnet
-supervision.effort low
-supervision.max_interventions 2
-supervision.steering_timeout_seconds 120
-supervision.stage_time_seconds 1800
-supervision.stage_tokens 0
-supervision.call_timeout_seconds 300
-supervision.max_calls_per_run 80
-supervision.call_max_cost_usd 0.5
-supervision.delegate_gates none
-supervision.files_allowlist package.json,package-lock.json,vite.config.js
-```
-
-Only `supervision.runner claude` is currently supported. Use `/delegate` for
-standing dialog delegation, `/app-input` for application input, and phrases
-such as “answer this one” or “tell it to” for a single explicit action.
-
-`supervision.files_allowlist` is a comma-separated list of repository-relative
-paths that a parallel implementation step may write without the plan having
-declared it as that step's owner. Implementation fan-out otherwise refuses to
-merge a whole group when any step touches a file it did not claim, because an
-unclaimed write usually means the plan's ownership partition was wrong. These
-are the recurring exceptions: a step's own setup command (`npm install`
-adding a dev dependency) legitimately rewrites `package.json`/`package-lock.json`
-from whichever step happens to need a new package, not only the step that
-scaffolded them, and a step configuring the dev server or test runner
-(adding a test plugin, an alias, a proxy) legitimately rewrites
-`vite.config.js` from whichever step needs that configuration, not only the
-step that scaffolded the project.
-
-### Authority boundary
-
-Supervisor answers are recorded in `gate-answers.jsonl` as
-`supervisor:explicit:<name>` or `supervisor:standing:<name>`. Metrics identify
-their usage as usage_scope 'supervisor chat'. Decisions involving signing, publication and waiver
-decisions remain with the user.
-
-### Recovery
-
-Recovery can diagnose stopped stages and propose repairs while preserving the
-same authority boundary.
-
-These systems operate within Uncle's authority boundaries. Protected approvals, reviewer artifacts, waivers, workflow state, and publication controls remain outside the coding agent's authority.
-
-### Home chat agent
-
-In the TUI home screen, typing free text that is not a slash command hands it
-to a home-chat agent. It answers questions and does ad-hoc chores (such as
-deleting merged branches) in the repository using its normal tools, instead of
-starting a workflow.
-
-The text for a workflow can also come from stdin:
-`cat spec.md | uncle --application`. A bare `--application` with no text reads
-piped stdin; on an interactive terminal with nothing piped it refuses with an
-"empty input" error. Empty input is refused. A value starting with `--` is
-treated as the next option, not as text, so text that begins with `--` must use
-the `=` form: `uncle --application="--foo bar"`.
-
-See the workflow documentation for the detailed supervision, triage, recovery, security, and configuration model.
+Uncle was started by Brian Woods ([@brianosaurus](https://github.com/brianosaurus)) and has had contributions from other people. The full list is on the [contributors page](https://github.com/unclehq/uncle/graphs/contributors).
 
 ## Ideas and feedback
 
-Have an idea for Uncle or want to discuss how it should work? Start a [GitHub Discussion](../../discussions).
+Have an idea or want to discuss how Uncle should work? Start a [GitHub Discussion](../../discussions). Found a bug or have a concrete request? Open an [issue](../../issues).
 
-Found a bug or have a concrete feature request? Open an [issue](../../issues).
-
-**Ideas start in Discussions. Work starts in Issues. Uncle takes it from there.**
-
----
-
-[Quickstart](docs/quickstart.md) · [Workflow documentation](docs/) · [GitHub integration](GITHUB_INTEGRATION.md) · [Attestations](ATTESTATIONS.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
+Ideas start in Discussions. Work starts in Issues. Uncle takes it from there.

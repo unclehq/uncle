@@ -4,6 +4,8 @@
   CRITICAL  the application is broken: a driver verification command failed in a way that says so -- a build or startup failure, a
             crash with no test summary, a runner that executed no tests, or a test suite where at least half of the tests fail
             (WORKFLOW_CRITICAL_FAIL_RATIO, default 0.5). Repair is for these.
+  AUDIT     a final-audit finding is repaired only when its severity is CRITICAL (WORKFLOW_REPAIR_AUDIT_SEVERITY=high adds HIGH) and it is
+            not a person's decision: a BLOCKED-HUMAN row, a missing waiver or a subjective judgement is not something a code change fixes.
   ISOLATED  a few tests of a suite fail while the application builds, serves and the rest pass. That is as likely a wrong test as a wrong
             application, and the manual checklist observes the application itself, so it is not critical: it goes to the final audit.
   MAJOR     the tests are weaker than the plan asked for: an assertion gap (ASSERTIONS) or a coverage gap (COVERAGE).
@@ -19,7 +21,8 @@ usage:
   failure_severity.py unrunnable GREEN_LOG             exit 0 when the application cannot be built, served or tested
   failure_severity.py isolated GREEN_CLASS GREEN_LOG   exit 0 and print each failed command that is only an isolated test failure
   failure_severity.py downgrade TEST_REVIEW.json [--symptoms]   mark the failing MAJOR/MINOR rows non-blocking; print "ID<TAB>SEVERITY" for each
-  failure_severity.py scope GREEN_CLASS GREEN_LOG [TEST_REVIEW.json]
+  failure_severity.py audit-critical FINAL_AUDIT.json  exit 0 and print each final-audit finding a repair is for; exit 1 if there is none
+  failure_severity.py scope GREEN_CLASS GREEN_LOG [TEST_REVIEW.json [FINAL_AUDIT.json]]
                                                         print the repair brief: the critical failures to fix, and the rows NOT to touch
 """
 import json
@@ -193,6 +196,37 @@ def deferred_rows(review_json):
     return out
 
 
+AUDIT_RANK = {'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1}
+HUMAN = re.compile(r'BLOCKED-HUMAN|waiver|human observation|subjective|aesthetic|judg(e)?ment|a person', re.I)
+
+
+def audit_split(audit_json):
+    """([findings to repair], [(finding, why it is left alone)]) from a final audit's JSON; both empty when it cannot be read."""
+    try:
+        data = json.loads(Path(audit_json).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return [], []
+    wanted = AUDIT_RANK.get(os.environ.get('WORKFLOW_REPAIR_AUDIT_SEVERITY', 'critical').strip().upper(), 4)
+    repair, left = [], []
+    for finding in data.get('findings', []) if isinstance(data, dict) else []:
+        if not isinstance(finding, dict):
+            continue
+        severity = str(finding.get('severity', '')).upper()
+        text = '%s %s' % (finding.get('evidence', ''), finding.get('required_correction', ''))
+        if AUDIT_RANK.get(severity, 0) < wanted:
+            left.append((finding, '%s is below the repair threshold' % (severity or 'unrated')))
+        elif HUMAN.search(text):
+            left.append((finding, 'it needs a person (an observation, a waiver or a judgement), not a code change'))
+        else:
+            repair.append(finding)
+    return repair, left
+
+
+def audit_line(finding):
+    return '**%s** (%s): %s' % (finding.get('id'), str(finding.get('severity', '')).upper(),
+                                ' '.join(str(finding.get('required_correction') or finding.get('evidence') or '').split())[:200])
+
+
 def deferred_commands(green_class, green_log=''):
     """Driver commands that failed but are not critical: isolated test failures, and the defect-injection (mutation) check."""
     out = []
@@ -209,12 +243,15 @@ def deferred_commands(green_class, green_log=''):
     return out
 
 
-def scope(green_class, green_log, review_json=''):
+def scope(green_class, green_log, review_json='', audit_json=''):
     items = critical_items(green_class, green_log)
+    to_repair, left_alone = audit_split(audit_json) if audit_json else ([], [])
+    items += [audit_line(f) for f in to_repair]
     lines = ['# Repair scope (critical failures only)', '',
              'Repair is for critical failures. Fix exactly these, and nothing else:', '']
     lines += ['- ' + item for item in items] or ['- (none recorded by the driver; read the repair source)']
     deferred = deferred_commands(green_class, green_log) + (deferred_rows(review_json) if review_json else [])
+    deferred += [(f.get('id'), str(f.get('severity', '')).upper(), why) for f, why in left_alone]
     if deferred:
         lines += ['', 'Do NOT address these. They are not critical, a repair pass cannot fix them, and the final audit reads them:', '']
         lines += ['- **%s** (%s): %s' % row for row in deferred]
@@ -230,8 +267,13 @@ def main(argv):
         return 0 if reason else 1
     if len(argv) == 3 and argv[1] == 'unrunnable':
         return 0 if unrunnable(argv[2]) else 1
-    if len(argv) in (4, 5) and argv[1] == 'scope':
-        sys.stdout.write(scope(argv[2], argv[3], argv[4] if len(argv) == 5 else ''))
+    if len(argv) == 3 and argv[1] == 'audit-critical':
+        repair, _ = audit_split(argv[2])
+        for finding in repair:
+            print(audit_line(finding))
+        return 0 if repair else 1
+    if len(argv) in (4, 5, 6) and argv[1] == 'scope':
+        sys.stdout.write(scope(argv[2], argv[3], argv[4] if len(argv) >= 5 else '', argv[5] if len(argv) == 6 else ''))
         return 0
     if len(argv) == 4 and argv[1] == 'isolated':
         found = isolated_failures(argv[2], argv[3])

@@ -6303,7 +6303,7 @@ while true; do
                 # The agent's whole job: the critical failures, not every row that happens to be failing.
                 if [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical ]]; then
                     python3 -B "$ROOT/scripts/lib/failure_severity.py" scope "$GREEN_CLASS" "$LOG_DIR/green-check.log" \
-                        "$STATE_DIR/documents/TEST_REVIEW.json" > "$STATE_DIR/REPAIR_SCOPE.md" 2>/dev/null || rm -f "$STATE_DIR/REPAIR_SCOPE.md"
+                        "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/FINAL_AUDIT.json" > "$STATE_DIR/REPAIR_SCOPE.md" 2>/dev/null || rm -f "$STATE_DIR/REPAIR_SCOPE.md"
                 else
                     rm -f "$STATE_DIR/REPAIR_SCOPE.md"
                 fi

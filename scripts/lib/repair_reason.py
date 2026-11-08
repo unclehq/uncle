@@ -82,7 +82,7 @@ def explain(state, source, attempt, limit):
     name = os.path.basename(source) if source else ''
     out = ['## Why repair is running', '']
     out.append('Repair attempt %s of %s.' % (attempt, limit))
-    items, trigger = [], ''
+    items, trigger, deferred = [], '', []
     if name == 'green-check.md':
         trigger = "The driver's own verification commands failed."
         items = green_failures(state)
@@ -95,7 +95,12 @@ def explain(state, source, attempt, limit):
         items = integrity_files(state)
     elif name == 'FINAL_AUDIT.md':
         trigger = 'The final audit did not say the build is ready.'
-        items = lines_matching(read(os.path.join(os.path.dirname(state), 'docs', 'FINAL_AUDIT.md')), r'NOT_READY|\bBLOCK|blocking')
+        repair, left = severity.audit_split(os.path.join(state, 'documents', 'FINAL_AUDIT.json'))
+        items = severity.critical_items(os.path.join(state, 'green-check.tsv'), os.path.join(state, 'logs', 'green-check.log')) \
+            + [severity.audit_line(f) for f in repair]
+        deferred = [(f.get('id'), str(f.get('severity', '')).upper(), why) for f, why in left]
+        if not items and not left:
+            items = lines_matching(read(os.path.join(os.path.dirname(state), 'docs', 'FINAL_AUDIT.md')), r'NOT_READY|\bBLOCK|blocking')
     elif name == 'VERIFICATION_REPORT.md' or source == 'checklist-fail':
         trigger = 'Manual checklist checks failed.'
         rows = failing_rows(read(os.path.join(os.path.dirname(state), 'docs', 'VERIFICATION_REPORT.md')), 0, 4, 5)
@@ -106,7 +111,6 @@ def explain(state, source, attempt, limit):
     else:
         trigger = 'Trigger recorded as `%s`.' % (source or 'unknown')
         items = lines_matching(read(source), r'\S')[:MAX_ITEMS] if source and os.path.exists(source) else []
-    deferred = []
     if name in ('TEST_REVIEW.md', 'green-check.md') and os.environ.get('WORKFLOW_REPAIR_SEVERITY', 'critical') == 'critical':
         # Repair is for critical failures only: say which ones, and which failing rows it will leave alone.
         critical = severity.critical_items(os.path.join(state, 'green-check.tsv'), os.path.join(state, 'logs', 'green-check.log'))

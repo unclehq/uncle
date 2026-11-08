@@ -163,6 +163,57 @@ class Severity(unittest.TestCase):
         self.assertEqual(fs.downgrade(p), [('ASSERTIONS', 'MAJOR')])      # without --symptoms INTEGRITY stays required
         self.assertEqual(aj.result(p, IDS), 'REPAIR')
 
+    AUDIT = {'schema': 'uncle.artifact/v1', 'kind': 'final-audit', 'verdict': 'NOT READY', 'findings': [
+        {'id': 'FA-001', 'severity': 'CRITICAL', 'evidence': 'the build fails on a clean checkout', 'required_correction': 'fix the import', 'blocks': 'YES'},
+        {'id': 'FA-002', 'severity': 'HIGH', 'evidence': 'MC-101 BLOCKED-HUMAN: no waiver', 'required_correction': 'record a waiver', 'blocks': 'YES'},
+        {'id': 'FA-003', 'severity': 'MEDIUM', 'evidence': 'mutation evidence incomplete', 'required_correction': 'rerun', 'blocks': 'NO'},
+        {'id': 'FA-004', 'severity': 'LOW', 'evidence': 'wording', 'required_correction': 'edit', 'blocks': 'NO'},
+        {'id': 'FA-005', 'severity': 'CRITICAL', 'evidence': 'the groovy look is a subjective judgement', 'required_correction': 'a person decides', 'blocks': 'YES'}]}
+
+    def audit(self):
+        path = self.tmp / 'audit.json'
+        path.write_text(json.dumps(self.AUDIT))
+        return str(path)
+
+    def test_only_critical_audit_findings_that_are_not_a_persons_decision_are_repaired(self):
+        repair, left = fs.audit_split(self.audit())
+        self.assertEqual([f['id'] for f in repair], ['FA-001'])
+        why = {f['id']: w for f, w in left}
+        self.assertIn('below the repair threshold', why['FA-003'])
+        self.assertIn('below the repair threshold', why['FA-004'])
+        self.assertIn('HIGH', why['FA-002'])
+        self.assertIn('needs a person', why['FA-005'])          # CRITICAL, but a judgement no code change can make
+
+    def test_high_findings_can_be_added_by_the_threshold_setting(self):
+        import os
+        os.environ['WORKFLOW_REPAIR_AUDIT_SEVERITY'] = 'high'
+        try:
+            repair, left = fs.audit_split(self.audit())
+        finally:
+            del os.environ['WORKFLOW_REPAIR_AUDIT_SEVERITY']
+        self.assertEqual([f['id'] for f in repair], ['FA-001'])          # FA-002 is HIGH but BLOCKED-HUMAN: still a person's decision
+        self.assertNotIn('FA-003', [f['id'] for f in repair])
+
+    def test_an_audit_with_nothing_critical_asks_for_no_repair(self):
+        data = dict(self.AUDIT, findings=[f for f in self.AUDIT['findings'] if f['severity'] in ('LOW', 'MEDIUM')])
+        path = self.tmp / 'a2.json'
+        path.write_text(json.dumps(data))
+        self.assertEqual(fs.audit_split(str(path))[0], [])
+        out = subprocess.run([sys.executable, str(ROOT / 'scripts/lib/failure_severity.py'), 'audit-critical', str(path)], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1)
+        out = subprocess.run([sys.executable, str(ROOT / 'scripts/lib/failure_severity.py'), 'audit-critical', self.audit()], capture_output=True, text=True)
+        self.assertEqual((out.returncode, 'FA-001' in out.stdout), (0, True))
+
+    def test_the_audit_repair_scope_lists_the_critical_finding_and_fences_off_the_rest(self):
+        green = self.green([('FAIL', 'npx vite build')], '$ npx vite build\nerror during build\n')
+        text = fs.scope(green[0], green[1], '', self.audit())
+        fixed, _, left_alone = text.partition('Do NOT address')
+        self.assertIn('FA-001', fixed)
+        self.assertIn('npx vite build', fixed)
+        for ident in ('FA-002', 'FA-003', 'FA-004', 'FA-005'):
+            self.assertNotIn(ident, fixed)
+            self.assertIn(ident, left_alone)
+
     def test_cli(self):
         g, l = self.green([('REGRESSION', 'npm test')])
         run = lambda *a: subprocess.run([sys.executable, str(ROOT / 'scripts/lib/failure_severity.py'), *a], capture_output=True, text=True)

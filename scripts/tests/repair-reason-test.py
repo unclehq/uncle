@@ -88,6 +88,19 @@ class Reason(unittest.TestCase):
         self.assertIn('previous repair changed none', out)
         self.assertIn('The tests stage is active', out)
 
+    def test_a_final_audit_repairs_the_critical_finding_and_names_what_it_leaves(self):
+        os.makedirs(os.path.join(self.state, 'documents'))
+        self.write(os.path.join(self.state, 'documents', 'FINAL_AUDIT.json'), json.dumps({'findings': [
+            {'id': 'FA-001', 'severity': 'CRITICAL', 'evidence': 'the build fails', 'required_correction': 'fix the import'},
+            {'id': 'FA-002', 'severity': 'MEDIUM', 'evidence': 'MC-101 BLOCKED-HUMAN', 'required_correction': 'record a waiver'},
+            {'id': 'FA-003', 'severity': 'LOW', 'evidence': 'wording', 'required_correction': 'edit'}]}))
+        out = run(self.state, '.uncle/docs/FINAL_AUDIT.md')
+        repaired, _, left_alone = out.partition('Not repaired')
+        self.assertIn('FA-001', repaired)
+        for ident in ('FA-002', 'FA-003'):
+            self.assertNotIn(ident, repaired)
+            self.assertIn(ident, left_alone)
+
     def test_an_unknown_source_still_explains_itself(self):
         out = run(self.state, 'something-new')
         self.assertIn('Trigger recorded as `something-new`', out)

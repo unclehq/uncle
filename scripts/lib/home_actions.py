@@ -21,9 +21,10 @@ def prompt(history, root):
     fields = {kind: list(names) for kind, names in Conversation.fields.items()}
     return '''You are Uncle, the conversational entry point for an application builder.
 Answer ordinary questions normally, in plain text. Help the user refine ideas.
-When the user asks you to create a brief or start work, return exactly one JSON
+When the user asks you to create a brief or start work, return one JSON
 object with "uncle_action" and "message". The application validates and executes
-these actions; do not run commands or write files yourself. Never claim an action
+these actions. Put nothing else in the reply: no sentence before or after
+the object (a fenced object is tolerated, prose is not relied on); do not run commands or write files yourself. Never claim an action
 has completed: the application reports the actual result.
 
 Actions:
@@ -80,18 +81,32 @@ Example: {"uncle_action":"run_change","message":"Starting the existing change re
 Document sections: ''' + json.dumps(fields) + '\nExisting documents: ' + json.dumps(existing) + \
         '\nConversation (JSON):\n' + json.dumps(history, ensure_ascii=False)
 
-def parse_reply(text):
+# A fence that opens and closes at the start of a line. Backticks inside the
+# JSON document string are escaped onto one line, so they never match here.
+FENCE_RE = re.compile(r'^(?P<mark>`{3,}|~{3,})[^\r\n]*\r?\n(?P<body>.*?)\r?\n?^(?P=mark)[ \t]*$', re.S | re.M)
+
+def _extract(text):
+    """Return (candidate, prose). A reply is the bare object, one wrapping
+    fence, or prose around a single fenced object that names uncle_action."""
     candidate = text.strip()
-    # A homepage action is occasionally rendered as a fenced object by a
-    # model. The fence is presentation, so accept one complete wrapper of any
-    # language/length; prose or a JSON fragment still fail schema validation.
-    fence = re.match(r'^(?P<mark>`{3,}|~{3,})[^\r\n]*[\r\n](?P<body>.*?)[\r\n]?(?P=mark)$', candidate, re.S)
-    if fence:
-        candidate = fence.group('body').strip()
+    whole = re.match(r'^(?P<mark>`{3,}|~{3,})[^\r\n]*[\r\n](?P<body>.*?)[\r\n]?(?P=mark)$', candidate, re.S)
+    if whole:
+        return whole.group('body').strip(), ''
+    if candidate.startswith('{'):
+        return candidate, ''
+    hits = [m for m in FENCE_RE.finditer(candidate)
+            if m.group('body').lstrip().startswith('{') and '"uncle_action"' in m.group('body')]
+    if len(hits) == 1:
+        m = hits[0]
+        return m.group('body').strip(), (candidate[:m.start()] + candidate[m.end():]).strip()
+    return candidate, ''
+
+def parse_reply(text):
+    candidate, prose = _extract(text)
     try:
         data = json.loads(candidate)
     except ValueError:
-        if candidate.startswith('{') and '"uncle_action"' in candidate:
+        if prose or (candidate.startswith('{') and '"uncle_action"' in candidate):
             raise ValueError('The chat model returned an incomplete action. Please retry.')
         return None
     if not isinstance(data, dict) or 'uncle_action' not in data:
@@ -118,7 +133,7 @@ def parse_reply(text):
                          % ', '.join(unknown))
     # "message" is only the sentence shown beside the action; a model that emits
     # a valid action but forgets it should still have the action run.
-    data.setdefault('message', '')
+    data.setdefault('message', prose)
     missing = sorted(keys - optional - set(data))
     if missing:
         # Naming the field distinguishes the common case -- the model described

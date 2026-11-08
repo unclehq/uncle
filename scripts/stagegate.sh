@@ -6195,7 +6195,7 @@ while true; do
                     FINAL_AUDIT.md|VERIFICATION_INTEGRITY.md|runtime-unrunnable-application) ;;   # blocking by nature
                     *)
                         if ! repair_critical="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" critical "$GREEN_CLASS" "$LOG_DIR/green-check.log")"; then
-                            echo "Repair not run: no critical failure. The driver's verification is clean and the application runs, so $(basename "$repair_source") goes to the final audit as unresolved evidence."
+                            echo "Repair not run: no critical failure. The application builds and runs (any failing tests are isolated), so $(basename "$repair_source") goes to the final audit as unresolved evidence."
                             echo "(WORKFLOW_REPAIR_SEVERITY=all repairs every failure.)"
                             record_nonblocking_failure "$(basename "$repair_source")" 'no critical failure; repair not run'
                             record_test_failure_disposition || true

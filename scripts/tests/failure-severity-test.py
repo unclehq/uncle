@@ -142,6 +142,27 @@ class Severity(unittest.TestCase):
         Path(q).write_text(json.dumps(data))
         self.assertEqual(aj.result(q, IDS), 'UNKNOWN')
 
+    def test_a_report_whose_every_failing_row_was_downgraded_is_a_pass(self):
+        # Run 13: every failing row (including INTEGRITY and RESULTS, which only echo an isolated test failure) was downgraded, so no
+        # required row was left and the acceptance parser rejected the report ("rejected for another reason"): the run stopped.
+        p = report(self.tmp / 'all.json', **{i: 'FAIL' for i in IDS})
+        done = dict(fs.downgrade(p, symptoms=True))
+        self.assertEqual(set(done), set(IDS))
+        self.assertEqual(aj.result(p, IDS), 'PASS')
+
+    def test_a_table_with_no_required_rows_and_no_driver_mark_is_still_rejected(self):
+        q = report(self.tmp / 'empty.json', ASSERTIONS='FAIL')
+        data = json.loads(Path(q).read_text())
+        for r in data['rows']:
+            r['required'] = False                                        # a reviewer emptied the required set on its own
+        Path(q).write_text(json.dumps(data))
+        self.assertEqual(aj.result(q, IDS), 'UNKNOWN')
+
+    def test_a_critical_failure_is_never_downgraded_into_a_pass(self):
+        p = report(self.tmp / 'crit.json', ASSERTIONS='FAIL', INTEGRITY='FAIL')
+        self.assertEqual(fs.downgrade(p), [('ASSERTIONS', 'MAJOR')])      # without --symptoms INTEGRITY stays required
+        self.assertEqual(aj.result(p, IDS), 'REPAIR')
+
     def test_cli(self):
         g, l = self.green([('REGRESSION', 'npm test')])
         run = lambda *a: subprocess.run([sys.executable, str(ROOT / 'scripts/lib/failure_severity.py'), *a], capture_output=True, text=True)

@@ -197,7 +197,7 @@ severity_gate_test_review() {
     local id severity
     while IFS=$'\t' read -r id severity; do
         [[ -n "$id" ]] || continue
-        echo "Severity $severity: test-review row $id failed, but the driver's verification is clean and the application runs; repair is for critical failures, so this goes to the final audit."
+        echo "Severity $severity: test-review row $id failed, but there is no critical failure (the application builds and runs${symptoms:+; only isolated tests fail}); repair is for critical failures, so this goes to the final audit."
         record_nonblocking_failure TEST_REVIEW.json "$severity: test-review row $id failed; no critical failure, so no repair"
     done <<< "$rows"
     printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(printf '%s' "$rows" | tr '\t\n' ': ' )" >> "$STATE_DIR/failure-severity.tsv"

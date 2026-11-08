@@ -929,7 +929,7 @@ def classify_escape(seq):
     body = seq[1:]
     if body == '200~':
         return 'paste'
-    if body in ('13;5u', '27;5;13~'):
+    if body in ('13;2u', '27;2;13~'):
         return 'newline'
     return None
 
@@ -6468,7 +6468,7 @@ class UncleTUI:
         if m:
             enter_mod = int(m.group(1) or m.group(2))
         if enter_mod is not None:
-            if enter_mod == 5:
+            if enter_mod == 2:   # Shift+Enter (Ctrl+Enter submits like Enter)
                 if self._plain_composing():
                     self._composer_newline()
                 return 13
@@ -6478,9 +6478,9 @@ class UncleTUI:
         if m:
             mod = int(m.group(1) or m.group(4))
             code = int(m.group(2) or m.group(3))
-            if mod == 5 and code == 99:
-                self._chat_key(3)
-                return 3
+            if mod == 5 and 97 <= code <= 122:
+                self._chat_key(code - 96)   # Ctrl+letter -> its control byte
+                return code - 96
             if mod == 3 and code in (98, 102, 100):
                 self._chat_meta(code)
                 return code
@@ -6697,6 +6697,18 @@ class UncleTUI:
             if self.chat_choices and k in (curses.KEY_UP, curses.KEY_DOWN):
                 self.chat_pick = (self.chat_pick + (1 if k == curses.KEY_DOWN else -1)) % len(self.chat_choices)
                 return True
+            if k in (curses.KEY_UP, curses.KEY_DOWN) and not self.chat_picker and '\n' in self.chat_composer:
+                text, cursor = self.chat_composer, self._composer_cursor()
+                start = _line_start(text, cursor)
+                if k == curses.KEY_UP and start > 0:
+                    prev = _line_start(text, start - 1)
+                    self._set_composer(text, prev + min(cursor - start, start - 1 - prev))
+                    return True
+                end = _line_end(text, cursor)
+                if k == curses.KEY_DOWN and end < len(text):
+                    nxt = end + 1
+                    self._set_composer(text, nxt + min(cursor - start, _line_end(text, nxt) - nxt))
+                    return True
             if k in (curses.KEY_UP, curses.KEY_DOWN) and not self.chat_picker and not self.chat_edit:
                 self._recall_input(-1 if k == curses.KEY_UP else 1)
                 return True
@@ -6776,7 +6788,11 @@ class UncleTUI:
                      curses.KEY_RIGHT: lambda: min(len(text), cursor + 1),
                      curses.KEY_HOME: lambda: _line_start(text, cursor), 1: lambda: _line_start(text, cursor),
                      curses.KEY_END: lambda: _line_end(text, cursor), 5: lambda: _line_end(text, cursor)}
-            if k in edits:
+            if k == 21:  # Ctrl-U clears the whole composer (it shrinks to one row)
+                if text:
+                    self.chat_kill = text
+                self._set_composer('', 0)
+            elif k in edits:
                 text, cursor, killed = edits[k](text, cursor)
                 if killed:
                     self.chat_kill = killed
@@ -7079,7 +7095,7 @@ class UncleTUI:
             status_rows = 1  # the streaming line, just above the composer
         if kind == 'build':
             if getattr(self, 'chat_open', False):
-                text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+                text = sanitize(self.chat_composer).expandtabs(4).lstrip()
                 extra = min(len(self._wrap_input(text, max(8, left_w - 2))), 6) - 1 if text else 0
                 chat_height = min(6 + extra, max(0, h - 4))
             if self.prompt_kind:
@@ -7087,7 +7103,7 @@ class UncleTUI:
         else:
             live = self._home_live_tail(w - 3)
             status_rows = 1  # just the streaming-reply row: the old top menu is gone, its actions are slash commands
-            text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+            text = sanitize(self.chat_composer).expandtabs(4).lstrip()
             extra = min(len(self._wrap_input(text, max(8, w - 6))), 6) - 1 if text else 0
             popup = 6 if (getattr(self, 'chat_picker', False) or self._slash_choices() or self._chat_menu()) else 0
             comp_rows = min(8 + extra, max(3, h - status_rows - popup - 1))
@@ -7191,7 +7207,7 @@ class UncleTUI:
                 # Left-justified, as wide as the output, and a row taller per
                 # wrap — every row it takes comes from the build output.
                 chat_width = w - panel
-                text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+                text = sanitize(self.chat_composer).expandtabs(4).lstrip()
                 extra = min(len(self._wrap_input(text, max(8, chat_width - 2))), 6) - 1 if text else 0
                 chat_height = min(6 + extra, max(0, h - 3))
             # The chat panel sits at the very bottom, in the row the old
@@ -7549,60 +7565,64 @@ class UncleTUI:
 
     @staticmethod
     def _wrap_input(text, width):
-        # Wrap on words but keep every typed space: the cursor position is
-        # derived from the wrapped text, so dropping whitespace stalls it.
-        chunks, current = [], ''
-        for word in text.split(' '):
-            candidate = word if not current else current + ' ' + word
-            while len(candidate) > width:
-                if current:
-                    chunks.append(current)
-                    current, candidate = '', word
-                else:
-                    chunks.append(candidate[:width])
-                    candidate = candidate[width:]
-            current = candidate
-        if text:
-            chunks.append(current)
-        return chunks
+        # Each newline starts a new row; every logical line wraps on words but
+        # keeps every typed space (the cursor is derived from the wrapped text).
+        chunks = []
+        for line in text.split('\n'):
+            current, row = '', []
+            for word in line.split(' '):
+                candidate = word if not current else current + ' ' + word
+                while len(candidate) > width:
+                    if current:
+                        row.append(current)
+                        current, candidate = '', word
+                    else:
+                        row.append(candidate[:width])
+                        candidate = candidate[width:]
+                current = candidate
+            row.append(current)
+            chunks.extend(row)
+        return chunks if text else []
 
     def _composer_cursor_cell(self, text, width):
         """(row, column) of the buffer cursor in _wrap_input(text, width).
 
         text is the drawn composer; the cursor offset is found by pushing
         composer[:cursor] through the same sanitize/expandtabs/lstrip."""
-        full = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4)
-        prefix = sanitize(self.chat_composer[:self._composer_cursor()]).replace('\n', ' / ').expandtabs(4)
+        full = sanitize(self.chat_composer).expandtabs(4)
+        prefix = sanitize(self.chat_composer[:self._composer_cursor()]).expandtabs(4)
         offset = max(0, min(len(text), len(prefix) - (len(full) - len(full.lstrip()))))
-        # Replay _wrap_input, tracking where each chunk starts in text.
-        starts, chunks, current, start, position = [], [], '', 0, 0
-        for word in text.split(' '):
-            candidate = word if not current else current + ' ' + word
-            if not current:
-                start = position
-            while len(candidate) > width:
-                if current:
-                    chunks.append(current)
-                    starts.append(start)
-                    current, candidate, start = '', word, position
-                else:
-                    chunks.append(candidate[:width])
-                    starts.append(start)
-                    candidate = candidate[width:]
-                    start += width
-            current = candidate
-            position += len(word) + 1
-        if text:
+        # Replay _wrap_input per logical line, tracking where each chunk starts.
+        starts, chunks, base = [], [], 0
+        for line in text.split('\n'):
+            current, start, position = '', 0, 0
+            for word in line.split(' '):
+                candidate = word if not current else current + ' ' + word
+                if not current:
+                    start = position
+                while len(candidate) > width:
+                    if current:
+                        chunks.append(current)
+                        starts.append(base + start)
+                        current, candidate, start = '', word, position
+                    else:
+                        chunks.append(candidate[:width])
+                        starts.append(base + start)
+                        candidate = candidate[width:]
+                        start += width
+                current = candidate
+                position += len(word) + 1
             chunks.append(current)
-            starts.append(start)
-        if not chunks:
+            starts.append(base + start)
+            base += len(line) + 1
+        if not text:
             return 0, 0
-        row = max(i for i, s in enumerate(starts) if s <= offset)
+        row = max(i for i, st in enumerate(starts) if st <= offset)
         return row, min(offset - starts[row], len(chunks[row]))
 
     def _home_anchor(self, h, width, compact):
         """Bottom-anchored home layout: (composer_row, shown_rows, block_start)."""
-        text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+        text = sanitize(self.chat_composer).expandtabs(4).lstrip()
         count = len(self._wrap_input(text, max(8, width - 2))) if text else 1
         shown = max(1, min(count, 6, h - 3))
         composer_row = h - 2 - shown
@@ -7657,7 +7677,7 @@ class UncleTUI:
         if not (anchored and compact and feedback_active):
             put(row + (1 if compact else 3 if feedback_active else 4), hint, color.get('muted', curses.A_DIM), not build)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
-        text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+        text = sanitize(self.chat_composer).expandtabs(4).lstrip()
         placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
         if self.state == 'running' and getattr(self, 'prompt_kind', '') and self.chat_focus == 'chat':
             placeholder = 'Ask a question · Tab returns to the pending dialog'
@@ -8753,6 +8773,12 @@ class UncleTUI:
                     return
             except (OSError, ValueError) as exc:
                 self.chat_error = sanitize(str(exc))
+                return
+        if k in (10, 13) and chat_composing and self._plain_composing():
+            cur = self._composer_cursor()
+            if cur > 0 and self.chat_composer[cur - 1] == '\\':
+                # Terminals mapped for Shift+Enter send backslash then Enter.
+                self._set_composer(self.chat_composer[:cur - 1] + '\n' + self.chat_composer[cur:], cur)
                 return
         if k in (10, 13) and chat_composing and self._plain_composing() and self._enter_is_burst(k):
             try:

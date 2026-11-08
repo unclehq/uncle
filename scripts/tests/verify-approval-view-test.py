@@ -91,6 +91,95 @@ class ViewDigestTests(unittest.TestCase):
         self.commit()
         self.assertEqual(len(uv.check_3(statement, 'HEAD')), 1)
 
+    def test_attestation_without_view_digest_and_json_canonical_is_not_a_mismatch(self):
+        self.approve('ADVERSARIAL_REVIEW', '# Review\n\nrendered view\n', canonical='{"kind": "adversarial-review"}\n')
+        statement = self.statement(['ADVERSARIAL_REVIEW'])
+        del statement['predicate']['approvals'][0]['view_digest']
+        self.commit()
+        entry = statement['predicate']['approvals'][0]
+        committed = (self.repo / '.uncle/docs/ADVERSARIAL_REVIEW.md').read_bytes()
+        self.assertNotEqual(entry['digest'], sha(committed))
+        with self.assertRaises(uv.Refused) as caught:  # a lone unverified gate is never 'approved'
+            uv.check_3(statement, 'HEAD')
+        self.assertNotIn('digest mismatch', caught.exception.args[0][0])
+        self.assertIn('no approved gate could be verified', caught.exception.args[0][0])
+        self.assertTrue(any('markdown view not verified' in l for l in caught.exception.args[0][1:]))
+
+    def test_absent_markdown_is_refused_even_without_view_digest(self):
+        self.approve('ADVERSARIAL_REVIEW', '# Review\n', canonical='{"kind": "adversarial-review"}\n')
+        statement = self.statement(['ADVERSARIAL_REVIEW'])
+        del statement['predicate']['approvals'][0]['view_digest']
+        with self.assertRaises(uv.Refused) as caught:  # nothing committed, nothing embedded
+            uv.check_3(statement, 'HEAD')
+        self.assertIn('digest mismatch', caught.exception.args[0][0])
+        self.assertIn('  present:   missing', caught.exception.args[0])
+
+    def test_missing_recorded_digest_is_refused(self):
+        self.approve('CHANGE_PLAN', '# Plan\n')
+        statement = self.statement(['CHANGE_PLAN'])
+        entry = statement['predicate']['approvals'][0]
+        del entry['view_digest']
+        del entry['digest']
+        self.commit()
+        with self.assertRaises(uv.Refused) as caught:
+            uv.check_3(statement, 'HEAD')
+        self.assertIn('missing', '\n'.join(caught.exception.args[0]))
+
+    def test_null_view_digest_is_refused(self):
+        self.approve('ADVERSARIAL_REVIEW', '# Review\n', canonical='{"kind": "adversarial-review"}\n')
+        statement = self.statement(['ADVERSARIAL_REVIEW'])
+        statement['predicate']['approvals'][0]['view_digest'] = None
+        self.commit()
+        with self.assertRaises(uv.Refused):
+            uv.check_3(statement, 'HEAD')
+
+    def test_real_mismatch_after_unverified_gate_still_refused(self):
+        self.approve('ADVERSARIAL_REVIEW', '# Review\n', canonical='{"kind": "adversarial-review"}\n')
+        self.approve('CHANGE_PLAN', '# Plan\n')
+        statement = self.statement(['ADVERSARIAL_REVIEW', 'CHANGE_PLAN'])
+        for e in statement['predicate']['approvals']:
+            if e['gate'] == 'ADVERSARIAL_REVIEW':
+                del e['view_digest']
+        (self.repo / '.uncle/docs/CHANGE_PLAN.md').write_text('# Plan edited\n')
+        self.commit()
+        with self.assertRaises(uv.Refused) as caught:
+            uv.check_3(statement, 'HEAD')
+        self.assertIn('CHANGE_PLAN', caught.exception.args[0][0])
+
+    def test_all_gates_unverifiable_yield_no_verified_line(self):
+        self.approve('ADVERSARIAL_REVIEW', '# Review\n', canonical='{"kind": "adversarial-review"}\n')
+        self.approve('CHANGE_PLAN', '# Plan\n', canonical='{"kind": "change-plan"}\n')
+        statement = self.statement(['CHANGE_PLAN', 'ADVERSARIAL_REVIEW'])
+        for e in statement['predicate']['approvals']:
+            del e['view_digest']
+        self.commit()
+        with self.assertRaises(uv.Refused) as caught:
+            uv.check_3(statement, 'HEAD')
+        self.assertIn('no approved gate could be verified', caught.exception.args[0][0])
+        self.assertTrue(any('markdown view not verified' in l for l in caught.exception.args[0][1:]))
+
+    def test_empty_view_digest_with_differing_digest_is_refused(self):
+        self.approve('ADVERSARIAL_REVIEW', '# Review\n', canonical='{"kind": "adversarial-review"}\n')
+        statement = self.statement(['ADVERSARIAL_REVIEW'])
+        statement['predicate']['approvals'][0]['view_digest'] = ''
+        self.commit()
+        with self.assertRaises(uv.Refused) as caught:
+            uv.check_3(statement, 'HEAD')
+        self.assertIn('digest mismatch', caught.exception.args[0][0])
+
+    def test_mixed_verified_and_unverified_gates_yield_one_line_each(self):
+        self.approve('ADVERSARIAL_REVIEW', '# Review\n', canonical='{"kind": "adversarial-review"}\n')
+        self.approve('CHANGE_PLAN', '# Plan\n')
+        statement = self.statement(['CHANGE_PLAN', 'ADVERSARIAL_REVIEW'])
+        for e in statement['predicate']['approvals']:
+            if e['gate'] == 'ADVERSARIAL_REVIEW':
+                del e['view_digest']
+        self.commit()
+        lines = uv.check_3(statement, 'HEAD')
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(sum(1 for line in lines if line.startswith('approved ')), 1)
+        self.assertEqual(sum(1 for line in lines if uv.unverified(line)), 1)
+
     def test_every_failing_check_is_reported(self):
         self.approve('CHANGE_PLAN', '# Plan\n')
         statement = self.statement(['CHANGE_PLAN'])

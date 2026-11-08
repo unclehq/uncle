@@ -6515,6 +6515,13 @@ class UncleTUI:
         self._paint_support_link()
 
     def _homepage_key(self, k):
+        if k in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+            step = max(1, getattr(self, '_home_page_rows', 5) - 1)
+            offset = getattr(self, 'home_scroll', 0) + (step if k == curses.KEY_PPAGE else -step)
+            self.home_scroll = max(0, offset)  # the draw clamps the upper bound
+            return True
+        if k in (10, 13):
+            self.home_scroll = 0  # sending a message follows the newest output
         if k == 16:  # Ctrl-P: the homepage command menu.
             self.home_menu_open = not getattr(self, 'home_menu_open', False)
             self.chat_focus = 'menu' if self.home_menu_open else 'chat'
@@ -6802,7 +6809,7 @@ class UncleTUI:
                 pass
         if history:
             joined = '\n'.join(history)
-            tail = joined[-max(1, width * body_rows * 2):]
+            tail = joined[-200000:]
             # Each surviving line takes the role of the entry that owns its first
             # character; the text itself is cut and split exactly as before.
             spans = []
@@ -6817,8 +6824,15 @@ class UncleTUI:
                 offset += len(raw)
                 lines.extend((role, part) for part in textwrap.wrap(line, width) or [''])
             room = max(0, body_rows - 1)
-            for i, (role, line) in enumerate(lines[-room:] if room else []):
+            self._home_page_rows = room
+            self.home_scroll = max(0, min(getattr(self, 'home_scroll', 0), len(lines) - room))
+            end = len(lines) - self.home_scroll
+            visible = lines[max(0, end - room):end] if room else []
+            for i, (role, line) in enumerate(visible):
                 put(top + 1 + i, line, self.chat_attr(role, color.get('accent', 0)))
+            if self.home_scroll:
+                put(top, '↓ %d newer lines · PgDn to follow' % self.home_scroll,
+                    color.get('muted', curses.A_DIM), True)
         row = top + body_rows
         self._draw_chat_composer(row, h, w, left, width, compact)
         for y, x, text, selected in bar:
@@ -7808,6 +7822,18 @@ class UncleTUI:
             pass
 
     # ---- input ----
+    def _wheel(self, bstate, lines=3):
+        """Scroll the home-page history or build transcript by mouse wheel."""
+        up = bool(bstate & getattr(curses, 'BUTTON4_PRESSED', 0))
+        down = bool(bstate & getattr(curses, 'BUTTON5_PRESSED', 0))
+        if not (up or down):
+            return
+        delta = lines if up else -lines
+        if self.state == 'menu':
+            self.home_scroll = max(0, getattr(self, 'home_scroll', 0) + delta)
+        elif self.state == 'running':
+            self.build_scroll = max(0, getattr(self, 'build_scroll', 0) + delta)
+
     def handle_key(self, k):
         self.esc_follow = None  # what _read_meta_key saw behind this key's Esc
         # Ctrl-L redraws everywhere; triage keeps its own keys otherwise.
@@ -8363,6 +8389,14 @@ class UncleTUI:
         except curses.error:
             pass
         self.stdscr.keypad(True)
+        # Mouse wheel scrolls the transcript, as in Claude Code's fullscreen mode.
+        # Only wheel events are requested; hold Shift (Option in some terminals)
+        # to select text with the terminal's own mouse handling.
+        try:
+            curses.mouseinterval(0)
+            curses.mousemask(getattr(curses, 'BUTTON4_PRESSED', 0) | getattr(curses, 'BUTTON5_PRESSED', 0))
+        except curses.error:
+            pass
         self.input_timeout = 80
         self.stdscr.timeout(self.input_timeout)
         try:
@@ -8407,7 +8441,13 @@ class UncleTUI:
                     self._reload_tick = 0
                     dirty = self.maybe_reload() or dirty
             k = self.stdscr.getch()
-            if k != -1:
+            if k == curses.KEY_MOUSE:
+                try:
+                    self._wheel(curses.getmouse()[4])
+                    dirty = True
+                except curses.error:
+                    pass
+            elif k != -1:
                 self.handle_key(k)
                 dirty = True
             current_size = self.stdscr.getmaxyx()

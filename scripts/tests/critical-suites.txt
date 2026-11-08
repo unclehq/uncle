@@ -63,6 +63,7 @@ implementation-review
 acceptance
 green-check
 green-check-vacuous
+green-defer-mutation
 test-report
 failure-severity
 test-failure-disposition
@@ -75,6 +76,7 @@ change-contract-unevaluated
 
 # The manual checklist: evidence is kept, a failing check routes, a report is written.
 checklist-evidence-preserved
+checklist-hedge
 checklist-failure-route
 checklist-execution-delivered
 execute-checklist-reports

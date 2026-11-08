@@ -5019,6 +5019,8 @@ run_green_check() {
         return 0
     fi
 
+    # GREEN_LOG lets the deferred defect-injection phase write its own log; GREEN_COMMAND_FILTER=main|mutation runs one kind of command.
+    local green_log="${GREEN_LOG:-$LOG_DIR/green-check.log}"
     verify_commands .uncle/docs/UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
     # A clean install that needs a lockfile (`npm ci`) cannot run in a project that has none, and no step may install
     # to create one: run the install that does (install_command.py), and say so.
@@ -5038,10 +5040,14 @@ run_green_check() {
         [[ ! -s "$STATE_DIR/green-check.groups" ]] || echo "Verification: the plan declares no parallel groups; running commands $(tr '\n' ';' < "$STATE_DIR/green-check.groups" | sed 's/;$//; s/;/; and /g') together."
     fi
 
+    if [[ -n "${GREEN_COMMAND_FILTER:-}" ]]; then
+        python3 -B "$ROOT/scripts/lib/filter_commands.py" "$GREEN_CMDS" "$STATE_DIR/green-check.groups" "$GREEN_COMMAND_FILTER" > /dev/null || true
+    fi
+
     if [[ ! -s "$GREEN_CMDS" ]]; then
         : > "$GREEN_CLASS"
         green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/UPDATED_PROJECT_PLAN.md \
-            "$LOG_DIR/green-check.log" 0
+            "$green_log" 0
         echo
         echo "Green check NOT RUN: .uncle/docs/UPDATED_PROJECT_PLAN.md has no fenced block"
         echo "under a 'Verification commands' heading, so the driver has no"
@@ -5097,7 +5103,7 @@ run_green_check() {
         fi
     done
     local execution_status=0
-    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" \
+    green_run "$GREEN_CMDS" "$GREEN_CUR" "$green_log" \
         check_verification_inputs "$STATE_DIR/green-check.groups" || execution_status=$?
     [[ "$execution_status" == 0 ]] || exit "$execution_status"
 
@@ -5105,7 +5111,7 @@ run_green_check() {
     # which is the correct reading for a new application.
     green_classify "$STATE_DIR/green-check.no-baseline" "$GREEN_CUR" > "$GREEN_CLASS"
     green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/UPDATED_PROJECT_PLAN.md \
-        "$LOG_DIR/green-check.log" 0
+        "$green_log" 0
     fi
 
     local failures
@@ -6030,7 +6036,7 @@ while true; do
                 echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results before checklist work."
                 exit 1
             fi
-            green_wait_final || { echo 'Driver verification did not publish final evidence before checklist work.' >&2; exit 1; }
+            green_wait_main || { echo 'Driver verification did not publish final evidence before checklist work.' >&2; exit 1; }
             runtime_ready_rc=0
             route_unrunnable_application || runtime_ready_rc=$?
             if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
@@ -6366,7 +6372,7 @@ while true; do
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi
-            green_wait_final || { echo 'Driver verification did not publish final evidence before MANUAL_CHECKLIST.' >&2; exit 1; }
+            green_wait_main || { echo 'Driver verification did not publish final evidence before MANUAL_CHECKLIST.' >&2; exit 1; }
             runtime_ready_rc=0
             route_unrunnable_application || runtime_ready_rc=$?
             if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
@@ -6403,7 +6409,7 @@ This is a new response: write the complete document now. A reply that refers bac
             # Green evidence is a prerequisite. Execute workers consume its
             # canonical result and never repeat unit/build/browser checks the
             # driver already ran.
-            green_wait_final || { echo 'Driver verification did not publish final evidence before EXECUTE_CHECKLIST.' >&2; exit 1; }
+            green_wait_main || { echo 'Driver verification did not publish final evidence before EXECUTE_CHECKLIST.' >&2; exit 1; }
             runtime_ready_rc=0
             route_unrunnable_application || runtime_ready_rc=$?
             if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi

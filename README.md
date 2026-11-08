@@ -157,7 +157,7 @@ The coding agent is untrusted and swappable. A broken or hostile agent can fail 
 * **Approvals that pin what you approved.** Each human gate records a SHA-256 of the approved artifact, so the plan you approved is the one that ships.
 * **Plain files, no build step.** Uncle is Bash and Python. Prompts are Markdown files in `prompts/`, and configuration is one text file. Adding a runner is a wrapper script that accepts `claude -p`-style flags.
 
-Limits to know about: the two drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) and `uncle_tui.py` are large, so changing the core takes more effort than changing prompts or config. Bedrock uses a bearer token, not an IAM role or SSO profile. Windows support is newer than macOS and Linux. The attestation is a local, driver-sealed record; it is not SLSA provenance signed by GitHub (see [ATTESTATIONS.md](ATTESTATIONS.md) for that).
+Limits to know about: the two drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) and `uncle_tui.py` are large, so changing the core takes more effort than changing prompts or config. Bedrock uses a bearer token, not an IAM role or SSO profile. Windows support is newer than macOS and Linux. The attestation is a driver-sealed in-toto/DSSE record signed with your own key; it is not SLSA provenance signed by GitHub (see [ATTESTATIONS.md](ATTESTATIONS.md) for that).
 
 ## The change is the unit of trust
 
@@ -203,9 +203,7 @@ Uncle treats that distinction as an invariant.
 
 ## Verifiable change provenance
 
-> **In development**
-
-Uncle is developing portable attestations for completed changes.
+Uncle produces a portable attestation for each completed change.
 
 Each trusted stage produces canonical, machine-readable evidence describing what actually happened, including the artifact involved, the result, evidence digests, and producer metadata.
 
@@ -245,15 +243,26 @@ implementation tree
          attestation
 ```
 
-The attestation design uses existing software supply-chain standards where possible, including **in-toto** statements and **DSSE** signing, rather than inventing a proprietary provenance format.
+The attestation uses existing software supply-chain standards rather than a proprietary provenance format: an **in-toto** Statement (v1) wrapped in a **DSSE** envelope, with RFC 8785 canonical JSON so hashes and signatures are reproducible. The driver writes every stage envelope and the release attestation itself, from validator exit codes, gate records and its own hashing. No model writes one.
 
-The goal is that a reviewer can independently answer:
+Uncle signs the attestation with keys you already have, and creates no new key material: Sigstore (`cosign` with a `gitsign` configuration) when available, otherwise your git SSH signing key. With neither, the attestation is written unsigned and a verifier reports integrity only. Both files are kept at `.uncle/attestation.json` and `.uncle/attestation.sig`.
+
+Anyone can check a change with the standalone verifier, which needs only Python and `git`:
+
+```sh
+uncle verify                 # the current checkout
+uncle verify 123             # a pull request (needs gh)
+```
+
+It exits `0` when verified, `1` when not verified or refused, `2` for usage errors or a missing required tool, and `3` when only integrity could be checked (no signature, an untrusted signature, or a missing optional tool).
+
+The question a reviewer can answer independently:
 
 > **Is the software being published the exact software that passed Uncle's required process?**
 
 without trusting the coding agent that produced it.
 
-See [#59: Add verifiable change provenance and portable attestations](../../issues/59) and [Attestations](ATTESTATIONS.md) for setup and verification.
+See [#59: Add verifiable change provenance and portable attestations](../../issues/59). [Attestations](ATTESTATIONS.md) covers a different thing: GitHub Actions build provenance for release artifacts.
 
 ## Talk to Uncle while it works
 

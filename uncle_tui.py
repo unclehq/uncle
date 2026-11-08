@@ -731,7 +731,9 @@ def runners_for(side):
                 continue
             installed.append("self-hosted" if binary == "opencode" else binary)
             break
-    return installed or ["self-hosted"]
+    if "self-hosted" not in installed:
+        installed.append("self-hosted")  # local runner is always offered
+    return installed
 
 
 def selectable_runners(side):

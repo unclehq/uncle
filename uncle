@@ -754,6 +754,8 @@ uncle_selectable_runners() {
     local installed
     installed="$(uncle_installed_runners)"
     [[ -z "$installed" ]] || printf '%s\n' "$installed"
+    # Local (self-hosted) and Bedrock are always offered, installed CLIs or not.
+    [[ $'\n'"$installed"$'\n' == *$'\nself-hosted\n'* ]] || printf 'self-hosted\n'
     printf 'aws-bedrock\n'
 }
 

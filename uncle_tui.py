@@ -7199,13 +7199,18 @@ class UncleTUI:
         if history:
             # Chat history fills the space above the composer.
             body_rows = max(body_rows, h - footer_rows - run_y)
-        # The composer sits as near the bottom as its footer allows.
-        top = max(run_y, h - body_rows - footer_rows)
+        # The composer block is anchored to the bottom; history fills what is above it.
+        block_start = self._home_anchor(h, width, compact)[2]
+        top = run_y
+        body_rows = max(0, block_start - top)
         logo_left = left + max(0, (width - LOGO_W) // 2)
         if logo:
+            logo_top = block_start - len(logo)
             for i, line in enumerate(logo):
+                if logo_top < 0:
+                    break
                 try:
-                    self.stdscr.addnstr(top + i, logo_left, line, LOGO_W, color.get('title', 0))
+                    self.stdscr.addnstr(logo_top + i, logo_left, line, LOGO_W, color.get('title', 0))
                 except curses.error:
                     pass
         def put(y, text, attr=0, centered=False):
@@ -7218,7 +7223,8 @@ class UncleTUI:
             except curses.error:
                 pass
         self._text_view = None
-        if history:
+        self._home_page_rows = 0
+        if history and body_rows:
             joined = '\n'.join(history)
             tail = joined[-200000:]
             # Each surviving line takes the role of the entry that owns its first
@@ -7234,21 +7240,27 @@ class UncleTUI:
                 role = next((r for s, r in reversed(spans) if s <= offset), None)
                 offset += len(raw)
                 lines.extend((role, part) for part in textwrap.wrap(line, width) or [''])
-            room = max(0, body_rows - 1)
+            # A scrolled view spends its first row on the "newer lines" note.
+            header = 1 if getattr(self, 'home_scroll', 0) and body_rows > 1 else 0
+            room = body_rows - header
             self._home_page_rows = room
             self.home_scroll = max(0, min(getattr(self, 'home_scroll', 0), len(lines) - room))
+            header = 1 if self.home_scroll and body_rows > 1 else 0
+            room = body_rows - header
             end = len(lines) - self.home_scroll
             visible = lines[max(0, end - room):end] if room else []
             for i, (role, line) in enumerate(visible):
-                put(top + 1 + i, line, self.chat_attr(role, color.get('accent', 0)))
-            self._text_view = {'state': self.state, 'top': top + 1, 'left': left, 'width': width, 'rows': len(visible),
+                put(top + header + i, line, self.chat_attr(role, color.get('accent', 0)))
+            self._text_view = {'state': self.state, 'top': top + header, 'left': left, 'width': width, 'rows': len(visible),
                                'start': max(0, end - room), 'lines': [text for _, text in lines]}
             self._paint_selection()
-            if self.home_scroll:
+            if header:
                 put(top, '↓ %d newer lines · PgDn to follow' % self.home_scroll,
                     color.get('muted', curses.A_DIM), True)
-        row = top + body_rows
-        self._draw_chat_composer(row, h, w, left, width, compact)
+        else:
+            self._text_view = {'state': self.state, 'top': block_start, 'left': left, 'width': width, 'rows': 0,
+                               'start': 0, 'lines': []}
+        self._draw_chat_composer(block_start, h, w, left, width, compact, anchor_bottom=True)
         for y, x, text, selected in bar:
             try:
                 self.stdscr.addnstr(y, x, text, min(len(text), max(0, w - x - 1)),
@@ -7310,11 +7322,24 @@ class UncleTUI:
         row = max(i for i, s in enumerate(starts) if s <= offset)
         return row, min(offset - starts[row], len(chunks[row]))
 
-    def _draw_chat_composer(self, row, h, w, left, width, compact=True):
+    def _home_anchor(self, h, width, compact):
+        """Bottom-anchored home layout: (composer_row, shown_rows, block_start)."""
+        text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+        count = len(self._wrap_input(text, max(8, width - 2))) if text else 1
+        shown = max(1, min(count, 6, h - 3))
+        composer_row = h - 2 - shown
+        return composer_row, shown, max(0, composer_row - (3 if compact else 5))
+
+    def _draw_chat_composer(self, row, h, w, left, width, compact=True, anchor_bottom=False):
         """Shared homepage and build chat appearance."""
         first_row = row
         build = self.state == 'running'
-        if build and compact:
+        anchored = bool(anchor_bottom) and not build and h >= 2
+        if anchored:
+            first_row = 0
+            row = self._home_anchor(h, width, compact)[0] - (3 if compact else 6)
+            greeting = True
+        elif build and compact:
             # No greeting on the build page; the build output gets the row.
             row -= 1
             greeting = False
@@ -7350,7 +7375,9 @@ class UncleTUI:
         if not build and not self._background_status():
             hint = ('/ commands   @ files   # issues   /configure   /quit' if width >= 56
                     else '/ commands  @ files  # issues' if width >= 32 else '/ cmds @ files')
-        put(row + (1 if compact else 3), hint, color.get('muted', curses.A_DIM), not build)
+        feedback_active = bool(self.chat_error or self.chat_choices or self.chat_composer.startswith('/'))
+        if not (anchored and compact and feedback_active):
+            put(row + (1 if compact else 3), hint, color.get('muted', curses.A_DIM), not build)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
         placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
@@ -7361,7 +7388,7 @@ class UncleTUI:
         # The composer grows as the input wraps; long pastes scroll to the tail.
         chunks = self._wrap_input(text, wrap_width)
         cursor_row, cursor_col = self._composer_cursor_cell(text, wrap_width)
-        shown = max(1, min(6, h - composer_row - 3))
+        shown = self._home_anchor(h, width, compact)[1] if anchored else max(1, min(6, h - composer_row - 3))
         cursor_row -= max(0, len(chunks) - shown)
         chunks = chunks[-shown:]
         extra = len(chunks) - 1 if text else 0
@@ -7415,11 +7442,15 @@ class UncleTUI:
             tests = self.test_execution_status()
             if tests:
                 model_status = 'Tests: ' + tests + '  ·  ' + model_status
-        status_row = composer_row + extra + (2 if build or compact else 3)
+        status_row = h - 1 if anchored else composer_row + extra + (2 if build or compact else 3)
         right_width = min(len(project_status), max(1, width - 18))
         put(status_row, model_status[:max(0, width - right_width - 2)], color.get('muted', curses.A_DIM))
         put(status_row, project_status[:right_width], color.get('good', 0) if auto else color.get('accent', 0), right=True)
         feedback_row = status_row + 1
+        if anchored:
+            # Status owns the last row, so feedback takes the spare row above
+            # the top rule (non-compact) or replaces the hint (compact).
+            feedback_row = composer_row - 2
         if self.chat_error:
             put(feedback_row, self.chat_error, color.get('warning', curses.A_BOLD))
         elif self.chat_choices:

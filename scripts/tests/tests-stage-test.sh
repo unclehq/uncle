@@ -42,9 +42,14 @@ run_claude() {
     echo "$lane reuse=${UNCLE_RUNNER_REUSE:-unset}" >> "$STATE_DIR/reuse.log"
     echo "$lane start $(date +%s%N)" >> "$STATE_DIR/order.log"
     case "$lane" in
-        complete) complete_list ;;
+        complete) if [[ -n "${COMPLETE_BAD_ONCE:-}" && ! -e "$STATE_DIR/complete.bad.done" ]]; then
+                      touch "$STATE_DIR/complete.bad.done"; complete_list
+                      sed -i.bak "s/find: 'beta'/find: 'a'/" tests/mutations/list.mjs; rm -f tests/mutations/list.mjs.bak     # 'a' occurs many times
+                  elif [[ -n "${COMPLETE_DROPS_INTENT:-}" ]]; then
+                      complete_list; sed -i.bak "s/expected_failing_tests: \['T-2'\]/expected_failing_tests: ['T-99']/" tests/mutations/list.mjs; rm -f tests/mutations/list.mjs.bak
+                  else complete_list; fi ;;
         harness) echo cfg > vitest.config.js; mkdir -p helpers; echo h > helpers/dom.js; printf 'vitest.config.js\nhelpers/dom.js\n' > "$dir/lane-harness.files" ;;
-        unit)    [[ -f vitest.config.js ]] || { echo "unit began before harness finished" >> "$STATE_DIR/errors.log"; }
+        unit)    sleep "${UNIT_SLEEP:-0}"; [[ -f vitest.config.js ]] || { echo "unit began before harness finished" >> "$STATE_DIR/errors.log"; }
                  echo u > tests/unit.test.js; printf 'tests/unit.test.js\n' > "$dir/lane-unit.files" ;;
         e2e)     mkdir -p tests/e2e; echo e > tests/e2e/a.spec.js; printf 'tests/e2e/a.spec.js\n%s\n' "${E2E_EXTRA:-}" | sed '/^$/d' > "$dir/lane-e2e.files" ;;
         mutation) mkdir -p tests/mutations
@@ -62,10 +67,15 @@ JS
     echo "$lane end $(date +%s%N)" >> "$STATE_DIR/order.log"
 }
 
-complete_list() { cat > tests/mutations/list.mjs <<'JS'
+complete_list() {
+    mkdir -p src
+    [[ -f src/engine.js ]] || : > src/engine.js
+    grep -q alpha src/engine.js || echo alpha >> src/engine.js
+    grep -q beta src/engine.js || echo beta >> src/engine.js
+    cat > tests/mutations/list.mjs <<'JS'
 export const defects = [
-  { id: 'DI-1', breaks: ['I-1'], target: 'src/engine.js', file: 'src/engine.js', find: 'a + b', replace: 'a - b', spec: 'tests/unit.test.js', expected_failing_tests: ['T-1'] },
-  { id: 'DI-2', breaks: ['I-2'], target: 'src/engine.js', file: 'src/engine.js', find: 'x', replace: 'y', spec: 'tests/unit.test.js', expected_failing_tests: ['T-2'] },
+  { id: 'DI-1', breaks: ['I-1'], target: 'src/engine.js', file: 'src/engine.js', find: 'alpha', replace: 'omega', spec: 'tests/unit.test.js', expected_failing_tests: ['T-1'] },
+  { id: 'DI-2', breaks: ['I-2'], target: 'src/engine.js', file: 'src/engine.js', find: 'beta', replace: 'gamma', spec: 'tests/unit.test.js', expected_failing_tests: ['T-2'] },
 ];
 export default defects;
 JS
@@ -227,6 +237,52 @@ printf 'tests/\nvitest.config.js\n' > "$STATE_DIR/tests.paths.fixture"
 : > "$STATE_DIR/reuse.log"
 ( WORKFLOW_TESTS_RUNNER_REUSE=0 tests_stage ) > /dev/null 2>&1 || true
 expect "WORKFLOW_TESTS_RUNNER_REUSE=0 gives every lane a cold CLI" '! grep -q "reuse=1" "$STATE_DIR/reuse.log" && grep -q "^unit reuse=0" "$STATE_DIR/reuse.log"'
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------
+# Completing the defect list early, cheaply, and checked by the driver.
+reset
+run_claude() { stub_agent "$@"; }
+export WORKFLOW_TESTS_CONCURRENT=1
+printf 'tests/\nvitest.config.js\n' > "$STATE_DIR/tests.paths.fixture"
+: > "$STATE_DIR/order.log"
+UNIT_SLEEP=5; export UNIT_SLEEP
+tests_background_start > /dev/null 2>&1
+sleep 2                                   # the harness and the fast authors are done; the unit author is still working
+mkdir -p src; echo "impl" > src/engine.js
+( tests_join ) > "$SCR/early.out" 2>&1 && early_rc=0 || early_rc=$?
+unset UNIT_SLEEP
+unit_end="$(awk '$1 == "unit" && $2 == "end" { print $3 }' "$STATE_DIR/order.log")"
+complete_start="$(awk '$1 == "complete" && $2 == "start" { print $3 }' "$STATE_DIR/order.log")"
+expect "the join succeeds with an early completion" '[[ "$early_rc" == 0 ]] && tests_locked'
+expect "the completion started before the slowest author finished" '[[ -n "$complete_start" && -n "$unit_end" ]] && (( complete_start < unit_end ))'
+expect "the join announces the early start" 'grep -q "completing the defect list now, beside the remaining authors" "$SCR/early.out"'
+expect "the agent is given the list and the source inline" 'grep -q "Source .src/engine.js." "$STATE_DIR/tests/prompt-complete.md" && grep -q "Current contents of .tests/mutations/list.mjs." "$STATE_DIR/tests/prompt-complete.md"'
+expect "the completed list passes the driver's own uniqueness check" '[[ -z "$(tests_verify_list tests/mutations/list.mjs)" ]]'
+expect "the intent snapshot predates the completion (it has no find yet)" 'grep -q "\"find\":false" "$STATE_DIR/tests/intent.tsv"'
+
+# A find that is not unique is caught by the driver, and the agent is asked once more with the exact problem.
+reset
+printf 'tests/\nvitest.config.js\n' > "$STATE_DIR/tests.paths.fixture"
+rm -f "$STATE_DIR/complete.bad.done"
+COMPLETE_BAD_ONCE=1; export COMPLETE_BAD_ONCE
+tests_background_start > /dev/null 2>&1
+mkdir -p src; echo "alpha beta" > src/engine.js
+( tests_join ) > "$SCR/retry.out" 2>&1 && retry_rc=0 || retry_rc=$?
+unset COMPLETE_BAD_ONCE
+expect "a non-unique find is rejected by the driver and fixed on the retry" '[[ "$retry_rc" == 0 ]] && grep -q "occurs .* times in src/engine.js" "$SCR/retry.out" && grep -q "asking once more" "$SCR/retry.out"'
+expect "the retry prompt names the failures" 'grep -q "driver rejected your previous list" "$STATE_DIR/tests/prompt-complete.md"'
+
+# An agent that changes the frozen intent while completing is still caught.
+reset
+printf 'tests/\nvitest.config.js\n' > "$STATE_DIR/tests.paths.fixture"
+COMPLETE_DROPS_INTENT=1; export COMPLETE_DROPS_INTENT
+tests_background_start > /dev/null 2>&1
+mkdir -p src; echo "impl" > src/engine.js
+( tests_join ) > "$SCR/intent.out" 2>&1 && intent_rc=0 || intent_rc=$?
+unset COMPLETE_DROPS_INTENT
+expect "a completion that changes the authored intent fails the join" '[[ "$intent_rc" != 0 ]] && grep -q "changed its breaks/expected_failing_tests" "$SCR/intent.out"'
+unset WORKFLOW_TESTS_CONCURRENT
 
 # A lane marked done whose file list vanished is a reported problem, not a bash error.
 reset

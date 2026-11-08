@@ -345,7 +345,7 @@ tests_finish() {
         echo "These files are now frozen. You approve them with the implementation at the next gate, where the diff includes them."
     fi
     tests_manifest > "$(tests_lock)"
-    tests_intent_snapshot
+    if [[ -e "$dir/intent.early" ]]; then rm -f "$dir/intent.early"; else tests_intent_snapshot; fi
     hash_file "$PLAN_DOC" > "$STATE_DIR/tests-plan.sha256"
 }
 
@@ -390,10 +390,11 @@ tests_join() {
     local dir; dir="$(tests_dir)"
     if tests_concurrent && ! tests_locked; then
         tests_prepare || return 1
+        tests_complete_early_start            # the mutation author is often done long before the others
         if tests_authoring_running; then
             local started="$SECONDS"
             echo "Tests: implementation finished; waiting for the test authors..."
-            while tests_authoring_running; do sleep 1; done
+            while tests_authoring_running; do tests_complete_early_start; sleep 1; done
             echo "Tests: authors finished after a further $((SECONDS - started))s."
         fi
         if [[ "$(cat "$dir/authoring.status" 2> /dev/null || echo missing)" != 0 ]]; then
@@ -408,19 +409,121 @@ tests_join() {
     tests_check_frozen
 }
 
-# Concurrent mode only: the defect list could not be completed while its source was being written elsewhere. One agent call does it
-# now that both exist.
-tests_complete_mutable() {
-    local dir prompt; dir="$(tests_dir)"
-    [[ -s "$dir/mutable.paths" ]] || return 0
-    tests_check_intent 2> /dev/null && return 0
-    prompt="$dir/prompt-complete.md"
+# --- Completing the defect list ---------------------------------------------------------------------------------------------
+# The list could not be completed while its source was being written elsewhere, so one agent call does it once both exist. Two things
+# keep that call cheap. The driver puts the list and every target source in the prompt, so the agent writes the list in one step instead
+# of reading its way to it, and the driver (not the agent) checks that every `find` occurs exactly once, with one retry that names the
+# failures. And the call starts as soon as the implementation is done and the mutation author has finished, beside the wait for the
+# slower authors, with the list's intent snapshotted first so a changed intent is still caught.
+#
+# It is deliberately NOT overlapped with the verification that follows. The list is a protected verification input that every command
+# re-hashes, the tree fingerprint covers it, and the approval gate and attestation hash the tree: an edit landing during verification
+# would halt the checks, restart them or invalidate the approval.
+
+# The source files the list's entries target, one path per line.
+tests_list_targets() {
+    command -v node > /dev/null 2>&1 || return 0
+    node --input-type=module -e '
+import { pathToFileURL } from "node:url"; import path from "node:path"; import fs from "node:fs";
+const m = await import(pathToFileURL(path.resolve(process.argv[1])).href);
+const l = m.default ?? m.defects ?? m.list ?? m.mutations ?? m.injections ?? Object.values(m).find(Array.isArray) ?? [];
+const seen = new Set();
+for (const e of l) for (const f of [e.file, e.target]) if (typeof f === "string" && !seen.has(f) && fs.existsSync(f)) { seen.add(f); console.log(f); }
+' "$1" 2> /dev/null || true
+}
+
+# Prints a problem per line when an entry cannot be run: no file/find/replace, an unreadable file, or a `find` that does not occur once.
+tests_verify_list() {
+    command -v node > /dev/null 2>&1 || return 0
+    node --input-type=module -e '
+import { pathToFileURL } from "node:url"; import path from "node:path"; import fs from "node:fs";
+const m = await import(pathToFileURL(path.resolve(process.argv[1])).href);
+const l = m.default ?? m.defects ?? m.list ?? m.mutations ?? m.injections ?? Object.values(m).find(Array.isArray) ?? [];
+for (const e of l) {
+  const id = e.id ?? e.name ?? "?", f = e.file, find = e.find;
+  if (typeof f !== "string" || !(typeof find === "string" || find instanceof RegExp)) { console.log(id + ": needs a string `file` and a `find`"); continue; }
+  if (typeof e.replace !== "string" || e.replace === find) { console.log(id + ": needs a `replace` that differs from `find`"); continue; }
+  let text; try { text = fs.readFileSync(f, "utf8"); } catch { console.log(id + ": cannot read " + f); continue; }
+  const n = typeof find === "string" ? text.split(find).length - 1 : (text.match(new RegExp(find.source, find.flags.includes("g") ? find.flags : find.flags + "g")) || []).length;
+  if (n !== 1) console.log(id + ": `find` occurs " + n + " times in " + f + " (it must occur exactly once)");
+}
+' "$1" 2> /dev/null || true
+}
+
+# tests_complete_prompt <retry-problems-file or ""> -- the agent's whole input, written to $dir/prompt-complete.md.
+tests_complete_prompt() {
+    local dir prompt f src bytes; dir="$(tests_dir)"; prompt="$dir/prompt-complete.md"
     { cat "$ROOT/prompts/tests-complete.md"; printf '\n## Files to complete\n\n'; sed 's/^/- `/; s/$/`/' "$dir/mutable.paths"; } > "$prompt"
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        { printf '\n## Current contents of `%s`\n\n```\n' "$f"; cat "$f"; printf '\n```\n'; } >> "$prompt"
+        while IFS= read -r src; do
+            [[ -n "$src" ]] || continue
+            bytes="$(wc -c < "$src" | tr -d ' ')"
+            if (( bytes > 40000 )); then printf '\n## `%s` is %s bytes: read it yourself.\n' "$src" "$bytes" >> "$prompt"; continue; fi
+            { printf '\n## Source `%s`\n\n```\n' "$src"; cat "$src"; printf '\n```\n'; } >> "$prompt"
+        done < <(tests_list_targets "$f")
+    done < "$dir/mutable.paths"
+    if [[ -n "${1:-}" && -s "$1" ]]; then
+        { printf '\n## The driver rejected your previous list for these reasons. Fix exactly these entries; you may read files now.\n\n'; sed 's/^/- /' "$1"; } >> "$prompt"
+    fi
+}
+
+# One completion pass, with one retry that names what the driver found wrong. Returns 0 when every entry runs and the intent is intact.
+tests_complete_run() {
+    local dir problems attempt f; dir="$(tests_dir)"; problems="$dir/complete-problems.txt"
+    for attempt in 1 2; do
+        if [[ "$attempt" == 1 ]]; then tests_complete_prompt ""; else tests_complete_prompt "$problems"; fi
+        SESSION_REUSE=0 UNCLE_RUNNER_REUSE="$(tests_runner_reuse)" PROGRESS_TOTAL=0 \
+            run_claude "$dir/prompt-complete.md" tests-complete > "$LOG_DIR/tests-complete.log" 2>&1 || {
+                echo "Tests: completing the defect list failed; see $LOG_DIR/tests-complete.log" >&2; return 1; }
+        : > "$problems"
+        while IFS= read -r f; do tests_verify_list "$f" >> "$problems"; done < "$dir/mutable.paths"
+        if [[ ! -s "$problems" ]] && tests_check_intent 2> "$dir/complete-intent.txt"; then return 0; fi
+        [[ ! -s "$dir/complete-intent.txt" ]] || cat "$dir/complete-intent.txt" >> "$problems"
+        [[ "$attempt" == 1 ]] && echo "Tests: the completed defect list has problems; asking once more:" && sed 's/^/  /' "$problems"
+    done
+    echo "Tests: the defect list is still incomplete:" >&2; sed 's/^/  /' "$problems" >&2
+    return 1
+}
+
+tests_complete_pid_file() { printf '%s/tests/complete.pid' "$STATE_DIR"; }
+tests_completion_running() {
+    local pid; pid="$(cat "$(tests_complete_pid_file)" 2> /dev/null || true)"
+    [[ -n "$pid" ]] && kill -0 "$pid" 2> /dev/null
+}
+
+# Start completing the list in the background if the implementation is done (the caller is the join) and the mutation author is.
+tests_complete_early_start() {
+    local dir; dir="$(tests_dir)"
+    [[ ! -e "$dir/complete.pid" && ! -e "$dir/complete.status" ]] || return 0
+    [[ -e "$dir/lane-mutation.done" && -s "$dir/lane-mutation.mutable" ]] || return 0
+    grep -v '^$' "$dir/lane-mutation.mutable" > "$dir/mutable.paths"
+    tests_intent_snapshot                 # the intent as authored, before anything edits the list
+    touch "$dir/intent.early"
+    echo "Tests: completing the defect list now, beside the remaining authors."
+    ( tests_complete_run; echo "$?" > "$dir/complete.status" ) > "$LOG_DIR/tests-complete.log" 2>&1 &
+    echo "$!" > "$(tests_complete_pid_file)"
+}
+
+# The list is complete before anything reads it: an early run is waited for, a missing one is run now.
+tests_complete_mutable() {
+    local dir; dir="$(tests_dir)"
+    [[ -s "$dir/mutable.paths" ]] || return 0
+    if tests_completion_running; then
+        local started="$SECONDS"
+        echo "Tests: waiting for the defect list to be completed..."
+        while tests_completion_running; do sleep 1; done
+        echo "Tests: the defect list was ready after a further $((SECONDS - started))s."
+    fi
+    if [[ -e "$dir/complete.status" ]]; then
+        [[ "$(cat "$dir/complete.status")" == 0 ]] && tests_check_intent && return 0
+        echo "Tests: the early completion of the defect list did not succeed; trying once more now." >&2
+        rm -f "$dir/complete.status" "$dir/complete.pid"
+    fi
+    tests_check_intent 2> /dev/null && return 0
     echo "Tests: completing the defect list against the finished source."
-    SESSION_REUSE=0 UNCLE_RUNNER_REUSE="$(tests_runner_reuse)" PROGRESS_TOTAL=0 \
-        run_claude "$prompt" tests-complete > "$LOG_DIR/tests-complete.log" 2>&1 || {
-            echo "Tests: completing the defect list failed; see $LOG_DIR/tests-complete.log" >&2; return 1; }
-    tests_check_intent
+    tests_complete_run
 }
 
 # Paths the implementation steps must not write. After the freeze: the files frozen with a content hash (paths that were absent at

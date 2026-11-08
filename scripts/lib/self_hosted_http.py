@@ -700,16 +700,29 @@ def _parse_temperature(text, source):
     return value
 
 
-def temperature(stage=None):
-    """Sampling temperature for a request, 0 unless configured.
+def temperature_enabled():
+    """Whether Self Hosted requests carry a temperature at all: `self-hosted.use-temperature` on|off, off by default."""
+    value = option('use-temperature', 'off')
+    if value in ('off', '0', 'false', 'no'):
+        return False
+    if value in ('on', '1', 'true', 'yes'):
+        return True
+    raise ValueError('self-hosted.use-temperature must be on or off')
 
-    Order, first match wins: WORKFLOW_SELF_HOSTED_TEMPERATURE_<STAGE>, then
+
+def temperature(stage=None):
+    """Sampling temperature for a request, or None when none is sent.
+
+    None unless `self-hosted.use-temperature` (env WORKFLOW_SELF_HOSTED_USE_TEMPERATURE) is on; the model server then
+    chooses its own default. When it is on, the value is, first match wins: WORKFLOW_SELF_HOSTED_TEMPERATURE_<STAGE>, then
     WORKFLOW_SELF_HOSTED_TEMPERATURE, then `<stage>.temperature` and
     `self-hosted.temperature` in .uncle/config, then the built-in per-stage
     defaults (requirements runs at 1), then 0.  A stage inherits from its parent:
     a worker from its stage, `requirements-investigate` from `requirements`.
     `none` (or `omit`/`off`) returns None: the request carries no temperature.
     """
+    if not temperature_enabled():
+        return None
     stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
     names = stage_names(stage)
     for name in names:

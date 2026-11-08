@@ -233,7 +233,7 @@ class Reuse:
             raise ValueError('Unknown runner profile %r; expected self-hosted or aws-bedrock' % (profile,))
         bedrock = profile == 'aws-bedrock'
         if (not enabled('result-reuse') or policy.write or policy.shell or schema is None or stage is not None
-                or (not bedrock and temperature() > 0 and not enabled('reuse-nonzero-temperature', 'off'))):
+                or (not bedrock and (temperature() or 0) > 0 and not enabled('reuse-nonzero-temperature', 'off'))):
             return
         if any(path in prompt or Path(path).name in prompt for path in self.ignored):
             return

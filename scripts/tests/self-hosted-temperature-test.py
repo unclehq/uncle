@@ -41,7 +41,8 @@ class TemperatureRefusalTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         env = {k: v for k, v in os.environ.items() if not k.startswith(('WORKFLOW_SELF_HOSTED', 'UNCLE_'))}
-        env.update(UNCLE_CONFIG=str(Path(tmp.name) / 'config'), UNCLE_STATUS_STAGE='implementation')
+        env.update(UNCLE_CONFIG=str(Path(tmp.name) / 'config'), UNCLE_STATUS_STAGE='implementation',
+                   WORKFLOW_SELF_HOSTED_USE_TEMPERATURE='on')  # off by default; these tests are about the on case
         for patcher in (mock.patch.dict(os.environ, env, clear=True),
                         mock.patch.dict(http._request_features, {}, clear=True)):
             patcher.start()
@@ -77,6 +78,56 @@ class TemperatureRefusalTest(unittest.TestCase):
         self.assertIsNone(self.chat(server))
         self.assertTrue(server.bodies and all('temperature' in body for body in server.bodies))
         self.assertIn('unknown field foo', http.last_rejection)
+
+
+class UseTemperatureSwitchTest(unittest.TestCase):
+    """`self-hosted.use-temperature` turns temperature on or off; off unless set."""
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.config = Path(tmp.name) / 'config'
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('WORKFLOW_SELF_HOSTED', 'UNCLE_'))}
+        env.update(UNCLE_CONFIG=str(self.config), UNCLE_STATUS_STAGE='implementation')
+        patcher = mock.patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write(self, text):
+        self.config.write_text(text)
+
+    def test_off_by_default_sends_no_temperature(self):
+        self.assertIsNone(http.temperature())
+        self.assertEqual(http.sampling({'_profile': 'self-hosted'}), {})
+
+    def test_off_ignores_a_configured_value_and_the_requirements_default(self):
+        self.write('self-hosted.temperature 0.7\n')
+        self.assertIsNone(http.temperature())
+        self.assertIsNone(http.temperature('requirements'))
+
+    def test_on_in_config_sends_the_default_and_configured_values(self):
+        self.write('self-hosted.use-temperature on\n')
+        self.assertEqual(http.temperature(), 0.0)
+        self.assertEqual(http.temperature('requirements'), 1.0)
+        self.assertEqual(http.sampling({'_profile': 'self-hosted'}), {'temperature': 0.0})
+        self.write('self-hosted.use-temperature on\nself-hosted.temperature 0.7\n')
+        self.assertEqual(http.temperature(), 0.7)
+
+    def test_environment_overrides_config_in_both_directions(self):
+        self.write('self-hosted.use-temperature on\n')
+        os.environ['WORKFLOW_SELF_HOSTED_USE_TEMPERATURE'] = 'off'
+        self.assertIsNone(http.temperature())
+        self.write('self-hosted.use-temperature off\n')
+        os.environ['WORKFLOW_SELF_HOSTED_USE_TEMPERATURE'] = 'on'
+        self.assertEqual(http.temperature(), 0.0)
+
+    def test_an_unrecognised_value_is_refused(self):
+        self.write('self-hosted.use-temperature maybe\n')
+        with self.assertRaisesRegex(ValueError, 'use-temperature must be on or off'):
+            http.temperature()
+
+    def test_bedrock_never_sends_one_even_when_on(self):
+        os.environ['WORKFLOW_SELF_HOSTED_USE_TEMPERATURE'] = 'on'
+        self.assertEqual(http.sampling({'_profile': 'aws-bedrock'}), {})
 
 
 if __name__ == '__main__':

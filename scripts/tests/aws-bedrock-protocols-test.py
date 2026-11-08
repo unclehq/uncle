@@ -37,6 +37,7 @@ class TemperatureTests(unittest.TestCase):
         self.assertIn('temperature', params['properties'])
         self.assertEqual(params['required'], ['temperature'])
 
+    @mock.patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_USE_TEMPERATURE': 'on'})  # temperature is off by default
     def test_self_hosted_still_carries_temperature(self):
         self.assertIn('temperature', http.sampling({'_profile': 'self-hosted'}))
         seen = {}

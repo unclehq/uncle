@@ -999,6 +999,71 @@ def restore_tty(fd, saved):
         pass
 
 
+def _inline_enabled():
+    """Build window and home page render as ordinary terminal output (UNCLE_INLINE=1)."""
+    return os.environ.get('UNCLE_INLINE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _tty_write(text):
+    """Raw output to the terminal, in order after anything curses has flushed."""
+    try:
+        os.write(_tty_fd(), text.encode('utf-8', 'replace'))
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def _sgr_color(code, base):
+    if code is None or code < 0:
+        return ''
+    if code < 8:
+        return ';%d' % (base + code)
+    if code < 16:
+        return ';%d' % (base + 60 + code - 8)
+    return ';%d;5;%d' % (base + 8, code)
+
+
+def _window_rows_as_ansi(win, width):
+    """The rows of an off-screen curses window as plain text with SGR styling, each at most width columns."""
+    rows = []
+    height, wide = win.getmaxyx()
+    columns = max(0, min(width, wide))
+    for y in range(height):
+        try:
+            text = win.instr(y, 0, columns).decode('utf-8', 'replace')
+        except curses.error:
+            text = ' ' * columns
+        out, current = [], None
+        for x, ch in enumerate(text):
+            try:
+                cell = win.inch(y, x)
+            except curses.error:
+                cell = 0
+            attr = cell & ~0xFF if cell > 0xFF else 0
+            style = (attr & (curses.A_BOLD | curses.A_DIM | curses.A_UNDERLINE | curses.A_REVERSE),
+                     curses.pair_number(attr) if hasattr(curses, 'pair_number') else 0)
+            if style != current:
+                codes = ''
+                if style[0] & curses.A_BOLD:
+                    codes += ';1'
+                if style[0] & curses.A_DIM:
+                    codes += ';2'
+                if style[0] & curses.A_UNDERLINE:
+                    codes += ';4'
+                if style[0] & curses.A_REVERSE:
+                    codes += ';7'
+                if style[1]:
+                    try:
+                        fg, bg = curses.pair_content(style[1])
+                        codes += _sgr_color(fg, 30) + _sgr_color(bg, 40)
+                    except curses.error:
+                        pass
+                out.append('\x1b[0%sm' % codes)
+                current = style
+            out.append(ch)
+        rows.append(''.join(out).rstrip() + '\x1b[0m' if out else '')
+    return rows
+
+
 class UncleTUI:
     @property
     def input_buf(self):
@@ -1487,6 +1552,15 @@ class UncleTUI:
         self.save_config()
         self.notice = "%s and this LLM connection selected for all stages." % display
 
+    def _use_temperature(self):
+        """`self-hosted.use-temperature`: whether Self Hosted requests send a temperature. Off unless set on."""
+        return str(getattr(self, 'self_hosted_settings', {}).get('self-hosted.use-temperature', '')).strip().lower() \
+            in ('on', '1', 'true', 'yes')
+
+    def _toggle_use_temperature(self):
+        self.self_hosted_settings['self-hosted.use-temperature'] = 'off' if self._use_temperature() else 'on'
+        self.save_config()
+
     def _config_items(self):
         section = getattr(self, "config_section", "")
         if not section:
@@ -1496,7 +1570,8 @@ class UncleTUI:
         if section == "recovery":
             return ["Recovery model — diagnose failures and propose repairs"]
         if section == "opencode":
-            return ["Connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
+            return ["Connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {})),
+                    "Temperature: " + ("on" if self._use_temperature() else "off")]
         if section == "bedrock":
             return ["Connection — Region and AWS Bedrock Token", "Refresh supported models (%d loaded)" % len(self.bedrock_keys.get("__opencode_models__", {}))]
         if section == "misc":
@@ -1562,6 +1637,11 @@ class UncleTUI:
             return self._supervision_desc()
         if not getattr(self, "config_section", ""):
             return "Choose a configuration section."
+        if getattr(self, "config_section", "") == "opencode" and self.config_sel == 2:
+            return ("Whether Self Hosted requests send a temperature. Off (the default) sends none and the model server "
+                    "uses its own default, which is what some hosted gateways require. On sends 0 (1 for the requirements "
+                    "stage); change the value with self-hosted.temperature in .uncle/config. Press Enter to toggle. "
+                    "Stored as self-hosted.use-temperature; WORKFLOW_SELF_HOSTED_USE_TEMPERATURE overrides it.")
         return CONFIG_DESC.get(self._config_row(), "")
 
     # ---- generic picker (model / effort / runner) ----
@@ -1747,6 +1827,9 @@ class UncleTUI:
 
     def load_config(self):
         self.self_hosted_request_options = {}
+        # Hand-written `self-hosted.<option>` lines (use-temperature, temperature, prefetch...). Kept verbatim so a save
+        # from this screen never drops them.
+        self.self_hosted_settings = {}
         exists = os.path.exists(CONFIG_PATH)
         self.misc = {}
         self.supervision = {}
@@ -1794,6 +1877,8 @@ class UncleTUI:
                     key, val = parts[0].strip(), parts[1].strip()
                     if key in ("misc.auto_mode", "misc.approval_name"):
                         self.misc[key.split(".", 1)[1]] = val
+                    elif key.startswith("self-hosted."):
+                        self.self_hosted_settings[key] = val
                     elif key.startswith("supervision."):
                         # Kept verbatim, valid or not: the typed parser reports
                         # an invalid value on the Supervision screen and the
@@ -1906,6 +1991,8 @@ class UncleTUI:
             with open(CONFIG_PATH, "w") as fh:
                 fh.write(header)
                 for key, value in getattr(self, 'self_hosted_request_options', {}).items():
+                    fh.write('%s %s\n' % (key, value))
+                for key, value in getattr(self, 'self_hosted_settings', {}).items():
                     fh.write('%s %s\n' % (key, value))
                 for key, value in getattr(self, "misc", {}).items():
                     fh.write("misc.%s %s\n" % (key, value))
@@ -2321,6 +2408,7 @@ class UncleTUI:
         self.build_wrapped_count = 0
         self._message_snapshot = ([], [])
         self._message_stream = []
+        self._inline_last = None
         self.partial = ""
         self.prompt_kind = ""
         self.prompt_text = ""
@@ -6471,7 +6559,231 @@ class UncleTUI:
         self.stdscr.refresh()
 
     # ---- drawing ----
+    # ---- inline build window and home page: ordinary scrolling terminal output ----
+    # The transcript is printed as normal lines, so the terminal's own scrollback, wheel and text selection all work.
+    # The composer, stage status and prompts are a short "live" block at the end of the output: each update moves
+    # up over the previous block, clears it and prints it again, using only cursor-up and clear-to-end.
+    INLINE_STATUS_ROWS = 2
+
+    def _inline_active(self):
+        """'build', 'home' or None: which view renders as ordinary terminal output."""
+        if not _inline_enabled():
+            return None
+        if self.state == 'running' and not getattr(self, 'transcript_full', False):
+            return 'build'
+        if self.state == 'menu':
+            return 'home'
+        return None
+
+    def _inline_status_text(self, width):
+        """One line replacing the stage sidebar: running stage(s) and session totals."""
+        lines = self._session_panel_lines()
+        styles = getattr(self, '_panel_stage_styles', {})
+        def field(index, offset):
+            try:
+                return lines[index + offset].split(None, 1)[1]
+            except (IndexError, ValueError):
+                return '?'
+        stages = [(i, t) for i, t in enumerate(lines) if t in styles]
+        running = [(i, t) for i, t in stages if t.startswith('> ')] or stages[-1:]
+        parts = ['%s %s %s tok' % (t.replace('> ', '', 1).strip(), field(i, 1), field(i, 2).replace(' tokens', ''))
+                 for i, t in running]
+        if not stages:
+            parts = ['waiting for stage...']
+        total = ''
+        if 'TOTALS' in lines:
+            at = lines.index('TOTALS')
+            total = '  |  total %s  %s tok' % (field(at, 1), field(at, 2))
+        mark = SPINNER[getattr(self, '_spinner_count', 0) % len(SPINNER)] if any(
+            t.startswith('> ') for _, t in stages) else '*'
+        return (' ' + mark + ' ' + '  +  '.join(parts) + total)[:max(0, width - 1)]
+
+    @staticmethod
+    def _inline_wrap(text, width):
+        out = []
+        for line in str(text).splitlines() or ['']:
+            line = ''.join(c for c in line.expandtabs(4) if c.isprintable())
+            out.extend(textwrap.wrap(line, max(1, width), drop_whitespace=False) or [''])
+        return out
+
+    def _inline_new_build_lines(self, width):
+        """Wrapped lines for build/chat stream entries not yet printed."""
+        self._build_messages()
+        stream = self._message_stream
+        last = getattr(self, '_inline_last', None)
+        start = 0
+        if last is not None:
+            for i in range(len(stream) - 1, -1, -1):
+                if stream[i] is last:
+                    start = i + 1
+                    break
+            else:
+                start = len(stream)  # entry replaced under us: never re-print history
+        fresh = stream[start:]
+        if stream:
+            self._inline_last = stream[-1]
+        return [line for item in fresh for line in self._inline_wrap(item[2], width)]
+
+    def _home_entries(self):
+        """(finished entries, live reply text) for the home page history."""
+        entries = list(self.chat_entries())
+        pending = getattr(self, 'home_replace_proposal', None)
+        live = ''
+        if getattr(self, 'chat_partial', '') and getattr(self, 'home_request', None) is not None and entries:
+            live = self.chat_partial
+            entries = entries[:-1]
+        if pending:
+            filename = 'REQUIREMENTS.md' if pending['uncle_action'] == 'create_app' else 'CHANGE_REQUEST.md'
+            entries.append(('proposal', 'Replace ' + filename + '? Previous file will be archived.'))
+            entries.append(('proposal', 'Type "approve replacement" or "decline replacement".'))
+        return entries, live
+
+    def _inline_new_home_lines(self, width):
+        done, _ = self._home_entries()
+        emitted = getattr(self, '_home_emitted', None)
+        lines = []
+        if emitted is None:
+            lines = [''] + list(LOGO) + [''] if not done else []
+            emitted = []
+        common = 0
+        for old, new in zip(emitted, done):
+            if old != new:
+                break
+            common += 1
+        self._home_emitted = list(done[-2000:])
+        return lines + [line for _, text in done[common:] for line in self._inline_wrap(text, width)]
+
+    def _home_menu_bar(self, w):
+        """The old top menu bar as [(row, col, text, selected)] plus its row count."""
+        focused = self.chat_focus == 'menu'
+        bar, x, y = [], 0, 0
+        for i, label in enumerate(self.menu_items()):
+            selected = focused and i == self.sel
+            text = ('› ' if selected else '') + label
+            if x:
+                if x + 3 + len(text) > w - 1:
+                    y += 1
+                    x = 0
+                else:
+                    text = '   ' + text
+            bar.append((y, x, text, selected))
+            x += len(text)
+        return bar, y + 1
+
+    def _inline_erase_live(self):
+        """Escape sequence that erases the live block, leaving the cursor where it started."""
+        live = getattr(self, '_inline_live', 0)
+        if not live:
+            return ''
+        self._inline_live = 0
+        return '\r' + ('\x1b[%dA' % (live - 1) if live > 1 else '') + '\x1b[J'
+
+    def _inline_enter(self):
+        import atexit
+        if not getattr(self, '_inline_atexit', False):
+            self._inline_atexit = True
+            atexit.register(lambda: _tty_write('\x1b[?25h'))
+        self._set_mouse(False)
+        _tty_write('\x1b[?1049l\r')  # back to the normal screen, below whatever the shell printed
+        self._inline_on = True
+        self._inline_live = 0
+        self._inline_size = None
+        self._inline_shown = None
+
+    def _inline_leave(self):
+        if not getattr(self, '_inline_on', False):
+            return
+        _tty_write(self._inline_erase_live() + '\x1b[?1049h')
+        self._inline_on = False
+        self._inline_shown = None
+        if getattr(self, '_root_scr', None) is not None:
+            self._root_scr.clearok(True)
+
+    def _draw_inline(self, kind):
+        root = self._root_scr
+        h, w = root.getmaxyx()
+        if not getattr(self, '_inline_on', False):
+            self._inline_enter()
+        status_rows = self.INLINE_STATUS_ROWS
+        chat_height = modal = comp_rows = popup = 0
+        bar, live = [], ''
+        if kind == 'build':
+            if getattr(self, 'chat_open', False):
+                text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+                extra = min(len(self._wrap_input(text, max(8, w - 2))), 6) - 1 if text else 0
+                chat_height = min(6 + extra, max(0, h - 4))
+            if self.prompt_kind:
+                modal = max(8, min(h // 2, h - 4 - chat_height - status_rows))
+        else:
+            bar, bar_rows = self._home_menu_bar(w)
+            live = self._home_entries()[1]
+            status_rows = bar_rows + 1
+            text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+            extra = min(len(self._wrap_input(text, max(8, w - 6))), 6) - 1 if text else 0
+            popup = 6 if (getattr(self, 'chat_picker', False) or self._slash_choices() or self._chat_menu()) else 0
+            comp_rows = min(8 + extra, max(3, h - status_rows - popup - 1))
+            chat_height = comp_rows + popup
+        rows = max(2, min(h - 2, status_rows + chat_height + modal))
+        out = ''
+        size = (h, w)
+        if getattr(self, '_inline_size', None) not in (None, size):
+            out += '\r\n'  # the terminal reflowed the old block; abandon it rather than erase the wrong rows
+            self._inline_live = 0
+            self._inline_shown = None
+        self._inline_size = size
+        new_lines = (self._inline_new_build_lines if kind == 'build' else self._inline_new_home_lines)(w - 1)
+        # Off-screen window: drawn with the existing code, never refreshed, then read back as text.
+        win = curses.newwin(rows, w, 0, 0)
+        win.erase()
+        saved = self.stdscr
+        self.stdscr = win
+        try:
+            try:
+                if kind == 'build':
+                    win.addnstr(0, 0, self._inline_status_text(w), w - 1, curses.A_BOLD)
+                    tail = self.partial.strip() if not self.prompt_kind else ''
+                else:
+                    color = getattr(self, 'color', {})
+                    for y, x, text, selected in bar:
+                        win.addnstr(y, x, text, min(len(text), max(0, w - x - 1)),
+                                    color.get('sel', curses.A_REVERSE) if selected else color.get('accent', 0))
+                    tail = live.strip()
+                if tail and rows > 1:
+                    win.addnstr(status_rows - 1 if kind == 'home' else 1, 0, ' ' + tail[-(w - 3):], w - 1)
+            except curses.error:
+                pass
+            if kind == 'build':
+                if self.prompt_kind and modal:
+                    area = win.derwin(rows - chat_height - status_rows, w, status_rows, 0)
+                    self.stdscr = area
+                    self._draw_modal(rows - chat_height - status_rows, w)
+                    self.stdscr = win
+                if chat_height:
+                    self._draw_chat_panel(rows - chat_height, rows, 0, w)
+            else:
+                self._draw_chat_composer(rows - comp_rows, rows, w, 2, max(1, w - 4), True)
+        finally:
+            self.stdscr = saved
+        footer = _window_rows_as_ansi(win, w - 1)
+        while footer and not footer[-1].strip('\x1b[0m'):
+            footer.pop()  # trailing blank rows add nothing but height
+        footer = footer or ['']
+        if not new_lines and footer == getattr(self, '_inline_shown', None):
+            return
+        self._inline_shown = footer
+        out += self._inline_erase_live() + ''.join(line + '\r\n' for line in new_lines) + '\r\n'.join(footer)
+        self._inline_live = len(footer)
+        _tty_write('\x1b[?25l' + out)
+
     def draw(self):
+        inline = self._inline_active()
+        if getattr(self, '_inline_on', False) and not inline:
+            self._inline_leave()
+        if inline:
+            self._root_scr = getattr(self, '_root_scr', None) or self.stdscr
+            self._ensure_chat()
+            self._draw_inline(inline)
+            return
         if self.state == 'triage':
             self._draw_triage()
             return
@@ -8068,6 +8380,8 @@ class UncleTUI:
 
                 elif section == "opencode" and self.config_sel == 1:
                     self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
+                elif section == "opencode" and self.config_sel == 2:
+                    self._toggle_use_temperature()
                 elif section == "bedrock" and self.config_sel == 1:
                     self._set_field("@bedrock", "region", self._field_value("@bedrock", "region"))
                 else:
@@ -8515,6 +8829,10 @@ def main(stdscr):
             ui.run()
             return ui.finished_build_lines()
         finally:
+            try:
+                ui._inline_leave()
+            except Exception:
+                pass
             try:
                 _EXIT_SUMMARY_LINES = ui.exit_token_summary_lines()
             except Exception:

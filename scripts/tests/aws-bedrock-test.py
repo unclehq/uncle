@@ -218,6 +218,7 @@ class BuilderTest(Base):
             for body, _ in post.calls:
                 self.assertFalse(has_key(body, 'temperature'), body)
 
+    @mock.patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_USE_TEMPERATURE': 'on'})  # temperature is off by default
     def test_self_hosted_temperature_unchanged(self):
         self.self_hosted_config()
         values = self_hosted.settings(str(self.config), 'implementation')
@@ -229,6 +230,7 @@ class BuilderTest(Base):
         for body, _ in post.calls:
             self.assertIn('temperature', body)
 
+    @mock.patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_USE_TEMPERATURE': 'on'})  # temperature is off by default
     def test_self_hosted_ollama_options_keep_temperature(self):
         self.self_hosted_config()
         values = self_hosted.settings(str(self.config), 'implementation')
@@ -311,6 +313,7 @@ GOLDEN_SELF_HOSTED = json.loads(r'''[{"max_tokens": 100, "messages": [{"content"
 
 class SelfHostedGoldenTest(Base):
     """R-5/AR-007: Self Hosted payloads are byte-identical to the pre-change (HEAD) payloads."""
+    @mock.patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_USE_TEMPERATURE': 'on'})  # temperature is off by default
     def test_golden_payloads(self):
         self.self_hosted_config()
         values = self_hosted.settings(str(self.config), 'implementation')
@@ -402,6 +405,7 @@ class SupervisorPathTest(Base):
         channel.mkdir()
         self.assertFalse(has_key(self.run_path(mock.Mock(channel=str(channel))), 'temperature'))
 
+    @mock.patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_USE_TEMPERATURE': 'on'})  # temperature is off by default
     def test_self_hosted_supervisor_path_keeps_temperature(self):
         import http_agent
         self.self_hosted_config()
@@ -906,6 +910,7 @@ class RepairRegressionTests(Base):
         with self.assertRaisesRegex(ValueError, 'Converse'):
             bp.parse_response({})
 
+    @mock.patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_USE_TEMPERATURE': 'on'})  # temperature is off by default
     def test_sampling_bedrock_empty_and_self_hosted_has_temperature(self):
         self.assertEqual(http.sampling({'_profile': 'aws-bedrock'}), {})
         self.assertIn('temperature', http.sampling({'_profile': 'self-hosted'}))

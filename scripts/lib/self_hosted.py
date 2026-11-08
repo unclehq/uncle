@@ -2094,7 +2094,7 @@ def profile_menu(config, choose=False, profile=SELF_HOSTED):
             name = input().strip()
         except EOFError:
             name = ''
-        key = name if name in profiles else local_model(name) if name else ''
+        key = name if name in profiles else _bedrock_model(name) if name else ''
         if key not in profiles:
             print('Choose a configured AWS Bedrock model; add models in Configure → AWS Bedrock', file=sys.stderr)
             return 1

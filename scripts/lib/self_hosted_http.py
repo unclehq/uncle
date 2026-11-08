@@ -212,6 +212,20 @@ def _bedrock_converse_post(values, body, timeout):
     region = values.get('region') or bp.region_from_url(values.get('base_url')) or ''
     url = bp.build_url(region, model)
     def attempt(payload):
+        # Parallel workers share one account quota: throttling (429) and overload (503, 529) are retried with
+        # backoff instead of failing the stage.
+        import random, time
+        for tries in range(8):
+            try:
+                return attempt_once(payload)
+            except HTTPError as error:
+                if error.code not in (429, 503, 529) or tries == 7:
+                    raise
+                delay = min(60.0, 2.0 * (2 ** tries)) * (0.5 + random.random() / 2)
+                print('Self hosted: AWS Bedrock HTTP %d; retrying in %.0fs.' % (error.code, delay), file=sys.stderr, flush=True)
+                time.sleep(delay)
+
+    def attempt_once(payload):
         nonlocal url, model
         try:
             return _request(url, token, payload, timeout, headers=bp.build_headers(token))

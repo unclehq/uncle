@@ -62,6 +62,42 @@ def _text(content):
     return content or ''
 
 
+def _converse_messages(turns):
+    """OpenAI-style turns -> Converse messages: tool calls become toolUse, tool results become user toolResult
+    blocks, and consecutive same-role turns merge (Converse only accepts user/assistant, alternating)."""
+    out = []
+
+    def add(role, blocks):
+        if not blocks:
+            return
+        if out and out[-1]['role'] == role:
+            out[-1]['content'].extend(blocks)
+        else:
+            out.append({'role': role, 'content': list(blocks)})
+
+    for m in turns:
+        role, text = m.get('role'), _text(m.get('content'))
+        if role == 'tool':
+            add('user', [{'toolResult': {'toolUseId': m.get('tool_call_id') or '',
+                                         'content': [{'text': text or '(no output)'}]}}])
+        elif role == 'assistant':
+            blocks = [{'text': text}] if text else []
+            for c in m.get('tool_calls') or []:
+                fn = c.get('function') or {}
+                args = fn.get('arguments')
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except ValueError:
+                        args = {}
+                blocks.append({'toolUse': {'toolUseId': c.get('id') or '', 'name': fn.get('name', ''),
+                                           'input': args if isinstance(args, dict) else {}}})
+            add('assistant', blocks or [{'text': '(empty)'}])
+        else:
+            add('user', [{'text': text or '(empty)'}])
+    return out
+
+
 def build_body(messages, max_tokens, tools=None, schema=None, schema_name='result'):
     """Converse body. `messages` are OpenAI-style {role, content}; `tools` are OpenAI function tools."""
     system = '\n\n'.join(_text(m.get('content')) for m in messages if m.get('role') == 'system')
@@ -70,10 +106,14 @@ def build_body(messages, max_tokens, tools=None, schema=None, schema_name='resul
              for t in (tools or [])]
     if schema is not None:
         specs.append((schema_name, 'Return the final answer.', schema))
-    body = {'messages': [{'role': m['role'], 'content': [{'text': _text(m.get('content'))}]} for m in turns],
+    body = {'messages': _converse_messages(turns),
             'inferenceConfig': {'maxTokens': max_tokens}}
     if system:
         body['system'] = [{'text': system}]
+    if not specs:
+        # Converse rejects toolUse/toolResult history without a toolConfig, even when no tool may be called now.
+        names = sorted({b['toolUse']['name'] for m in body['messages'] for b in m['content'] if 'toolUse' in b})
+        specs = [(n, 'Tool used earlier in this conversation.', {'type': 'object'}) for n in names]
     if specs:
         body['toolConfig'] = {'tools': [{'toolSpec': {'name': n, 'description': d, 'inputSchema': {'json': s}}} for n, d, s in specs]}
         if schema is not None:

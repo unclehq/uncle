@@ -113,6 +113,10 @@ from self_hosted import key_file, read_keys, save_keys, connection_settings, ref
 import supervisor as supervision_lib
 import supervisor_runner
 import home_agent_session
+import home_preload
+import io
+PRELOAD_TIMEOUT_S = 60
+PRELOAD_CANCEL_WAIT_S = 3
 from supervisor_runner import SupervisorRequest, build_command as supervisor_command
 import supervisor_chat
 from supervisor_chat import ChatRequest
@@ -3641,6 +3645,74 @@ class UncleTUI:
         self.agent_origin_message = ''
         self.agent_handoff = ''
         self.agent_unavailable_noted = False
+        self.agent_preload_cancel = None
+        self.agent_lock = threading.RLock()
+
+    def _preload_allowed(self):
+        """The one guard for the startup preload; used by run() and _preload_home_agent."""
+        if os.environ.get('UNCLE_NOUI') == '1' or os.environ.get('UNCLE_HOME_AGENT') == '0':
+            return False
+        try:
+            return supervision_lib.load_config(CONFIG_PATH).runner == 'claude'
+        except (OSError, ValueError):
+            return False
+
+    def _start_preload_thread(self):
+        """Thread-start seam for tests to patch."""
+        threading.Thread(target=self._preload_home_agent, daemon=True).start()
+
+    def _preload_home_agent(self):
+        """Startup thread: hand the home agent a bounded snapshot so its first answer skips exploration."""
+        if not self._preload_allowed():
+            return
+        self._agent_state()
+        try:
+            snapshot = home_preload.gather(_project_root())
+            if not snapshot:
+                return
+            prompt = home_preload.preload_prompt(snapshot)
+        except Exception:
+            return
+        event = threading.Event()
+        session = None
+        created = errored = False
+        timer = None
+        with self.agent_lock:
+            try:
+                if self.agent_session is not None or self.chat_calls:
+                    return  # an operator turn got there first; never preload over it
+                self.agent_preload_cancel = event
+                self.agent_preloading = True  # read only under agent_lock, by _agent_note_unavailable
+                try:
+                    session = self._home_agent_session()
+                finally:
+                    self.agent_preloading = False
+                if session is None:
+                    return
+                created = True
+                if event.is_set():
+                    return
+                timer = threading.Timer(PRELOAD_TIMEOUT_S, event.set)
+                timer.daemon = True
+                timer.start()
+                session.turn(prompt, io.BytesIO(), time.monotonic() + PRELOAD_TIMEOUT_S, event)
+            except Exception:
+                errored = True
+            finally:
+                if timer is not None:
+                    timer.cancel()
+                failed = event.is_set() or errored
+                if self.agent_preload_cancel is event:
+                    self.agent_preload_cancel = None
+                if created and session is not None and (failed or self.agent_session is not session):
+                    if self.agent_session is session:
+                        self.agent_session = None
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+                elif created and session is not None and not session.alive():
+                    self.agent_session = None
 
     def _home_agent_idle(self):
         """Idle is evaluated once, at send time (D-7)."""
@@ -3652,6 +3724,8 @@ class UncleTUI:
                 and self.agent_pending is None and not self.agent_closing)
 
     def _agent_note_unavailable(self, text):
+        if getattr(self, 'agent_preloading', False):
+            return  # a failed startup preload is silent; the operator's first message reports it if it still applies
         if not self.agent_unavailable_noted:
             self.agent_unavailable_noted = True
             self.home_history.append(('system', text))
@@ -3665,8 +3739,12 @@ class UncleTUI:
                 'partly run, so check the current state before repeating any side effect.]\n' + '\n'.join(lines))
 
     def _home_agent_session(self):
-        """The persistent home agent for the current project root; None when unavailable (D-3, D-7)."""
         self._agent_state()
+        with self.agent_lock:
+            return self._home_agent_session_locked()
+
+    def _home_agent_session_locked(self):
+        """The persistent home agent for the current project root; None when unavailable (D-3, D-7)."""
         if os.environ.get('UNCLE_HOME_AGENT') == '0':
             return None
         root = _project_root()
@@ -3699,6 +3777,9 @@ class UncleTUI:
         self._agent_state()
         self.agent_closing = True
         dead = True
+        preload, self.agent_preload_cancel = self.agent_preload_cancel, None
+        if preload is not None:
+            preload.set()
         try:
             request = getattr(self, 'home_request', None)
             if request is not None and getattr(request, 'home_agent', False) is True:
@@ -3739,6 +3820,18 @@ class UncleTUI:
 
     def _agent_turn(self, message, resend=False):
         """Send one homepage message to the home agent. False if it is unavailable."""
+        self._agent_state()
+        preload = self.agent_preload_cancel
+        if preload is not None:
+            # Do not queue behind the startup preload: abort it and wait a bounded time for the lock.
+            preload.set()
+            if self.agent_lock.acquire(timeout=PRELOAD_CANCEL_WAIT_S):
+                self.agent_lock.release()
+            else:
+                stuck, self.agent_session = self.agent_session, None
+                self.agent_preload_cancel = None
+                if stuck is not None:
+                    stuck.close()
         session = self._home_agent_session()
         if session is None:
             return False
@@ -9068,6 +9161,8 @@ class UncleTUI:
         # while the homepage is being read instead of in front of the first
         # answer. A failure here is not an error -- the per-call path remains.
         threading.Thread(target=self._warm_supervisor, daemon=True).start()
+        if self._preload_allowed():
+            self._start_preload_thread()
         self._start_model_refresh()
         import atexit
         modes = getattr(self, 'terminal_modes', None) or TerminalModes()

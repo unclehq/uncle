@@ -16,7 +16,7 @@
 - **Actual result:** Paste: composer 'Xl1\nl2\nl3Y', nothing sent. Control paste: composer 'a[31mbc\td\ne' (ESC and BEL dropped, TAB and LF kept; the printable '[31m' remains as expected from dropping only the ESC byte), nothing sent. Handler-level behavior matches; live-terminal observation not made.
 - **Defects:** None
 
-### MC-103
+### MC-106
 
 - **Action:** Drove the real UncleTUI.handle_key (headless, using the project's FakeScreen harness from scripts/tests/home-composer-keys-test.py; not a real terminal/pty) with a bracketed paste (ESC[200~ line1\nline2\r\nline3 ESC[201~) and then Ctrl+Enter (ESC[13;5u) in (a) slash picker state (composer '/', chat_picker=True) and (b) edit mode (chat_edit=True, composer 'abc'). Also ran a control paste in plain composing state.
 - **Expected result:** Paste and Ctrl+Enter are swallowed in picker/edit states: no text inserted, no newline, nothing submitted, picker/edit state unchanged.
@@ -58,7 +58,7 @@
 - **Actual result:** Not observed. I did not run the check and did not infer a result from automated tests.
 - **Defects:** None
 
-### MC-202
+### MC-203
 
 - **Action:** Ran temporary probe .uncle/tests/mc202_203_probe.py driving the real UncleTUI.handle_key/_read_csi/_read_paste path (fake curses screen, no real terminal/pty) with a 2,080,000-byte bracketed paste of multibyte characters (accents, CJK, emoji) and many newlines, terminated by ESC[201~, followed by a trailing 'x' keystroke.
 - **Expected result:** Composer truncated at the limit, no hang, nothing submitted, no leftover paste bytes acting as keystrokes (SI-2).
@@ -72,7 +72,7 @@
 - **Actual result:** In both states _chat_menu returned 'slash' / 'picker' and _plain_composing was False. After the paste and both Ctrl+Enter forms the composer was unchanged ('/' and '#'), send_home_chat and _run were not called.
 - **Defects:** None
 
-### MC-204
+### MC-206
 
 - **Action:** None performed. The check needs a real enhanced-key-capable terminal emulator with a human watching it, to see whether pasted text in `cat` shows ESC[200~ markers after quit, SIGTERM and SIGHUP. This worker has no such terminal.
 - **Expected result:** After each exit path the shell is clean: no ESC[200~ markers on paste and keys behave normally (SI-3).
@@ -149,7 +149,7 @@
 - **Actual result:** Ctrl-C: the app ran its full exit teardown (alt-screen leave ?1049l, ?2004l, >4;0m emitted). Alt+b/f/d and Esc+x were sent without crash or early exit, and the app was still running until Ctrl-C. Cursor positions and the absence of a newline were NOT visually observed, because the raw pty byte stream was not rendered to a screen. Real terminal with enhanced key reporting not available here.
 - **Defects:** None
 
-### MC-404
+### MC-306
 
 - **Action:** Launched uncle_tui.py in a pty and exited it via Ctrl-C (normal quit), SIGTERM and SIGHUP; checked the output stream for the mode-disable sequences. Did not run the interactive 'cat' paste step in a real shell.
 - **Expected result:** After every exit path, bracketed paste (?2004) and modifyOtherKeys (>4;0m) are reset so the shell is clean.

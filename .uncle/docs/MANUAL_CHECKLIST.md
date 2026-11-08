@@ -84,11 +84,9 @@
 - Actual result: 
 - Status: NOT RUN
 
-## Invariants
-
-### MC-200
+### MC-107
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: tui:home-agent-session
 - Depends on: none
 - Exact action: In a CSI-u/modifyOtherKeys-capable terminal, launch the TUI, type 'abc', then press Ctrl+Enter, type 'def', and press Ctrl+Enter again.
 - Expected result: Each Ctrl+Enter inserts a newline at the cursor and advances it; nothing is submitted and the composer retains 'abc', 'def' on separate lines (SI-1).
@@ -106,9 +104,11 @@
 - Actual result: 
 - Status: NOT RUN
 
-### MC-202
+## Invariants
+
+### MC-200
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: tui:home-agent-session
 - Depends on: none
 - Exact action: Paste a text block far larger than the composer limit (over 1 MiB, e.g. generated with multibyte characters and many newlines) into the composer.
 - Expected result: The composer is truncated at the limit, the app does not hang, nothing is submitted, and no leftover paste bytes act as keystrokes afterwards (SI-2).
@@ -126,9 +126,9 @@
 - Actual result: 
 - Status: NOT RUN
 
-### MC-204
+### MC-201
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: tui:home-agent-session
 - Depends on: none
 - Exact action: Launch the TUI in a capable terminal, then quit normally; run `cat`, paste multi-line text and press Ctrl+D. Repeat quitting via `kill -TERM` and via `kill -HUP` of the TUI process.
 - Expected result: After each exit path the shell is clean: pasted text shows no ESC[200~ markers and keys behave normally, confirming modes were disabled (SI-3).
@@ -218,9 +218,9 @@
 - Actual result: 
 - Status: NOT RUN
 
-## Regressions
+## Resources: cleanup on quit
 
-### MC-401
+### MC-303
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
@@ -230,9 +230,11 @@
 - Actual result: 
 - Status: NOT RUN
 
-### MC-402
-- Required for acceptance: YES
-- Exclusive resources: none
+## Resources: UI responsiveness
+
+### MC-306
+- Required for acceptance: NO
+- Exclusive resources: tui:session-E
 - Depends on: none
 - Exact action: In the home composer, type 'line one\' and press Enter, then type 'x\\' and press Enter; then press F4 for edit mode, type text and press Enter.
 - Expected result: Trailing single backslash plus Enter becomes a newline without submitting; double backslash sends one trailing backslash; Enter in edit mode inserts a newline at the cursor without submitting.
@@ -240,9 +242,11 @@
 - Actual result: 
 - Status: NOT RUN
 
-### MC-403
+## Regressions
+
+### MC-401
 - Required for acceptance: YES
-- Exclusive resources: none
+- Exclusive resources: terminal:uncle-tui
 - Depends on: none
 - Exact action: With text in the composer, press Ctrl-C; separately in a fresh session with a word-filled composer press Meta/Alt+b, Alt+f, Alt+d, and Esc followed by a non-Enter key (e.g. 'x'), in a terminal with enhanced key reporting enabled.
 - Expected result: Ctrl-C still quits the app; Alt+b/f/d move/delete by word as before; Esc then 'x' behaves as before (key delivered, no newline inserted, no submit).
@@ -250,7 +254,7 @@
 - Actual result: 
 - Status: NOT RUN
 
-### MC-404
+### MC-402
 - Required for acceptance: YES
 - Exclusive resources: terminal:interactive
 - Depends on: none

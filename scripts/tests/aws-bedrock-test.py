@@ -334,7 +334,11 @@ class BuilderIntrospectionTest(unittest.TestCase):
         src = (ROOT / 'scripts' / 'lib' / 'self_hosted_http.py').read_text(encoding='utf-8')
         found = set()
         for node in ast.walk(ast.parse(src)):
-            if isinstance(node, ast.FunctionDef) and node.name not in ('sampling', 'temperature', '_parse_temperature', '_strip_temperature', 'compatible_post'):
+            # The Self Hosted refusal retry only removes temperature, and Bedrock never reaches it
+            # (compatible_post sends Bedrock to Converse first): self-hosted-temperature-test.py covers it.
+            if isinstance(node, ast.FunctionDef) and node.name not in (
+                    'sampling', 'temperature', '_parse_temperature', '_strip_temperature', 'compatible_post',
+                    '_has_temperature', '_without_temperature', '_compatible_output_post', 'post_body'):
                 text = ast.get_source_segment(src, node)
                 if 'sampling(' in text or "'temperature'" in text or '"temperature"' in text:
                     found.add(node.name)

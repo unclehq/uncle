@@ -1050,7 +1050,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         if data is None:
             if tools_required and (policy.write or policy.shell):
                 raise ValueError('The model server does not support tool calling, which this stage needs; '
-                                 'select a tool-capable model')
+                                 'select a tool-capable model (server said %s)'
+                                 % (transport.last_rejection or 'nothing'))
             break  # read-only stage on a server without tools: go straight to the answer
         if not data.get('_captured_stop') and not data.get('_reused'):
             requests += 1

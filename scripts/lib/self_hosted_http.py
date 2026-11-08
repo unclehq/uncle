@@ -155,6 +155,30 @@ def _names_option(detail, options):
     return False
 
 
+def _server_reason(error, limit=300):
+    """The server's own words for a refusal, on one line, for error messages."""
+    try:
+        detail = ' '.join(_error_detail(error).split())
+    except Exception:
+        return ''
+    return (': ' + detail[:limit]) if detail else ''
+
+
+# The reason the last tool-capable turn was refused, so "no tool calling" can say what the server said.
+last_rejection = ''
+
+
+def _has_temperature(body):
+    return 'temperature' in body or 'temperature' in (body.get('options') or {})
+
+
+def _without_temperature(body):
+    clean = {key: value for key, value in body.items() if key != 'temperature'}
+    if isinstance(clean.get('options'), dict):
+        clean['options'] = {key: value for key, value in clean['options'].items() if key != 'temperature'}
+    return clean
+
+
 def compatible_post(values, body, timeout, url=None):
     """Reserve reasoning separately from the deliverable cap on every transport."""
     from self_hosted_stream import ANSWER_CAP, answer_signal, output_accounting
@@ -334,19 +358,38 @@ def _compatible_output_post(values, body, timeout, url=None):
                 clean.pop(key, None)
         return clean
 
+    no_temperature = features.setdefault('no_temperature_models', set())
+
+    def post_body(candidate):
+        """Hosted OpenAI-compatible gateways refuse `temperature` on some models (newer Claude and GPT
+        models on Bedrock-backed gateways). Retry without it once and omit it for that model from then on."""
+        model = candidate.get('model')
+        if model in no_temperature:
+            candidate = _without_temperature(candidate)
+        try:
+            return post(url, values['api_key'], candidate, timeout)
+        except HTTPError as error:
+            if not (400 <= error.code < 500 and _has_temperature(candidate) and
+                    _names_option(_error_detail(error), {'temperature': None})):
+                raise
+            print('Self hosted [%s]: server rejected temperature for model %s; retrying without it and '
+                  'omitting it for this model on this Base URL for this process.' % (stage, model), file=sys.stderr)
+            no_temperature.add(model)
+            return post(url, values['api_key'], _without_temperature(candidate), timeout)
+
     def send(candidate):
         clean = without_options(candidate)
         if not applied or features.get('request_options') is False:
-            return post(url, values['api_key'], clean, timeout)
+            return post_body(clean)
         try:
-            return post(url, values['api_key'], candidate, timeout)
+            return post_body(candidate)
         except HTTPError as error:
             detail = _error_detail(error)
             if not 400 <= error.code < 500:
                 raise
             if _names_option(detail, applied):
                 disabled()
-                return post(url, values['api_key'], clean, timeout)
+                return post_body(clean)
             # Explicit errors about a different protocol feature belong to
             # its own fallback. A generic 400 warrants an otherwise-identical
             # A/B probe, without changing effort or schema during that probe.
@@ -355,7 +398,7 @@ def _compatible_output_post(values, body, timeout, url=None):
                     'structured_outputs', 'guided_json', 'tools', 'tool_choice', 'format', 'stream', 'stream_options'))):
                 raise
             try:
-                result = post(url, values['api_key'], clean, timeout)
+                result = post_body(clean)
             except HTTPError:
                 raise error from None  # no evidence against options; retain support
             disabled()
@@ -646,6 +689,8 @@ def _config_values(path=None):
 
 
 def _parse_temperature(text, source):
+    if text.strip().lower() in ('none', 'omit', 'off'):
+        return None  # send no temperature at all, for servers that refuse the field
     try:
         value = float(text)
     except ValueError:
@@ -663,6 +708,7 @@ def temperature(stage=None):
     `self-hosted.temperature` in .uncle/config, then the built-in per-stage
     defaults (requirements runs at 1), then 0.  A stage inherits from its parent:
     a worker from its stage, `requirements-investigate` from `requirements`.
+    `none` (or `omit`/`off`) returns None: the request carries no temperature.
     """
     stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
     names = stage_names(stage)
@@ -1117,10 +1163,10 @@ def sampling(values):
         import self_hosted
         if self_hosted.resolve_profile(config, stage) == 'aws-bedrock':
             raise ValueError('AWS Bedrock request values lack _profile; refusing to send a request (never defaults to Self Hosted)')
-        return {'temperature': temperature()}
-    if profile == 'aws-bedrock':
+    elif profile == 'aws-bedrock':
         return {}
-    return {'temperature': temperature()}
+    value = temperature()
+    return {} if value is None else {'temperature': value}
 
 
 def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
@@ -1175,12 +1221,14 @@ def constrained_completion(values, messages, schema, name, limit, effort=None, t
             return text, reason, usage, mode
         except HTTPError as error:
             if error.code not in REJECTED:
-                raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
+                raise ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model'
+                                 % (error.code, _server_reason(error))) from None
             caps['rejected'].add(mode)
             last = error
         except TimeoutError:
             raise _no_answer(timeout, limit) from None
-    raise ValueError('Model API rejected every request form (HTTP %s); check the model name' % getattr(last, 'code', '?'))
+    raise ValueError('Model API rejected every request form (HTTP %s%s); check the model name'
+                     % (getattr(last, 'code', '?'), _server_reason(last) if last is not None else ''))
 
 
 # Every mode that asks the server's grammar engine to shape the output.  The one
@@ -1271,7 +1319,10 @@ def chat(values, messages, tools, limit, effort=None, timeout=3600):
         return data
     except HTTPError as error:
         if error.code not in REJECTED:
-            raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
+            raise ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model'
+                             % (error.code, _server_reason(error))) from None
+        global last_rejection
+        last_rejection = 'HTTP %d%s' % (error.code, _server_reason(error))
     except TimeoutError:
         raise _no_answer(timeout, limit) from None
     return None

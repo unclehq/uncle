@@ -34,14 +34,14 @@ case "${OSTYPE:-}" in
 esac
 
 CLAUDE_CMD="${WORKFLOW_REVIEWER_CLAUDE_CMD:-claude}"
-DEFAULT_MODEL="${WORKFLOW_REVIEWER_CLAUDE_MODEL:-claude-sonnet-5}"
+DEFAULT_MODEL="claude-sonnet-5-5"
 MAX_TURNS="${WORKFLOW_REVIEWER_CLAUDE_TURNS:-80}"
 TOOLS="${WORKFLOW_REVIEWER_CLAUDE_TOOLS:-Read,Glob,Grep}"
 if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
     TOOLS="$TOOLS,Write"
 fi
 
-model="$DEFAULT_MODEL"
+model="${WORKFLOW_REVIEWER_CLAUDE_MODEL:-$DEFAULT_MODEL}"
 effort=""
 output_file=""
 prompt=""

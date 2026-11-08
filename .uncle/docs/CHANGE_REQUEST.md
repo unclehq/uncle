@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 182
+Issue 185
 
-Seeded from [unclehq/uncle#182](https://github.com/unclehq/uncle/issues/182).
+Seeded from [unclehq/uncle#185](https://github.com/unclehq/uncle/issues/185).
 
 ## Change Type
 
@@ -10,87 +10,51 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Bedrock: configure with region + bearer token only; always use the Converse API
+Set the default model list for the Claude runner to the Claude models Uncle currently sees
 
 ## Motivation
 
 ## Summary
+Make the default models available to the Claude runner the Claude models from the current Claude model list, so the picker and the runner defaults agree.
 
-Simplify the AWS Bedrock runner configuration to **a region and a Bedrock bearer token only**. The runner always talks to Bedrock through the **Converse API**. Remove the Bedrock URL field and the API Compatibility choice (OpenAI / Anthropic / Converse).
+## Current state
+`uncle_tui.py` `MODEL_CATALOG_CLAUDE` (line ~443) offers:
+- Claude Opus 5 (`claude-opus-5`)
+- Claude Sonnet 5 (`claude-sonnet-5`)
+- Claude Haiku 4.5 (`claude-haiku-4-5`)
 
-## Motivation
+Related defaults:
+- `DEFAULT_MODEL_FOR_RUNNER["claude"]` = `claude-sonnet-5` (`uncle_tui.py`)
+- `scripts/stagegate.sh` `DEFAULT_MODEL="claude-sonnet-5"`
+- `scripts/reviewer-claude.sh` `DEFAULT_MODEL` = `claude-sonnet-5`
+- The comment above `DEFAULT_MODEL_FOR_RUNNER` still says the default is the "opus" tier alias, which no longer matches the code.
 
-Today Configure → AWS Bedrock asks for a Bedrock URL, a token and a wire protocol. Bedrock's endpoints are fully determined by the region, and Converse works uniformly across model providers, so the URL and protocol choices add configuration surface (and failure modes) without adding capability. Model discovery also currently differs per protocol.
+## Desired behavior
+The default model list for the Claude runner is exactly these models (id, label), in this order:
 
-## Proposed behavior
+| id | label |
+|---|---|
+| `claude-haiku-5-5` | Claude Haiku 5.5 |
+| `claude-sonnet-5-5` | Claude Sonnet 5.5 |
+| `claude-opus-5-5` | Claude Opus 5.5 |
+| `claude-fable-5-1` | Claude Fable 5.1 |
+| `claude-fable-5` | Claude Fable 5 |
+| `claude-opus-4-8` | Claude Opus 4.8 |
+| `claude-opus-4-7` | Claude Opus 4.7 |
+| `claude-sonnet-4-6` | Claude Sonnet 4.6 |
+| `claude-opus-4-6` | Claude Opus 4.6 |
+| `claude-opus-4-5-20251101` | Claude Opus 4.5 |
+| `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
+| `claude-sonnet-4-5-20250929` | Claude Sonnet 4.5 |
 
-**Configuration**
-- Bedrock connection = `region` (e.g. `us-east-2`) + `AWS Bedrock Token` (the `AWS_BEARER_TOKEN_BEDROCK` bearer token).
-- Derived endpoints:
-  - control plane: `https://bedrock.<region>.amazonaws.com`
-  - runtime: `https://bedrock-runtime.<region>.amazonaws.com`
-- Remove `base_url` and `api_compatibility` from the Bedrock connection (TUI, shell Configure menu, config keys, env vars such as `WORKFLOW_AWS_BEDROCK_API_COMPATIBILITY`, docs/aws-bedrock.md, README).
-- Validate region format and a single-line token; the token is only ever sent over https.
-
-**Listing available models** (bearer auth: `Authorization: Bearer <token>`)
-- `GET {control}/foundation-models` → `.modelSummaries[].modelId` (+ `providerName`).
-- `GET {control}/inference-profiles?maxResults=100` → `.inferenceProfileSummaries[].inferenceProfileId` (+ `inferenceProfileName`); **paginate** by following `nextToken` (URL-encoded) until absent.
-- The picker should offer both foundation model IDs and inference profile IDs (e.g. `us.anthropic.claude-haiku-4-5-20251001-v1:0`), since some models are only invocable through a profile.
-
-**Inference**
-- `POST {runtime}/model/<url-encoded modelId>/converse` with `content-type: application/json`; the `:` in the model ID is encoded as `%3A`.
-- Minimal body: `{"messages":[{"role":"user","content":[{"text":"..."}]}]}`; reply text at `.output.message.content[0].text`.
-- **Never use temperature (AWS Bedrock runner only; Self Hosted and other runners keep their existing temperature behavior)**: the Converse request must not include `inferenceConfig.temperature` (or any temperature/sampling field), regardless of any `temperature` config key or environment variable; configured values are ignored for Bedrock and must not affect request caching/reuse keys. This is an invariant covered by a test that inspects the outgoing request body.
-- Anthropic and OpenAI adapters in `scripts/lib/bedrock_protocols.py` become unused for Bedrock and can be removed.
-
-**Reference script** (list models, list inference profiles, run a Converse request):
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-REGION="us-east-2"
-AUTH="Authorization: Bearer ${AWS_BEARER_TOKEN_BEDROCK:?Set AWS_BEARER_TOKEN_BEDROCK first}"
-CONTROL="https://bedrock.${REGION}.amazonaws.com"
-RUNTIME="https://bedrock-runtime.${REGION}.amazonaws.com"
-
-echo "Foundation models:"
-curl -sf "${CONTROL}/foundation-models" -H "$AUTH" \
-  | jq -r '.modelSummaries[] | "  \(.modelId)  (\(.providerName))"'
-
-echo
-echo "Inference profiles:"
-NEXT=""
-while :; do
-  URL="${CONTROL}/inference-profiles?maxResults=100"
-  [[ -n "$NEXT" ]] && URL="${URL}&nextToken=$(jq -rn --arg t "$NEXT" '$t|@uri')"
-  PAGE=$(curl -sf "$URL" -H "$AUTH")
-  echo "$PAGE" | jq -r '.inferenceProfileSummaries[] | "  \(.inferenceProfileId)  (\(.inferenceProfileName))"'
-  NEXT=$(echo "$PAGE" | jq -r '.nextToken // empty')
-  [[ -z "$NEXT" ]] && break
-done
-
-echo
-# The ":" in the model ID is URL-encoded as %3A, as boto3 does.
-MODEL_ID="us.anthropic.claude-haiku-4-5-20251001-v1%3A0"
-
-curl -s "${RUNTIME}/model/${MODEL_ID}/converse" \
-  -H "$AUTH" \
-  -H "content-type: application/json" \
-  -d '{"messages":[{"role":"user","content":[{"text":"what day is it"}]}]}' \
-  | jq -r '.output.message.content[0].text // .'
-```
+- The default model shown by the picker, `stagegate.sh`, and `reviewer-claude.sh` is the same single value: `claude-sonnet-5-5` (replaces `claude-sonnet-5`).
+- Every id in the list passes `reviewer-claude.sh`'s allowlist (`claude*|opus*|sonnet*|haiku*`).
 
 ## Acceptance criteria
-- No Bedrock request ever contains a temperature, even when a temperature is configured for the stage or globally. Self Hosted temperature handling is unchanged.
-- Configure → AWS Bedrock (TUI and shell) asks only for Region and AWS Bedrock Token; no URL or compatibility field.
-- Model discovery lists foundation models and all pages of inference profiles; failures keep the prior catalog and show an actionable error.
-- All Bedrock stage requests use the Converse endpoint derived from the region, with no temperature.
-- Existing configs that have `base_url`/`api_compatibility` are handled with a clear migration path (derive region from the old URL where possible, otherwise prompt) rather than failing obscurely.
-- `docs/aws-bedrock.md`, README and the Bedrock tests are updated.
-
-## Notes
-- Related: #179, #181 (Bedrock runner), and the recent change that made Anthropic-protocol discovery use `/foundation-models?byProvider=Anthropic` — superseded by this.
+- Picker for the Claude runner lists exactly the models in the table above and no others by default.
+- The default for a stage with no stored model is identical in the TUI and the shell drivers (`claude-sonnet-5-5`).
+- The stale "opus" comment is corrected.
+- Existing tests pass; add a test that the shell and TUI defaults agree, and that every catalog id passes the `reviewer-claude.sh` allowlist.
 
 ## Observed Current Behavior
 

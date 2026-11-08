@@ -442,9 +442,18 @@ NETWORK_CHOICES = ["false", "true"]
 # so the picker never offers an id the shim would silently replace or drop.
 MODEL_CATALOG_CLAUDE = [
     ("Claude", [
-        ("Claude Opus 5", "claude-opus-5"),
-        ("Claude Sonnet 5", "claude-sonnet-5"),
-        ("Claude Haiku 4.5", "claude-haiku-4-5"),
+        ("Claude Haiku 5.5", "claude-haiku-5-5"),
+        ("Claude Sonnet 5.5", "claude-sonnet-5-5"),
+        ("Claude Opus 5.5", "claude-opus-5-5"),
+        ("Claude Fable 5.1", "claude-fable-5-1"),
+        ("Claude Fable 5", "claude-fable-5"),
+        ("Claude Opus 4.8", "claude-opus-4-8"),
+        ("Claude Opus 4.7", "claude-opus-4-7"),
+        ("Claude Sonnet 4.6", "claude-sonnet-4-6"),
+        ("Claude Opus 4.6", "claude-opus-4-6"),
+        ("Claude Opus 4.5", "claude-opus-4-5-20251101"),
+        ("Claude Haiku 4.5", "claude-haiku-4-5-20251001"),
+        ("Claude Sonnet 4.5", "claude-sonnet-4-5-20250929"),
     ]),
 ]
 
@@ -473,14 +482,14 @@ MODEL_LABELS = {mid: label
 SPINNER = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 
 # What the other runners run when the stage stores no model. Claude's
-# "opus" is the tier alias the drivers have always defaulted to
-# (stagegate.sh's DEFAULT_MODEL, reviewer-claude.sh's DEFAULT_MODEL);
-# agent-codex.sh blanks it for codex, so it reaches only claude. Codex has
+# default is the pinned id claude-sonnet-5-5, which must match
+# stagegate.sh's DEFAULT_MODEL and reviewer-claude.sh's DEFAULT_MODEL.
+# Codex has
 # no repo-level default: agent-codex.sh omits the flag and the CLI's own
 # configured model applies. Kimi's shim defaults WORKFLOW_KIMI_MODEL to this
 # raw id (agent-kimi.sh).
 DEFAULT_MODEL_FOR_RUNNER = {
-    "claude": "claude-sonnet-5",
+    "claude": "claude-sonnet-5-5",
     "codex": "codex default",
     "kimi": "moonshotai/kimi-k2.7-code-highspeed",
 }
@@ -1725,7 +1734,11 @@ class UncleTUI:
             return self.stage_network(stage)
         if self.picker_kind == "markdown_viewer":
             return self._field_value(stage, self.picker_kind)
-        return self.stage_model(stage)
+        model = self.stage_model(stage)
+        if not model and self.picker_kind == "model" and self.stage_runner(stage) == "claude":
+            # Nothing stored: the stage runs the default, so open on that row.
+            return DEFAULT_MODEL_FOR_RUNNER["claude"]
+        return model
 
     def _open_picker(self, kind, target):
         self.notice = ""

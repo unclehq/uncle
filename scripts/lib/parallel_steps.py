@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+from claude_env import scrub_claude_env
 import sys
 import tempfile
 import threading
@@ -376,6 +377,14 @@ def run_step(spec, results):
         pass
 
 
+def step_env(step):
+    """The environment one implementation step runs with; a claude step never inherits a gateway override."""
+    env = dict(os.environ, **step.get('env', {}))
+    if env.get('UNCLE_RESOLVED_RUNNER', 'claude') in ('claude', ''):
+        scrub_claude_env(env)
+    return env
+
+
 def merge(project, steps, results, owned, allowlist=()):
     """Copy each step's owned files back, or refuse the whole group.
 
@@ -587,7 +596,7 @@ def main():
             link_dependencies(project, sandbox)
         return {'number': number, 'project': project, 'sandbox': str(sandbox),
                 'command': step['command'], 'log': step['log'],
-                'env': dict(os.environ, **step.get('env', {})),
+                'env': step_env(step),
                 'baseline': snapshot(sandbox, project), 'gitignore_before': read_text(sandbox / '.gitignore')}
 
     try:

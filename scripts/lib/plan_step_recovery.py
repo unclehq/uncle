@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from claude_env import scrub_claude_env
 import tempfile
 import threading
 
@@ -75,6 +76,7 @@ def request_steps(section, root, stage, runner, config, limit, seconds):
             command = [os.environ.get('WORKFLOW_CLAUDE_CMD', 'claude'), '-p', '--output-format', 'json',
                        '--json-schema', json.dumps(SCHEMA), '--max-turns', '1', '--tools', '']
             env['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = str(limit)
+            scrub_claude_env(env)
         elif runner == 'codex':
             command = [os.environ.get('WORKFLOW_CODEX_CMD', 'codex'), 'exec', '--skip-git-repo-check',
                        '--sandbox', 'read-only', '--output-schema', str(schema), '--output-last-message', str(output)]

@@ -140,8 +140,6 @@ Uncle separates the people and agents doing the work from the system establishin
 
 * **Work with Uncle while it works.** Ask questions, provide context, redirect implementation, or discuss failures without leaving the terminal.
 * **Use the agents you already have.** Uncle works with Claude, Codex, Kimi, self-hosted models, AWS Bedrock (Region + token, Converse API; see [docs/aws-bedrock.md](docs/aws-bedrock.md)), and other coding agents.
-
-Note: Cline support was removed. If a saved runner is `cline`, switch it to claude, codex, kimi, self-hosted or aws-bedrock with `uncle` -> Configure.
 * **Independent review.** The agent that writes the code does not approve its own implementation.
 * **Human authority.** Consequential decisions remain explicit human approval gates.
 * **Pinned intent.** Approved specifications and plans are cryptographically identified so they cannot silently change.
@@ -150,6 +148,16 @@ Note: Cline support was removed. If a saved runner is `cline`, switch it to clau
 * **Audited publication.** The artifact being published must be the artifact that passed the required review, verification, and approval stages.
 
 The coding agent is untrusted and swappable. A broken or hostile agent can fail Uncle's checks, but it cannot declare itself verified.
+
+### What makes Uncle different
+
+* **Mix models per stage.** Pick the runner and model for each stage in `.uncle/config`: Claude, Codex, Kimi, a self-hosted model, or AWS Bedrock. For example, Bedrock can implement, a local model can review and Claude can audit. The implementing model never reviews or audits its own work.
+* **Local and private.** Uncle runs on your machine in a terminal UI (or `--noui`), with a self-hosted runner for local models. It has no telemetry, no accounts and no Uncle backend; see the [privacy policy](PRIVACY_POLICY.md).
+* **Evidence the agent cannot write.** The driver seals the PR attestation and the stage envelopes from its own workflow state, never from an agent-authored file. Missing evidence is recorded as `unavailable`, and a blocked or unrun check is never reported as a pass.
+* **Approvals that pin what you approved.** Each human gate records a SHA-256 of the approved artifact, so the plan you approved is the one that ships.
+* **Plain files, no build step.** Uncle is Bash and Python. Prompts are Markdown files in `prompts/`, and configuration is one text file. Adding a runner is a wrapper script that accepts `claude -p`-style flags.
+
+Limits to know about: the two drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) and `uncle_tui.py` are large, so changing the core takes more effort than changing prompts or config. Bedrock uses a bearer token, not an IAM role or SSO profile. Windows support is newer than macOS and Linux. The attestation is a local, driver-sealed record; it is not SLSA provenance signed by GitHub (see [ATTESTATIONS.md](ATTESTATIONS.md) for that).
 
 ## The change is the unit of trust
 

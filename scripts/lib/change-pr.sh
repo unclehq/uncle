@@ -580,7 +580,14 @@ def attest(j):
         envelopes = env.load_envelopes(STATE)
     except env.EnvelopeError as failure:
         raise error(str(failure)) from failure
-    approvals = [env.approval_entry(STATE, name) for name in gate_names()] + [consent_entry(artifact)]
+    # `view_digest` is the committed Markdown's own hash; without it `uncle verify` cannot tie a gate to the document a human read.
+    def gate_entry(name):
+        entry = env.approval_entry(STATE, name)
+        view = env.sha256_file(Path('.uncle') / 'docs' / (name + '.md'))
+        if view:
+            entry['view_digest'] = view
+        return entry
+    approvals = [gate_entry(name) for name in gate_names()] + [consent_entry(artifact)]
     override = override_entry(j)
     reason = env.blocking_reason(envelopes, artifact, waived_stages(j))
     if reason and override:

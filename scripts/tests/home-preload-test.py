@@ -245,6 +245,214 @@ class Gather(unittest.TestCase):
         self.assertNotIn('\x07', snap)
 
 
+class PlanScope(unittest.TestCase):
+    """Tests the approved plan required (audit FA-009): timeout, cancel-wait bound, caps, concurrency, hardening."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for p in (patch.object(tui, '_project_root', return_value=self.tmp.name),
+                  patch.dict(os.environ, {k: v for k, v in os.environ.items()
+                                          if k not in ('UNCLE_NOUI', 'UNCLE_HOME_AGENT')}, clear=True),
+                  patch.object(tui.supervision_lib, 'load_config',
+                               return_value=Mock(runner='claude', model='m', effort='low'))):
+            p.start()
+            self.addCleanup(p.stop)
+        self.ui = make_ui(self.tmp.name)
+        self.session = Mock()
+        self.session.alive.return_value = True
+
+    def spawn(self):
+        return patch.object(tui.home_agent_session, 'persistent_session',
+                            return_value=(self.session, ['claude']))
+
+    def test_timeout_is_a_future_monotonic_deadline(self):
+        # session.turn() takes an absolute time.monotonic() deadline; a bare 60 is already in the past.
+        before = tui.time.monotonic()
+        with patch.object(home_preload, 'gather', return_value='SNAP'), self.spawn():
+            self.ui._preload_home_agent()
+        deadline = self.session.turn.call_args[0][2]
+        self.assertGreaterEqual(deadline, before + tui.PRELOAD_TIMEOUT_S)
+        self.assertLessEqual(deadline, tui.time.monotonic() + tui.PRELOAD_TIMEOUT_S)
+
+    def test_timeout_timer_sets_cancel_event(self):
+        timers = []
+
+        class FakeTimer:
+            def __init__(self, interval, fn):
+                self.interval, self.fn, self.daemon, self.cancelled = interval, fn, False, False
+                timers.append(self)
+
+            def start(self):
+                pass
+
+            def cancel(self):
+                self.cancelled = True
+        with patch.object(tui.threading, 'Timer', FakeTimer), \
+                patch.object(home_preload, 'gather', return_value='SNAP'), self.spawn():
+            self.ui._preload_home_agent()
+        self.assertEqual([t.interval for t in timers], [tui.PRELOAD_TIMEOUT_S])
+        self.assertTrue(timers[0].cancelled)
+        self.assertIs(self.session.turn.call_args[0][3].is_set(), False)
+        timers[0].fn()
+        self.assertTrue(self.session.turn.call_args[0][3].is_set())
+
+    def test_timed_out_preload_closes_session(self):
+        def slow_turn(prompt, log, deadline, event):
+            event.set()
+            return None
+        self.session.turn.side_effect = slow_turn
+        with patch.object(home_preload, 'gather', return_value='SNAP'), self.spawn():
+            self.ui._preload_home_agent()
+        self.session.close.assert_called()
+        self.assertIsNone(self.ui.agent_session)
+        self.assertIsNone(self.ui.agent_preload_cancel)
+
+    def test_cancel_wait_is_bounded_and_stuck_preload_is_abandoned(self):
+        stuck = Mock()
+        self.ui.agent_session = stuck
+        self.ui.agent_preload_cancel = threading.Event()
+        release, held = threading.Event(), threading.Event()
+
+        def hold():
+            with self.ui.agent_lock:
+                held.set()
+                release.wait(10)
+        t = threading.Thread(target=hold, daemon=True)
+        t.start()
+        held.wait(5)
+        self.addCleanup(release.set)
+        sentinel = Exception('operator-session reached')
+        started = tui.time.monotonic()
+        with patch.object(tui, 'PRELOAD_CANCEL_WAIT_S', 0.2), \
+                patch.object(self.ui, '_home_agent_session', side_effect=sentinel):
+            with self.assertRaises(Exception) as caught:
+                self.ui._agent_turn('hi')
+        self.assertIs(caught.exception, sentinel)
+        self.assertLess(tui.time.monotonic() - started, 2)
+        stuck.close.assert_called_once()
+        self.assertIsNone(self.ui.agent_session)
+        self.assertIsNone(self.ui.agent_preload_cancel)
+
+    def test_operator_session_wins_creation_race(self):
+        self.ui.agent_session = self.session
+        with patch.object(home_preload, 'gather', return_value='SNAP'), self.spawn() as sp:
+            self.ui._preload_home_agent()
+        sp.assert_not_called()
+        self.session.turn.assert_not_called()
+
+    def test_active_chat_call_blocks_preload(self):
+        self.ui.chat_calls = 1
+        with patch.object(home_preload, 'gather', return_value='SNAP'), self.spawn() as sp:
+            self.ui._preload_home_agent()
+        sp.assert_not_called()
+
+    def test_concurrent_preloads_create_one_session(self):
+        gate = threading.Barrier(2)
+        calls = []
+
+        def create(*args, **kwargs):
+            calls.append(1)
+            return self.session, ['claude']
+        results = []
+
+        def run():
+            gate.wait(5)
+            self.ui._preload_home_agent()
+            results.append(1)
+        with patch.object(home_preload, 'gather', return_value='SNAP'), \
+                patch.object(tui.home_agent_session, 'persistent_session', side_effect=create):
+            threads = [threading.Thread(target=run) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(calls), 1)
+        self.assertIs(self.ui.agent_session, self.session)
+
+    def test_preload_session_has_no_operator_grants_and_default_build_command(self):
+        with patch.object(home_preload, 'gather', return_value='SNAP'), self.spawn() as sp:
+            self.ui._preload_home_agent()
+        grants = sp.call_args[0][4]
+        self.assertEqual(tuple(grants), ())
+
+    def test_tool_use_denial_has_no_grant_path_during_preload(self):
+        # The preload only consumes the stream through turn(); it never calls grant_rule, so a tool-use
+        # request cannot add a rule. A denial in the stream adds nothing to the session grants.
+        denial = {'tool_name': 'Bash', 'tool_input': {'command': 'rm -rf /'}}
+        self.session.turn.return_value = ['{"type":"result","permission_denials":[%s]}' % __import__('json').dumps(denial)]
+        with patch.object(home_preload, 'gather', return_value='SNAP'), self.spawn(), \
+                patch.object(tui.home_agent_session, 'grant_rule') as grant:
+            self.ui._preload_home_agent()
+        grant.assert_not_called()
+        self.assertEqual(list(self.ui.agent_grants), [])
+
+    def test_runner_argv_cwd_env_hardening(self):
+        seen = []
+
+        def run(argv, cwd, env, timeout):
+            seen.append((argv, cwd, env, timeout))
+            return ''
+        with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'k', 'GITHUB_TOKEN': 't', 'PATH': '/usr/bin'}):
+            home_preload.gather('/proj', runner=run, listdir=lambda p: ['a'])
+        self.assertTrue(seen)
+        for argv, cwd, env, timeout in seen:
+            self.assertIsInstance(argv, list)
+            self.assertEqual(cwd, '/proj')
+            self.assertLessEqual(timeout, home_preload.COMMAND_TIMEOUT)
+            self.assertNotIn('ANTHROPIC_API_KEY', env)
+            self.assertNotIn('GITHUB_TOKEN', env)
+            self.assertEqual(env['GIT_TERMINAL_PROMPT'], '0')
+            self.assertEqual(env['GIT_OPTIONAL_LOCKS'], '0')
+            if argv[0] == 'git':
+                self.assertIn('core.hooksPath=/dev/null', argv)
+                self.assertIn('core.fsmonitor=false', argv)
+                self.assertIn('--no-pager', argv)
+
+    def test_default_runner_bounds_output_and_kills_on_timeout(self):
+        out = home_preload.default_runner([sys.executable, '-c', 'print("x"*200000)'], '.', os.environ.copy(), 10)
+        self.assertLessEqual(len(out or ''), home_preload.OUTPUT_MAX_BYTES)
+        started = tui.time.monotonic()
+        self.assertIsNone(home_preload.default_runner([sys.executable, '-c', 'import time; time.sleep(30)'],
+                                                      '.', os.environ.copy(), 0.3))
+        self.assertLess(tui.time.monotonic() - started, 5)
+        self.assertIsNone(home_preload.default_runner(['/nonexistent-binary'], '.', {}, 1))
+
+    def test_cap_boundaries(self):
+        cap = home_preload.SNAPSHOT_MAX_CHARS
+        self.assertEqual(len(home_preload.sanitize('a' * 500)), home_preload.ITEM_MAX_CHARS)
+        self.assertEqual(len(home_preload.sanitize('a' * home_preload.ITEM_MAX_CHARS)), home_preload.ITEM_MAX_CHARS)
+        calls = []
+
+        def run(argv, cwd, env, timeout):
+            calls.append(argv)
+            return {'--is-inside-work-tree': 'true'}.get(argv[argv.index('--is-inside-work-tree')] if '--is-inside-work-tree' in argv else '', '') or ''
+        issue_cmds = []
+
+        def run2(argv, cwd, env, timeout):
+            if argv[0] == 'gh':
+                issue_cmds.append(argv)
+                return '\n'.join('i%d' % n for n in range(500))
+            return None
+        snap = home_preload.gather('/r', runner=run2, listdir=lambda p: [])
+        self.assertIn('--limit', issue_cmds[0])
+        self.assertEqual(issue_cmds[0][issue_cmds[0].index('--limit') + 1], str(home_preload.ISSUE_LIMIT))
+        # exactly at the cap fits whole; one over trims.
+        fit = home_preload._fit
+        self.assertEqual(len(fit([], [], ['x' * (cap - len('top-level files:\n'))], [])), cap)
+        self.assertLessEqual(len(fit([], [], ['x' * (cap + 1)], [])), cap)
+        self.assertLessEqual(len(snap or ''), cap)
+
+    def test_oversize_drops_issues_then_worktrees_first(self):
+        cap = 200
+        status, wts, listing, issues = ['s' * 50], ['w' * 50], ['l' * 50], ['i' * 50]
+        text = home_preload._fit(status, wts, listing, issues, cap=cap)
+        self.assertLessEqual(len(text), cap)
+        self.assertNotIn('open issues', text)
+        self.assertIn('git status', text)
+
+
 class Prompt(unittest.TestCase):
     def test_AC2_states_not_operator_untrusted_and_stale(self):
         text = home_preload.preload_prompt('SNAP', nonce='n1', now=0)

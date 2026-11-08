@@ -123,6 +123,24 @@ def git(*args, data=None, env=None, check=True):
     return result.stdout
 
 
+# Copy of scripts/lib/uncle_gitignore.py MANAGED/strip_managed: the release tree was
+# snapshotted with Uncle's own ignore entries removed from .gitignore (change-pr.sh),
+# so the committed tree must be normalized the same way before it is compared.
+MANAGED_IGNORES = {
+    '.uncle', '.uncle/', '.uncle/*', '!.uncle/docs/',
+    '!.uncle/attestation.json', '!.uncle/attestation.sig', '!.uncle/allowed_signers',
+    '.uncle/workflow', '.uncle/workflow/', '.uncle/workflow/*',
+    '.uncle/workflow-history', '.uncle/workflow-history/', '.uncle/workflow-history/*',
+    '.workflow', '.workflow/', '.workflow/*',
+    '.workflow/state', '.workflow/approvals/', '.workflow/logs/',
+    '.workflow/change.diff', '.workflow/change-stat.txt',
+}
+
+
+def strip_managed(text):
+    return '\n'.join(line for line in text.splitlines() if line.strip() not in MANAGED_IGNORES)
+
+
 def excluded(path):
     return any(path.startswith(prefix) if prefix.endswith('/') else path == prefix for prefix in ARTIFACT_EXCLUDES)
 
@@ -140,6 +158,13 @@ def artifact_of(tree):
         if drop:
             git('update-index', '--force-remove', '-z', '--stdin', env=env,
                 data=b''.join(p.encode('utf-8') + b'\0' for p in drop))
+        row = git('ls-tree', tree, '.gitignore').decode().strip()
+        if row and '\t' in row and row.split()[1] == 'blob':
+            mode = row.split()[0]
+            raw = git('cat-file', 'blob', row.split()[2])
+            normal = (strip_managed(raw.decode('utf-8', 'replace')) + '\n').encode('utf-8')
+            oid = git('hash-object', '-w', '--no-filters', '--stdin', data=normal).decode().strip()
+            git('update-index', '--add', '--cacheinfo', '%s,%s,.gitignore' % (mode, oid), env=env)
         return git('write-tree', env=env).decode().strip()
     finally:
         for name in (index, index + '.lock'):

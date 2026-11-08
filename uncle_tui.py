@@ -3628,7 +3628,7 @@ class UncleTUI:
                 timer = threading.Timer(PRELOAD_TIMEOUT_S, event.set)
                 timer.daemon = True
                 timer.start()
-                session.turn(prompt, io.BytesIO(), PRELOAD_TIMEOUT_S, event)
+                session.turn(prompt, io.BytesIO(), time.monotonic() + PRELOAD_TIMEOUT_S, event)
             except Exception:
                 errored = True
             finally:

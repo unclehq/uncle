@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import subprocess
+import threading
 import time
 
 SNAPSHOT_MAX_CHARS = 6000
@@ -34,27 +35,43 @@ def _env():
 
 
 def default_runner(argv, cwd, env, timeout):
-    """Run a fixed argv; return stdout text (byte-bounded) or None on failure."""
+    """Run a fixed argv; return stdout text (byte-bounded) or None on failure or timeout."""
     try:
         p = subprocess.Popen(argv, cwd=cwd, env=env, shell=False,
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        try:
-            out = p.stdout.read(OUTPUT_MAX_BYTES)
-            p.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            p.kill()
-            return None
-        finally:
-            try:
-                p.stdout.close()
-                p.kill()
-            except Exception:
-                pass
-        if p.returncode not in (0, None, -9):
-            return None
-        return out.decode("utf-8", "replace")
     except Exception:
         return None
+    # The read below blocks until output or EOF, so the deadline must be enforced from outside it.
+    timed_out = threading.Event()
+
+    def expire():
+        timed_out.set()
+        try:
+            p.kill()
+        except Exception:
+            pass
+    timer = threading.Timer(timeout, expire)
+    timer.daemon = True
+    timer.start()
+    try:
+        out = p.stdout.read(OUTPUT_MAX_BYTES)
+        p.wait(timeout=timeout)
+    except Exception:
+        return None
+    finally:
+        timer.cancel()
+        try:
+            p.stdout.close()
+            p.kill()
+        except Exception:
+            pass
+        try:
+            p.wait(timeout=1)
+        except Exception:
+            pass
+    if timed_out.is_set() or p.returncode not in (0, None, -9):
+        return None
+    return out.decode("utf-8", "replace")
 
 
 def sanitize(text, limit=ITEM_MAX_CHARS):

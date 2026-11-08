@@ -6748,7 +6748,7 @@ class UncleTUI:
             entries.append(('proposal', 'Replace ' + filename + '? Previous file will be archived.'))
             entries.append(('proposal', 'Type "approve replacement" or "decline replacement".'))
         history = [line for _, line in entries]
-        width = max(1, min(76, w - 4))
+        width = max(1, w - 4)
         left = max(0, (w - width) // 2)
         compact = h < len(LOGO) + 12
         footer_rows = 8 if compact else 12
@@ -6779,7 +6779,11 @@ class UncleTUI:
         body_rows = len(LOGO) if logo_fits else 0
         if h < 18:
             body_rows = 0
-        top = max(run_y, (h - body_rows - footer_rows) // 2)
+        if history:
+            # Chat history fills the space above the composer.
+            body_rows = max(body_rows, h - footer_rows - run_y)
+        # The composer sits as near the bottom as its footer allows.
+        top = max(run_y, h - body_rows - footer_rows)
         logo_left = left + max(0, (width - LOGO_W) // 2)
         if logo:
             for i, line in enumerate(logo):

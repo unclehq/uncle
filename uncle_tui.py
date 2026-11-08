@@ -7359,7 +7359,7 @@ class UncleTUI:
             except curses.error:
                 pass
         if greeting:
-            put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
+            put(row + (0 if compact else 2), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
         if build:
             hint = (self._control_hint(width) if width >= 100 else
                     '/homepage to leave   / commands   @ files   # issues   Tab to chat' if width >= 66
@@ -7377,7 +7377,7 @@ class UncleTUI:
                     else '/ commands  @ files  # issues' if width >= 32 else '/ cmds @ files')
         feedback_active = bool(self.chat_error or self.chat_choices or self.chat_composer.startswith('/'))
         if not (anchored and compact and feedback_active):
-            put(row + (1 if compact else 3), hint, color.get('muted', curses.A_DIM), not build)
+            put(row + (1 if compact else 3 if feedback_active else 4), hint, color.get('muted', curses.A_DIM), not build)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
         placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'

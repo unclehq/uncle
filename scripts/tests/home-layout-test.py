@@ -161,8 +161,8 @@ class HomeLayout(unittest.TestCase):
         for composer, e in (('', 0), (LONG, 2)):
             _, draws = home(h, composer)
             crow = h - 3 - e
-            # Baseline non-compact build layout (BuildAndPanelUnchanged): greeting is 5 rows above the composer.
-            self.assertEqual(rows_of(draws, lambda s: s == GREETING), [crow - 5])
+            # Baseline non-compact build layout (BuildAndPanelUnchanged): greeting is 4 rows above the composer.
+            self.assertEqual(rows_of(draws, lambda s: s == GREETING), [crow - 4])
             self.assertIn(crow - 1, rule_rows(draws))
             self.assertEqual(sorted(set(rule_rows(draws)) & {crow - 1, h - 2}), [crow - 1, h - 2])
 
@@ -227,7 +227,7 @@ class HomeLayout(unittest.TestCase):
         greeting = rows_of(draws, lambda s: s == GREETING)
         self.assertEqual(len(greeting), 1)
         self.assertIsNotNone(t._text_view)
-        self.assertEqual(t._text_view['top'], greeting[0])
+        self.assertEqual(t._text_view['top'], greeting[0] - 1)  # block start; greeting sits one row below it
         self.assertEqual(t._text_view['rows'], 0)
 
     def test_AC5_body_rows_zero_draws_no_history(self):
@@ -369,9 +369,9 @@ class BuildAndPanelUnchanged(unittest.TestCase):
         return t.stdscr.draws
 
     def test_AC4_build_non_compact_offsets(self):
-        # row=10: greeting 11, hint 13, top rule 15, composer 16, bottom rule 17, status 18
+        # row=10: greeting 12, hint 13, top rule 15, composer 16, bottom rule 17, status 18
         d = self.build(10, 40, False)
-        self.assertEqual(rows_of(d, lambda s: s == GREETING), [11])
+        self.assertEqual(rows_of(d, lambda s: s == GREETING), [12])
         self.assertEqual(rule_rows(d), [15, 17])
         self.assertIn(16, rows_of(d, lambda s: s.startswith('›')))
         self.assertEqual(rows_of(d, lambda s: 'Chat ready' in s), [18])

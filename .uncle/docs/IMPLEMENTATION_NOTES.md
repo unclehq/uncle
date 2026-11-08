@@ -2,22 +2,20 @@
 
 ### Files changed
 
-- `uncle_tui.py` — Claude catalog replaced with the 12 ordered models; claude default set to claude-sonnet-5-5; stale opus comment rewritten; 1; SB-1, SB-2, SB-4, SI-3
-- `scripts/stagegate.sh` — DEFAULT_MODEL set to claude-sonnet-5-5; 2; SB-3, SI-2
-- `scripts/reviewer-claude.sh` — DEFAULT_MODEL fallback set to claude-sonnet-5-5; 2; SB-3, SI-2
-- `scripts/tests/claude-model-defaults-test.py` — New test: exact catalog, default agreement, allowlist (bash case), comment, other runners unchanged. Fixed the bash case helper so the pattern is interpolated into the script (alternation is not honored via parameter expansion).; 3; SI-1, SI-2, SI-3, SI-4
+- `uncle_tui.py` — Home page bottom anchoring: new _home_anchor helper; _draw_chat_composer(anchor_bottom=True) pins status to row h-1 and bottom rule to h-2; _draw_homepage sizes history above the anchored block; feedback moved above the status. Composer rows capped at min(count, 6, h-3).; 2; S-1..S-5, S-8, V-1, V-2, V-4
+- `scripts/tests/home-layout-test.py` — New fake-screen test (19 tests) for AC-1..AC-5; fixed body-rows-zero case to h=6, where the anchored block starts at row 0.; 1; V-1, V-2, V-3, V-4
 
 ### Unresolved concerns
 
-- Full shell and Python suites are run by the driver, not here.
-- The Bedrock items in DEFECTS.md and TEST_REVIEW.md belong to an earlier unrelated change, not issue 185.
+- No live-terminal run of the TUI was performed; layout is verified with a fake curses screen only.
 
 ## Acceptance delivery
 
 | ID | Status | Changed code | Observed targeted verification |
 |---|---|---|---|
-| AC-1 | IMPLEMENTED | uncle_tui.py MODEL_CATALOG_CLAUDE: 12 ordered pairs | python3 scripts/tests/claude-model-defaults-test.py: 6 tests OK (catalog exact test) |
-| AC-2 | IMPLEMENTED | uncle_tui.py DEFAULT_MODEL_FOR_RUNNER, scripts/stagegate.sh:282, scripts/reviewer-claude.sh:37 | same test run, default agreement test OK |
-| AC-3 | IMPLEMENTED | scripts/tests/claude-model-defaults-test.py allowlist test | initially failed (test harness bug), fixed; now OK for all 12 ids via bash case and fnmatch |
-| AC-4 | IMPLEMENTED | uncle_tui.py comment near line 485 | comment test OK |
-| AC-5 | IMPLEMENTED | no Codex/Kimi edits; test_other_runners_unchanged added | snapshot test OK; full suites pending in driver green check |
+| AC-1 | IMPLEMENTED | uncle_tui.py _draw_chat_composer: status_row = h-1 when anchored | python3 scripts/tests/home-layout-test.py: Ran 19 tests OK (test_AC1_status_on_last_row_at_24_and_50) |
+| AC-2 | IMPLEMENTED | uncle_tui.py _home_anchor/_draw_chat_composer: bottom rule at h-2 directly above status, composer capped at 6 rows | home-layout-test OK (test_AC2_no_gap_between_bottom_rule_and_status, test_AC2_non_compact_block_offsets) |
+| AC-3 | IMPLEMENTED | uncle_tui.py _draw_chat_composer: feedback_row = composer_row-2 when anchored; hint suppressed in compact when feedback active | home-layout-test OK (test_AC3_* four tests) |
+| AC-4 | IMPLEMENTED | uncle_tui.py: anchor_bottom defaults False, so build page and chat panel offsets are unchanged | home-layout-test OK (test_AC4_* five tests, hard-coded baseline offsets) |
+| AC-5 | IMPLEMENTED | uncle_tui.py _draw_homepage: body_rows = block_start - top; empty _text_view at 0 rows; tiny heights guarded | home-layout-test OK (test_AC5_* six tests); scripts/tests/home-actions-test.py Ran 39 tests OK |
+| AC-6 | IMPLEMENTED | No change; driver owns the full suites | Full suites not run here (driver pending). home-actions-test.py OK as a related check. |

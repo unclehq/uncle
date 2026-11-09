@@ -210,6 +210,16 @@ def load_config(path):
             values[key] = parse_value(key, raw)
         except ValueError as exc:
             errors.append(str(exc))
+    if 'runner' not in seen:
+        # No supervision.runner: follow the global runner (and its model) rather than assuming Claude Code, which may have no login.
+        top = dict(read_config_lines(path, prefix=''))
+        if top.get('runner'):
+            try:
+                values['runner'] = parse_value('runner', top['runner'].lower())
+                if 'model' not in seen and top.get('model'):
+                    values['model'] = parse_value('model', top['model'])
+            except ValueError:
+                values.pop('runner', None)
     return Config(values, errors)
 
 

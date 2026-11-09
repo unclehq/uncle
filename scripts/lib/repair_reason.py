@@ -103,7 +103,9 @@ def explain(state, source, attempt, limit):
             items = lines_matching(read(os.path.join(os.path.dirname(state), 'docs', 'FINAL_AUDIT.md')), r'NOT_READY|\bBLOCK|blocking')
     elif name == 'VERIFICATION_REPORT.md' or source == 'checklist-fail':
         trigger = 'Manual checklist checks failed.'
-        rows = failing_rows(read(os.path.join(os.path.dirname(state), 'docs', 'VERIFICATION_REPORT.md')), 0, 4, 5)
+        report = read(os.path.join(os.path.dirname(state), 'docs', 'VERIFICATION_REPORT.md'))
+        report = report.rpartition('## Acceptance gate')[2] or report
+        rows = failing_rows(report, 0, 2, 3)
         items = ['**%s** %s: %s' % (i, s, clip(e)) for i, s, e in rows]
     elif name == 'runtime-unrunnable-application':
         trigger = 'The application could not be started.'

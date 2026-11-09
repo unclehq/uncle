@@ -4558,6 +4558,11 @@ REPAIR
             plan_status=0
             plan_before_write "repair-$repair_count" || plan_status=$?
             case "$plan_status" in 0|22) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+            echo
+            python3 -B "$ROOT/scripts/lib/repair_reason.py" "$STATE_DIR" "$repair_source" "$repair_count" "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" \
+                | tee "$STATE_DIR/REPAIR_REASON.md" || true
+            { printf '\n--- %s ---\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; cat "$STATE_DIR/REPAIR_REASON.md"; } >> "$STATE_DIR/repair-history.md" 2>/dev/null || true
+            echo
             repair_begin || exit 1
             envelope_invalidate IMPLEMENT
             envelope_guard_begin

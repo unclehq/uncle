@@ -28,6 +28,15 @@ class Reason(unittest.TestCase):
         with open(path, 'w') as handle:
             handle.write(text)
 
+    def test_checklist_failure_names_the_failing_rows(self):
+        self.write(os.path.join(self.docs, 'VERIFICATION_REPORT.md'),
+                   '# R\n\n## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n'
+                   '| MC-1 | YES | PASS | ok |\n| MC-2 | YES | FAIL | button does nothing |\n')
+        out = run(self.state, 'checklist-fail')
+        self.assertIn('Manual checklist checks failed', out)
+        self.assertIn('**MC-2** FAIL: button does nothing', out)
+        self.assertNotIn('MC-1', out)
+
     def test_green_check_lists_each_failing_command(self):
         self.write(os.path.join(self.state, 'green-check.tsv'), 'PASS\tnpm run build\nFAIL\tnpx vitest run\nMUTATION\tnode tests/mutations/run.mjs\n')
         out = run(self.state, os.path.join(self.state, 'green-check.md'))

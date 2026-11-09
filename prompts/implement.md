@@ -6,6 +6,7 @@ Read these in one parallel batch of tool calls:
 - .uncle/docs/REQUIREMENTS_INTERPRETATION.md
 - .uncle/docs/UPDATED_PROJECT_PLAN.md
 - .uncle/docs/PREFLIGHT_REPORT.md, if it exists
+- .uncle/docs/TESTS_NOTES.md, if it exists (see "Frozen tests" below)
 
 That is the whole input set. .uncle/docs/PREFLIGHT_REPORT.md may legitimately be absent:
 the prerequisite probe now runs alongside this stage instead of in front of it,
@@ -289,3 +290,16 @@ state/output, report actual values, and exit nonzero on assertion failure.
 Do not add browser dependencies to a non-browser project. Do not claim a
 prepared or unexecuted probe passed. Final-page selector confirmation and live
 acceptance execution belong to Execute Checklist.
+
+## Frozen tests (only when `.uncle/docs/TESTS_NOTES.md` exists)
+
+The tests were written and approved before any code existed, and are frozen. Make them pass by implementing the plan;
+do not edit, delete, skip, loosen or work around them -- the driver hashes them and rejects the stage if any changed.
+You may add new test files. If a frozen test contradicts the approved plan or cannot be satisfied, do not change it:
+implement everything else, then record it as a `deviations` entry naming the test and the contradiction, and list it in
+`unresolved_concerns`. Where the notes list assumed interfaces, follow them exactly.
+
+If a frozen test is wrong (it contradicts the approved plan, or cannot be satisfied by any implementation), do not loop on it and do not
+silently rewrite it. Fix it, then append one line `<path><TAB><reason>` to `.uncle/workflow/tests/amendments.tsv` saying why
+(for example the requirement it misstates). The driver accepts an amendment only with a reason, logs it, and the changed file appears
+in the diff the human approves. An edit without an amendment line is rejected.

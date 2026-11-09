@@ -47,6 +47,10 @@ parallel_groups() {
     if declare -F plan_steps > /dev/null; then
         skip="$(plan_steps "$plan" 2>/dev/null | python3 -B "$lib/verification_steps.py" skip-set - 2>/dev/null || true)"
     fi
+    # Tests: a step whose every owned path is already written and frozen has nothing left to do.
+    if declare -F tests_frozen_only_steps > /dev/null && [[ -s "${STATE_DIR:-.uncle/workflow}/implement-owns.all.tsv" ]]; then
+        skip="$skip $(tests_frozen_only_steps < "${STATE_DIR:-.uncle/workflow}/implement-owns.all.tsv" | tr '\n' ' ')"
+    fi
     printf '%s' "$out" | python3 -c '
 import json, sys
 try:
@@ -86,9 +90,14 @@ lib = sys.argv[1]
 rows = subprocess.run(["bash", "-c", ". \"%s/plan-scope.sh\"; plan_step_owns \"%s\"" % (lib, os.environ["UNCLE_PLAN"])],
                       capture_output=True, text=True).stdout.splitlines()
 owned = {}
+FROZEN = set(open(os.environ["UNCLE_FROZEN_LIST"]).read().split("\n")) if os.environ.get("UNCLE_FROZEN_LIST") and os.path.exists(os.environ["UNCLE_FROZEN_LIST"]) else set()
+FROZEN.discard("")
 for line in rows:
     if "\t" in line:
         n, path = line.split("\t", 1)
+        # Tests: frozen tests are never written by a step (UNCLE_FROZEN_LIST, one path per line), so a worker that writes one is refused.
+        if any(path.strip() == f or (f.endswith("/") and path.strip().startswith(f)) for f in FROZEN):
+            continue
         owned.setdefault(n, []).append(path.strip())
 # Application steps merged into one worker (step_groups.py merge-map): the worker owns all their files, and the absorbed
 # steps stop being separate owners, or the same file would be claimed twice.

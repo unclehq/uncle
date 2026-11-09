@@ -190,12 +190,14 @@ severity_gate_test_review() {
     [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical ]] || return 0
     [[ -s "$canonical" && -n "${GREEN_CLASS:-}" && -s "$GREEN_CLASS" ]] || return 0
     reason="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" critical "$GREEN_CLASS" "${LOG_DIR:-$STATE_DIR/logs}/green-check.log")" && return 0
-    rows="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" downgrade "$canonical")" || return 0
+    local symptoms=""
+    python3 -B "$ROOT/scripts/lib/failure_severity.py" isolated "$GREEN_CLASS" "${LOG_DIR:-$STATE_DIR/logs}/green-check.log" > /dev/null && symptoms="--symptoms"
+    rows="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" downgrade "$canonical" $symptoms)" || return 0
     [[ -n "$rows" ]] || return 0
     local id severity
     while IFS=$'\t' read -r id severity; do
         [[ -n "$id" ]] || continue
-        echo "Severity $severity: test-review row $id failed, but the driver's verification is clean and the application runs; repair is for critical failures, so this goes to the final audit."
+        echo "Severity $severity: test-review row $id failed, but there is no critical failure (the application builds and runs${symptoms:+; only isolated tests fail}); repair is for critical failures, so this goes to the final audit."
         record_nonblocking_failure TEST_REVIEW.json "$severity: test-review row $id failed; no critical failure, so no repair"
     done <<< "$rows"
     printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(printf '%s' "$rows" | tr '\t\n' ': ' )" >> "$STATE_DIR/failure-severity.tsv"

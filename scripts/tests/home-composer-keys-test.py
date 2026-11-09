@@ -39,16 +39,16 @@ class ClassifyEscape(unittest.TestCase):
     def test_paste_start(self):
         self.assertEqual(tui.classify_escape(b'[200~'), 'paste')
 
-    def test_ctrl_enter_csi_u_and_modify_other_keys(self):
-        self.assertEqual(tui.classify_escape(b'[13;5u'), 'newline')
-        self.assertEqual(tui.classify_escape(b'[27;5;13~'), 'newline')
+    def test_shift_enter_csi_u_and_modify_other_keys(self):
+        self.assertEqual(tui.classify_escape(b'[13;2u'), 'newline')
+        self.assertEqual(tui.classify_escape(b'[27;2;13~'), 'newline')
 
     def test_esc_enter(self):
         self.assertEqual(tui.classify_escape(b'\r'), 'newline')
         self.assertEqual(tui.classify_escape(b'\n'), 'newline')
 
     def test_other_modifiers_and_unknown_are_none(self):
-        for seq in (b'[13;2u', b'[13;3u', b'[27;2;13~', b'[A', b'[201~', b'x', b''):
+        for seq in (b'[13;3u', b'[A', b'[201~', b'x', b''):
             self.assertIsNone(tui.classify_escape(seq), seq)
 
 
@@ -101,7 +101,7 @@ class Keys(unittest.TestCase):
         self.assertEqual([c for c in self.ui.send_home_chat.call_args_list if c.args[0].strip()], [])
 
     def test_AC2_ctrl_enter_forms_insert_newline_at_cursor(self):
-        for seq in (b'[13;5u', b'[27;5;13~'):
+        for seq in (b'[13;2u', b'[27;2;13~'):
             with self.subTest(seq=seq):
                 self.ui.send_home_chat.reset_mock()
                 self.feed(27, seq, text='abcd', cursor=2)
@@ -109,13 +109,28 @@ class Keys(unittest.TestCase):
                 self.assertEqual(self.ui._composer_cursor(), 3)
                 self.ui.send_home_chat.assert_not_called()
 
+    def test_ctrl_enter_submits(self):
+        for seq in (b'[13;5u', b'[27;5;13~'):
+            with self.subTest(seq=seq):
+                self.ui.send_home_chat.reset_mock()
+                self.feed(27, seq, text='hi')
+                self.ui.send_home_chat.assert_called_once_with('hi')
+
     def test_AC2_esc_enter_inserts_newline(self):
         self.feed(27, b'\r', text='ab', cursor=1)
         self.assertEqual(self.ui.chat_composer, 'a\nb')
         self.ui.send_home_chat.assert_not_called()
 
+    def test_shift_enter_forms_insert_newline(self):
+        for seq in (b'[13;2u', b'[27;2;13~'):
+            with self.subTest(seq=seq):
+                self.ui.send_home_chat.reset_mock()
+                self.feed(27, seq, text='hi')
+                self.assertEqual(self.ui.chat_composer, 'hi\n')
+                self.ui.send_home_chat.assert_not_called()
+
     def test_AC2_other_modifier_enter_submits(self):
-        self.feed(27, b'[13;2u', text='hi')
+        self.feed(27, b'[13;3u', text='hi')
         self.ui.send_home_chat.assert_called_once_with('hi')
 
     def test_AC3_bracketed_paste_inserts_without_submit(self):

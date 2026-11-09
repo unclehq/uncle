@@ -120,16 +120,45 @@ def permission_denials(lines):
     return found
 
 
-def system_prompt(root, patterns=None):
+def project_state_section(root, project):
+    """What the repository says about new application versus change, for the agent to weigh against the operator's words.
+
+    A snapshot taken when the session starts, from scripts/lib/detect_mode.py. It never raises: the agent works without it."""
+    if not project:
+        return ''
+    try:
+        import sys
+        lib = os.path.join(root, 'scripts', 'lib')
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import detect_mode
+        result = detect_mode.classify(project, '')
+    except Exception:    # noqa: BLE001 -- advisory context only
+        return ''
+    lines = ['\n## Project state (a snapshot from when this session started)\n',
+             'The repository looks like: **%s**. %s' % (result['repository'], '; '.join(result['reasons']) or 'No evidence either way.'),
+             '',
+             'Use this to choose between `create_app` and `create_change`, together with what the operator actually asks for:',
+             '- An empty or template-only directory, and a request to build something: `create_app`.',
+             '- Existing application code, and a request that fixes, restyles, extends or names things already there: `create_change`.',
+             '- When the request and the repository disagree (a "new app" over code that exists, or a "fix" in an empty directory), '
+             'do not guess: ask the operator which they mean before emitting an `uncle_action`. A new build over existing code is the '
+             'costly mistake, so lean to `create_change` if they cannot say.',
+             '- The directory may have changed since this snapshot; look again with Glob if it matters.']
+    return '\n'.join(lines) + '\n'
+
+
+def system_prompt(root, patterns=None, project=None):
     patterns = deny_patterns() if patterns is None else patterns
     with open(os.path.join(root, 'prompts', 'home-agent.md'), encoding='utf-8') as fh:
         text = fh.read()
+    text += project_state_section(root, project)
     text += '\n## Never run commands starting with\n\n'
     text += ''.join('- `%s`\n' % pattern for pattern in patterns)
     return text
 
 
-def build_command(root, model, effort, grants=(), environ=None):
+def build_command(root, model, effort, grants=(), environ=None, project=None):
     """(argv, env) for the home agent, or ValueError('unavailable ...')."""
     environ = os.environ if environ is None else environ
     executable = environ.get('WORKFLOW_CLAUDE_CMD') or 'claude'
@@ -148,7 +177,7 @@ def build_command(root, model, effort, grants=(), environ=None):
             '--model', model, '--effort', effort,
             '--allowedTools', ','.join(allowed),
             '--disallowedTools', ','.join('Bash(%s:*)' % p for p in patterns),
-            '--append-system-prompt', system_prompt(root, patterns)]
+            '--append-system-prompt', system_prompt(root, patterns, project)]
     return argv, agent_env(environ)
 
 
@@ -169,7 +198,7 @@ class HomeAgentSession(SupervisorSession):
 
 def start_session(root, model, effort, cwd, grants=(), environ=None):
     """(session, argv) for a fresh home agent; ValueError('unavailable ...') when claude is missing."""
-    argv, env = build_command(root, model, effort, grants, environ)
+    argv, env = build_command(root, model, effort, grants, environ, project=cwd)
     return HomeAgentSession(argv, env, cwd, grants), argv
 
 

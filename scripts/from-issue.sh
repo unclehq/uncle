@@ -668,25 +668,39 @@ fi
 # a worktree and letting that force MODE=change -- silently reclassified every
 # run that wanted its own directory.
 if [[ -z "$MODE" ]]; then
-    # If CHANGE_REQUEST.md already exists, assume the user is continuing a
-    # change workflow. Otherwise, if the repo contains files beyond the workflow
-    # scaffolding, default to change; if it looks like a fresh template, default
-    # to new.
+    # If CHANGE_REQUEST.md already exists, assume the user is continuing a change workflow. Otherwise the repository
+    # and the issue text decide together (detect_mode.py); when they disagree it asks, or without a terminal takes
+    # the reading that cannot overwrite existing code.
     if [[ -s "$(generated_input_path CHANGE_REQUEST.md)" ]]; then
         MODE="change"
-    elif git ls-files 2>/dev/null | grep -q -v \
-            -e '^README\.md$' \
-            -e '^REQUIREMENTS\.md$' \
-            -e '^CLAUDE\.md$' \
-            -e '^CHANGE_REQUEST\.md$' \
-            -e '^scripts/' \
-            -e '^prompts/' \
-            -e '^\.claude/' \
-            -e '^\.github/' \
-            -e '^\.gitignore$'; then
-        MODE="change"
     else
-        MODE="new"
+        # Neither a request in progress nor an explicit flag: read the repository and the issue together
+        # (scripts/lib/detect_mode.py). The old rule only asked whether any file existed beyond scaffolding, which sent a bare
+        # Vite template to "change" and an empty directory with "fix the checkout bug" to "new".
+        detect_json="$(python3 -B "$ROOT/scripts/lib/detect_mode.py" --project "$PROJECT_ROOT" --prompt "${TITLE:-}
+${BODY:-}" 2>/dev/null || true)"
+        detected="$(printf '%s' "$detect_json" | python3 -B -c 'import json,sys; d=json.load(sys.stdin); print(d["mode"], d["fallback"], d["confidence"])' 2>/dev/null || true)"
+        if [[ -z "$detected" ]]; then
+            MODE="change"
+            echo "Could not classify the request; defaulting to change, which never rewrites existing code." >&2
+        else
+            read -r detected_mode detected_fallback detected_confidence <<< "$detected"
+            printf '%s' "$detect_json" | python3 -B -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import detect_mode; print(detect_mode.summary(json.load(sys.stdin)))' "$ROOT/scripts/lib" >&2 2>/dev/null || true
+            if [[ "$detected_mode" == ask ]]; then
+                MODE="$detected_fallback"
+                if [[ -t 0 && "${UNCLE_UNATTENDED:-0}" != 1 && "${UNATTENDED:-0}" != 1 ]]; then
+                    read -r -p "Is this a new application or a change to the code here? [n=new/c=change, Enter=$detected_fallback] " answer
+                    case "$answer" in
+                        n|N|new) MODE="new" ;;
+                        c|C|change) MODE="change" ;;
+                    esac
+                else
+                    echo "Not decisive; continuing as $MODE (the reading that cannot overwrite existing work). Use --new or --change to say otherwise." >&2
+                fi
+            else
+                MODE="$detected_mode"
+            fi
+        fi
     fi
 fi
 

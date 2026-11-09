@@ -28,9 +28,26 @@ supervision.delegate_gates none
 supervision.files_allowlist package.json,package-lock.json,vite.config.js
 ```
 
-Only `supervision.runner claude` is currently supported. Use `/delegate` for
-standing dialog delegation, `/app-input` for application input, and phrases
-such as “answer this one” or “tell it to” for a single explicit action.
+Supervision works with any runner and any model. `supervision.runner` accepts
+`claude`, `codex`, `kimi`, `self-hosted`, `aws-bedrock`, `opencode` and `aider`,
+and `supervision.model` is any model identifier the chosen runner accepts (a
+token of letters, digits and `. _ / : -`). Uncle passes it to the runner
+unchanged, so a model has to exist for that runner: supervision does not keep a
+list of models of its own.
+
+Two details depend on the runner:
+
+- `supervision.model sonnet` is the default and is only a Claude selector. With
+  `codex` it means "use Codex's configured default model", and with `kimi` it
+  means the configured Kimi default; set `kimi:<alias>` to pick a specific Kimi
+  model. A model of any other form is ignored by `kimi`.
+- `self-hosted`, `aws-bedrock`, `opencode` and `aider` take their model from the
+  stage's runner configuration (`uncle` → Configure), so the stage must be
+  configured before supervision can use that runner.
+
+Use `/delegate` for standing dialog delegation, `/app-input` for application
+input, and phrases such as “answer this one” or “tell it to” for a single
+explicit action.
 
 `supervision.files_allowlist` is a comma-separated list of repository-relative
 paths that a parallel implementation step may write without the plan having

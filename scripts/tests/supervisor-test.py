@@ -1757,7 +1757,7 @@ class DocsTests(unittest.TestCase):
         for key, _, default in sv.CONTROLS:
             line = 'supervision.%s %s' % (key, sv.format_value(key, default))
             self.assertIn(line, readme, line)
-        for phrase in ('Authority boundary', 'Recovery', 'Only `supervision.runner claude`'):
+        for phrase in ('Authority boundary', 'Recovery', 'Supervision works with any runner and any model'):
             self.assertIn(phrase, readme)
 
 

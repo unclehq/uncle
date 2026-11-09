@@ -94,7 +94,12 @@ The JSON object's other fields cover:
 
 - `changed_files`: files changed, purpose of each change, approved-plan step,
   behavior or invariant affected
-- `deviations`: file and reason, for every file outside the frozen scope
+- `deviations`: file and reason, for every file outside the frozen scope, and for every
+  place the code departs from the plan's wording even inside scope: a different mechanism
+  than the plan names (e.g. `time.sleep` where it says an interruptible `Event.wait`), a
+  changed default or edge-case rule, or a test expectation edited to match the code. If the
+  plan and the code disagree, either make the code do what the plan says or record it here;
+  never mark a requirement IMPLEMENTED while it differs from the plan and `deviations` is empty.
 - `unresolved_concerns`: anything left open
 
 Run the targeted checks needed to demonstrate the changed behavior and write

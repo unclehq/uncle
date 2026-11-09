@@ -42,7 +42,7 @@ class Retry(unittest.TestCase):
         srv, seen = serve(codes)
         self.addCleanup(srv.shutdown)
         err = io.StringIO()
-        with mock.patch.object(h.time, 'sleep'), redirect_stderr(err):
+        with mock.patch.object(h, 'retry_delay', return_value=0.0), redirect_stderr(err):
             try:
                 result = h.post('http://127.0.0.1:%d/v1/chat/completions' % srv.server_port, 'k', {}, 5)
             except HTTPError as e:
@@ -64,6 +64,19 @@ class Retry(unittest.TestCase):
         self.assertEqual(len(seen), h.RETRY_LIMIT)
         self.assertIsInstance(result, HTTPError)
         self.assertEqual(result.code, 500)
+
+    def test_abort_during_wait_stops_retrying(self):
+        srv, seen = serve([500])
+        self.addCleanup(srv.shutdown)
+        conns = h._connections()
+        threading.Timer(0.3, conns.aborting.set).start()
+        self.addCleanup(conns.aborting.clear)
+        started = h.time.monotonic()
+        with mock.patch.object(h, 'retry_delay', return_value=30.0), redirect_stderr(io.StringIO()):
+            with self.assertRaises(HTTPError):
+                h.post('http://127.0.0.1:%d/v1/x' % srv.server_port, 'k', {}, 5)
+        self.assertLess(h.time.monotonic() - started, 5)
+        self.assertEqual(len(seen), 1)
 
     def test_permanent_errors_not_retried(self):
         for code in (400, 401, 403, 404, 422):

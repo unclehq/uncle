@@ -1,66 +1,79 @@
-# Change spec: `uncle --audit [BRANCH]`
+# Change spec: branch and worktree policy
 
-Omitted sections: Performance (none); Migration (none: no schema); Prototype isolation (not a prototype)
+Omitted sections: Performance (negligible git calls); Security (no new trust boundary); Migration (none); Prototype isolation (not applicable).
 
 ## 1. Change type
-Feature (new CLI command).
+Behavior change.
 
 ## 2. Problem statement
-Rerunning the final auditor requires hand-editing `.uncle/workflow/state` and rerunning the driver. Operators want one command.
+App builds and change runs both get an Uncle worktree by default, and a change run on a checkout with no remote (or unborn/detached HEAD) gets no branch at all. The operator wants a predictable policy: change work on a new branch, new app builds directly in `main` with no worktree and no branch.
 
 ## 3. Current behavior
-B-1..B-7 in the baseline. `--audit` is an unknown argument.
+See baseline B-1..B-9.
 
 ## 4. Desired behavior
-`uncle --audit [BRANCH]` sets the change workflow of the branch's checkout back to its `FINAL_AUDIT` state and runs the existing change driver, which runs the unchanged auditor, writes `.uncle/docs/FINAL_AUDIT.md` in that checkout, and routes the verdict as it does today. The command then prints the verdict class and the audit file path. BRANCH defaults to the current branch. Settled questions: auditor = FINAL_AUDIT stage; optional positional branch; output stays in `<checkout>/.uncle/docs/FINAL_AUDIT.md`.
+1. Change run (`change-workflow.sh`, `from-issue.sh` change mode, home actions create_change/run_change/github_issue) is on a newly created branch before any edit, unless already on the branch recorded as created for this run.
+2. App build (`stagegate.sh`, create_app/run_app) runs in `main` of the current checkout: no worktree, no branch.
+3. Any worktree option/setting requested for an app build is ignored and Uncle says so plainly.
+4. App build refuses to start (nothing written) if the checkout is a git repository with commits and is not on `main`, or has uncommitted changes other than Uncle's own files; the message states which and why.
+5. Opt-in issue worktrees keep working.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| B-1 | ADD | `uncle --audit` | Unknown argument | Audits current branch's checkout; prints verdict and FINAL_AUDIT.md path; exit = driver status | AC-2 test |
-| B-8 | ADD | `uncle --audit BRANCH` | n/a | Audits checkout where BRANCH is checked out (this or another worktree); caller's checkout untouched | AC-3 test |
-| B-9 | ADD | `--audit` cannot run | n/a | One-line `Error: ...` on stderr naming the cause, nonzero exit (`$UNCLE_REFUSE_CODE`), state file unchanged | AC-4 tests |
-| B-2 | MODIFY | `uncle --help` | usage without audit | usage lists `--audit [BRANCH]` | AC-1 |
-| B-5 | MODIFY | near-miss like `--audt` | Did-you-mean from fixed list | list includes `--audit` | AC-1 |
-| B-3,B-4,B-6,B-7 | PRESERVE | existing flags / driver | as baseline | unchanged | AC-5 |
+| BH-1 | MODIFY | Change run, any launcher, no worktree and no remote (B-4) | Stays on current branch | Switches to a new branch before first stage; prints `Branch: <name>` | run-policy-test.sh |
+| BH-2 | PRESERVE | Change run with remote on default branch (B-3) | Engine creates branch | Unchanged; same branch name scheme | early-branch-test.py |
+| BH-3 | PRESERVE | Change run resumed on its recorded run branch (B-5) | Adopts branch | No second branch created | run-policy-test.sh |
+| BH-4 | MODIFY | App run via `uncle`/TUI/headless | Sibling worktree + new branch | No worktree, no branch; runs in the current checkout on `main` | run-policy-test.sh/.py |
+| BH-5 | ADD | App build off `main` | Runs | Exit 1 before any write; message names current branch and `main` | run-policy-test.sh |
+| BH-6 | ADD | App build with uncommitted changes (excluding `.uncle/`, `REQUIREMENTS.md`, `CHANGE_REQUEST.md`) | Runs | Exit 1 before any write; message says uncommitted changes and lists up to 10 paths | run-policy-test.sh |
+| BH-7 | ADD | App build with `WORKFLOW_WORKTREE=1` set explicitly | Worktree made | Notice `Worktrees are not used for application builds; building in main of this checkout.`; no worktree | run-policy-test.sh |
+| BH-8 | PRESERVE | `from-issue.sh N --worktree` | Worktree on new branch | Unchanged | worktree-run-test.sh |
+| BH-9 | PRESERVE | `from-issue.sh --new --worktree` | Exit 1 | Unchanged | existing tests |
+| BH-10 | PRESERVE | Resumed app run (state file exists) or non-git/unborn-HEAD project | n/a | Preflight skipped; run continues | run-policy-test.sh |
+| BH-11 | PRESERVE | Legacy in-flight owned app worktree | Merge-back | Merge code retained and unchanged | worktree-merge tests |
+| BH-12 | MODIFY | Docs and home-agent prompt | No policy text | Describe the policy | grep in test |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| I-1 | EXISTING | One driver per checkout | driver | driver.lock | AC-4 lock case |
-| I-3 | EXISTING | Audit binding/verdict routing unchanged | driver | `change-workflow.sh` untouched | AC-7 diff check |
-| I-4 | EXISTING | Unknown args refused with `$UNCLE_REFUSE_CODE` | launcher | `uncle` | AC-5 |
-| I-6 | NEW | `--audit` never modifies state unless every precondition passed | audit command | precondition order in new script | AC-4 tests assert state bytes unchanged |
-| I-7 | NEW | `--audit` never switches or modifies the caller's checkout/branch | audit command | no `git checkout`/`switch` used | AC-3 test asserts HEAD unchanged |
-No RELAXED or REMOVED invariants.
+| INV-1 | NEW | The branch/worktree decision for a run kind is made only in `scripts/lib/run-policy.sh` | all launchers and drivers | run-policy.sh | run-policy-test.sh (callers delegate) |
+| INV-2 | NEW | An app build never creates a worktree or a branch | stagegate path | worktree_auto + driver | run-policy-test.sh (`git worktree list`/`git branch` before = after) |
+| INV-3 | NEW | A change run has left the starting branch for a new branch before the first stage | change path | driver guard | run-policy-test.sh |
+| INV-4 | NEW | A refused app start writes nothing | stagegate path | preflight before first write | run-policy-test.sh |
+| INV-5 | EXISTING | No existing branch or worktree is deleted or force-modified | all | no delete in new code | run-policy-test.sh, worktree tests |
+| INV-6 | EXISTING | Approval and verification gates unchanged | drivers | untouched code | existing suites |
+
+No invariant is RELAXED or REMOVED.
 
 ## 7. Compatibility
-All existing flags, exit codes, and driver options unchanged. `--audit` composes with `--attended`/`--unattended`/`--noui`; refused with `--application`, `--issue`, `--change-request`, `verify`-style early exits are not combinable.
+Change runs keep their worktree default (already a new branch). `WORKFLOW_WORKTREE=0`, `--no-worktree`, `--worktree`, `--worktree-dir`, `--branch` keep meaning for change and issue runs.
 
 ## 8. Error and failure behavior
-Clear refusal (B-9) for: not a git repo; detached HEAD without BRANCH; BRANCH not a local branch; BRANCH not checked out in any worktree; checkout has no change-family workflow state; driver lock held; more than one BRANCH; BRANCH beginning with `--`; combined with another startup action. A driver failure or a not-READY audit surfaces the driver's own message and nonzero exit.
+App preflight failure: message on stderr, exit 1, no state written. Branch-guard failure (name invalid, switch fails): message, exit 1 before any stage; no branch deleted. Non-git, unborn HEAD: policy skips with no error (`uncle_ensure_project_git` owns repo creation). Detached HEAD on change run: branch created from it.
 
-## 10. Security
-Branch name is validated with `git check-ref-format --branch` and passed only as a quoted argument; never evaluated. No new env override for the driver path. `UNCLE_HOME_AGENT` rule (I-2) applies: refuse `--audit` from the home agent subtree without the app marker, as other startup actions do.
-
-## 12. Rollback
-Revert the commit: removes flag and script. State left at FINAL_AUDIT after a run is harmless: resuming reruns the audit; previous state is printed so an operator can restore it.
+## 11-12. Migration and rollback
+No data migration. Rollback is reverting the commit; branches created by runs are left in place.
 
 ## 14. Non-goals
-Changing what the auditor checks; other commands; app-family (stagegate) audits; creating worktrees or checking out branches; cleanup.
+Changing review/plan/verify stages; removing issue worktree support; changing push/PR behavior; editing `from-issue.sh`; removing `worktree-merge.sh`.
 
 ## 15. Assumptions
-A1/A2 from the baseline. Exit status equals the driver's; the verdict is printed for information.
+- A1: `main` includes `master` only when no local `main` exists.
+- A2: Change runs keep their default worktree (it satisfies 'new branch'); the guard covers runs that proceed in place.
+- A3: Uncle's own files excluded from the dirty check: `.uncle/`, `REQUIREMENTS.md`, `CHANGE_REQUEST.md`.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | `uncle --help` lists `--audit [BRANCH]` and exits 0; the did-you-mean hint for a near miss such as `--audt` suggests `--audit`. | Shell test greps help output and hint output. |
-| AC-2 | `uncle --audit` with no argument in a checkout with a change-family workflow sets state to FINAL_AUDIT, runs the change driver in that checkout, prints the verdict class and the path of `.uncle/docs/FINAL_AUDIT.md`, and exits with the driver's status. | Fixture test with stub driver via UNCLE_RUNTIME_ROOT records state, cwd and flags at invocation; asserts output and exit codes 0 and nonzero cases. |
-| AC-3 | `uncle --audit BRANCH` runs the driver in the worktree where BRANCH is checked out, without changing the caller's checkout, branch or HEAD. | Fixture with two worktrees; stub driver records cwd; caller HEAD and branch compared before and after. |
-| AC-4 | Each unrunnable case (not a git repo, detached HEAD without BRANCH, unknown branch, branch not checked out, no change workflow state or app-family state, driver lock held, extra positional, option-like BRANCH, combined with --application/--issue/--change-request) prints a one-line `Error:` message naming the cause, exits `$UNCLE_REFUSE_CODE`, and leaves the state file byte-identical. | One shell test case per condition checking stderr, exit code, and state checksum. |
-| AC-5 | Existing launcher behavior is unchanged: existing launcher-* tests and the full shell and Python suites show no new failures versus baseline. | `bash scripts/run-shell-tests.sh` and `bash scripts/run-python-tests.sh` compared with baseline by the driver. |
-| AC-6 | New automated tests (`scripts/tests/audit-command-test.sh`) cover AC-1 to AC-4 and fail when the command is absent or skips a precondition. | Run the test against the unmodified launcher (fails) and against a copy with one precondition removed (fails). |
-| AC-7 | The auditor and driver are not modified: no diff in `scripts/change-workflow.sh`, `scripts/stagegate.sh`, `scripts/lib/audit-verdict.sh`, or `prompts/`. | `git diff --stat` against the change-impact table scope. |
+| AC-1 | A change run that proceeds in place (WORKFLOW_WORKTREE=0, no remote) is on a newly created branch, shown by `git branch --show-current`, before the first stage runs. | run-policy-test.sh: fixture repo on main, run policy function/driver start, assert branch differs from main and is new. |
+| AC-2 | A change run resumed on the branch recorded as created for it creates no further branch. | run-policy-test.sh: run guard twice; branch list unchanged after second call. |
+| AC-3 | A new application build started on a clean `main` creates no worktree and no branch. | run-policy-test.sh and run-policy-test.py: `git worktree list` and `git branch` identical before and after the launcher path (worktree_auto with app kind prints nothing). |
+| AC-4 | An application build refuses to start, exit 1 with a message naming the cause, when the checkout is not on `main` or has uncommitted changes; nothing is written. | run-policy-test.sh: both refusal cases plus clean-main pass case; assert exit status, message, and no new files under .uncle/workflow. |
+| AC-5 | An explicitly requested worktree setting (WORKFLOW_WORKTREE=1) on an app build is ignored and Uncle says plainly that worktrees are not used for application builds. | run-policy-test.sh: assert notice text and no worktree. |
+| AC-6 | Opt-in issue worktrees and existing worktree tests are unaffected. | scripts/run-shell-tests.sh and scripts/run-python-tests.sh show no new failures against baseline. |
+| AC-7 | The branch/worktree decision is made in one place (scripts/lib/run-policy.sh); uncle, uncle_tui.py, run_duties.py, uncle_headless.py and the drivers delegate to it. | run-policy-test.py asserts launchers pass the run kind to the shared function; code inspection. |
+| AC-8 | docs/worktrees.md, prompts/home-agent.md and scripts/README.md describe the policy. | run-policy-test.sh greps for the policy sentences. |
+| AC-9 | No existing branch or worktree is deleted or force-modified by the new code. | run-policy-test.sh: pre-existing branch and worktree still present with same SHA. |
 

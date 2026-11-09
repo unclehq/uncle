@@ -2399,8 +2399,8 @@ class UncleTUI:
             return
         try:
             result = subprocess.run(
-                ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2"',
-                 "_", ROOT, _project_root()],
+                ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2" "$3"',
+                 "_", ROOT, _project_root(), self._startup_action or ""],
                 capture_output=True, text=True, timeout=120,
                 env=dict(os.environ, ROOT=ROOT), cwd=_project_root())
         except (OSError, subprocess.SubprocessError):

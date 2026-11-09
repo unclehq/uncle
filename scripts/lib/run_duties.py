@@ -166,21 +166,22 @@ def build_driver_command(action, text, attended, root_dir, issue_mode=""):
     return cmd
 
 
-def prepare_worktree(root_dir, project_root, environ=None, issue=False, runner=None):
+def prepare_worktree(root_dir, project_root, environ=None, issue=False, runner=None, kind=None):
     """Create the run worktree via worktrees.sh worktree_auto (non-issue runs).
 
+    kind: None/unknown keeps today's behavior; "app" never creates a worktree.
     Returns the directory, or None when skipped or on any failure (same
     tolerance as the TUI).
     """
     import subprocess
     environ = os.environ if environ is None else environ
-    if environ.get("UNCLE_PROJECT_ROOT_LOCKED") or issue:
+    if environ.get("UNCLE_PROJECT_ROOT_LOCKED") or issue or kind in ("app", "create_app", "run_app", "stagegate.sh"):
         return None
     runner = runner or subprocess.run
     try:
         result = runner(
-            ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2"',
-             "_", root_dir, project_root],
+            ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2" "$3"',
+             "_", root_dir, project_root, kind or ""],
             capture_output=True, text=True, timeout=120,
             env=dict(environ, ROOT=root_dir), cwd=project_root)
     except (OSError, subprocess.SubprocessError):

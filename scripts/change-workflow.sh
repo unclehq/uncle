@@ -24,6 +24,15 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+# Run policy: an in-place change run never works on main or a pre-existing
+# branch; the guard switches to a new run branch before any stage (and before
+# change_pr_engine start, which adopts it). UNCLE_RUN_POLICY=off skips it.
+if [[ "${UNCLE_RUN_POLICY:-}" == "off" ]]; then
+    echo "Run policy: skipped (UNCLE_RUN_POLICY=off)" >&2
+else
+    . "$ROOT/scripts/lib/run-policy.sh"
+    run_policy_change_branch || exit 1
+fi
 # Every workflow-generated document lives here, never the project root.
 mkdir -p .uncle/docs
 . "$ROOT/scripts/lib/generated-input.sh"

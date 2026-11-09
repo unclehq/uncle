@@ -739,7 +739,7 @@ run_workflow() {
     . "$ROOT/scripts/lib/worktrees.sh"
     case "${1##*/}" in
         from-issue.sh) uncle_worktree="" ;;
-        *) uncle_worktree="$(worktree_auto "$PWD" || true)" ;;
+        *) uncle_worktree="$(worktree_auto "$PWD" "${1##*/}" || true)" ;;
     esac
     if [[ -n "$uncle_worktree" ]]; then
         echo "Working in $uncle_worktree"

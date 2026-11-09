@@ -46,6 +46,10 @@ def combine(rows):
         known = [row[field] for row in rows if number(row.get(field))]
         result[field] = sum(known) if known else None
         result[field + '_coverage'] = f'{len(known)}/{len(rows)}'
+    spent = [row['spent_usd'] for row in rows if number(row.get('spent_usd'))]
+    result['spent_usd'] = sum(spent) if spent else None
+    caps = {row.get('max_budget_usd') if number(row.get('max_budget_usd')) else None for row in rows}
+    result['max_budget_usd'] = caps.pop() if len(caps) == 1 and None not in caps else None
     result['models'] = sorted({row.get('model', '') for row in rows})
     result['pricing_sources'] = sorted({row['pricing_source'] for row in rows if row.get('pricing_source')})
     return result

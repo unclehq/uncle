@@ -748,8 +748,11 @@ def snapshot(audit=False, excludes=(), attestation=False):
         git('read-tree', '--empty', env=env)
         paths = set(subprocess.check_output(
             ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z']).split(b'\0'))
+        # A first build has no commit yet; its tracked set is then empty rather than an error.
+        has_head = subprocess.run(['git', 'rev-parse', '--verify', '-q', 'HEAD'],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
         head_paths = set(subprocess.check_output(
-            ['git', 'ls-tree', '-rz', '--name-only', 'HEAD']).split(b'\0'))
+            ['git', 'ls-tree', '-rz', '--name-only', 'HEAD']).split(b'\0')) if has_head else set()
         paths.update(head_paths)
         # .uncle/docs/ is always part of the tree (the canonical block re-includes it with `!.uncle/docs/`). A bare `.uncle` line
         # appended to .gitignore mid-run (by a test or a first-run refresh) ignores the whole directory, which hid every approved

@@ -7,7 +7,7 @@ nothing from the Uncle install is imported, so `canonical()` and
 `ARTIFACT_EXCLUDES` below are copies of scripts/lib/envelope.py and must stay
 byte-identical.
 
-Exit codes: 0 VERIFIED; 1 NOT VERIFIED or refused; 2 usage or a required tool
+Exit codes: 0 VERIFIED; 1 NOT HUMAN VERIFIED or refused; 2 usage or a required tool
 missing; 3 integrity only (no signature, untrusted signature, or a missing
 optional tool).
 """
@@ -28,7 +28,9 @@ PREDICATE_TYPE = 'https://uncle.dev/attestation/v1'
 SCHEMA_VERSION = '1'
 PAYLOAD_TYPE = 'application/vnd.in-toto+json'
 SSH_NAMESPACE = 'uncle-attestation'
-DOCUMENTS = ('BASELINE_REPORT', 'CHANGE_SPEC', 'ADVERSARIAL_REVIEW', 'CHANGE_PLAN')
+# Change gates, then the new-application build's (scripts/lib/build_attestation.py records the gates the build driver wrote).
+DOCUMENTS = ('BASELINE_REPORT', 'CHANGE_SPEC', 'ADVERSARIAL_REVIEW', 'CHANGE_PLAN',
+             'REQUIREMENTS_INTERPRETATION', 'PROJECT_PLAN', 'UPDATED_PROJECT_PLAN')
 DELEGATED = re.compile(r'^(unattended|supervisor:.*|disabled:.*)$', re.S)
 
 ARTIFACT_EXCLUDES = (
@@ -284,7 +286,7 @@ def check_3(statement, tree):
         # `view_digest` is the Markdown's own hash at attestation time; older
         # attestations lack it. Without it, `digest` may be the canonical JSON's
         # hash, which the verifier cannot recompute: a Markdown that differs is
-        # then reported as NOT VERIFIED (never as approved), not as tampering.
+        # then reported as NOT HUMAN VERIFIED (never as approved), not as tampering.
         no_view_digest = 'view_digest' not in entry
         recorded = entry.get('view_digest') or entry.get('digest') or ''
         path = '.uncle/docs/' + name + '.md'
@@ -296,7 +298,7 @@ def check_3(statement, tree):
             actual = embedded.get(path, '')
             where = 'embedded'
         if recorded and actual and actual != recorded and no_view_digest:
-            lines.append('NOT VERIFIED: %s markdown view not verified (digest is not the Markdown hash)'
+            lines.append('NOT HUMAN VERIFIED: %s markdown view not verified (digest is not the Markdown hash)'
                          % name.lower().replace('_', ' '))
             continue
         if not recorded or actual != recorded:
@@ -305,13 +307,13 @@ def check_3(statement, tree):
         lines.append('approved %s %s' % (name.lower().replace('_', ' '), short(recorded)))
     if not lines:
         raise Refused(['no approved document is recorded in the attestation'])
-    if all(line.startswith('NOT VERIFIED:') for line in lines):
+    if all(line.startswith('NOT HUMAN VERIFIED:') for line in lines):
         raise Refused(['no approved gate could be verified against its Markdown view'] + lines)
     return lines
 
 
 def unverified(line):
-    return line.startswith('NOT VERIFIED:')
+    return line.startswith('NOT HUMAN VERIFIED:')
 
 
 def check_4(statement):
@@ -387,6 +389,19 @@ def check_8(statement, tree, release):
 
 # --- entry -------------------------------------------------------------------
 
+def main_branch_ref():
+    """The repository's main branch: the local branch named by origin/HEAD, else `main`, else `master`."""
+    names = []
+    head = git('symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD', check=False).decode().strip()
+    if head.startswith('origin/'):
+        names.append(head[len('origin/'):])
+    names += ['main', 'master']
+    for name in names:
+        if git('rev-parse', '--verify', '-q', 'refs/heads/' + name + '^{commit}', check=False).decode().strip():
+            return 'refs/heads/' + name
+    return ''
+
+
 def resolve_target(args):
     """(tree, attestation bytes, signature bytes or None)."""
     sig = None
@@ -410,7 +425,19 @@ def resolve_target(args):
             has_sig = git('rev-parse', '--verify', '-q', head + ':.uncle/attestation.sig', check=False).decode().strip()
             sig = git('show', head + ':.uncle/attestation.sig') if has_sig else None
         return tree, raw, sig
-    tree = git('rev-parse', (args.tree or 'HEAD') + '^{tree}').decode().strip()
+    if not (args.tree or args.attestation):
+        main_ref = main_branch_ref()
+        if main_ref and git('rev-parse', '--verify', '-q', main_ref + ':.uncle/attestation.json', check=False).strip():
+            print('verifying the attestation on ' + main_ref)
+            tree = git('rev-parse', main_ref + '^{tree}').decode().strip()
+            has_sig = git('rev-parse', '--verify', '-q', main_ref + ':.uncle/attestation.sig', check=False).decode().strip()
+            return (tree, git('show', main_ref + ':.uncle/attestation.json'),
+                    git('show', main_ref + ':.uncle/attestation.sig') if has_sig else None)
+    ref = args.tree or 'HEAD'
+    if git('rev-parse', '--verify', '-q', ref + '^{tree}', check=False).decode().strip() == '':
+        raise Usage('nothing to verify: %s does not exist (this repository has no commits yet; commit the build, '
+                    'including .uncle/attestation.json, then run uncle verify again)' % ref)
+    tree = git('rev-parse', ref + '^{tree}').decode().strip()
     path = Path(args.attestation or os.path.join('.uncle', 'attestation.json'))
     try:
         raw = path.read_bytes()
@@ -423,7 +450,7 @@ def resolve_target(args):
 
 def main(argv):
     parser = argparse.ArgumentParser(prog='uncle verify', description='Verify an Uncle change attestation.')
-    parser.add_argument('pr', nargs='?', help='PR URL or number (needs gh); default: the current checkout')
+    parser.add_argument('pr', nargs='?', help='PR URL or number (needs gh); default: the main branch, else the current checkout')
     parser.add_argument('--attestation', help='path to attestation.json (default .uncle/attestation.json)')
     parser.add_argument('--tree', help='commit or tree to verify (default HEAD)')
     parser.add_argument('--allowed-signers', help='SSH trust root (default .uncle/allowed_signers)')
@@ -443,14 +470,14 @@ def main(argv):
     except Usage as error:
         print(str(error))
         print()
-        print('NOT VERIFIED')
+        print('NOT HUMAN VERIFIED')
         return 2 if 'not installed' in str(error) else 1
     except Refused as error:
         print('✗ ' + error.args[0][0])
         for extra in error.args[0][1:]:
             print(extra)
         print()
-        print('NOT VERIFIED')
+        print('NOT HUMAN VERIFIED')
         return 1
     # Past the statement itself, every check runs and reports: stopping at the
     # first refusal hid whether anything else was wrong, and made each fix
@@ -480,7 +507,7 @@ def main(argv):
             if unverified(line):
                 print('○ ' + line)
                 if verdict == 'VERIFIED':
-                    verdict = 'NOT VERIFIED'
+                    verdict = 'NOT HUMAN VERIFIED'
             else:
                 print('✓ ' + line)
 
@@ -512,11 +539,11 @@ def main(argv):
     except Usage as error:
         print(str(error))
         print()
-        print('NOT VERIFIED')
+        print('NOT HUMAN VERIFIED')
         return 2 if 'not installed' in str(error) else 1
     print()
     if failed:
-        print('NOT VERIFIED')
+        print('NOT HUMAN VERIFIED')
         return 1
     print(verdict)
     return 0 if verdict == 'VERIFIED' else 3

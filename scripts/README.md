@@ -714,7 +714,7 @@ it runs in CI on a machine that has never seen Uncle. It carries its own copy
 of the RFC 8785 canonicalizer and of `ARTIFACT_EXCLUDES` from
 `scripts/lib/envelope.py`; `scripts/tests/envelope-test.py` fails when the
 two drift. Checks 1-8, the output format, and the exit codes (0 `VERIFIED`,
-1 `NOT VERIFIED`, 2 usage or missing required tool, 3 integrity only) are
+1 `NOT HUMAN VERIFIED`, 2 usage or missing required tool, 3 integrity only) are
 described in `GITHUB_INTEGRATION.md` under Attestation.
 
 ### agent-kimi.sh

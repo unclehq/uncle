@@ -25,7 +25,7 @@ Recordings have not been added yet. This is what each one will show.
 ```text
 ✗ head tree does not match the release artifact
 
-NOT VERIFIED
+NOT HUMAN VERIFIED
 ```
 
 That is the refusal message from [scripts/uncle-verify.py](scripts/uncle-verify.py). The recording will show the full run.
@@ -119,7 +119,7 @@ Verification         tree f12b8...   PASS
 Publication          tree 91ae3...
 
                          ✗
-                    NOT VERIFIED
+                    NOT HUMAN VERIFIED
 ```
 
 The review may have been valid. It just was not a review of the code being published. Uncle treats that distinction as an invariant.

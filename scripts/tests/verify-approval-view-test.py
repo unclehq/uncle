@@ -196,7 +196,7 @@ class ViewDigestTests(unittest.TestCase):
         self.assertIn('digest mismatch', result.stdout)
         self.assertIn('artifact mismatch', result.stdout)
         self.assertIn('review result is missing', result.stdout)
-        self.assertTrue(result.stdout.rstrip().endswith('NOT VERIFIED'))
+        self.assertTrue(result.stdout.rstrip().endswith('NOT HUMAN VERIFIED'))
 
 
 if __name__ == '__main__':

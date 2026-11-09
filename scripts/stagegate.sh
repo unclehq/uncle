@@ -181,6 +181,7 @@ fi
 # wrapper logic around the shared FINAL_AUDIT function.
 . "$ROOT/scripts/lib/project-git.sh"
 . "$ROOT/scripts/lib/worktree-merge.sh"
+. "$ROOT/scripts/lib/change-pr.sh"
 . "$ROOT/scripts/lib/preview-build.sh"
 . "$ROOT/scripts/lib/install-warm.sh"
 . "$ROOT/scripts/lib/background-verify.sh"
@@ -452,6 +453,27 @@ fi
 # The verdict the build finishes with. A waiver (a person's, or an unattended run's) leaves READY
 # in the verdict file and the auditor's own verdict in audit-verdict.original; the run reports
 # the effective one and says out loud, on the next line, that findings were waived unreviewed.
+# Write the build's attestation from the driver's records (scripts/lib/build_attestation.py). Only a READY-class verdict is
+# attested; a build over an override, or with no git history to bind a tree to, is left without one and says so.
+build_attest_completed() {
+    local verdict artifact
+    verdict="$(completed_verdict)"
+    if [[ -s "$GREEN_OVERRIDE_FILE" || -s "$AUDIT_OVERRIDE_FILE" ]]; then
+        echo "Attestation skipped: the build completed over an override."
+        return 0
+    fi
+    git rev-parse --git-dir >/dev/null 2>&1 || { echo "Attestation skipped: not a Git repository."; return 0; }
+    # A bare `.uncle` ignore line would keep the attestation out of the commit; settle uncle's own entries first.
+    python3 "$ROOT/scripts/lib/uncle_gitignore.py" "$PROJECT_ROOT" >/dev/null 2>&1 || true
+    artifact="$(change_pr_engine artifact 2>/dev/null)" && [[ -n "$artifact" ]] \
+        || { echo "Attestation skipped: could not compute the build's artifact digest."; return 0; }
+    python3 "$ROOT/scripts/lib/build_attestation.py" --state "$STATE_DIR" --artifact "$artifact" --verdict "$verdict" \
+        --green-enabled "$GREEN_CHECK" --run-id "${STAGEGATE_RUN_ID:-}" \
+        --subject "$(basename "$PROJECT_ROOT")@$(git branch --show-current 2>/dev/null)" \
+        || echo "Attestation not written; the build continues without one."
+    return 0
+}
+
 completed_verdict() {
     local verdict
     verdict="$(verdict_file_field "$VERDICT_FILE" audit_class 2>/dev/null)"
@@ -6828,6 +6850,9 @@ PY
             # An application build has no PR path. In uncle's own worktree the finished build would otherwise sit on a branch nobody
             # merges, so a clean READY build is committed and merged into the source checkout's branch, and the worktree removed once
             # the summary has printed. Anything short of that keeps the worktree and says so.
+            # Attest the build before it is committed, so the merge carries .uncle/attestation.json to the source branch and
+            # `uncle verify` finds it there. Failure never blocks the merge: no attestation simply verifies as absent.
+            build_attest_completed
             extras_reason=not-applicable merge_failed=0
             if worktree_merge_owned; then
                 case "$(completed_verdict)" in

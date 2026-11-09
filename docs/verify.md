@@ -5,7 +5,7 @@
 ## Usage
 
 ```sh
-uncle verify                 # the current checkout (HEAD)
+uncle verify                 # the attestation on the main branch (falls back to the current checkout when main has none)
 uncle verify 123             # a pull request by number or URL (needs gh)
 uncle verify --tree <commit> # a specific commit or tree
 ```
@@ -23,7 +23,7 @@ Options: `--attestation PATH` (default `.uncle/attestation.json`), `--tree REF`,
 
 ## What gets written
 
-When a change completes, the driver writes two files into the change:
+When a change completes, the driver writes two files into the change. A new-application build does the same at completion (`scripts/lib/build_attestation.py`), from its own approval records, review and plan documents, green-check results and audit verdict, so the local merge carries them to the source branch. A build that completed over an override, or whose verification or audit did not pass, is not attested:
 
 * `.uncle/attestation.json`: an [in-toto](https://in-toto.io/) Statement (`https://in-toto.io/Statement/v1`) with predicate type `https://uncle.dev/attestation/v1`, serialized as RFC 8785 canonical JSON so its hash and signature are reproducible.
 * `.uncle/attestation.sig`: a DSSE envelope (payload type `application/vnd.in-toto+json`) over those exact bytes. Present only when a signer was available.
@@ -61,7 +61,7 @@ In order, and stopping at the first failure:
 | Exit | Meaning |
 |---|---|
 | 0 | `VERIFIED`: all checks passed and the signature is valid against a trust root you supplied. |
-| 1 | `NOT VERIFIED`: a check failed or the change was refused. |
+| 1 | `NOT HUMAN VERIFIED`: a check failed or the change was refused. |
 | 2 | Usage error, or a required tool (such as `git`) is missing. |
 | 3 | Integrity only: all checks passed, but there is no signature, the signature is untrusted, or an optional tool is missing. |
 

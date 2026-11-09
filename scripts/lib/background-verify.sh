@@ -143,10 +143,10 @@ green_background_publish() {
             rm -f "$STATE_DIR/green-check.fingerprint"      # the tree moved while the commands ran: the result describes another tree
         fi
         if [[ "$failures" -gt 0 ]]; then
-            record_nonblocking_failure green-check "$failures failed verification check(s); they ran in the background and changed nothing"
+            # A failed background run is only a result. It is not a decision to continue: writing the override file here (as this
+            # once did) made TEST_REVIEW skip repair and made COMPLETE say "by human override" for a run no human touched. The
+            # consumers route it through green_failure_route (repair first, then continue/ask) and record any continuation themselves.
             record_test_failure_disposition || true
-            printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$failures failing check(s) continued automatically (background verification)" \
-                > "$GREEN_OVERRIDE_FILE"
         fi
         echo "Background verification finished: $failures failed command(s)."
     else

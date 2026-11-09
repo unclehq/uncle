@@ -38,15 +38,22 @@ def unrunnable(green_log):
 
 def critical(green_class, green_log):
     failed = []
+    unknown = []
     try:
         for row in Path(green_class).read_text(encoding='utf-8').splitlines():
             kind, _, command = row.partition('\t')
             if kind in ('REGRESSION', 'FAIL'):
                 failed.append(command.strip() or kind)
+            elif kind in ('PENDING', 'NOT RUN'):
+                # A placeholder is not a clean run. Reading one as "no failure" let test review downgrade its rows and skip
+                # repair while the real result was still being produced.
+                unknown.append(command.strip() or kind)
     except OSError:
         pass
     if failed:
         return 'verification failed: ' + '; '.join(failed)
+    if unknown:
+        return 'verification result not available: ' + '; '.join(unknown)
     try:
         text = Path(green_log).read_text(encoding='utf-8', errors='replace')
     except OSError:

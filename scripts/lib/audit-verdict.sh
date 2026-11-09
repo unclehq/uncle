@@ -116,6 +116,25 @@ verdict_file_field() {
 # final_audit_route_verdict next); returns 2 when a malformed audit's one-shot
 # retry was spent and FINAL_AUDIT was reopened (this function already called
 # set_state FINAL_AUDIT -- the caller's case arm need only `continue`).
+# audit_verification_unresolved -- succeeds when a driver verification command is failing and no waiver covers every failing one.
+audit_verification_unresolved() {
+    [[ "${GREEN_CHECK:-1}" == 1 && -s "${GREEN_CLASS:-}" ]] || return 1
+    [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] || return 1
+    local ids=""
+    if declare -f green_failed_ids > /dev/null && declare -f waived_ids > /dev/null; then
+        ids="$(green_failed_ids "$GREEN_CLASS" "$GREEN_CMDS")"
+        # shellcheck disable=SC2086
+        if [[ -n "${ids// /}" ]] && waived_ids $ids; then return 1; fi
+    fi
+    return 0
+}
+
+# audit_blind_to_evidence <FINAL_AUDIT.md> -- succeeds when the audit says it was given no artifacts to judge. Such an audit has
+# no opinion about the build, so its READY means nothing; FA-001..003 in a real run said exactly this and were still accepted.
+audit_blind_to_evidence() {
+    [[ -s "$1" ]] && grep -qiE 'named no (canonical )?(json )?(prerequisite )?artifact|no artifact paths were given|no verification evidence was available' "$1"
+}
+
 final_audit_validate() {
     local check_fn="$1" run_id="$2"
     local final_audit_ingest_error final_audit_validation_error
@@ -140,6 +159,19 @@ final_audit_validate() {
         python3 -B "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$final_audit_validation_error"
     }
     FINAL_AUDIT_CLASS="$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")"
+
+    if [[ "$FINAL_AUDIT_CLASS" == READY || "$FINAL_AUDIT_CLASS" == READY_WITH_NON_BLOCKING_ISSUES ]] \
+            && audit_blind_to_evidence .uncle/docs/FINAL_AUDIT.md; then
+        if [[ ! -e "$STATE_DIR/final-audit-evidence-retry" ]]; then
+            : > "$STATE_DIR/final-audit-evidence-retry"
+            echo "The final audit says it was given no artifacts to judge; rerunning it once instead of accepting a verdict with no evidence behind it."
+            rm -f .uncle/docs/FINAL_AUDIT.md "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json"
+            set_state FINAL_AUDIT
+            return 2
+        fi
+        echo "The final audit was again given no artifacts to judge; its $FINAL_AUDIT_CLASS verdict is not accepted. Treating it as NOT_READY."
+        FINAL_AUDIT_CLASS=NOT_READY
+    fi
 
     if [[ "$FINAL_AUDIT_CLASS" == READY || "$FINAL_AUDIT_CLASS" == READY_WITH_NON_BLOCKING_ISSUES ]] \
             && [[ "$GREEN_CHECK" == "1" && -s "$GREEN_CMDS" ]]; then
@@ -303,6 +335,17 @@ final_audit_override_recovery() {
             echo 'Unattended final audit is NOT READY with a driver-observed verification failure; repairing once before any unreviewed waiver.'
             printf '%s\n' .uncle/docs/FINAL_AUDIT.md > "$STATE_DIR/repair-source"
             set_state REPAIR
+            return 0
+        fi
+        # An unattended run may skip audit findings it has no one to ask about, but it may not turn a driver-observed failure into a
+        # READY. The run still finishes, so it is not stuck, and it finishes with the auditor's NOT_READY on record and the failing
+        # commands named. Only a recorded waiver (waived_ids) or a green result makes those commands stop counting.
+        if [[ "${UNATTENDED:-0}" == 1 ]] && audit_verification_unresolved; then
+            echo "Unattended run finishing with verdict NOT_READY: driver verification still fails and has not been waived."
+            echo "  $GREEN_MD lists the failing command(s). The verdict is not rewritten to READY."
+            printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "finished NOT_READY: unresolved driver verification failure" \
+                >> "${UNATTENDED_FILE:-$STATE_DIR/unattended-gates}"
+            set_state COMPLETE
             return 0
         fi
         if [[ "${UNATTENDED:-0}" == 1 ]]; then

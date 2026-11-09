@@ -40,6 +40,11 @@ class Severity(unittest.TestCase):
         self.assertEqual(fs.critical(*self.green([('PASS', 'npx vitest run'), ('MUTATION', 'node tests/mutations/run.mjs')])), '')
         self.assertEqual(fs.critical(*self.green([('PASS', 'a'), ('PREEXISTING', 'b')])), '')
 
+    def test_a_pending_or_not_run_placeholder_is_not_read_as_a_clean_run(self):
+        # The background run publishes PENDING rows first; reading them as "no failure" let test review skip repair.
+        self.assertIn('not available', fs.critical(*self.green([('PENDING', 'npx vitest run')])))
+        self.assertIn('not available', fs.critical(*self.green([('PASS', 'npm ci'), ('NOT RUN', 'npx vitest run')])))
+
     def test_a_missing_record_is_not_critical(self):
         self.assertEqual(fs.critical(str(self.tmp / 'none.tsv'), str(self.tmp / 'none.log')), '')
 

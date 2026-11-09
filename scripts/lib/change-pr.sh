@@ -184,7 +184,7 @@ change_pr_complete() {
     fi
     if [[ "$rc" == 0 && "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] && change_pr_in_worktree; then
         case "${CHANGE_PR_EXTRAS_REASON:-}" in
-            published|published-draft-unreviewed|merged-local) ;;
+            published|published-draft-unreviewed|merged-local|handoff) ;;
             *) echo "Worktree run: no PR was published (${CHANGE_PR_EXTRAS_REASON:-unset})." >&2; return 1 ;;
         esac
     fi
@@ -198,6 +198,16 @@ change_pr_complete_route() {
     # The unattended ledger never routes: an attended rerun after a headless
     # run still publishes.
     local interactive=0 boundary=0
+    # Hand-off publish mode (UNCLE_PUBLISH_MODE=handoff): a workspace that cannot push or call gh writes the audited change
+    # for its host to publish. No remote, gh or journal write is involved, and the hand-off is a success (exit 0).
+    if [[ "${UNCLE_PUBLISH_MODE:-}" == handoff ]]; then
+        if python3 "$(dirname "${BASH_SOURCE[0]}")/handoff_export.py"; then
+            CHANGE_PR_EXTRAS_REASON=handoff
+            return 0
+        fi
+        CHANGE_PR_EXTRAS_REASON=handoff-failed
+        return 1
+    fi
     # Unattended (auto) mode is zero human input: the title, summary and consent
     # are generated, a NOT_READY audit is published over on the record as a DRAFT
     # PR, and nothing waits on anyone. The release envelope and the PR banner still

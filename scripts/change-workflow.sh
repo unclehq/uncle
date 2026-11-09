@@ -4989,6 +4989,8 @@ PY
             ;;
 
         COMPLETE)
+            . "$ROOT/scripts/lib/host_preview_hook.sh"
+            uncle_host_preview_hook
             echo
             if [[ -s "$STATE_DIR/delivery-summary.tsv" ]] && grep -q $'\tWAIVED\t' "$STATE_DIR/delivery-summary.tsv"; then
                 echo "Change workflow complete with waived acceptance."

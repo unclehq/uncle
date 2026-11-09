@@ -22,10 +22,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import completion_preview as cp
 
 
-def command_for(root, spec):
-    """The launch command, on the launch URL's port, for the Vite-style script a plan usually names."""
+def command_for(root, spec, host=None, port=None):
+    """The launch command, on the launch URL's port, for the Vite-style script a plan usually names.
+
+    `host` and `port` override the loopback default and the URL's port (host-preview mode); omitted, nothing changes."""
     command = cp.existing_script(root, spec.get('command'))
-    port = urlparse(spec.get('url') or '').port
+    port = port or urlparse(spec.get('url') or '').port
     if not (isinstance(command, list) and command[:2] == ['npm', 'run'] and len(command) == 3 and port):
         return command
     try:
@@ -33,7 +35,7 @@ def command_for(root, spec):
     except (OSError, ValueError):
         return command
     if 'vite' in script:
-        return command + ['--', '--host', '127.0.0.1', '--port', str(port), '--strictPort']
+        return command + ['--', '--host', host or '127.0.0.1', '--port', str(port), '--strictPort']
     return command
 
 

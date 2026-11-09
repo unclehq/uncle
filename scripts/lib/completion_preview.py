@@ -6,6 +6,7 @@ import queue
 import re
 import shlex
 import subprocess
+import sys
 import threading
 import time
 from urllib.parse import urlparse
@@ -281,6 +282,11 @@ class CompletionPreview:
 
     def run(self):
         try:
+            import host_preview
+            if host_preview.is_host_mode(os.environ):
+                # Host mode: the host owns the preview; never spawn or open a browser here.
+                sys.stderr.write('Application preview: skipped in host mode\n')
+                return
             spec = launch_spec(self.root)
             self.kind = spec['kind']
             if self.kind == 'command' and spec.get('terminal'):

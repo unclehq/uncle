@@ -6790,6 +6790,8 @@ PY
             ;;
 
         COMPLETE)
+            . "$ROOT/scripts/lib/host_preview_hook.sh"
+            uncle_host_preview_hook
             echo
             if green_pending; then
                 echo "Verification commands are still running in the background; $GREEN_MD is replaced with their results when they finish."

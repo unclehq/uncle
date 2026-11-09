@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# EXPERIMENTAL (WORKFLOW_TESTS=1): write the protected tests before any application code, in parallel lanes, show them to
+# EXPERIMENTAL (on by default; WORKFLOW_TESTS=0 turns it off): write the protected tests before any application code, in parallel lanes, show them to
 # the human, freeze them, and refuse an implementation that edits or deletes a frozen file.
 #
-# Sits between MODULE_INTERFACES and IMPLEMENT. Off by default: with the flag unset the state is a pass-through, so a normal
+# Sits between MODULE_INTERFACES and IMPLEMENT. With WORKFLOW_TESTS=0 the state is a pass-through, so a normal
 # run is unchanged.
 #
 # Lanes. A `harness` lane (test configuration, fixtures, helpers) runs first, because every other lane imports it. Then the
@@ -19,10 +19,10 @@
 # verification_manifest, verify_commands.
 
 tests_enabled() {
-    case "${WORKFLOW_TESTS:-0}" in
+    case "${WORKFLOW_TESTS:-1}" in
         1) return 0 ;;
-        0|'') return 1 ;;
-        *) echo "WORKFLOW_TESTS=${WORKFLOW_TESTS} is not 1; tests is OFF (a stray character after the 1?)." >&2
+        0) return 1 ;;
+        *) echo "WORKFLOW_TESTS=${WORKFLOW_TESTS} is not 0 or 1; tests is OFF (a stray character after the 1?)." >&2
            return 1 ;;
     esac
 }

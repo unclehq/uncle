@@ -135,7 +135,7 @@ fi
 # two modules that disagreed on whether `initialState` is a function. WORKFLOW_MODULE_INTERFACES=1 runs it for every plan, 0 never.
 WORKFLOW_MODULE_INTERFACES="${WORKFLOW_MODULE_INTERFACES:-auto}"
 # Tests lanes are written in isolation from each other and from the code, so they always need the shared contract.
-[[ "${WORKFLOW_TESTS:-0}" != 1 ]] || WORKFLOW_MODULE_INTERFACES="${WORKFLOW_MODULE_INTERFACES/auto/1}"
+[[ "${WORKFLOW_TESTS:-1}" != 1 ]] || WORKFLOW_MODULE_INTERFACES="${WORKFLOW_MODULE_INTERFACES/auto/1}"
 
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
@@ -5804,7 +5804,7 @@ while true; do
 
         MODULE_INTERFACES)
             module_interfaces_stage "$PLAN_DOC"
-            # Experimental: with WORKFLOW_TESTS=1 the tests are written and frozen before IMPLEMENT.
+            # Experimental: unless WORKFLOW_TESTS=0 the tests are written and frozen before IMPLEMENT.
             if tests_enabled && ! tests_locked && ! tests_concurrent; then set_state TESTS; fi
             ;;
 

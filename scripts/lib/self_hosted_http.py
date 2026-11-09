@@ -326,12 +326,39 @@ def _converse_result(raw, schema_name, model):
             'usage': {'prompt_tokens': u['input'], 'completion_tokens': u['output'], 'total_tokens': u['input'] + u['output']}}
 
 
+REFUSED_SECONDS = 6 * 3600.0
+
+
+def _refused_file(base):
+    parts = urlsplit(base)
+    name = re.sub(r'[^A-Za-z0-9._-]', '_', '%s-%s%s' % (parts.hostname, parts.port or 0, parts.path))
+    return os.path.join(os.environ.get('UNCLE_OUTAGE_DIR') or tempfile.gettempdir(), 'uncle-options-refused-' + name)
+
+
+def _options_refused(base):
+    """True when an earlier stage process learned this Base URL refuses the optional request fields."""
+    try:
+        return time.time() - os.path.getmtime(_refused_file(base)) < REFUSED_SECONDS
+    except OSError:
+        return False
+
+
+def _remember_options_refused(base):
+    try:
+        with open(_refused_file(base), 'w') as handle:
+            handle.write('1')
+    except OSError:
+        pass
+
+
 def _compatible_output_post(values, body, timeout, url=None):
     """Apply extras to every turn, with fallback separate from effort/schema."""
     values = configure_request_options(values)
     base = values['base_url'].rstrip('/')
     url = url or base + '/chat/completions'
     features = _request_features.setdefault(base, {})
+    if 'request_options' not in features and _options_refused(base):
+        features['request_options'] = False
     options = values['_request_options'] if features.get('request_options') is not False else {}
     request, applied = merge_request_options(body, options)
     stage = values['_request_options_stage'] or 'self-hosted'
@@ -346,8 +373,10 @@ def _compatible_output_post(values, body, timeout, url=None):
     def disabled():
         if features.get('request_options') is not False:
             print('Self hosted [%s]: server rejected request options %s; using a retry without options '
-                  'and omitting them for this Base URL for this process.' % (stage, keys), file=sys.stderr)
+                  'and omitting them for this Base URL from now on (across stage processes, for %d hours).'
+                  % (stage, keys, REFUSED_SECONDS // 3600), file=sys.stderr)
         features['request_options'] = False
+        _remember_options_refused(base)
 
     def without_options(candidate):
         clean = dict(candidate)

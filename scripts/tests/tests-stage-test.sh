@@ -135,6 +135,21 @@ eval "${run_claude_orig/run_claude/stub_agent}"
 run_claude() { stub_agent "$@"; [[ "${2#tests-}" != unit ]] || { mkdir -p src; echo prod > src/engine.js; }; }
 expect "production code written during authoring is rejected" '! ( tests_stage ) > "$SCR/stray.out" 2>&1 && grep -q "src/engine.js changed during test authoring" "$SCR/stray.out"'
 
+# Ignore rules that move mid-run must not turn an old, untouched file into a stray. (Real run: the implementation rewrote .gitignore while the
+# lanes wrote tests, and a stale .vite/deps from hours earlier stopped being ignored and failed the ownership check.)
+reset
+mkdir -p stale-cache; echo old > stale-cache/deps.json; touch -t 202001010000 stale-cache/deps.json
+printf 'stale-cache/\n' > .gitignore
+run_claude() { stub_agent "$@"; [[ "${2#tests-}" != unit ]] || printf '__pycache__/\n' > .gitignore; }
+( tests_stage ) > "$SCR/ignore-moved.out" 2>&1 && ignore_moved_rc=0 || ignore_moved_rc=$?
+expect "an old file un-ignored during authoring is not a stray" '[[ "$ignore_moved_rc" == 0 ]] && ! grep -q "stale-cache/deps.json changed during test authoring" "$SCR/ignore-moved.out"'
+reset
+mkdir -p stale-cache; echo old > stale-cache/deps.json; touch -t 202001010000 stale-cache/deps.json
+printf 'stale-cache/\n' > .gitignore
+run_claude() { stub_agent "$@"; [[ "${2#tests-}" != unit ]] || { printf '__pycache__/\n' > .gitignore; mkdir -p src; echo fresh > src/new.js; }; }
+( tests_stage ) > "$SCR/ignore-moved2.out" 2>&1 && ignore_moved2_rc=0 || ignore_moved2_rc=$?
+expect "a file written during authoring is still a stray when the ignore rules moved too" '[[ "$ignore_moved2_rc" != 0 ]] && grep -q "src/new.js changed during test authoring" "$SCR/ignore-moved2.out" && ! grep -q "stale-cache/deps.json changed" "$SCR/ignore-moved2.out"'
+
 # Ownership handed to implementation steps: frozen tests are removed from every step, and steps left with nothing are skipped.
 reset
 run_claude() { stub_agent "$@"; }   # the previous test left the stray-production stub installed

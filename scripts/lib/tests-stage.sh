@@ -188,6 +188,12 @@ tests_collate() {
         path="${line:3}"
         [[ -n "$path" && "$path" != .uncle/* ]] || continue
         awk -F'\t' -v f="$path" '$2 == f { found = 1 } END { exit !found }' "$listed" && continue
+        # `git status` lines are a proxy for "changed during authoring", and the proxy breaks when ignore rules move: an
+        # implementation running at the same time rewrote .gitignore, and a stale, untouched .vite/deps (hours older than the run)
+        # stopped being ignored, so it looked like a new stray and failed the stage. A file that still exists and is older than the
+        # snapshot taken before the lanes started cannot have been written by one. (A missing file has no age, so a deletion still
+        # counts; the same-second case compares as not older and stays flagged, which errs toward the check.)
+        [[ -e "$path" && "$path" -ot "$dir/status.before" ]] && continue
         # Concurrent mode: the implementation is writing source at the same time, so a changed file an implementation step owns is its own.
         if tests_concurrent && [[ -s "$STATE_DIR/implement-owns.all.tsv" ]] \
                 && awk -F'\t' -v f="$path" '$2 == f { found = 1 } END { exit !found }' "$STATE_DIR/implement-owns.all.tsv"; then continue; fi

@@ -404,6 +404,15 @@ PYREVISE
         printf 'x\n' >> .uncle/workflow/agent-calls
         mode="${FAKE_ANALYZE:-}"
         [[ "$mode" == baseline-only && -e .uncle/workflow/stub-analyze-done ]] && mode=""
+        # FAKE_ANALYZE=reject-once delivers a bundle the publisher rejects (wrong schema). The second call delivers a valid one only
+        # if its prompt carries the rejection text, so a retry that does not say what was wrong keeps failing.
+        if [[ "$mode" == reject-once ]]; then
+            if [[ -e .uncle/workflow/stub-analyze-done ]] && printf '%s' "$prompt" | grep -q 'previous canonical delivery was rejected'; then
+                mode=""
+            else
+                mode=reject-bad
+            fi
+        fi
         : > .uncle/workflow/stub-analyze-done
         delivery="$(printf '%s' "$prompt" | tr '\n' ' ' | sed -n 's/.*JSON object at ` *\([^` ]*\).*/\1/p' | head -n1)"
         if [[ "$mode" == baseline-only ]]; then
@@ -418,6 +427,9 @@ PYREVISE
                 narrative:"",verification_commands:"bash app/test.sh"}' \
                 > .uncle/workflow/documents/BASELINE_REPORT.json
             printf '# Baseline Report\n\nPassing.\n' > .uncle/docs/BASELINE_REPORT.md
+        elif [[ "$mode" == reject-bad && -n "$delivery" ]]; then
+            mkdir -p "$(dirname "$delivery")"
+            jq -n '{schema:"uncle.artifact",kind:"change-planning-bundle"}' > "$delivery"
         elif [[ "$mode" != exhaust && -n "$delivery" ]]; then
             mkdir -p "$(dirname "$delivery")"
             jq -n '{schema:"uncle.artifact/v1",kind:"change-planning-bundle",
@@ -1636,6 +1648,22 @@ COUNT=$((COUNT + 1))
 if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 1 ]]; then
     fail 'expected exactly one planning pass'
 fi
+
+# A bundle that was delivered and then rejected is asked again once, with the exact error; a pass that delivers nothing is not (above).
+new_case rejected-planning-bundle-is-retried-once-with-the-error
+[[ -s "$REPO/CHANGE_REQUEST.md" ]] || printf '# Change request\n\nFix the greeting.\n' > "$REPO/CHANGE_REQUEST.md"
+rm -f "$REPO/.uncle/docs/BASELINE_REPORT.md" "$REPO/.uncle/docs/CHANGE_SPEC.md" "$REPO/.uncle/docs/CHANGE_PLAN.md" \
+    "$REPO/.uncle/workflow/documents/BASELINE_REPORT.json" "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json" "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json"
+set_state ANALYZE
+run_driver FAKE_ANALYZE=reject-once
+expect_out 'Canonical change-planning bundle rejected; retrying'
+expect_not_out 'Planning is not retried'
+COUNT=$((COUNT + 1))
+if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 2 ]]; then
+    fail "expected the rejected bundle to be asked for exactly once more, saw $(wc -l < "$REPO/.uncle/workflow/agent-calls") planning call(s)"
+fi
+COUNT=$((COUNT + 1))
+[[ -s "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json" ]] || fail 'the corrected bundle was not published'
 
 # A pass that writes nothing stops with the cause, not "Required file missing".
 new_case analyze-exhausted-stops-with-the-cause

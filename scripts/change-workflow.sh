@@ -2185,7 +2185,11 @@ CANONICAL_WORKER_PACKET_CONTRACT
                 # conflicting instructions; one real run tried the denied
                 # live path, then narrated success without writing anywhere.
                 if [[ "${UNCLE_RESOLVED_RUNNER:-}" == self-hosted ]]; then
-                    :
+                    # Only the contract is skipped. A retry after a rejected bundle must still tell the model what was wrong,
+                    # or it is the same call again; self_hosted.py appends its own delivery notice after this.
+                    if [[ -n "$artifact_error" ]]; then
+                        printf '\nThe previous canonical delivery was rejected: %s\nCorrect exactly that and deliver the complete corrected bundle the same way as before.\n' "$artifact_error" >> "$effective_prompt"
+                    fi
                 elif [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" == 1 ]]; then
                     cat >> "$effective_prompt" <<'CANONICAL_PLANNING_BUNDLE_CONTRACT'
 
@@ -2392,8 +2396,19 @@ STRUCTURED_OUTPUT_CONTRACT
                         # would hard-exit the whole process instead.
                         :
                     elif ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_change_planning_bundle.py" . "$agent_delivery" 2>&1)"; then
-                        # Planning is invoked once. A rejected bundle is reported with the exact schema error and the
-                        # stage stops; it is not asked again (run_planning_stage turns this into the stage's failure).
+                        # A pass that delivers nothing is never retried (above): it ran out of context, and asking again
+                        # costs the same pass again. A bundle that was delivered and then rejected is different. The
+                        # validator names the exact defect (a step number used twice, a bad schema), the model has the whole
+                        # plan in hand, and the split path has always retried this once with that message. Without it a
+                        # one-token numbering mistake ended the whole run after the planning call had succeeded.
+                        if [[ -z "$artifact_retried" ]]; then
+                            artifact_retried=1
+                            rm -f "$agent_delivery"
+                            echo "Canonical change-planning bundle rejected; retrying $log_name once with the exact error."
+                            printf '%s\n' "$artifact_error"
+                            continue
+                        fi
+                        # Rejected twice: report the exact error and stop (run_planning_stage turns this into the stage's failure).
                         printf '%s\n' "$artifact_error" >&2
                         return 1
                     fi

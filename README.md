@@ -16,11 +16,7 @@ Describe an application or give Uncle a GitHub issue. It plans, implements, inde
 
 ## See Uncle in action
 
-Recordings have not been added yet. This is what each one will show.
-
-**Demo A: build an application.** A one-sentence request, a live preview while it builds, then independent review, verification and the finished result.
-
-**Demo B: catch an unverified change.** A change passes review and verification. Someone then edits the Git tree. `uncle verify` notices that the tree no longer matches what was reviewed and refuses to call it verified:
+https://github.com/user-attachments/assets/5966ea18-5f58-418c-a0f3-c8415b68e354
 
 ```text
 ✗ head tree does not match the release artifact

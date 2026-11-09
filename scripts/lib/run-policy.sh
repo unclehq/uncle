@@ -169,6 +169,19 @@ run_policy_change_branch() {
     if [[ -n "$cur" ]]; then
         _run_policy_on_run_branch && return 0
         _run_policy_valid_marker && return 0
+        # A linked worktree on its own non-default branch is already isolated,
+        # even when nothing marked it (a worktree made from the TUI or by hand
+        # has no worktree-owned file). Branching again here moved the checkout
+        # to "<branch>-2" after the PR journal had recorded "<branch>", so
+        # publication saw "HEAD or branch changed" and made no PR. Adopt the
+        # branch as the run branch instead.
+        if [[ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-dir 2>/dev/null)" ]] \
+           && ! _run_policy_is_default "$cur" \
+           && git show-ref --verify --quiet "refs/heads/$cur"; then
+            dir="$(_run_policy_state_dir)"
+            mkdir -p "$dir" && printf '%s\n' "$cur" > "$dir/run-branch"
+            return 0
+        fi
     fi
 
     base="$( ROOT="${ROOT:-$_RUN_POLICY_ROOT}" bash -c \

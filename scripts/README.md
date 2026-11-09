@@ -909,3 +909,13 @@ Kimi server (or legacy Wire), and OpenCode server. The locally installed runner
 must provide that interface. Token and reported cost updates continue in the
 stage sidebar, including follow-up turns; unavailable provider costs remain
 unavailable. Command-line workflows without the TUI keep their existing transport.
+
+### Branch and worktree policy
+
+New-application builds run on `main` in the project checkout and never in a
+worktree; they are refused, with the reason, when the checkout is off `main`,
+dirty, or on a detached HEAD. `WORKFLOW_WORKTREE=1` on a fresh app start creates
+no worktree and prints a "worktree not used" notice once. An in-place change run
+on `main` or a non-run branch first switches to a new run branch, with or
+without a remote. Resume is unaffected. `UNCLE_RUN_POLICY=off` skips the app
+preflight and the change-branch guard. See [docs/worktrees.md](../docs/worktrees.md).

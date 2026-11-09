@@ -410,7 +410,8 @@ def main(argv):
         if _duties is not None and os.environ.get("UNCLE_STARTUP_ACTION") != "github_issue":
             runtime = os.environ.get("UNCLE_RUNTIME_ROOT") or os.path.dirname(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            directory = _duties.prepare_worktree(runtime, root)
+            kind = os.environ.get("UNCLE_STARTUP_ACTION") or os.path.basename(args[0])
+            directory = _duties.prepare_worktree(runtime, root, kind=kind)
             if directory:
                 root = directory
                 os.environ["UNCLE_PROJECT_ROOT"] = directory

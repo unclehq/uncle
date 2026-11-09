@@ -24,6 +24,16 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+# Run policy: an app build starts only from a clean main. This runs before the
+# first driver write (.uncle/docs, state, stage output); a refusal exits 1.
+# UNCLE_RUN_POLICY=off (exact match) skips it, for legacy suites.
+if [[ "${UNCLE_RUN_POLICY:-}" == "off" ]]; then
+    echo "Run policy: skipped (UNCLE_RUN_POLICY=off)" >&2
+else
+    . "$ROOT/scripts/lib/run-policy.sh"
+    run_policy_app_preflight || exit 1
+    run_policy_app_notice
+fi
 # Every workflow-generated document lives here, never the project root.
 mkdir -p .uncle/docs
 . "$ROOT/scripts/lib/generated-input.sh"

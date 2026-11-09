@@ -1,74 +1,66 @@
-# Baseline: add `uncle --audit`
+# Baseline: branch and worktree policy
 
-Omitted sections: Reproduction of reported bug (feature, not bug); Existing failures/flaky (none documented; driver baseline is authority)
+Omitted sections: Reproduction result (not a bug); Baseline test results beyond section 9 (driver supplies); Areas outside the change folded into section 14.
 
 ## 1. Change-request summary
-See `.uncle/docs/CHANGE_REQUEST.md`: new `uncle --audit` reruns the auditor on a branch; open questions (how auditor runs today, branch argument, output location) are answered below.
+See `.uncle/docs/CHANGE_REQUEST.md` (Behavior change). Change runs go on a newly created branch; new application builds run in `main` of the current checkout with no worktree and no branch; refuse an app build off `main` or with uncommitted changes; keep opt-in issue worktrees.
 
 ## 2. Repository architecture
-- `uncle` (bash, 1074 lines): launcher. Parses flags (`uncle:240-339`), resolves mode (`uncle:340-385`), then runs TUI / headless / line menu.
-- `scripts/change-workflow.sh`: state-machine driver for change requests. `scripts/stagegate.sh`: new-app driver. `scripts/from-issue.sh`: issue driver.
-- State lives in `<checkout>/.uncle/workflow/state` (`change-workflow.sh:132,176`), written by `state_write` (`scripts/lib/state.sh:54`), read by `state_read` (`:17`). `.uncle/workflow/family` records `change` or `app` (`scripts/lib/workflow_family.py:15-30`).
-- Per-run git worktrees: `scripts/lib/worktrees.sh` (`worktree_branch_dir` :48 maps a branch to its checkout path).
+Bash drivers (`scripts/stagegate.sh` = app, `scripts/change-workflow.sh` = change, `scripts/from-issue.sh` = issue) launched by `uncle` (bash), `uncle_tui.py`, `scripts/lib/uncle_headless.py`, `scripts/lib/repl_actions.py`, all via `scripts/lib/run_duties.py`. Git plumbing: `scripts/lib/worktrees.sh`, `worktree-merge.sh`, `change-pr.sh` (embedded Python engine), `project-git.sh`. Home-agent actions: `scripts/lib/home_actions.py`, `prompts/home-agent.md`.
 
 ## 3. Relevant code paths
-- **The auditor today is the `FINAL_AUDIT` state** of the driver: `change-workflow.sh:4838-4880` (reuses green check, runs `run_final_audit_panel` :3138, writes `.uncle/docs/FINAL_AUDIT.md`), then `VALIDATE_AUDIT` :4882-4908 (verdict classification via `scripts/lib/audit-verdict.sh`, envelope write, routing), `WAIT_AUDIT_OVERRIDE` :4910. Same state name exists in `stagegate.sh:4921`.
-- Auditor output: `.uncle/docs/FINAL_AUDIT.md`, verdict file `.uncle/workflow/audit-verdict` (`:181`), envelope stage `audit`.
-- Driver accepts only `-h --version --attended --unattended` (`change-workflow.sh:72-80`); it self-locks via `driver.lock` (`:113-118`) and reads mode from `UNCLE_UNATTENDED`.
-- Launcher dispatch to driver: `run_change_workflow` `uncle:1020`; `run_workflow` `uncle:664`. Early-exit flags `verify`, `--performance`, `--runs` at `uncle:244-246`. Did-you-mean list at `uncle:332`. Usage text `uncle:66-120`.
+- `scripts/lib/worktrees.sh:292` `worktree_auto`: gives EVERY non-issue run (app and change) its own worktree + new branch unless `WORKFLOW_WORKTREE=0`, already inside a worktree, or marker `.uncle/workflow/worktree-owned`; writes that marker (:319).
+- Callers of `worktree_auto`: `uncle:724-748` (`run_workflow`; skips when `${1##*/}` is `from-issue.sh`), `uncle_tui.py:2381-2414` (`_enter_run_worktree`, skips `workflow_idx==1`; idx 0=app, 2=change; called :9187), `scripts/lib/run_duties.py:169-192` (`prepare_worktree(issue=...)`), `scripts/lib/uncle_headless.py:408-418` (skips `UNCLE_STARTUP_ACTION=github_issue`).
+- `scripts/stagegate.sh:173` sources `worktree-merge.sh`; `:5373` area calls `uncle_ensure_project_git` (`scripts/lib/project-git.sh:3`, does `git init` when no repo); `:6818-6842` merges a finished app build from an owned worktree into the source branch (`worktree_merge_owned`, `worktree_merge_finish_all`).
+- `scripts/change-workflow.sh:3834-3837`: `uncle_ensure_project_git`, then `change_pr_engine start`. Engine `start_build` (`scripts/lib/change-pr.sh:1342-1401`) creates and switches to a PR-head branch ONLY when HEAD is born, a branch is checked out, a remote exists and a default branch is known; otherwise it silently stays on the current branch (no-remote/unborn/detached = today's path). Branch name: `change_pr_engine run-branch-name` (:1900). On a non-default current branch it adopts that branch as head.
+- `scripts/from-issue.sh:492-536`: `WORKTREE=1` default (comment says off), `--no-worktree`, `--worktree-dir`, `--branch`; `--new` forces `WORKTREE=0` unless explicit; explicit `--worktree` with `--new` exits 1 (:543).
+- `scripts/README.md:184-196,245-322` and `docs/worktrees.md` document worktree behavior; `prompts/home-agent.md` has no branch/worktree policy (only mentions branches under cleanup rules, lines 15-16; clear/resume lines 49-56 mention issue worktrees in `home_actions.py` prompt).
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `uncle --audit` | `Unknown argument: --audit`, usage, exit `$UNCLE_REFUSE_CODE` (1; 2 under --noui) | `uncle:322-338` | No (this is the change) |
-| B-2 | `uncle --help` | prints usage, exit 0 | `uncle:242` | Yes, apart from adding the new line |
-| B-3 | `uncle --runs` / `--performance` / `verify` | exec early-exit helpers | `uncle:244-246` | Yes |
-| B-4 | `--application`/`--issue`/`--change-request` mutually exclusive | error exit 1 | `uncle:217-227` | Yes |
-| B-5 | unknown flag near a known one | `Did you mean X?` | `uncle:329-335`; `scripts/tests/launcher-args-test.sh` | Yes |
-| B-6 | change driver reaching FINAL_AUDIT | audit panel runs, FINAL_AUDIT.md written, verdict routed | `change-workflow.sh:4838-4908` | Yes, unchanged |
-| B-7 | second concurrent driver in same checkout | refused by `driver.lock` | `change-workflow.sh:113-118` | Yes |
+| B-1 | Non-issue run (app or change) via `uncle`/TUI/headless, git repo, `WORKFLOW_WORKTREE` unset | Sibling worktree `<project>-<branch>` on new branch; run happens there | worktrees.sh:292-355; worktree-auto-seed-test.sh | MODIFY for app; keep for change |
+| B-2 | `WORKFLOW_WORKTREE=0` or no git | Run in place; no branch created by launcher | worktrees.sh:295-296 | Change: gain branch guard |
+| B-3 | Change run, remote + default branch known, HEAD on default | Engine creates/switches to new branch before first stage | change-pr.sh:1374-1401; early-branch-test.py T1 | PRESERVE |
+| B-4 | Change run with no remote / unborn / detached | No branch created; edits land on current branch | change-pr.sh:1346-1351; early-branch-test.py T5 | MODIFY (gap) |
+| B-5 | Change run already on non-default branch | Branch adopted as PR head | change-pr.sh:1376; early-branch-test.py T3 | PRESERVE for resume |
+| B-6 | Finished app build in owned worktree | Committed and merged into source branch, worktree removed | stagegate.sh:6818-6842; README:192-196 | PRESERVE code for in-flight legacy runs |
+| B-7 | `from-issue.sh N --worktree[-dir]` | Worktree on new branch, copy of `.uncle/config` | from-issue.sh:507-518; worktree-run-test.sh | PRESERVE |
+| B-8 | `from-issue.sh --new --worktree` | Exit 1: `--worktree and --worktree-dir require --change` | from-issue.sh:543 | PRESERVE |
+| B-9 | App build on non-main branch / dirty tree | Runs; no check | stagegate.sh (no check found) | MODIFY |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | One driver per checkout state dir | `driver.lock` via plan-executability.py lock-run | scripts/tests (lock suites) | Medium |
-| I-2 | Builds start only via app action path when `UNCLE_HOME_AGENT=1` | `uncle:343-355` | startup-action tests | Medium |
-| I-3 | Audit result is bound to files/HEAD/branch and refused if they changed | `change_pr_engine bind` `change-workflow.sh:4890-4896` | change-workflow suites | Medium |
-| I-4 | Unknown launcher args exit with `$UNCLE_REFUSE_CODE` | `uncle:338` | launcher-removed-flag-test.sh | High |
-| I-5 | Test fixtures never use signing | project rule | launcher tests use no commits | High |
+| I-1 | Branches are never deleted by worktree removal | worktrees.sh `worktree_create` rollback; README | worktree-run-test.sh | Medium |
+| I-2 | Engine never overwrites a divergent candidate ref | change-pr.sh claim_ref | early-branch-test.py T4 | High |
+| I-3 | Engine start uses only reads and one ref update; signer never invoked | change-pr.sh start_build | early-branch-test.py T6,T7 | High |
+| I-4 | worktree_auto declines (returns 0, prints nothing) when unwanted/impossible | worktrees.sh:295-304 | worktree-auto-seed-test.sh | Medium |
 
-## 6. Current interface contracts
-Launcher flags in usage text; driver flags above; state file format `[N:]STATE` (`workflow_family.py` strips `^\d+:`). `UNCLE_RUNTIME_ROOT` lets tests point `uncle` at a stub install (`uncle:21-23`).
+## 6. Interface contracts
+`worktree_auto <root>` prints the worktree path or nothing. `run_duties.prepare_worktree(root_dir, project_root, environ, issue, runner)` returns dir or None. Env `WORKFLOW_WORKTREE` (0 disables). `.uncle/workflow/worktree-owned` marker. No schema/API persistence changes.
 
 ## 7. Existing automated-test coverage
-- Shell: `scripts/tests/launcher-args-test.sh`, `launcher-noui-test.sh`, `launcher-removed-flag-test.sh`, `launcher-stdin-text-test.sh`, run by `scripts/run-shell-tests.sh`.
-- Python: `scripts/tests/*-test.py` (e.g. `startup-action-test.py`) run by `scripts/run-python-tests.sh`.
-- No test covers re-entering FINAL_AUDIT from the CLI. The two runners use separate temp dirs and share no ports, hence one parallel group.
+Shell suites via `scripts/run-shell-tests.sh`; Python (`scripts/tests/*-test.py`) via `scripts/run-python-tests.sh`. Relevant: worktree-auto-seed-test.sh, worktree-run-test.sh, worktree-branch-test.py, worktree-runs-test.py, early-branch-test.py, project-git-test.py, home-actions-test.py. ~27 suites drive `change-workflow.sh` and ~23 drive `stagegate.sh`; several create git repos (audit-command, change-workflow-exit-status, gates, worktree-run). The two runners use separate temp dirs and share no ports (per the task contract), so they run as one parallel group.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (both exist). Not run here; driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. CLAUDE.md notes some Python suites already fail on a clean checkout; none documented individually.
+Commands come from the task contract and runner scripts present in `scripts/`. No results were produced here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites are documented as already failing on a clean checkout.
 
 ## 12. Likely change surface
-`uncle` (flag, usage, hint list, post-mode dispatch), new `scripts/audit-command.sh`, new test `scripts/tests/audit-command-test.sh`, docs (`scripts/README.md`/README usage mention).
+`scripts/lib/worktrees.sh`, new `scripts/lib/run-policy.sh`, `scripts/stagegate.sh`, `scripts/change-workflow.sh`, `uncle`, `uncle_tui.py`, `scripts/lib/run_duties.py`, `scripts/lib/uncle_headless.py`, docs, prompt, new tests.
 
 ## 13. Regression-sensitive components
-Launcher flag loop and mutual-exclusion pre-scan (`uncle:214-239`), usage text (tests may match it), did-you-mean list, `change-workflow.sh` FINAL_AUDIT/VALIDATE_AUDIT (must not be modified).
+The ~50 driver-driven suites that run git fixtures (a new branch guard or app preflight can change branch/exit behavior); worktree_auto callers; engine `start_build`; `worktree-merge.sh` legacy path.
 
 ## 14. Outside the change
-Auditor content/lenses/prompts (`prompts/change/final-audit.md`), `audit-verdict.sh`, `stagegate.sh`, TUI, other commands.
+Review/plan/verification stages, approval gates, `from-issue.sh` worktree creation, `worktree-merge.sh` removal, PR push/open logic, `home_actions.py` validation.
 
 ## 15. Unknowns and assumptions
-- A1: "the auditor" = the change-workflow FINAL_AUDIT stage. `stagegate.sh` also has FINAL_AUDIT but the request's constraints and `CLAUDE.md` Existing-Code section target the change driver; app-family checkouts are refused.
-- A2: Rerun is only meaningful where a prior change workflow ran (state dir, VERIFICATION_REPORT) on that branch.
-- U1: whether launcher tests assert exact usage text (implementer greps before editing).
+- `main` meaning: assumed `main`, or `master` when the repo has no `main` branch (stock `git init`).
+- Whether existing driver fixtures are on a non-main branch or dirty with a born HEAD: UNRESOLVED until the suite runs; handled as a plan risk.
 
-## 16. Initial risk assessment
-| Risk | Level |
-|---|---|
-| Writing state while a live driver holds the lock | Medium: probe/refuse |
-| Mode resolution skipped if dispatched too early | Medium: dispatch after `uncle:381` |
-| Usage-text test breakage | Low |
-| Auditor behavior altered | Low: no edits to driver
+## 16. Initial risk
+Medium: many driver tests exercise git fixtures; launcher behavior change for app runs is user-visible.
 
 ## Exact build and test commands executed
 

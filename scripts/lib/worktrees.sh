@@ -289,9 +289,14 @@ fi
 # worktree is not wanted or not possible: no git, no brief to name one from,
 # already inside a run's worktree, or WORKFLOW_WORKTREE=0. The run then
 # proceeds where it is, exactly as before.
+#
+# Optional second argument: the run kind. Only the exact string "app" returns
+# early (an app run builds in the source checkout on its current branch).
+# Absent, empty or any other kind keeps the behavior above.
 worktree_auto() {
-    local root="${1:-$PWD}" branch base dir n=2
+    local root="${1:-$PWD}" kind="${2:-}" branch base dir n=2
 
+    case "$kind" in app|create_app|run_app|stagegate.sh) return 0 ;; esac
     [[ "${WORKFLOW_WORKTREE:-1}" == "1" ]] || return 0
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
     # A worktree this function already made, or one the operator made: either

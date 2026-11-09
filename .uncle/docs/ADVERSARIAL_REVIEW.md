@@ -1,184 +1,184 @@
-## AR-001: Mode handling is contradictory: the plan forwards a mode flag to the driver, yet the driver is untouched and nothing say
+## AR-001: The plan never says what an app build does on a repo with commits and a detached HEAD.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s8 'forwarded to the driver' and s20 step 1 'run driver with mode flag' vs s5 not modifying change-workflow.sh.
-- Failure: Mode handling is contradictory: the plan forwards a mode flag to the driver, yet the driver is untouched and nothing says it accepts one. Settle: 'The helper passes mode only via exported UNCLE_UNATTENDED, adds no driver CLI flags; unset means driver default.'
+- References: CHANGE_SPEC BH-5 and D-5. The spec covers detached HEAD only for change runs, in section 8.
+- Failure: The plan never says what an app build does on a repo with commits and a detached HEAD. D-5 defines main as a branch name. Settle it with: 'Detached HEAD on an app build is refused as not on main, naming the detached commit.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Unspecified: target state already mid-flight (implementation, pending gate).
+## AR-002: A change run in place on a feature branch not created for it is unspecified.
 
 - Severity: HIGH
-- References: CHANGE_SPEC s8 refusal list has no stage condition; plan s7 writes FINAL_AUDIT unconditionally after preconditions.
-- Failure: Unspecified: target state already mid-flight (implementation, pending gate). Overwriting with FINAL_AUDIT could skip approval gates. Settle: 'Refuse unless state is a post-implementation stage or FINAL_AUDIT; otherwise Error: and state untouched.'
+- References: CHANGE_PLAN D-3 and risk row 2, against CHANGE_SPEC BH-1/BH-2.
+- Failure: A change run in place on a feature branch not created for it is unspecified. BH-1 says switch to a new branch; BH-2 and risk T3 say the engine adopts a non-default branch. Settle it with: 'An in-place change run on any branch not recorded in run-branch creates a new branch from HEAD, even with a remote.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Exit contract conflicts: AC-2 says driver's status, but a driver exit 0 with missing verdict file or a not-READY verdict
+## AR-003: The WORKFLOW_WORKTREE combinations for app builds are not fully specified.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC s15 'Exit status equals the driver's' vs s8 'not-READY audit ... nonzero exit'; AC-2.
-- Failure: Exit contract conflicts: AC-2 says driver's status, but a driver exit 0 with missing verdict file or a not-READY verdict has no stated output or code. Settle: 'If audit-verdict is missing print UNKNOWN and exit $UNCLE_REFUSE_CODE; otherwise exit with driver status.'
+- References: CHANGE_SPEC BH-7; CHANGE_PLAN D-7 and D-8. Neither says whether the notice is skipped on resume.
+- Failure: The WORKFLOW_WORKTREE combinations for app builds are not fully specified. BH-7 covers only an explicit =1, and D-8 puts the notice in the driver. Settle it with: 'The notice prints only for an explicit =1 on a fresh app start; =0, unset, and resume print nothing.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: D-1 leaves cases open: empty-string BRANCH, 'uncle --audit verify', and a single-dash token.
+## AR-004: D-6 does not say how untracked, ignored, or staged entries count, or what is printed past 10 paths.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s8/s10 D-1; uncle line 244 treats 'verify' as an early exec case.
-- Failure: D-1 leaves cases open: empty-string BRANCH, 'uncle --audit verify', and a single-dash token. Settle: 'Token after --audit is BRANCH iff present, non-empty and not starting with -; empty is refused; verify is refused as extra positional.'
+- References: CHANGE_PLAN D-6 (`git status --porcelain` minus three paths) and CHANGE_SPEC BH-6 ('lists up to 10 paths').
+- Failure: D-6 does not say how untracked, ignored, or staged entries count, or what is printed past 10 paths. Settle it with: 'Untracked files count as uncommitted changes, ignored files do not, and the message lists the first 10 paths then "and N more".'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Branch checked out in zero or multiple worktrees, or BRANCH equal to the current branch, is not defined.
+## AR-005: Edge states for the app preflight have no combined rule: a repo with only master, and a linked worktree on main.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-3 and s8 list only 'not checked out in any worktree'; plan step 1 does not define ambiguity.
-- Failure: Branch checked out in zero or multiple worktrees, or BRANCH equal to the current branch, is not defined. Settle: 'Resolve via worktree_branch_dir; zero or multiple matches are refused; BRANCH equal to current branch audits the current checkout.'
+- References: CHANGE_PLAN D-5, D-7 and CHANGE_SPEC BH-10/A1. Each state is covered separately and linked worktrees are never mentioned.
+- Failure: Edge states for the app preflight have no combined rule: a repo with only master, and a linked worktree on main. Settle it with: 'Preflight is skipped for non-git and unborn-HEAD projects; master counts as main only when no local main exists; a linked worktree on main is treated like any checkout.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Placement of the exclusivity check is unspecified; the pre-scan only counts three options, so --audit with stdin-reading
+## AR-006: INV-4 and AC-4 say a refused app start writes nothing, but the plan runs the policy after `uncle_ensure_project_git`, wh
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN section 1 ('after uncle_ensure_project_git') against CHANGE_SPEC INV-4. The AC-4 test only checks .uncle/workflow.
+- Failure: INV-4 and AC-4 say a refused app start writes nothing, but the plan runs the policy after `uncle_ensure_project_git`, which may write. Settle it with: 'Preflight runs before any driver write; "nothing written" means no new files or edits beyond what the launcher created before the driver started.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-007: Change-run guard vs.
+
+- Severity: HIGH
+- References: change-pr.sh:1376 `target = current_branch if current_branch != default`; plan s15.1.r2 only says 'covered by an interplay case' without stating expected outcome.
+- Failure: Change-run guard vs. engine start_build ordering is unspecified: guard runs before change_pr_engine start and switches to a new branch, but start_build then sees a non-default current branch and adopts it as head. Plan should say: when the guard created the branch, the engine adopts it as head_branch with no second branch (BH-2/BH-3 interplay).
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-008: Plan says app preflight runs only when no $STATE_FILE exists, but the TUI/headless/uncle launchers for app kind skip the
+
+- Severity: HIGH
+- References: D-6 excludes only `.uncle/`, `REQUIREMENTS.md`, `CHANGE_REQUEST.md`; a prior merged run commits `.uncle/docs/CHANGE_REQUEST.md` (run_duties.py:212) and a second app build after a first would see tracked/untracked source from the earlier build. Add sentence: preflight on a completed-run checkout with an archived state is evaluated by the same dirty rule.
+- Failure: Plan says app preflight runs only when no $STATE_FILE exists, but the TUI/headless/uncle launchers for app kind skip the worktree and then run the driver on a dirty or off-main checkout. A legacy owned app worktree (worktree-owned marker) or a prior-run leftover (.uncle/docs from a finished run, committed or uncommitted) is not defined as clean vs dirty.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: Existing ~50 driver suites that run stagegate.sh in fixtures off main, dirty or with commits will now be refused by pref
+
+- Severity: MEDIUM
+- References: Plan s15.1.r1 says protected tests may need to change and the implementer must 'stop'; no env override or fixture contract is stated, and AC-6 requires no new failures.
+- Failure: Existing ~50 driver suites that run stagegate.sh in fixtures off main, dirty or with commits will now be refused by preflight; plan resolves this by 'stop' rather than a decision. Specify an opt-out or fixture rule so regression results are deterministic.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-010: worktree_auto kind arg is optional and absent keeps current behavior, but run_duties.prepare_worktree(kind=None) and any
+
+- Severity: MEDIUM
+- References: Plan s6.1 'absent = current behavior'; run_policy_kind returns `unknown`; uncle_headless.py:410 gates only on github_issue.
+- Failure: worktree_auto kind arg is optional and absent keeps current behavior, but run_duties.prepare_worktree(kind=None) and any caller omitting kind (e.g. headless with UNCLE_STARTUP_ACTION unset) still create app worktrees, contradicting INV-2 'an app build never creates a worktree'. State what an unknown/absent kind does.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-011: Change-run guard for a worktree run via WORKFLOW_WORKTREE default vs.
+
+- Severity: MEDIUM
+- References: change-pr.sh:1350 returns early on detached HEAD or no remote; plan D-2 numbers `-2..-64`, spec s8 says detached creates branch but no test row exists.
+- Failure: Change-run guard for a worktree run via WORKFLOW_WORKTREE default vs. detached HEAD, name collisions beyond -64, and dirty tree are unspecified: failure of branch-name exhaustion or `git switch -c` with conflicting index is not described, and BH-1 says a run with remote uses engine while no-remote uses guard, leaving remote-but-detached-HEAD uncovered.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: Notice for WORKFLOW_WORKTREE=1 on app builds is printed by the stagegate driver only (D-8), but the TUI/headless launche
 
 - Severity: LOW
-- References: uncle lines 219-227 pre-scan only --application/--issue/--change-request; plan step 2 gives no placement.
-- Failure: Placement of the exclusivity check is unspecified; the pre-scan only counts three options, so --audit with stdin-reading options could read stdin first. Settle: 'Add --audit to the pre-scan exclusivity loop so combinations are refused before any stdin read.'
+- References: BH-7 trigger is 'set explicitly'; D-8 gives no condition on the variable.
+- Failure: Notice for WORKFLOW_WORKTREE=1 on app builds is printed by the stagegate driver only (D-8), but the TUI/headless launchers have already skipped the worktree and an explicit --worktree flag path or WORKFLOW_WORKTREE=1 with UNCLE_PROJECT_ROOT_LOCKED is not stated. Say whether the notice prints when WORKFLOW_WORKTREE is unset (it must not).
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: The plan does not say how the existing exclusivity pre-scan treats --audit.
+## AR-013: Branch names come from run-branch-name (slug of untrusted brief/issue text), but the plan never says the name is validat
 
 - Severity: HIGH
-- References: uncle:217-227 counts only three flags; :276-285 --issue treats a following --* token as 'read stdin', so `--issue --audit` is ambiguous.
-- Failure: The plan does not say how the existing exclusivity pre-scan treats --audit. Settle with: '--audit counts as a startup action in the pre-scan, so --audit with --application/--issue/--change-request is refused before any stdin read.'
+- References: CHANGE_PLAN D-2/D-4; change-pr.sh run-branch-name (label_prefix+slug of origin); spec section 8 mentions 'name invalid' but the plan gives no check.
+- Failure: Branch names come from run-branch-name (slug of untrusted brief/issue text), but the plan never says the name is validated before `git switch -c`. Say: 'run_policy_change_branch runs `git check-ref-format --branch`, rejects a leading '-', and calls `git switch -c -- <name>`; failure exits 1 before any stage.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The exit code for --audit combined with another startup action is stated two ways.
+## AR-014: BH-6 lists up to 10 paths in a message, but the plan never states filenames are sanitized or that porcelain -z is used.
 
 - Severity: MEDIUM
-- References: AC-4 and plan section 8 say $UNCLE_REFUSE_CODE; uncle:224-227 and :253-256 use literal exit 1.
-- Failure: The exit code for --audit combined with another startup action is stated two ways. Settle with: 'Combining --audit with another startup action exits $UNCLE_REFUSE_CODE (2 under --noui).'
+- References: CHANGE_SPEC BH-6 'lists up to 10 paths'; D-6 uses plain `git status --porcelain`.
+- Failure: BH-6 lists up to 10 paths in a message, but the plan never states filenames are sanitized or that porcelain -z is used. Say: 'Paths in the BH-6 message are parsed from `git status --porcelain -z` and printed with control characters stripped.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: BRANCH token parsing is unspecified for edge values.
+## AR-015: The dirty-check exclusion is path-based, so a modified tracked file under .uncle/, REQUIREMENTS.md or CHANGE_REQUEST.md
 
 - Severity: MEDIUM
-- References: Plan section 8 excludes only '--' prefixes; uncle:244 has a `verify` case; `-x` and '' are undefined.
-- Failure: BRANCH token parsing is unspecified for edge values. Settle with: 'BRANCH is the next token only if non-empty and not starting with -; `verify` is taken as BRANCH; an empty string is refused; a second positional hits the Error path.'
+- References: D-6 excludes whole paths; run_duties.archive_change_request notes CHANGE_REQUEST.md can be committed as .uncle/docs/CHANGE_REQUEST.md.
+- Failure: The dirty-check exclusion is path-based, so a modified tracked file under .uncle/, REQUIREMENTS.md or CHANGE_REQUEST.md passes as clean. Say: 'Exclusions apply only to untracked entries; a modified tracked file at those paths counts as uncommitted.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Ordering of --audit relative to early-exit flags is undefined.
+## AR-016: Skip markers (run-branch, worktree-owned, journal, STATE_FILE) live in the working tree and are trusted on existence alo
 
 - Severity: MEDIUM
-- References: uncle:242-246 exec during the parse loop; CHANGE_SPEC section 7 says only 'not combinable'.
-- Failure: Ordering of --audit relative to early-exit flags is undefined. Settle with: 'Early-exit flags (--help, verify, --runs, --performance) act in argument order as today; --audit after them is never parsed; --audit before them is refused as a combination.'
+- References: D-3 and D-7 skip on marker existence; a marker naming a nonexistent or reused branch is unspecified.
+- Failure: Skip markers (run-branch, worktree-owned, journal, STATE_FILE) live in the working tree and are trusted on existence alone, so a stale or planted one bypasses the refusal or guard. Say: 'run-branch is honored only if it names an existing local branch equal to the current branch; otherwise it is ignored.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The plan does not say whether the upgrade check and other pre-dispatch steps run on the --audit path.
-
-- Severity: MEDIUM
-- References: Plan section 1 dispatches after uncle:~381 while section 16 sets UNCLE_SKIP_UPGRADE=1, implying an upgrade step sits on the path.
-- Failure: The plan does not say whether the upgrade check and other pre-dispatch steps run on the --audit path. Settle with: 'The --audit path skips upgrade checks and never reads stdin or starts the TUI.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-012: The summary is undefined when the driver exits 0 but audit-verdict is missing or stale.
+## AR-017: Behavior for kind `unknown` is unspecified, and the kind can derive from env (UNCLE_STARTUP_ACTION).
 
 - Severity: LOW
-- References: CHANGE_SPEC section 15 says the verdict is printed 'for information'; plan step 1 reads .uncle/workflow/audit-verdict with no missing-file behavior.
-- Failure: The summary is undefined when the driver exits 0 but audit-verdict is missing or stale. Settle with: 'If audit-verdict is absent or older than the run, print verdict: unknown and still return the driver status.'
+- References: CHANGE_PLAN section 1 run_policy_kind returns app|change|issue|unknown; uncle_headless.py reads UNCLE_STARTUP_ACTION from the environment.
+- Failure: Behavior for kind `unknown` is unspecified, and the kind can derive from env (UNCLE_STARTUP_ACTION). Say: 'run_policy_kind matches exact strings only; unknown behaves as today and never skips worktree creation as app.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Plan validates BRANCH with check-ref-format but never states how git is invoked with it.
+## AR-018: Plan never says what an app build does on a non-git or unborn-HEAD repo when WORKFLOW_WORKTREE=1 is set, or whether the
 
 - Severity: HIGH
-- References: CHANGE_PLAN s8 says BRANCH is 'not starting with `--`'; CHANGE_SPEC s10 relies on `git check-ref-format --branch`, which expands '@{-N}' forms.
-- Failure: Plan validates BRANCH with check-ref-format but never states how git is invoked with it. Settle: 'Git calls pass the branch only as refs/heads/<name> after "--", and BRANCH beginning with "-" (not just "--") is refused.'
+- References: CHANGE_SPEC BH-7, BH-10; CHANGE_PLAN D-4, D-8.
+- Failure: Plan never says what an app build does on a non-git or unborn-HEAD repo when WORKFLOW_WORKTREE=1 is set, or whether the BH-7 notice prints. Add: 'Preflight skips on non-git or unborn HEAD; the BH-7 notice prints whenever WORKFLOW_WORKTREE=1 is set on an app build.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Checkout path from worktree_branch_dir is never required to be verified.
+## AR-019: Dirty check is ambiguous for untracked, ignored, renamed or space-containing paths, and for excluded files that are trac
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1 and step 1: 'checkout via current branch or worktree_branch_dir'; no validation of the returned path.
-- Failure: Checkout path from worktree_branch_dir is never required to be verified. Settle: 'Target dir comes only from `git worktree list --porcelain` of the caller repo, is realpath-resolved, must exist and contain .uncle owned by the current user, else refuse.'
+- References: CHANGE_PLAN D-6; CHANGE_SPEC BH-6, A3.
+- Failure: Dirty check is ambiguous for untracked, ignored, renamed or space-containing paths, and for excluded files that are tracked. Add: 'Untracked files outside the excluded set count as uncommitted; ignored files do not; exclusions match exact top-level paths, tracked or untracked.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: Which change-workflow.sh runs is ambiguous: install dir copy or the target worktree's copy (branch-controlled content).
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1 'runs the existing scripts/change-workflow.sh there'; CHANGE_SPEC s10 'No new env override for the driver path'.
-- Failure: Which change-workflow.sh runs is ambiguous: install dir copy or the target worktree's copy (branch-controlled content). Settle: 'The helper always runs $ROOT/scripts/change-workflow.sh from the install dir, never a script from the target checkout.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: Lock probe then state write is a check-then-act race that can alter state under a live driver, contradicting I-6.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s11 D-2 and s7: the driver lock is the final guard only after the state write in step 1.
-- Failure: Lock probe then state write is a check-then-act race that can alter state under a live driver, contradicting I-6. Settle: 'The state write happens while holding the driver lock, or is restored if the driver cannot acquire it.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: Echoed previous state, branch names and paths may carry terminal escapes.
-
-- Severity: LOW
-- References: CHANGE_PLAN s7 'Previous state is printed'; CHANGE_SPEC s8 error messages naming the cause.
-- Failure: Echoed previous state, branch names and paths may carry terminal escapes. Settle: 'Any branch name, path or state value printed has control characters stripped.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: AC-6 defect injection is vague: stubbing the whole precondition block can fail without proving each refusal test catches
+## AR-020: App build on a detached HEAD is undefined: BH-5 says message 'names current branch' but there is none.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s16 'precondition block stubbed out'; CHANGE_SPEC AC-6 says 'one precondition removed'.
-- Failure: AC-6 defect injection is vague: stubbing the whole precondition block can fail without proving each refusal test catches its own check. Plan should say: 'One mutant per AC-4 refusal; each must fail its matching test.'
+- References: CHANGE_SPEC section 8 covers detached HEAD for change runs only; BH-5.
+- Failure: App build on a detached HEAD is undefined: BH-5 says message 'names current branch' but there is none. Add: 'App build on detached HEAD refuses with exit 1 and a message saying HEAD is detached.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: AC-4 refusals are split between launcher and helper with no stated owner, and defect injection targets only the helper.
-
-- Severity: HIGH
-- References: CHANGE_PLAN s20 steps 1 and 2; s16 stubs only the helper.
-- Failure: AC-4 refusals are split between launcher and helper with no stated owner, and defect injection targets only the helper. Plan should say: 'Argument-shape, exclusivity and home-agent refusals live in uncle; git, state and lock refusals in audit-command.sh; injection covers both.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: Output and exit are unspecified when the verdict file is absent or unparsable, or when the verdict is not READY and the
+## AR-021: D-3 skip conditions can conflict with INV-3/AC-1: a stale run-branch file, journal or worktree-owned marker lets a chang
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-2 and A2; s16 stub 'may write a verdict file'.
-- Failure: Output and exit are unspecified when the verdict file is absent or unparsable, or when the verdict is not READY and the driver exits 0. Plan should say: 'Missing verdict prints "verdict: unknown"; exit always equals the driver status.'
+- References: CHANGE_PLAN D-3 vs CHANGE_SPEC INV-3.
+- Failure: D-3 skip conditions can conflict with INV-3/AC-1: a stale run-branch file, journal or worktree-owned marker lets a change run stay on main. Add: 'Guard skips only if the current branch equals run-branch and is not the default branch; a marker or journal on main does not suppress it.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: Lock probe is left unresolved with a fallback, so the AC-4 lock test cannot be written deterministically (helper vs driv
+## AR-022: Exhausted name range -2..-64 and empty or invalid derived names are unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s11 D-2 and s22 non-blocking probe item.
-- Failure: Lock probe is left unresolved with a fallback, so the AC-4 lock test cannot be written deterministically (helper vs driver refusal differ in message and code). Plan should say: 'Helper refuses via a non-blocking flock probe on driver.lock with $UNCLE_REFUSE_CODE; test holds the lock in a background process.'
+- References: CHANGE_PLAN D-2; CHANGE_SPEC section 8.
+- Failure: Exhausted name range -2..-64 and empty or invalid derived names are unspecified. Add: 'If no free name exists or check-ref-format rejects it, exit 1 before any stage naming the cause.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: Unspecified inputs: empty-string BRANCH, --audit combined with verify/--runs/--performance (which exec early and swallow
+## AR-023: BH-6 lists 'up to 10 paths' without saying order or what shows beyond 10, so tests cannot assert output.
 
 - Severity: MEDIUM
-- References: uncle:244-246 early exec for verify, --performance, --runs; CHANGE_SPEC s8 refusal list omits them.
-- Failure: Unspecified inputs: empty-string BRANCH, --audit combined with verify/--runs/--performance (which exec early and swallow it), and an existing FINAL_AUDIT state. Plan should say: 'Empty BRANCH is refused; --audit with those flags is refused; existing FINAL_AUDIT state is accepted and re-run.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-023: D-1 (--audit --attended parses as no BRANCH) conflicts with the spec's 'BRANCH beginning with --' refusal; the test expe
-
-- Severity: LOW
-- References: CHANGE_PLAN s10 D-1 and s8 versus CHANGE_SPEC s8.
-- Failure: D-1 (--audit --attended parses as no BRANCH) conflicts with the spec's 'BRANCH beginning with --' refusal; the test expectation is ambiguous. Plan should say: 'A -- token after --audit is never a BRANCH and falls to the existing handler; the option-like refusal applies only to --audit=--x.'
+- References: CHANGE_SPEC BH-6.
+- Failure: BH-6 lists 'up to 10 paths' without saying order or what shows beyond 10, so tests cannot assert output. Add: 'Paths in git status order, first 10, then "and N more" when over 10.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

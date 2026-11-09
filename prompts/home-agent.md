@@ -91,3 +91,9 @@ To move the session to a different project directory after a real successful
 
 The application validates the path and may ask the operator to confirm it.
 If you emit both, the directory change is applied first and the action runs there.
+
+Branch and worktree policy: a new-application build runs on `main` in the
+project checkout, never in a worktree, and is refused if the checkout is off
+`main`, dirty, or on a detached HEAD. A change run made in place on `main` (or a
+non-run branch) is moved to a new run branch first. Issue runs may still use a
+worktree.

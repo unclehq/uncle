@@ -15,4 +15,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 cd "$project"
+# Legacy suites run drivers in fixtures that may be off main or dirty; the run policy is opted out for them.
+export UNCLE_RUN_POLICY=off
 exec python3 -B "$ROOT/scripts/lib/python_suites.py" "$jobs" "$@"

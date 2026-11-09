@@ -1,0 +1,166 @@
+"""Pure request/response helpers for the AWS Bedrock runner (Converse only).
+
+No I/O. Endpoints derive only from the region and are always https. Auth is a
+bearer token. No helper ever emits a temperature field.
+"""
+import json
+import re
+from urllib.parse import quote, urlsplit
+
+REGION_RE = re.compile(r'^[a-z]{2,}(-[a-z]+)+-\d+$')
+
+
+def validate_region(value):
+    """Return the trimmed region or raise ValueError. Never case-folds; empty counts as unset."""
+    region = (value or '').strip() if isinstance(value, str) or value is None else ''
+    if not region:
+        raise ValueError('AWS Bedrock Region is not set; set Region in Configure → AWS Bedrock')
+    if not REGION_RE.match(region):
+        raise ValueError('Invalid AWS Bedrock Region %r; expected a lowercase region such as us-east-1' % region)
+    return region
+
+
+def control_url(region):
+    return 'https://bedrock.%s.amazonaws.com' % validate_region(region)
+
+
+def runtime_url(region):
+    return 'https://bedrock-runtime.%s.amazonaws.com' % validate_region(region)
+
+
+def region_from_url(url):
+    """Legacy migration: region from an https Bedrock host, else None."""
+    try:
+        parts = urlsplit((url or '').strip())
+        host, port = parts.hostname, parts.port
+    except (ValueError, AttributeError):
+        return None
+    if parts.scheme != 'https' or not host or parts.username or parts.password or port or parts.query or parts.fragment:
+        return None
+    if parts.netloc != host:
+        return None
+    match = re.match(r'^bedrock(?:-runtime)?\.([^.]+)\.amazonaws\.com$', host)
+    if not match:
+        return None
+    try:
+        return validate_region(match.group(1))
+    except ValueError:
+        return None
+
+
+def build_headers(token):
+    return {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token}
+
+
+def build_url(region, model):
+    return runtime_url(region) + '/model/' + quote(model, safe='') + '/converse'
+
+
+def _text(content):
+    if isinstance(content, list):
+        return ''.join(p.get('text', '') for p in content if isinstance(p, dict))
+    return content or ''
+
+
+def _converse_messages(turns):
+    """OpenAI-style turns -> Converse messages: tool calls become toolUse, tool results become user toolResult
+    blocks, and consecutive same-role turns merge (Converse only accepts user/assistant, alternating)."""
+    out = []
+
+    def add(role, blocks):
+        if not blocks:
+            return
+        if out and out[-1]['role'] == role:
+            out[-1]['content'].extend(blocks)
+        else:
+            out.append({'role': role, 'content': list(blocks)})
+
+    for m in turns:
+        role, text = m.get('role'), _text(m.get('content'))
+        if role == 'tool':
+            add('user', [{'toolResult': {'toolUseId': m.get('tool_call_id') or '',
+                                         'content': [{'text': text or '(no output)'}]}}])
+        elif role == 'assistant':
+            blocks = [{'text': text}] if text else []
+            for c in m.get('tool_calls') or []:
+                fn = c.get('function') or {}
+                args = fn.get('arguments')
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except ValueError:
+                        args = {}
+                blocks.append({'toolUse': {'toolUseId': c.get('id') or '', 'name': fn.get('name', ''),
+                                           'input': args if isinstance(args, dict) else {}}})
+            add('assistant', blocks or [{'text': '(empty)'}])
+        else:
+            add('user', [{'text': text or '(empty)'}])
+    return out
+
+
+def build_body(messages, max_tokens, tools=None, schema=None, schema_name='result'):
+    """Converse body. `messages` are OpenAI-style {role, content}; `tools` are OpenAI function tools."""
+    system = '\n\n'.join(_text(m.get('content')) for m in messages if m.get('role') == 'system')
+    turns = [m for m in messages if m.get('role') != 'system']
+    specs = [(t['function']['name'], t['function'].get('description', ''), t['function'].get('parameters', {'type': 'object'}))
+             for t in (tools or [])]
+    if schema is not None:
+        specs.append((schema_name, 'Return the final answer.', schema))
+    body = {'messages': _converse_messages(turns),
+            'inferenceConfig': {'maxTokens': max_tokens}}
+    if system:
+        body['system'] = [{'text': system}]
+    if not specs:
+        # Converse rejects toolUse/toolResult history without a toolConfig, even when no tool may be called now.
+        names = sorted({b['toolUse']['name'] for m in body['messages'] for b in m['content'] if 'toolUse' in b})
+        specs = [(n, 'Tool used earlier in this conversation.', {'type': 'object'}) for n in names]
+    if specs:
+        body['toolConfig'] = {'tools': [{'toolSpec': {'name': n, 'description': d, 'inputSchema': {'json': s}}} for n, d, s in specs]}
+        if schema is not None:
+            body['toolConfig']['toolChoice'] = {'tool': {'name': schema_name}}
+    return body
+
+
+def parse_response(data, schema_name=None):
+    """-> {'text', 'tool_calls': [{'id','name','arguments'(dict)}], 'usage': {'input','output'}, 'reason'}.
+
+    A tool call named `schema_name` is the schema-constrained answer: its arguments become `text` (JSON)."""
+    if not isinstance(data, dict):
+        raise ValueError('AWS Bedrock response is not a JSON object')
+    text, calls = '', []
+    try:
+        parts = data['output']['message']['content']
+    except (KeyError, TypeError):
+        raise ValueError('AWS Bedrock Converse response has no output.message.content') from None
+    for b in parts:
+        if 'text' in b:
+            text += b['text']
+        elif 'toolUse' in b:
+            t = b['toolUse']
+            calls.append({'id': t.get('toolUseId'), 'name': t['name'], 'arguments': t.get('input') or {}})
+    u = data.get('usage') or {}
+    usage = {'input': u.get('inputTokens', 0), 'output': u.get('outputTokens', 0)}
+    if schema_name:
+        for c in calls:
+            if c['name'] == schema_name:
+                text = json.dumps(c['arguments'])
+        calls = [c for c in calls if c['name'] != schema_name]
+    return {'text': text, 'tool_calls': calls, 'usage': usage, 'reason': data.get('stopReason')}
+
+
+def parse_models(foundation, profiles):
+    """Sorted, de-duplicated modelId and inferenceProfileId values from discovery pages (lists of page dicts)."""
+    names = set()
+    for pages, summaries, field in ((foundation, 'modelSummaries', 'modelId'), (profiles, 'inferenceProfileSummaries', 'inferenceProfileId')):
+        for page in pages or []:
+            if not isinstance(page, dict) or not isinstance(page.get(summaries, []), list):
+                raise ValueError('AWS Bedrock model list response is malformed')
+            for item in page.get(summaries, []):
+                if isinstance(item, dict) and isinstance(item.get(field), str) and item[field]:
+                    # A foundation model that lists its inference types but not ON_DEMAND can only be
+                    # invoked through an inference profile (e.g. us.anthropic...); the bare ID returns HTTP 400.
+                    types = item.get('inferenceTypesSupported')
+                    if field == 'modelId' and isinstance(types, list) and types and 'ON_DEMAND' not in types:
+                        continue
+                    names.add(item[field])
+    return sorted(names)

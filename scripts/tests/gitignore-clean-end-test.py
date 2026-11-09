@@ -121,6 +121,9 @@ class CallerEnumeration(unittest.TestCase):
             if 'tests' in f.parts or f.name == 'uncle_gitignore.py':
                 continue
             for n, line in enumerate(f.read_text(errors='replace').splitlines(), 1):
+                # change-pr.sh `bind` normalizes inside a linked worktree only (guarded by the git-dir/common-dir comparison there).
+                if f.name == 'change-pr.sh' and 'worktree-only' in line:
+                    continue
                 if re.search(r'uncle_gitignore\.ensure\(', line) or (re.search(r'python3?\b.*uncle_gitignore\.py', line) and 'worktrees.sh' != f.name
                                                                      and not line.lstrip().startswith('#') and 'import' not in line):
                     offenders.append(f'{f.relative_to(ROOT)}:{n}')

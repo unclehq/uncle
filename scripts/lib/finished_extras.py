@@ -14,7 +14,18 @@ REASONS = {
     'publication-pending': 'not created (publication pending)',
     'not-published': 'none (not published)',
     'not-applicable': 'none (not applicable to new-application builds)',
+    'published': 'published',
+    'published-draft-unreviewed': 'published as unreviewed draft (verdict not READY)',
+    'validate-failed': 'not created (validation failed)',
+    'verdict-not-ready': 'not created (verdict not READY)',
+    'issue-not-eligible': 'not created (issue not eligible)',
+    'tree-mismatch': 'not created (tree does not match attested tree)',
+    'merged-local': 'none (merged into the source branch locally; no PR)',
+    'local-merge-failed': 'none (local merge into the source branch did not complete)',
+    'handoff-failed': 'not created (handoff failed)',
+    'handoff-incomplete': 'not created (handoff did not create a PR)',
 }
+FALLBACK = 'publication-pending'
 STAMP = 'run-started-at'
 _CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')
 
@@ -89,7 +100,11 @@ def total_line(state, unattended):
 
 def pr_line(state, kind, reason, stopped):
     if kind == 'new':
-        return None if stopped else 'PR: none (not applicable to new-application builds)'
+        if stopped:
+            return None
+        if reason in ('merged-local', 'local-merge-failed'):
+            return 'PR: ' + REASONS[reason]
+        return 'PR: none (not applicable to new-application builds)'
     path = Path(state) / 'pr' / 'journal.json'
     try:
         journal = json.loads(path.read_text(encoding='utf-8'))
@@ -103,7 +118,8 @@ def pr_line(state, kind, reason, stopped):
         return f'PR: {clean(journal["url"])} (#{number}){mark}'
     if stopped:
         return None
-    return 'PR: ' + REASONS.get(reason, REASONS['not-published'])
+    key = reason if isinstance(reason, str) and reason in REASONS else FALLBACK
+    return 'PR: ' + REASONS[key]
 
 
 def main():

@@ -473,6 +473,29 @@ class Actions(unittest.TestCase):
             with self.assertRaises(ValueError):
                 parse_reply(json.dumps(value))
 
+    def test_prose_then_fenced_action_is_parsed(self):
+        # Real replies from a testme run: a sentence, then a fenced action whose
+        # document string itself contains literal triple backticks.
+        doc = brief('change') + '\n```\nfoo bar foo\nhello world\n```\n'
+        payload = json.dumps(dict(uncle_action='create_change', message='Starting.', start=True, document=doc))
+        reply = "I'm handing this to Uncle's workflow.\n\n```uncle_action\n" + payload + "\n```"
+        data = parse_reply(reply)
+        self.assertEqual(data['uncle_action'], 'create_change')
+        self.assertEqual(data['document'], doc)
+        self.assertTrue(data['start'])
+        # Trailing prose too, and prose becomes the message when none is given.
+        bare = json.dumps(dict(uncle_action='run_change'))
+        data = parse_reply('Running it.\n```json\n' + bare + '\n```\nDone.')
+        self.assertEqual(data['message'], 'Running it.\n\nDone.')
+
+    def test_unparseable_fenced_action_is_an_error_not_chat(self):
+        with self.assertRaises(ValueError):
+            parse_reply('Starting.\n```uncle_action\n{"uncle_action": "run_change", "message": \n```')
+        with self.assertRaises(ValueError):
+            parse_reply('Sure.\n```uncle_action\n{"uncle_action": "run_change",\n```')
+        # An example quoted in prose, or two fenced objects, still never run.
+        self.assertIsNone(parse_reply('Example:\n```\n{"answer": 1}\n```'))
+
     def test_conversation_and_files_in_prompt(self):
         (self.root/'CHANGE_REQUEST.md').write_text('Request')
         result = prompt([('user', 'Grocery app'), ('assistant', 'Shared lists?'),

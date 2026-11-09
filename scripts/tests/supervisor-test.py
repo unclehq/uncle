@@ -846,12 +846,12 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             runner.build_command(sv.Config(dict(runner='cline', model='x', effort='low')), ROOT)
         self.assertIn('Cline support was removed', str(caught.exception))
-        self.assertIn('claude, codex, kimi or self-hosted', str(caught.exception))
+        self.assertIn('claude, codex, kimi, self-hosted or aws-bedrock', str(caught.exception))
         with self.assertRaises(ValueError) as caught:
             runner.build_command(sv.Config(dict(runner='bogus')), ROOT)
         self.assertEqual(str(caught.exception),
                          "uncle: runner 'bogus' is not supported (Cline support was removed). "
-                         "Set it to claude, codex, kimi or self-hosted with 'uncle' -> Configure.")
+                         "Set it to claude, codex, kimi, self-hosted or aws-bedrock with 'uncle' -> Configure.")
         self.assertNotIn('cline', sv.SUPPORTED_RUNNERS)
 
     def test_codex_supervisor_uses_a_read_only_adapter(self):
@@ -1751,8 +1751,9 @@ class DocsTests(unittest.TestCase):
     """AT-9 documentation half: every key, default and the authority boundary are documented."""
 
     def test_every_key_documented(self):
-        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
-        # README is the documentation of record; .uncle/config.example was removed in the repo cleanup.
+        # The README links to docs/supervision.md, which holds the key reference;
+        # .uncle/config.example was removed in the repo cleanup.
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8') + (ROOT / 'docs' / 'supervision.md').read_text(encoding='utf-8')
         for key, _, default in sv.CONTROLS:
             line = 'supervision.%s %s' % (key, sv.format_value(key, default))
             self.assertIn(line, readme, line)

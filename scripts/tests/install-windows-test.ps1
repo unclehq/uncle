@@ -10,6 +10,11 @@ function scoop {
     $global:UncleScoopTestCalls += ($args -join ' ')
     $global:LASTEXITCODE = $global:UncleScoopTestFailure
     if ($global:UncleScoopTestFailure) { return }
+    # `bucket list/add` must not look like an installed app.
+    if ($args[0] -notin @('install', 'update')) {
+        if ($args[0] -eq 'bucket' -and $args[1] -eq 'list') { return 'versions' }
+        return
+    }
     $current = Join-Path $env:SCOOP 'apps/uncle/current'
     New-Item -ItemType Directory -Force $current | Out-Null
     Set-Content (Join-Path $current 'install.json') '{"bucket":"uncle-github"}'
@@ -69,7 +74,7 @@ try {
     Assert (Test-Path $archive) 'Local archive disappeared after installation'
     Assert ($manifest.hash -eq (Get-FileHash $archive -Algorithm SHA256).Hash) 'Incorrect manifest hash'
     Assert ($manifest.extract_dir -eq 'uncle-package') 'Wrong extraction root'
-    Assert ($manifest.depends -contains 'python') 'Missing Python dependency'
+    Assert ($manifest.depends -contains 'versions/python313') 'Missing Python dependency'
     Assert-InstallerArchive $archive
     # Model Scoop's 7-Zip path: extract into the destination, then move the
     # wrapper's children up in place. A wrapper named "uncle" collides with

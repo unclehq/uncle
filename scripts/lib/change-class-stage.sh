@@ -46,7 +46,10 @@ classify_change_stage() {
     # The supervisor's defaults (the stage config alias supplies a configured runner and model; these supply what it leaves out).
     if [[ "$(UNCLE_CLASSIFY_FALLBACK_STAGE=x uncle_config_stage classify-change)" == supervision ]]; then
         export WORKFLOW_MODEL_CLASSIFY_CHANGE="${WORKFLOW_MODEL_CLASSIFY_CHANGE-$(uncle_config_get supervision.model || true)}"
-        [[ -n "$WORKFLOW_MODEL_CLASSIFY_CHANGE" ]] || export WORKFLOW_MODEL_CLASSIFY_CHANGE=sonnet
+        # "sonnet" is a Claude model alias; any other runner would reject it and the fail-open stage would hide that.
+        if [[ -z "$WORKFLOW_MODEL_CLASSIFY_CHANGE" && "$(uncle_config_get supervision.runner || true)" =~ ^(claude)?$ ]]; then
+            export WORKFLOW_MODEL_CLASSIFY_CHANGE=sonnet
+        fi
         export WORKFLOW_EFFORT_CLASSIFY_CHANGE="${WORKFLOW_EFFORT_CLASSIFY_CHANGE-$(uncle_config_get supervision.effort || true)}"
         [[ -n "$WORKFLOW_EFFORT_CLASSIFY_CHANGE" ]] || export WORKFLOW_EFFORT_CLASSIFY_CHANGE=low
     fi
@@ -151,6 +154,27 @@ change_class_panel_subset() {
         [[ "$wanted" == *" $lens "* ]] && kept="${kept:+$kept }$lens"
     done
     printf '%s' "${kept:-$default}"
+}
+
+# change_class_review_skipped <plan.md> -- succeeds only when the stored classification says review=skip and still matches this
+# plan. A missing plan_sha, plan, or change-class.json is a mismatch (fail closed). WORKFLOW_SKIP_REVIEW=0, WORKFLOW_CLASSIFY=0
+# and a forced class all disable it. skip-review re-verifies everything again before it writes the stub.
+change_class_review_skipped() {
+    local plan="${1:-}"
+    [[ "${WORKFLOW_SKIP_REVIEW-1}" == 1&& "${WORKFLOW_CLASSIFY:-1}" != 0 && -z "${WORKFLOW_CHANGE_CLASS:-}" ]] || return 1
+    [[ -s "$plan" && -s "$STATE_DIR/change-class.json" ]] || return 1
+    python3 -B - "$STATE_DIR/change-class.json" "$plan" <<'PY' 2>/dev/null
+import hashlib, json, sys
+try:
+    stored = json.load(open(sys.argv[1], encoding='utf-8'))
+    text = open(sys.argv[2], encoding='utf-8', errors='replace').read()
+    sha = stored.get('features', {}).get('plan_sha')
+    ok = stored.get('review') == 'skip' and bool(sha) \
+        and sha == hashlib.sha256(text.encode('utf-8', 'replace')).hexdigest()
+except Exception:
+    ok = False
+sys.exit(0 if ok else 1)
+PY
 }
 
 # change_class_lenses <default list> -- the adversarial review lenses to run; WORKFLOW_ADVERSARIAL_LENSES wins.

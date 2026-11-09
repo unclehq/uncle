@@ -1506,16 +1506,29 @@ gate_group_6() {
 new_stagegate_case sg-repair-limit
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
+run_stagegate WORKFLOW_REPAIR_SEVERITY=all WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
 expect_status 1
 expect_state REPAIR
 expect_in_file .uncle/workflow/repair-count '1'
 expect_no_file .uncle/docs/FINAL_AUDIT.md
-run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
+run_stagegate WORKFLOW_REPAIR_SEVERITY=all WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
 expect_status 1
 expect_state REPAIR
 expect_in_file .uncle/workflow/repair-count '1'
 expect_out 'Repair limit (1) reached'
+
+# Repair is for critical failures only: a failing test review whose driver verification is clean and whose application runs is
+# carried to the final audit, and no repair agent is started (the default; WORKFLOW_REPAIR_SEVERITY=all restores repair).
+new_stagegate_case sg-repair-skips-noncritical
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL
+expect_status 0
+expect_state COMPLETE
+expect_out 'Repair not run: no critical failure'
+expect_no_file .uncle/workflow/repair-count
+expect_file .uncle/docs/FINAL_AUDIT.md
+expect_not_out ': repair'
 
 # A repair pass that changes none of the files its findings name is a report,
 # not a repair: it is not reviewed, consumes no attempt, is retried once with a
@@ -1541,7 +1554,7 @@ fi
 new_stagegate_case sg-repair-noop-once-then-repairs
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL_ONCE FAKE_REPAIR_NOOP=once WORKFLOW_MAX_REPAIRS=1
+run_stagegate WORKFLOW_REPAIR_SEVERITY=all WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL_ONCE FAKE_REPAIR_NOOP=once WORKFLOW_MAX_REPAIRS=1
 expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workflow/repair-count '1'

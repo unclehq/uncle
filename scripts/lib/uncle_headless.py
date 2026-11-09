@@ -8,6 +8,7 @@ at a gate (driver exit 0 without a completion banner), 128+n on a forwarded
 signal n.
 """
 import codecs
+import collections
 import os
 import re
 import select
@@ -30,6 +31,7 @@ COMPLETION_BANNERS = tuple(getattr(_duties, "COMPLETION_BANNERS", _DEFAULT_BANNE
 _FINISHED_START = ("Finished build:", "READY - ", "NOT READY - ")
 _FINISHED_TAIL = ("Total time:", "PR:")
 
+LINE_CAP = 8192
 KILL_GRACE_SECONDS = 10.0
 IDLE_FLUSH_SECONDS = 0.2
 
@@ -164,7 +166,7 @@ def run(cmd, root, attended=False, env=None, out=None, err=None, stdin_fd=0,
         start = time.monotonic()
         proc = subprocess.Popen(cmd, cwd=root, env=base,
                                 stdin=subprocess.PIPE if attended else subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 start_new_session=True, bufsize=0)
         return _stream(proc, base, root, attended, out, err, stdin_fd, start,
                        received, grace, idle, desktop_decision)
@@ -191,10 +193,19 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
     term_at = 0.0
     last_data = time.monotonic()
     eof = False
+    efd = proc.stderr.fileno()
+    eflt = EscapeFilter()  # stderr's own filter and line buffer: no state shared with stdout
+    eacc, eof_err, discard = "", False, False
+    elast = time.monotonic()
+    tail = collections.deque(maxlen=20)  # redacted diagnostic lines; never replayed
 
-    def handle_line(line):
+    def handle_line(line, banner_only=False):
         nonlocal completed, in_block
         text = line.strip()
+        if banner_only:
+            if text in COMPLETION_BANNERS:
+                completed = True
+            return
         if text.startswith(_FINISHED_START):
             finished.append(text)
             in_block = True
@@ -205,6 +216,58 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
         if text.startswith("Human gate:") or "REVIEW REQUIRED" in text:
             gates.append(text)
 
+    def emit_err(line):
+        if len(line) > LINE_CAP:
+            line = line[:LINE_CAP] + "…[truncated]"
+        shown = redact(line, env)
+        tail.append(shown)
+        err.write(shown + "\n")
+        err.flush()
+        handle_line(line, banner_only=True)
+
+    def feed_err(data, final=False):
+        nonlocal eacc, discard
+        eacc += eflt.feed(data, final)
+        while "\n" in eacc:
+            line, eacc = eacc.split("\n", 1)
+            if discard:
+                discard = False
+            else:
+                emit_err(line)
+        if len(eacc) > LINE_CAP and not discard:
+            emit_err(eacc)  # bounded buffer: emit the capped head, drop the rest of this line
+            eacc, discard = "", True
+        elif discard:
+            eacc = ""
+        if final and eacc:
+            emit_err(eacc)
+            eacc = ""
+
+    def flush_out_partial():
+        nonlocal acc
+        if acc:
+            writer.emit(redact(acc, env))
+            handle_line(acc)
+            acc = ""
+
+    def drain_err(cap=2.0):
+        # Read what is left on stderr (bounded) and flush the partial line.
+        nonlocal eof_err
+        deadline = time.monotonic() + cap
+        while not eof_err and time.monotonic() < deadline:
+            r, _, _ = select.select([efd], [], [], 0.05)
+            if not r:
+                if proc.poll() is not None:
+                    break
+                continue
+            data = os.read(efd, 65536)
+            if not data:
+                break
+            feed_err(data)
+        eof_err = True
+        flush_out_partial()
+        feed_err(b"", True)
+
     while True:
         if received and not sent_term:
             _killpg(proc, signal.SIGTERM)
@@ -213,6 +276,8 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
             _killpg(proc, signal.SIGKILL)
             killed = True
         rl = [] if eof else [fd]
+        if not eof_err:
+            rl.append(efd)
         if stdin_open:
             rl.append(stdin_fd)
         if not rl:
@@ -247,11 +312,28 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
                 writer.emit(redact(acc, env))
                 handle_line(acc)
                 acc = ""
+            if not eof_err:
+                drain_err()
         elif acc and (time.monotonic() - last_data >= idle):
             # prompt without newline (or idle pipe): never withhold it
             writer.emit(redact(acc, env))
             handle_line(acc)
             acc = ""
+        if not eof_err and efd in ready:
+            edata = os.read(efd, 65536)
+            if not edata:
+                eof_err = True
+                flush_out_partial()
+                feed_err(b"", True)
+            else:
+                flush_out_partial()  # never split a pending stdout partial
+                feed_err(edata)
+                elast = time.monotonic()
+        elif eacc and (time.monotonic() - elast >= idle):
+            flush_out_partial()
+            emit_err(eacc)
+            eacc = ""
+            eflt.state = "text"
         if stdin_open and stdin_fd in ready:
             try:
                 chunk = os.read(stdin_fd, 65536)
@@ -266,7 +348,7 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
                     stdin_open = False
             except (BrokenPipeError, OSError):
                 stdin_open = False
-        if eof and (not stdin_open or proc.poll() is not None):
+        if eof and eof_err and (not stdin_open or proc.poll() is not None):
             break
     # reap, still honoring a late signal; ignore repeats
     while proc.poll() is None:
@@ -328,7 +410,8 @@ def main(argv):
         if _duties is not None and os.environ.get("UNCLE_STARTUP_ACTION") != "github_issue":
             runtime = os.environ.get("UNCLE_RUNTIME_ROOT") or os.path.dirname(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            directory = _duties.prepare_worktree(runtime, root)
+            kind = os.environ.get("UNCLE_STARTUP_ACTION") or os.path.basename(args[0])
+            directory = _duties.prepare_worktree(runtime, root, kind=kind)
             if directory:
                 root = directory
                 os.environ["UNCLE_PROJECT_ROOT"] = directory
@@ -383,6 +466,8 @@ def prepare_driver(root, err, env=None):
             with open(target, "w", encoding="utf-8") as fh:
                 fh.write(document)
         elif action == "change_request":
+            for archived in _duties.archive_change_request(root, e):
+                err.write("uncle --noui: archived the previous change request to %s\n" % archived)
             _duties.write_change_request(root, text)
         issue_mode = ""
         if action == "github_issue":

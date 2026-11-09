@@ -338,6 +338,7 @@ ORIGIN_FILE="\$STATE_DIR/origin"
 DIFF_FILE=DIFF
 GREEN_MD=GREEN
 UNATTENDED=\${UNATTENDED:-0}
+CLOSE_ISSUE=\${WORKFLOW_CLOSE_ISSUE:-1}
 triage_print_actions() { :; }
 change_pr_complete() { echo "change_pr_complete CALLED"; git commit --no-gpg-sign; }
 # completed_verdict reads VERDICT_FILE through verdict_file_field, a shared

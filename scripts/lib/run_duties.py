@@ -166,21 +166,22 @@ def build_driver_command(action, text, attended, root_dir, issue_mode=""):
     return cmd
 
 
-def prepare_worktree(root_dir, project_root, environ=None, issue=False, runner=None):
+def prepare_worktree(root_dir, project_root, environ=None, issue=False, runner=None, kind=None):
     """Create the run worktree via worktrees.sh worktree_auto (non-issue runs).
 
+    kind: None/unknown keeps today's behavior; "app" never creates a worktree.
     Returns the directory, or None when skipped or on any failure (same
     tolerance as the TUI).
     """
     import subprocess
     environ = os.environ if environ is None else environ
-    if environ.get("UNCLE_PROJECT_ROOT_LOCKED") or issue:
+    if environ.get("UNCLE_PROJECT_ROOT_LOCKED") or issue or kind in ("app", "create_app", "run_app", "stagegate.sh"):
         return None
     runner = runner or subprocess.run
     try:
         result = runner(
-            ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2"',
-             "_", root_dir, project_root],
+            ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2" "$3"',
+             "_", root_dir, project_root, kind or ""],
             capture_output=True, text=True, timeout=120,
             env=dict(environ, ROOT=root_dir), cwd=project_root)
     except (OSError, subprocess.SubprocessError):
@@ -204,6 +205,40 @@ def resolve_startup_text(text, text_file_reader=None, text_file=None):
 def change_request_exists(project_root):
     return any(os.path.lexists(os.path.join(project_root, *part, "CHANGE_REQUEST.md"))
                for part in ((), (".uncle", "docs")))
+
+
+def archive_change_request(project_root, environ=None):
+    """Move a leftover CHANGE_REQUEST.md out of the way so a new request can be written; returns the archived paths.
+
+    A finished run leaves its request behind (a local merge even commits it as .uncle/docs/CHANGE_REQUEST.md), and refusing every
+    later `--change-request` for it made the operator delete the file by hand. The file is moved to .uncle/brief-history/, not
+    destroyed, as the homepage's replace does. A symlink is only unlinked: there is no content of ours behind it.
+    UNCLE_KEEP_CHANGE_REQUEST=1 keeps the old refusal.
+    """
+    env = os.environ if environ is None else environ
+    if env.get("UNCLE_KEEP_CHANGE_REQUEST") == "1":
+        return []
+    import time
+    history = os.path.join(project_root, ".uncle", "brief-history")
+    moved = []
+    for part in ((), (".uncle", "docs")):
+        path = os.path.join(project_root, *part, "CHANGE_REQUEST.md")
+        if not os.path.lexists(path):
+            continue
+        if os.path.islink(path) or not os.path.isfile(path):
+            if os.path.islink(path):
+                os.unlink(path)
+                continue
+            raise FileExistsError(path + " is not a regular file")
+        os.makedirs(history, exist_ok=True)
+        stamp = time.strftime("%Y%m%dT%H%M%S")
+        dest, n = os.path.join(history, "%s.CHANGE_REQUEST.md" % stamp), 0
+        while os.path.lexists(dest):
+            n += 1
+            dest = os.path.join(history, "%s-%d.CHANGE_REQUEST.md" % (stamp, n))
+        os.replace(path, dest)
+        moved.append(dest)
+    return moved
 
 
 def write_change_request(project_root, text):

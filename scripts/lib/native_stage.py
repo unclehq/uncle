@@ -14,6 +14,7 @@ import time
 import uuid
 from runner_timing import RunnerTiming
 from read_cache import ReadCache
+from claude_env import CLAUDE_ROUTING_ENV, scrub_claude_env  # noqa: F401  (re-exported for tests)
 from process_tree import timed_popen
 from process_tree import launch_command, group_options, kill_tree, finish_check, python3_executable
 
@@ -104,8 +105,13 @@ class Stage:
         self.env = os.environ.copy()
         for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG', 'UNCLE_STEERING',
                     'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'DOCUMENT_BUDGET_SOURCE',
-                    'UNCLE_SUPERVISION_NOTE', 'UNCLE_SUPERVISION_HOST', 'UNCLE_RUNNER_POOL_OWNER_PID'):
+                    'UNCLE_SUPERVISION_NOTE', 'UNCLE_SUPERVISION_HOST', 'UNCLE_RUNNER_POOL_OWNER_PID',
+                    'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'UNCLE_MODEL_REFRESH_AUTH_TOKEN'):
             self.env.pop(key, None)
+        if self.runner == 'claude':
+            # A gateway or provider override in the operator's shell would send the claude.ai login to a server that
+            # rejects it ("401 Invalid bearer token"). The login has to be what authenticates a claude stage.
+            scrub_claude_env(self.env)
 
     def option(self, *names):
         for i, arg in enumerate(self.args[:-1]):

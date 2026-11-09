@@ -16,6 +16,7 @@ app_stage_runner_config_name() {
     case "$1" in
         requirements|requirements-investigate) printf '%s\n' project-plan ;;
         preview-build-part-*) printf '%s\n' preview-build ;;
+        tests|tests-*) printf '%s\n' implementation ;;
         *) printf '%s\n' "$1" ;;
     esac
 }
@@ -66,10 +67,11 @@ app_status_stage_context() {
     local log_name="$1"
     local model="${2:-(runner default)}"
     local mode="${3:-act}"
-    local s i=1 index=0 n=0
+    local s i=1 index=0 n=0 base="$log_name"
+    case "$log_name" in tests-*) base=tests ;; esac   # every tests author is part of the one tests stage
     for s in $STATUS_STAGE_SEQ; do
         n=$((n + 1))
-        if [[ "$s" == "$log_name" ]]; then
+        if [[ "$s" == "$base" ]]; then
             index=$i
         fi
         i=$((i + 1))

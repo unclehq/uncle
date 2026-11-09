@@ -27,16 +27,6 @@ __pycache__/
 # Self-hosted model credentials
 .uncle/self-hosted-keys.json
 .aider*
-ADVERSARIAL_REVIEW.md
-BASELINE_REPORT.md
-CHANGE_PLAN.md
-CHANGE_REQUEST.md
-CHANGE_SPEC.md
-CHANGE_TEST_REPORT.md
-DEFECTS.md
-IMPLEMENTATION_NOTES.md
-MANUAL_CHECKLIST.md
-VERIFICATION_REPORT.md
 
 # A test run from this directory once left a whole .uncle/workflow here (and committed it).
 scripts/tests/.uncle/

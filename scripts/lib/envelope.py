@@ -79,7 +79,7 @@ VOCABULARY = frozenset((
 STRUCTURE = frozenset((
     'schema_version', 'stage', 'attempt', 'role', 'runner', 'model', 'uncle_version',
     'produced_at', 'gitTree', 'sha256', 'id', 'severity', 'blocking', 'finding', 'action',
-    'gate', 'required', 'approved_by', 'delegated_by', 'timestamp', 'reapprovals', 'override',
+    'gate', 'required', 'view_digest', 'approved_by', 'delegated_by', 'timestamp', 'reapprovals', 'override',
     'path', '_type', 'subject', 'name', 'predicateType', 'predicate', 'run_id', 'envelopes',
     'repository', 'issue', 'signer',
 ))
@@ -368,7 +368,9 @@ def write_envelope(state, stage, result, reason='', artifact='', inputs=None, ev
         digest = sha256_file(Path(root) / path)
         body['evidence'].append({'path': path, 'digest': {'sha256': digest or 'unavailable'}})
     if approvals:
-        body['approvals'] = [approval_entry(state, name) for name in approvals]
+        body['approvals'] = [dict(approval_entry(state, name),
+                                  view_digest=sha256_file(Path(root) / '.uncle' / 'docs' / (name + '.md')) or '')
+                             for name in approvals]
     if findings_path:
         digest = sha256_file(Path(root) / findings_path)
         body['findings'] = [dict(row, evidence={'sha256': digest}) for row in findings(_read(Path(root) / findings_path))]

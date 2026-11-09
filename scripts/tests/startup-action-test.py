@@ -131,21 +131,42 @@ class ChangeRequestStartup(StartupAction):
         self.assertFalse(self.file.exists())
         self.ChatRequest.assert_not_called()
 
-    def test_existing_request_refused_untouched(self):
+    def test_existing_request_is_archived_and_the_new_one_runs(self):
         existing = self.root / 'CHANGE_REQUEST.md'
         existing.write_text('old')
-        with self.assertRaises(tui.StartupRefused) as ctx:
+        with patch('subprocess.run'), patch('subprocess.Popen'):
             self.ui._handle_startup_action()
+        self.assertEqual(self.target().read_bytes(), b'Fix the bug.\nNo heading here\n\n  trailing  ')
+        archived = list((self.root / '.uncle/brief-history').glob('*.CHANGE_REQUEST.md'))
+        self.assertEqual([p.read_text() for p in archived], ['old'])
+        self.assertEqual(self.ui.state, 'running')
+
+    def test_existing_request_refused_untouched_when_kept(self):
+        existing = self.root / 'CHANGE_REQUEST.md'
+        existing.write_text('old')
+        with patch.dict(os.environ, {'UNCLE_KEEP_CHANGE_REQUEST': '1'}):
+            with self.assertRaises(tui.StartupRefused) as ctx:
+                self.ui._handle_startup_action()
         self.assertIn('CHANGE_REQUEST.md already exists', str(ctx.exception))
         self.assertEqual(existing.read_text(), 'old')
         self.assertFalse((self.root / '.uncle/brief-history').exists())
         self.assertEqual(self.ui.state, 'menu')
 
-    def test_dangling_symlink_refused(self):
-        (self.root / 'CHANGE_REQUEST.md').symlink_to(self.root / 'nowhere')
-        with self.assertRaises(tui.StartupRefused):
+    def test_dangling_symlink_is_removed_by_default_and_refused_when_kept(self):
+        link = self.root / 'CHANGE_REQUEST.md'
+        link.symlink_to(self.root / 'nowhere')
+        with patch.dict(os.environ, {'UNCLE_KEEP_CHANGE_REQUEST': '1'}):
+            with self.assertRaises(tui.StartupRefused):
+                self.ui._handle_startup_action()
+        self.assertTrue(link.is_symlink())
+        self.private.mkdir(mode=0o700, exist_ok=True)  # the first attempt consumed the private text file and its directory
+        self.file.write_bytes(b'again')
+        self.ui._startup_action = 'change_request'
+        self.ui._startup_text_file = str(self.file)
+        with patch('subprocess.run'), patch('subprocess.Popen'):
             self.ui._handle_startup_action()
-        self.assertTrue((self.root / 'CHANGE_REQUEST.md').is_symlink())
+        self.assertFalse(link.is_symlink())
+        self.assertEqual(self.ui.state, 'running')
 
     def test_untrusted_paths_refused_and_not_deleted(self):
         link_dir = Path(tempfile.mkdtemp())

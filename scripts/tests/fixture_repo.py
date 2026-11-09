@@ -46,7 +46,7 @@ def init_repo(path, env=None, branch='main'):
     path.mkdir(parents=True, exist_ok=True)
     git(path, 'init', '-q', '-b', branch, env=env)
     for key, value in (('commit.gpgsign', 'false'), ('tag.gpgsign', 'false'), ('gpg.format', 'openpgp'),
-                       ('user.name', 'Fixture'), ('user.email', 'fixture@example.test')):
+                       ('user.name', 'Fixture'), ('user.email', 'me@brian.biz')):
         git(path, 'config', key, value, env=env)
     return path
 

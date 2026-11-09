@@ -31,9 +31,9 @@ WT="$(auto)"
 check "a worktree was made" test -d "$WT"
 check "it is one of the project's git worktrees" bash -c 'git -C "$1" worktree list --porcelain | grep -qF "$(basename "$2")"' _ "$PROJ" "$WT"
 check "the request is in the worktree under .uncle/docs/" test -s "$WT/.uncle/docs/CHANGE_REQUEST.md"
-check "and it is the same text" cmp -s "$PROJ/.uncle/docs/CHANGE_REQUEST.md" "$WT/.uncle/docs/CHANGE_REQUEST.md"
+check "and it is the same text" test "$(cat "$WT/.uncle/docs/CHANGE_REQUEST.md")" == "$(printf '# Change request\n\nChange the background to mustard and chocolate.\n')"
 check "the worktree is marked as owned" test -e "$WT/.uncle/workflow/worktree-owned"
-check "the source project keeps its own copy" test -s "$PROJ/.uncle/docs/CHANGE_REQUEST.md"
+check "the request was moved: the source project no longer holds it" test ! -e "$PROJ/.uncle/docs/CHANGE_REQUEST.md"
 check "the project's files are in the worktree" test -s "$WT/src/a.js"
 check "nothing was copied to the worktree root" test ! -e "$WT/CHANGE_REQUEST.md"
 
@@ -42,7 +42,8 @@ new_project root-only
 printf '# Change request\n\nAdd a widget.\n' > "$PROJ/CHANGE_REQUEST.md"
 WT="$(auto)"
 check "root brief: a worktree was made" test -d "$WT"
-check "root brief: copied to the worktree root" cmp -s "$PROJ/CHANGE_REQUEST.md" "$WT/CHANGE_REQUEST.md"
+check "root brief: moved to the worktree root" test "$(cat "$WT/CHANGE_REQUEST.md")" == "$(printf '# Change request\n\nAdd a widget.\n')"
+check "root brief: gone from the source project" test ! -e "$PROJ/CHANGE_REQUEST.md"
 check "root brief: nothing invented under .uncle/docs/" test ! -e "$WT/.uncle/docs/CHANGE_REQUEST.md"
 
 # 3. Requirements are carried from either place too.
@@ -50,12 +51,13 @@ new_project requirements-docs
 mkdir -p "$PROJ/.uncle/docs" && printf 'Build a calendar.\n' > "$PROJ/.uncle/docs/REQUIREMENTS.md"
 WT="$(auto)"
 check "requirements under .uncle/docs/: a worktree was made" test -d "$WT"
-check "requirements under .uncle/docs/: carried to the same path" cmp -s "$PROJ/.uncle/docs/REQUIREMENTS.md" "$WT/.uncle/docs/REQUIREMENTS.md"
+check "requirements under .uncle/docs/: carried to the same path" test "$(cat "$WT/.uncle/docs/REQUIREMENTS.md")" == "Build a calendar."
+check "requirements under .uncle/docs/: gone from the source project" test ! -e "$PROJ/.uncle/docs/REQUIREMENTS.md"
 
 new_project requirements-root
 printf 'Build a calendar.\n' > "$PROJ/REQUIREMENTS.md"
 WT="$(auto)"
-check "requirements at the root: carried to the root" cmp -s "$PROJ/REQUIREMENTS.md" "$WT/REQUIREMENTS.md"
+check "requirements at the root: carried to the root" test "$(cat "$WT/REQUIREMENTS.md")" == "Build a calendar."
 
 # 4. Both places at once, and both files: each goes to its own path.
 new_project everything
@@ -67,6 +69,17 @@ WT="$(auto)"
 check "both: root copy at the root" test "$(cat "$WT/CHANGE_REQUEST.md")" == "root request"
 check "both: docs copy under .uncle/docs/" test "$(cat "$WT/.uncle/docs/CHANGE_REQUEST.md")" == "docs request"
 check "both: requirements under .uncle/docs/" test "$(cat "$WT/.uncle/docs/REQUIREMENTS.md")" == "docs requirements"
+
+# 4b. An earlier run's merge committed the request: the new one overwrote a tracked file in the source project. Moving it must put the
+# source back to HEAD, or the run's own merge later refuses ("local changes ... would be overwritten").
+new_project tracked-request
+mkdir -p "$PROJ/.uncle/docs" && printf 'old request\n' > "$PROJ/.uncle/docs/CHANGE_REQUEST.md"
+( cd "$PROJ" && G add -f .uncle/docs/CHANGE_REQUEST.md && G commit -q --no-gpg-sign -m "earlier request" )
+printf 'new request\n' > "$PROJ/.uncle/docs/CHANGE_REQUEST.md"
+WT="$(auto)"
+check "tracked request: the worktree has the new text" test "$(cat "$WT/.uncle/docs/CHANGE_REQUEST.md")" == "new request"
+check "tracked request: the source file is back to HEAD" test "$(cat "$PROJ/.uncle/docs/CHANGE_REQUEST.md")" == "old request"
+check "tracked request: the source checkout is clean" test -z "$(git -C "$PROJ" status --porcelain)"
 
 # 5. An empty file is not a brief, and is not copied.
 new_project empty

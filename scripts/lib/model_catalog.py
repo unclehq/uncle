@@ -40,6 +40,7 @@ _cache_lock = threading.Lock()
 
 
 _REFRESH_KEY = None
+_REFRESH_AUTH_TOKEN = None
 
 
 def take_refresh_key(environ=None):
@@ -48,11 +49,14 @@ def take_refresh_key(environ=None):
     The launcher gives the TUI a key solely for the model-list refresh. Popping
     it here, before anything is spawned, keeps it out of every child process.
     """
-    global _REFRESH_KEY
+    global _REFRESH_KEY, _REFRESH_AUTH_TOKEN
     environ = os.environ if environ is None else environ
     key = environ.pop("UNCLE_MODEL_REFRESH_KEY", None)
     if key:
         _REFRESH_KEY = key
+    token = environ.pop("UNCLE_MODEL_REFRESH_AUTH_TOKEN", None)
+    if token:
+        _REFRESH_AUTH_TOKEN = token
     return _REFRESH_KEY
 
 
@@ -262,15 +266,17 @@ def fetch_claude(env=None, opener=None, which=shutil.which, timeout=CLAUDE_TIMEO
     if env is None:
         env = os.environ
         key = env.get("ANTHROPIC_API_KEY") or _REFRESH_KEY
+        token = env.get("ANTHROPIC_AUTH_TOKEN") or _REFRESH_AUTH_TOKEN
     else:
         key = env.get("ANTHROPIC_API_KEY")
+        token = env.get("ANTHROPIC_AUTH_TOKEN")
     if not which("claude"):
         return ("skipped", [], "claude not on PATH")
-    if not key:
+    if not key and not token:
         return ("skipped", [], "no API key for model refresh")
     try:
-        req = urllib.request.Request(ANTHROPIC_URL, headers={
-            "x-api-key": key, "anthropic-version": "2023-06-01"})
+        auth = {"x-api-key": key} if key else {"Authorization": "Bearer " + token}
+        req = urllib.request.Request(ANTHROPIC_URL, headers=dict(auth, **{"anthropic-version": "2023-06-01"}))
         op = opener or build_claude_opener()
         with op.open(req, timeout=timeout) as resp:
             status = getattr(resp, "status", 200)

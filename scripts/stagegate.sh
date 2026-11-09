@@ -24,6 +24,16 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+# Run policy: an app build starts only from a clean main. This runs before the
+# first driver write (.uncle/docs, state, stage output); a refusal exits 1.
+# UNCLE_RUN_POLICY=off (exact match) skips it, for legacy suites.
+if [[ "${UNCLE_RUN_POLICY:-}" == "off" ]]; then
+    echo "Run policy: skipped (UNCLE_RUN_POLICY=off)" >&2
+else
+    . "$ROOT/scripts/lib/run-policy.sh"
+    run_policy_app_preflight || exit 1
+    run_policy_app_notice
+fi
 # Every workflow-generated document lives here, never the project root.
 mkdir -p .uncle/docs
 . "$ROOT/scripts/lib/generated-input.sh"
@@ -124,6 +134,8 @@ fi
 # because it costs 9 to 26 s on the critical path and nothing had shown it helped. Run 28 then lost a repair (67 s and a re-review) to
 # two modules that disagreed on whether `initialState` is a function. WORKFLOW_MODULE_INTERFACES=1 runs it for every plan, 0 never.
 WORKFLOW_MODULE_INTERFACES="${WORKFLOW_MODULE_INTERFACES:-auto}"
+# Tests lanes are written in isolation from each other and from the code, so they always need the shared contract.
+[[ "${WORKFLOW_TESTS:-1}" != 1 ]] || WORKFLOW_MODULE_INTERFACES="${WORKFLOW_MODULE_INTERFACES/auto/1}"
 
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
@@ -168,6 +180,8 @@ fi
 # hardcoded here; phase (c) decides whether it becomes a branch or stays
 # wrapper logic around the shared FINAL_AUDIT function.
 . "$ROOT/scripts/lib/project-git.sh"
+. "$ROOT/scripts/lib/worktree-merge.sh"
+. "$ROOT/scripts/lib/change-pr.sh"
 . "$ROOT/scripts/lib/preview-build.sh"
 . "$ROOT/scripts/lib/install-warm.sh"
 . "$ROOT/scripts/lib/background-verify.sh"
@@ -176,6 +190,7 @@ fi
 . "$ROOT/scripts/lib/plan-recovery.sh"
 . "$ROOT/scripts/lib/plan-scope.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
+. "$ROOT/scripts/lib/tests-stage.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
 . "$ROOT/scripts/lib/change-class-stage.sh"
 . "$ROOT/scripts/lib/review-schema.sh"
@@ -278,7 +293,7 @@ REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
 # execution are closer to transcription, so they do not need the top tier.
 # Override any of these from the environment, e.g.
 #   WORKFLOW_MODEL_REQUIREMENTS=opus WORKFLOW_EFFORT_REQUIREMENTS=high
-DEFAULT_MODEL="claude-sonnet-5"
+DEFAULT_MODEL="claude-sonnet-5-5"
 DEFAULT_EFFORT="low"
 
 # Stop after implementation and show the operator the actual diff, the green
@@ -370,6 +385,8 @@ on_exit() {
     if declare -f uncle_title_end > /dev/null; then uncle_title_end 2>/dev/null || true; fi
     if [[ "$rc" != 0 ]]; then finished_extras print --kind new --reason not-applicable --stopped; fi
     triage_on_exit "$rc"
+    # After every writer above: a removed run worktree's directory is recreated by the state they write.
+    if declare -f worktree_merge_sweep > /dev/null; then worktree_merge_sweep; fi
 }
 trap on_exit EXIT
 if [[ -f "$ROOT/scripts/lib/terminal-title.sh" ]]; then
@@ -436,6 +453,30 @@ fi
 # The verdict the build finishes with. A waiver (a person's, or an unattended run's) leaves READY
 # in the verdict file and the auditor's own verdict in audit-verdict.original; the run reports
 # the effective one and says out loud, on the next line, that findings were waived unreviewed.
+# Write the build's attestation from the driver's records (scripts/lib/build_attestation.py). A clean READY build is attested
+# as a pass. A build over an override is attested too, but honestly: the audit envelope carries the auditor's own verdict, the
+# release envelope says fail, and the attestation records that it completed over an override. No git history means no attestation.
+build_attest_completed() {
+    local verdict artifact overridden=0 original
+    verdict="$(completed_verdict)"
+    if [[ -s "$GREEN_OVERRIDE_FILE" || -s "$AUDIT_OVERRIDE_FILE" ]]; then
+        overridden=1
+        original="$(verdict_file_field "$STATE_DIR/audit-verdict.original" audit_class 2>/dev/null)"
+        [[ -n "$original" ]] && verdict="$original"
+        echo "Attestation will record that the build completed over an override (release: fail)."
+    fi
+    git rev-parse --git-dir >/dev/null 2>&1 || { echo "Attestation skipped: not a Git repository."; return 0; }
+    # A bare `.uncle` ignore line would keep the attestation out of the commit; settle uncle's own entries first.
+    python3 "$ROOT/scripts/lib/uncle_gitignore.py" "$PROJECT_ROOT" >/dev/null 2>&1 || true
+    artifact="$(change_pr_engine artifact 2>/dev/null)" && [[ -n "$artifact" ]] \
+        || { echo "Attestation skipped: could not compute the build's artifact digest."; return 0; }
+    python3 "$ROOT/scripts/lib/build_attestation.py" --state "$STATE_DIR" --artifact "$artifact" --verdict "$verdict" \
+        --green-enabled "$GREEN_CHECK" --overridden "$overridden" --run-id "${STAGEGATE_RUN_ID:-}" \
+        --subject "$(basename "$PROJECT_ROOT")@$(git branch --show-current 2>/dev/null)" \
+        || echo "Attestation not written; the build continues without one."
+    return 0
+}
+
 completed_verdict() {
     local verdict
     verdict="$(verdict_file_field "$VERDICT_FILE" audit_class 2>/dev/null)"
@@ -966,6 +1007,7 @@ stage_model() {
     case "$1" in
         requirements|requirements-investigate) lookup_stage="project-plan" ;;
         preview-build-part-*) lookup_stage="preview-build" ;;
+        tests|tests-*) lookup_stage="implementation" ;;
         execute-checklist) fallback="kimi" ;;
     esac
     if uncle_has_config || [[ -n "${UNCLE_RESOLVED_RUNNER:-}" ]]; then
@@ -989,7 +1031,7 @@ stage_effort() {
 stage_turns() {
     local fallback=40
     case "$1" in
-        implementation|repair) fallback=200 ;;
+        implementation|repair|tests|tests-*) fallback=200 ;;
         # Read the brief, write one file, stop.  A longer leash only lets it explore and install.
         preview-build|preview-build-part-*) fallback=8 ;;
         implementation-report) fallback=20 ;;
@@ -1018,7 +1060,7 @@ stage_tools() {
         # The preview is one hand-written file: with Bash it scaffolds and installs, with Edit and
         # Glob it explores, and each of those is minutes of a stage that exists to be quick.
         preview-build|preview-build-part-*) fallback="Read,Write" ;;
-        implementation|implementation-investigate|implementation-report|repair|repair-investigate|execute-checklist|preflight|preflight-investigate)
+        implementation|implementation-investigate|implementation-report|tests|tests-*|repair|repair-investigate|execute-checklist|preflight|preflight-investigate)
             fallback="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
             ;;
     esac
@@ -1027,7 +1069,7 @@ stage_tools() {
 
 # New application pipeline stage order, used to report "stage N/M" to the TUI.
 # Matches run_stage's case arms.
-STATUS_STAGE_SEQ="derive-brief requirements project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
+STATUS_STAGE_SEQ="derive-brief requirements project-plan adversarial-review updated-plan preflight tests implementation test-review manual-checklist execute-checklist final-audit"
 
 
 # Map state-machine destinations which immediately launch an agent to the
@@ -1044,6 +1086,7 @@ unattended_prewarm_stage_for_state() {
         PROJECT_PLAN) stage=project-plan ;;
         PREFLIGHT) stage=preflight ;;
         IMPLEMENT) stage=implementation ;;
+        TESTS) stage=tests ;;
         REPAIR) stage=repair ;;
         # One packet worker is enough to warm the shared reviewer pool: all
         # same-config workers attach to that process concurrently.
@@ -1738,7 +1781,7 @@ run_claude() {
     fi
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
-        claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
+        claude|codex) client_cmd=(env -u ANTHROPIC_BASE_URL -u ANTHROPIC_BEDROCK_BASE_URL -u ANTHROPIC_VERTEX_BASE_URL -u ANTHROPIC_FOUNDRY_BASE_URL -u ANTHROPIC_FOUNDRY_API_KEY -u ANTHROPIC_CUSTOM_HEADERS -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX -u CLAUDE_CODE_USE_FOUNDRY -u AWS_BEARER_TOKEN_BEDROCK -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
     if [[ -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]] \
        && { [[ "${UNCLE_STEERING:-}" == 1 ]] \
@@ -2200,7 +2243,7 @@ run_codex_review() {
     cmd="$(stage_reviewer_cmd "$log_name")" || return 1
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
-        claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
+        claude|codex) client_cmd=(env -u ANTHROPIC_BASE_URL -u ANTHROPIC_BEDROCK_BASE_URL -u ANTHROPIC_VERTEX_BASE_URL -u ANTHROPIC_FOUNDRY_BASE_URL -u ANTHROPIC_FOUNDRY_API_KEY -u ANTHROPIC_CUSTOM_HEADERS -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX -u CLAUDE_CODE_USE_FOUNDRY -u AWS_BEARER_TOKEN_BEDROCK -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
     if [[ -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]] \
        && { [[ "${UNCLE_STEERING:-}" == 1 ]] \
@@ -3620,6 +3663,36 @@ _stagegate_parallel_build_step_prompt() {
         else
             echo '- `*`'
         fi
+        if declare -F tests_frozen_for_step > /dev/null; then
+            local frozen_here="" frozen_step
+            for frozen_step in $step ${UNCLE_ABSORBED_STEPS:-}; do
+                frozen_here="${frozen_here:+$frozen_here$'\n'}$(tests_frozen_for_step "$frozen_step" < "$STATE_DIR/implement-owns.all.tsv")"
+            done
+            frozen_here="$(printf '%s\n' "$frozen_here" | sed '/^$/d')"
+            if [[ -n "$frozen_here" ]]; then
+                echo; echo '## Frozen files for this step (read-only, binding)'
+                echo 'The plan lists these under this step, but separate test authors write them from the same plan and module contract (before you'
+                echo 'or at the same time as you), and they are frozen. They may not exist yet when you start.'
+                echo 'Do NOT write, edit, delete or overwrite them, and do not recreate their contents elsewhere. Implement the source files above'
+                echo 'to the plan and the module interfaces so that tests written against them pass. The driver rejects the merge of any step that touches them.'
+                printf '%s\n' "$frozen_here"
+            fi
+        fi
+        if declare -F tests_mutable_for_step > /dev/null; then
+            local mutable_here="" mutable_step
+            for mutable_step in $step ${UNCLE_ABSORBED_STEPS:-}; do
+                mutable_here="${mutable_here:+$mutable_here$'\n'}$(tests_mutable_for_step "$mutable_step" < "$STATE_DIR/implement-owns.all.tsv")"
+            done
+            mutable_here="$(printf '%s\n' "$mutable_here" | sed '/^$/d')"
+            if [[ -n "$mutable_here" ]]; then
+                echo; echo '## Completable files for this step (binding)'
+                echo 'These files were started before any code existed and cannot be finished without it. Keep every existing entry'"'"'s `id`, `breaks`'
+                echo 'and `expected_failing_tests` exactly as written, and add to each entry the fields the defect-injection runner needs once the source'
+                echo 'it names exists: `file` (the source path), `find` (text that occurs EXACTLY ONCE in that file, copied from the final source) and'
+                echo '`replace` (the wrong implementation). Verify each `find` occurs once. Do not delete or merge entries.'
+                printf '%s\n' "$mutable_here"
+            fi
+        fi
         echo; echo "Work only on this approved step and its declared owned files."
         echo "Do not edit workflow documents."
         if [[ "$owned_paths" == *'`package.json`'* ]]; then
@@ -3859,7 +3932,15 @@ run_parallel_application_implementation() {
     # `.uncle/launch.json`; the ownership guard then threw away every parallel
     # result and forced a long serial implementation pass.  Keep the compact
     # prompt, while statefully attaching its exact file boundary.
-    plan_step_owns .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-owns.tsv"
+    plan_step_owns .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-owns.all.tsv"
+    # Tests: tests that already exist and are frozen are not the implementation's to write, whatever the plan's Owns says.
+    if declare -F tests_filter_owns > /dev/null; then
+        tests_filter_owns < "$STATE_DIR/implement-owns.all.tsv" > "$STATE_DIR/implement-owns.tsv"
+        tests_frozen_paths > "$STATE_DIR/tests.frozen.list"
+        if [[ -s "$STATE_DIR/tests.frozen.list" ]]; then export UNCLE_FROZEN_LIST="$STATE_DIR/tests.frozen.list"; else unset UNCLE_FROZEN_LIST; fi
+    else
+        cp "$STATE_DIR/implement-owns.all.tsv" "$STATE_DIR/implement-owns.tsv"
+    fi
     # Preserve worker handoffs in one canonical input for the report-only
     # reconciliation stage. A worker may record its narrow check here, but it
     # cannot truthfully attest to the whole merged application.
@@ -4973,6 +5054,8 @@ run_green_check() {
         return 0
     fi
 
+    # GREEN_LOG lets the deferred defect-injection phase write its own log; GREEN_COMMAND_FILTER=main|mutation runs one kind of command.
+    local green_log="${GREEN_LOG:-$LOG_DIR/green-check.log}"
     verify_commands .uncle/docs/UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
     # A clean install that needs a lockfile (`npm ci`) cannot run in a project that has none, and no step may install
     # to create one: run the install that does (install_command.py), and say so.
@@ -4992,10 +5075,14 @@ run_green_check() {
         [[ ! -s "$STATE_DIR/green-check.groups" ]] || echo "Verification: the plan declares no parallel groups; running commands $(tr '\n' ';' < "$STATE_DIR/green-check.groups" | sed 's/;$//; s/;/; and /g') together."
     fi
 
+    if [[ -n "${GREEN_COMMAND_FILTER:-}" ]]; then
+        python3 -B "$ROOT/scripts/lib/filter_commands.py" "$GREEN_CMDS" "$STATE_DIR/green-check.groups" "$GREEN_COMMAND_FILTER" > /dev/null || true
+    fi
+
     if [[ ! -s "$GREEN_CMDS" ]]; then
         : > "$GREEN_CLASS"
         green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/UPDATED_PROJECT_PLAN.md \
-            "$LOG_DIR/green-check.log" 0
+            "$green_log" 0
         echo
         echo "Green check NOT RUN: .uncle/docs/UPDATED_PROJECT_PLAN.md has no fenced block"
         echo "under a 'Verification commands' heading, so the driver has no"
@@ -5051,7 +5138,7 @@ run_green_check() {
         fi
     done
     local execution_status=0
-    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" \
+    green_run "$GREEN_CMDS" "$GREEN_CUR" "$green_log" \
         check_verification_inputs "$STATE_DIR/green-check.groups" || execution_status=$?
     [[ "$execution_status" == 0 ]] || exit "$execution_status"
 
@@ -5059,7 +5146,7 @@ run_green_check() {
     # which is the correct reading for a new application.
     green_classify "$STATE_DIR/green-check.no-baseline" "$GREEN_CUR" > "$GREEN_CLASS"
     green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/UPDATED_PROJECT_PLAN.md \
-        "$LOG_DIR/green-check.log" 0
+        "$green_log" 0
     fi
 
     local failures
@@ -5474,6 +5561,28 @@ while true; do
             # Normally started when planning began; a run resumed here starts
             # it now, so the review stages are not minutes of nothing on screen.
             preview_build_start
+            skipped_marker="$STATE_DIR/review-skipped"
+            review_json="$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"
+            # A human decline of a skipped review forces a full panel review, never a re-skip.
+            if [[ -f "$STATE_DIR/review-skip-declined" ]]; then
+                rm -f "$STATE_DIR/review-skip-declined" "$skipped_marker"
+                if [[ -s "$review_json" ]] && grep -q 'skipped: class' "$review_json" 2>/dev/null; then
+                    rm -f "$review_json" .uncle/docs/ADVERSARIAL_REVIEW.md
+                fi
+            elif change_class_review_skipped .uncle/docs/PROJECT_PLAN.md \
+                    && { [[ ! -s "$review_json" ]] || grep -q 'skipped: class' "$review_json" 2>/dev/null; } \
+                    && python3 -B "$CHANGE_CLASS_PY" skip-review app . .uncle/docs/PROJECT_PLAN.md; then
+                python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
+                : > "$skipped_marker"
+                echo "Adversarial review $(python3 -B -c 'import json,sys; print(json.load(open(sys.argv[1])).get("overall_assessment",""))' "$review_json")"
+                set_state VALIDATE_ADVERSARIAL_REVIEW
+                continue
+            fi
+            # Full review: drop any stale stub and marker first; never overwrite a real review.
+            rm -f "$skipped_marker"
+            if [[ -s "$review_json" ]] && grep -q 'skipped: class' "$review_json" 2>/dev/null; then
+                rm -f "$review_json" .uncle/docs/ADVERSARIAL_REVIEW.md
+            fi
             run_gated_stage ADVERSARIAL_REVIEW \
                 .uncle/docs/PROJECT_PLAN.md \
                 .uncle/docs/ADVERSARIAL_REVIEW.md
@@ -5720,6 +5829,13 @@ while true; do
 
         MODULE_INTERFACES)
             module_interfaces_stage "$PLAN_DOC"
+            # Experimental: unless WORKFLOW_TESTS=0 the tests are written and frozen before IMPLEMENT.
+            if tests_enabled && ! tests_locked && ! tests_concurrent; then set_state TESTS; fi
+            ;;
+
+        TESTS)
+            verify_approval "$PLAN_DOC" "$PLAN_DOC_NAME"
+            tests_stage
             ;;
 
         IMPLEMENT)
@@ -5779,7 +5895,10 @@ while true; do
             plan_status=0
             plan_before_write || plan_status=$?
             case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
+            # Concurrent tests: the test authors start now and run beside the implementation; the join is the barrier.
+            tests_background_start || exit 1
             [[ "$plan_status" == 22 ]] || run_stage IMPLEMENT
+            tests_join || exit 1
             python3 -B "$ROOT/scripts/lib/completion_preview.py" --normalize "$PWD" || exit 1
             plan_status=0
             plan_after_write || plan_status=$?
@@ -5952,7 +6071,7 @@ while true; do
                 echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results before checklist work."
                 exit 1
             fi
-            green_wait_final || { echo 'Driver verification did not publish final evidence before checklist work.' >&2; exit 1; }
+            green_wait_main || { echo 'Driver verification did not publish final evidence before checklist work.' >&2; exit 1; }
             runtime_ready_rc=0
             route_unrunnable_application || runtime_ready_rc=$?
             if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
@@ -6101,6 +6220,29 @@ while true; do
                 set_state WAIT_IMPLEMENT_APPROVAL
                 continue
             fi
+            # Repair is for critical failures only (scripts/lib/failure_severity.py): a failed driver verification command, an application
+            # that cannot be built or served, a runner that executed no tests, a protected input that changed, or a final audit that is
+            # not ready. Anything else -- thoroughness rows of the test review, a mutation check, a checklist failure while the driver's
+            # own verification is clean -- is evidence for the final audit, not a defect a repair pass can fix.
+            # WORKFLOW_REPAIR_SEVERITY=all restores repair for every failure.
+            if [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical && -s "${GREEN_CLASS:-/nonexistent}" ]]; then
+                case "$(basename "$repair_source")" in
+                    FINAL_AUDIT.md|VERIFICATION_INTEGRITY.md|runtime-unrunnable-application) ;;   # blocking by nature
+                    *)
+                        if ! repair_critical="$(python3 -B "$ROOT/scripts/lib/failure_severity.py" critical "$GREEN_CLASS" "$LOG_DIR/green-check.log")"; then
+                            echo "Repair not run: no critical failure. The application builds and runs (any failing tests are isolated), so $(basename "$repair_source") goes to the final audit as unresolved evidence."
+                            echo "(WORKFLOW_REPAIR_SEVERITY=all repairs every failure.)"
+                            record_nonblocking_failure "$(basename "$repair_source")" 'no critical failure; repair not run'
+                            record_test_failure_disposition || true
+                            case "$(basename "$repair_source")" in
+                                TEST_REVIEW.md|green-check.md)
+                                    if [[ -e "$STATE_DIR/checklist-ran" ]]; then set_state FINAL_AUDIT; else set_state MANUAL_CHECKLIST; fi ;;
+                                *) set_state FINAL_AUDIT ;;
+                            esac
+                            continue
+                        fi ;;
+                esac
+            fi
             if [[ "$WORKFLOW_AUTO_REPAIR" != 1 \
                     || ( "$repair_source" != "$GREEN_MD" && "$repair_source" != .uncle/docs/TEST_REVIEW.md \
                          && "$repair_source" != .uncle/docs/FINAL_AUDIT.md \
@@ -6192,6 +6334,19 @@ while true; do
             PREVIOUS_VERIFICATION_SNAPSHOT="$(cat "$STATE_DIR/verification-snapshot" 2>/dev/null || true)"
             if [[ "$plan_status" != 22 ]]; then
                 printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
+                # Say, in the driver's own words and from its own records, what this repair is for.
+                # The agent's whole job: the critical failures, not every row that happens to be failing.
+                if [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical ]]; then
+                    python3 -B "$ROOT/scripts/lib/failure_severity.py" scope "$GREEN_CLASS" "$LOG_DIR/green-check.log" \
+                        "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/FINAL_AUDIT.json" > "$STATE_DIR/REPAIR_SCOPE.md" 2>/dev/null || rm -f "$STATE_DIR/REPAIR_SCOPE.md"
+                else
+                    rm -f "$STATE_DIR/REPAIR_SCOPE.md"
+                fi
+                echo
+                python3 -B "$ROOT/scripts/lib/repair_reason.py" "$STATE_DIR" "$repair_source" "$repair_count" "$MAX_REPAIRS" \
+                    | tee "$STATE_DIR/REPAIR_REASON.md" || true
+                { printf '\n--- %s ---\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; cat "$STATE_DIR/REPAIR_REASON.md"; } >> "$STATE_DIR/repair-history.md" 2>/dev/null || true
+                echo
                 repair_begin || exit 1
                 run_stage REPAIR
                 repair_status=0
@@ -6252,7 +6407,7 @@ while true; do
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi
-            green_wait_final || { echo 'Driver verification did not publish final evidence before MANUAL_CHECKLIST.' >&2; exit 1; }
+            green_wait_main || { echo 'Driver verification did not publish final evidence before MANUAL_CHECKLIST.' >&2; exit 1; }
             runtime_ready_rc=0
             route_unrunnable_application || runtime_ready_rc=$?
             if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
@@ -6289,7 +6444,7 @@ This is a new response: write the complete document now. A reply that refers bac
             # Green evidence is a prerequisite. Execute workers consume its
             # canonical result and never repeat unit/build/browser checks the
             # driver already ran.
-            green_wait_final || { echo 'Driver verification did not publish final evidence before EXECUTE_CHECKLIST.' >&2; exit 1; }
+            green_wait_main || { echo 'Driver verification did not publish final evidence before EXECUTE_CHECKLIST.' >&2; exit 1; }
             runtime_ready_rc=0
             route_unrunnable_application || runtime_ready_rc=$?
             if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
@@ -6695,7 +6850,36 @@ PY
                 echo
                 finished_build_line "$(completed_verdict)"
             fi
-            finished_extras print --kind new --reason not-applicable ${UNATTENDED:+$([[ "$UNATTENDED" == 1 ]] && echo --unattended)}
+            # An application build has no PR path. In uncle's own worktree the finished build would otherwise sit on a branch nobody
+            # merges, so a clean READY build is committed and merged into the source checkout's branch, and the worktree removed once
+            # the summary has printed. Anything short of that keeps the worktree and says so.
+            # Attest the build before it is committed, so the merge carries .uncle/attestation.json to the source branch and
+            # `uncle verify` finds it there. Failure never blocks the merge: no attestation simply verifies as absent.
+            build_attest_completed
+            extras_reason=not-applicable merge_failed=0
+            if worktree_merge_owned; then
+                case "$(completed_verdict)" in
+                    READY|READY_WITH_NON_BLOCKING_ISSUES)
+                        if [[ -s "$GREEN_OVERRIDE_FILE" || -s "$AUDIT_OVERRIDE_FILE" ]]; then
+                            echo "Not merging: the build completed over an override; branch $(git branch --show-current) is kept."
+                            extras_reason=local-merge-failed merge_failed=1
+                        elif worktree_merge_finish_all "uncle: $(git branch --show-current | sed 's|^[^/]*/||; s|-| |g')"; then
+                            extras_reason=merged-local
+                        else
+                            echo "Not merged: $WORKTREE_MERGE_FAILURE."
+                            extras_reason=local-merge-failed merge_failed=1
+                        fi
+                        ;;
+                    *)
+                        echo "Not merging: the audit verdict is '$(completed_verdict)'; branch $(git branch --show-current) is kept."
+                        extras_reason=local-merge-failed merge_failed=1
+                        ;;
+                esac
+            fi
+            finished_extras print --kind new --reason "$extras_reason" ${UNATTENDED:+$([[ "$UNATTENDED" == 1 ]] && echo --unattended)}
+            worktree_merge_remove_pending
+            # An unattended run that delivered nothing into the source branch must not read as success.
+            [[ "$merge_failed" == 1 && "${UNATTENDED:-0}" == 1 ]] && exit 1
 
             exit 0
             ;;

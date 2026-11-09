@@ -15,7 +15,14 @@ import time
 import uuid
 
 
-def write_json(path, value):
+def write_json(path, value, floor=None):
+    """Write atomically. With `floor`, nothing is written (and nothing created) unless that directory still exists.
+
+    The sampler outlives the driver, and the driver can remove its run's worktree before it exits. Every later write used to create
+    the directories above it again, so a finished run left an empty-looking `<worktree>/.uncle/workflow/performance/...` behind.
+    """
+    if floor is not None and not Path(floor).is_dir():
+        return
     temporary = path.with_name('.' + path.name + '.' + uuid.uuid4().hex)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,7 +40,7 @@ def event(kind, name, started, elapsed, status=None, **fields):
         write_json(Path(directory) / 'events' / (uuid.uuid4().hex + '.json'),
                    dict(kind=kind, name=name, started_at=started,
                         elapsed_seconds=elapsed, process_exit=status,
-                        pid=os.getpid(), **fields))
+                        pid=os.getpid(), **fields), floor=directory)
     except (OSError, ValueError):
         pass
 
@@ -44,7 +51,7 @@ def stage(name):
         try:
             write_json(Path(directory) / 'events' / (uuid.uuid4().hex + '.json'),
                        dict(kind='stage_boundary', name=name, started_at=time.time(),
-                            monotonic=time.monotonic()))
+                            monotonic=time.monotonic()), floor=directory)
         except (OSError, ValueError):
             pass
 
@@ -170,7 +177,7 @@ class BuildTiming(ContextDecorator):
         first, last = row.pop('cpu_first'), row.pop('cpu_last')
         row['elapsed_seconds'] = elapsed
         row['cpu_seconds'] = max(0., last - first) if first is not None and last is not None else None
-        write_json(self.directory / 'events' / (uuid.uuid4().hex + '.json'), row)
+        write_json(self.directory / 'events' / (uuid.uuid4().hex + '.json'), row, floor=self.directory)
 
     def __exit__(self, exc_type, exc, traceback):
         if self.enabled:
@@ -182,9 +189,11 @@ class BuildTiming(ContextDecorator):
                     for row in self.samples.values():
                         self.flush_sample(row)
                 elapsed = end_tick - self.tick
+                if not self.directory.is_dir():
+                    raise OSError('the run directory was removed (its worktree was); nothing to report into')
                 write_json(self.directory / 'run.json', dict(started_at=self.started, ended_at=ended,
                     elapsed_seconds=elapsed, ended_monotonic=end_tick, process_exit=self.status, status='interrupted' if exc_type else 'finished',
-                    sample_interval_seconds=self.interval, sampling_errors=self.errors))
+                    sample_interval_seconds=self.interval, sampling_errors=self.errors), floor=self.directory)
                 render(self.directory)
             except Exception:
                 # Reporting is observational, even if a record or renderer is faulty.

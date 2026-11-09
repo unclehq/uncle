@@ -86,6 +86,20 @@ def _title_signal_exit(signum, _frame):
     raise SystemExit(128 + signum)
 from preview_server import DevelopmentPreview, PreviewServer, development_preview
 from chat import Conversation, sanitize
+
+_FAILURE_ANSI_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]')
+
+
+def format_failure_line(status, last_line):
+    """Failure line for a non-zero driver exit; None for exit 0.
+
+    The quoted last output line is escape-filtered and redacted.
+    """
+    if status == 0:
+        return None
+    text = _FAILURE_ANSI_RE.sub('', last_line or '')
+    text = sanitize(text).strip()
+    return 'Driver exited with status %s: %s' % (status, text or '(no output)')
 from generated_input import generated_input_path, generated_input_write_path
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
@@ -95,10 +109,14 @@ from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compo
                          hold_reason as triage_hold_reason, DIAGNOSIS_TOOLS, EXECUTE_TOOLS)
 from github_issues import IssuePicker, references as issue_references, issue_context
 from self_hosted import settings as home_settings
-from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
+from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, refresh_bedrock_models, validate_bedrock_token, local_model
 import supervisor as supervision_lib
 import supervisor_runner
 import home_agent_session
+import home_preload
+import io
+PRELOAD_TIMEOUT_S = 60
+PRELOAD_CANCEL_WAIT_S = 3
 from supervisor_runner import SupervisorRequest, build_command as supervisor_command
 import supervisor_chat
 from supervisor_chat import ChatRequest
@@ -169,7 +187,9 @@ class StartupRefused(Exception):
 
 def _project_root():
     root = os.environ.get("UNCLE_PROJECT_ROOT")
-    if root and os.path.isabs(root):
+    # A run's worktree can be removed when it finishes (merged locally, no remote); until the next run restores the launch root,
+    # a root that no longer exists is not a project.
+    if root and os.path.isabs(root) and os.path.isdir(root):
         return root
     return os.getcwd()
 
@@ -321,6 +341,7 @@ STAGES = [
     ("requirements", AGENT),
     ("project-plan", AGENT),
     ("change-plan", AGENT),
+    ("classify-change", AGENT),
     ("adversarial-review", REVIEWER),
     ("updated-plan", AGENT),
     ("updated-change-plan", AGENT),
@@ -348,8 +369,21 @@ BUILD_CONFIG_STAGES = [name for name in CONFIG_STAGES if name != "triage"]
 # scripts/agent-*.sh and scripts/reviewer-*.sh — and the shim is what enforces
 # that difference. codex, for instance, runs `--sandbox workspace-write` as an
 # agent and `--sandbox read-only` as a reviewer.
-AGENT_RUNNERS = ["claude", "kimi", "codex", "self-hosted"]
-REVIEWER_RUNNERS = ["codex", "claude", "kimi", "self-hosted"]
+AGENT_RUNNERS = ["claude", "kimi", "codex", "self-hosted", "aws-bedrock"]
+REVIEWER_RUNNERS = ["codex", "claude", "kimi", "self-hosted", "aws-bedrock"]
+# Runners that speak HTTP to a configured endpoint.  AWS Bedrock is a profile
+# of the self-hosted class with its own key store, labels and display name.
+HTTP_RUNNERS = ("self-hosted", "aws-bedrock")
+PROFILES = {
+    "self-hosted": {"display": "Self hosted", "key_file": "self-hosted-keys.json",
+                    "url_label": "Base URL", "token_label": "API key"},
+    "aws-bedrock": {"display": "AWS Bedrock", "key_file": "aws-bedrock-keys.json",
+                    "url_label": "Region", "token_label": "AWS Bedrock Token"},
+}
+
+
+def runner_display(runner):
+    return PROFILES.get(runner, {}).get("display", runner)
 
 # Applied to any stage the operator has not configured.
 DEFAULT_RUNNER = "claude"
@@ -385,6 +419,10 @@ def parent_stage(stage):
         return "project-plan"
     if stage.startswith("preview-build-part-"):
         return "preview-build"
+    # Tests: the harness, unit, e2e and mutation authors (and the closing defect-list call) are one stage, drawn as one row
+    # with an indicator per author.
+    if stage.startswith("tests-"):
+        return "tests"
     if stage in ("manual-checklist-base", "manual-checklist-delta"):
         return "manual-checklist"
     # The investigate/format split's first call always names itself
@@ -412,9 +450,18 @@ NETWORK_CHOICES = ["false", "true"]
 # so the picker never offers an id the shim would silently replace or drop.
 MODEL_CATALOG_CLAUDE = [
     ("Claude", [
-        ("Claude Opus 5", "claude-opus-5"),
-        ("Claude Sonnet 5", "claude-sonnet-5"),
-        ("Claude Haiku 4.5", "claude-haiku-4-5"),
+        ("Claude Haiku 5.5", "claude-haiku-5-5"),
+        ("Claude Sonnet 5.5", "claude-sonnet-5-5"),
+        ("Claude Opus 5.5", "claude-opus-5-5"),
+        ("Claude Fable 5.1", "claude-fable-5-1"),
+        ("Claude Fable 5", "claude-fable-5"),
+        ("Claude Opus 4.8", "claude-opus-4-8"),
+        ("Claude Opus 4.7", "claude-opus-4-7"),
+        ("Claude Sonnet 4.6", "claude-sonnet-4-6"),
+        ("Claude Opus 4.6", "claude-opus-4-6"),
+        ("Claude Opus 4.5", "claude-opus-4-5-20251101"),
+        ("Claude Haiku 4.5", "claude-haiku-4-5-20251001"),
+        ("Claude Sonnet 4.5", "claude-sonnet-4-5-20250929"),
     ]),
 ]
 
@@ -443,14 +490,14 @@ MODEL_LABELS = {mid: label
 SPINNER = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 
 # What the other runners run when the stage stores no model. Claude's
-# "opus" is the tier alias the drivers have always defaulted to
-# (stagegate.sh's DEFAULT_MODEL, reviewer-claude.sh's DEFAULT_MODEL);
-# agent-codex.sh blanks it for codex, so it reaches only claude. Codex has
+# default is the pinned id claude-sonnet-5-5, which must match
+# stagegate.sh's DEFAULT_MODEL and reviewer-claude.sh's DEFAULT_MODEL.
+# Codex has
 # no repo-level default: agent-codex.sh omits the flag and the CLI's own
 # configured model applies. Kimi's shim defaults WORKFLOW_KIMI_MODEL to this
 # raw id (agent-kimi.sh).
 DEFAULT_MODEL_FOR_RUNNER = {
-    "claude": "claude-sonnet-5",
+    "claude": "claude-sonnet-5-5",
     "codex": "codex default",
     "kimi": "moonshotai/kimi-k2.7-code-highspeed",
 }
@@ -502,6 +549,7 @@ CONFIG_DESC = {
         "records BLOCKED, and no repair attempt can grant it a port."
     ),
     "field:base_url": "The OpenAI-compatible API root the model server should use, for example http://localhost:8000/v1.",
+    "field:region": "The AWS region that serves your Bedrock models, for example us-east-1. Endpoints and model discovery are derived from it. Bedrock never sends a temperature.",
     "field:api_key": "Endpoint credential, hidden while editing and stored separately in .uncle/self-hosted-keys.json. Use a placeholder for a server without authentication.",
     "field:model": (
         "The model this stage runs. claude, codex, and kimi take "
@@ -555,6 +603,12 @@ CONFIG_DESC = {
         "ordered set of work. This stage benefits from a strong planning model. "
         "Leave it at (default) to use the global model, or set a specific model "
         "ID if you always want planning to run on a particular model."
+    ),
+    "classify-change": (
+        "A small judgment call that sizes the plan and decides how many "
+        "adversarial review lenses run. Left unset it runs on the supervisor's "
+        "runner (or the planning stage's runner when that is not installed). "
+        "It fails open: a runner that errors just gets the full review."
     ),
     "updated-plan": (
         "Revises the project plan after the adversarial review catches gaps or "
@@ -648,7 +702,7 @@ def stage_env_var(stage):
 def unsupported_runner_message(runner):
     runner = re.sub(r'[\x00-\x1f\x7f]', '', str(runner))[:64]
     return ("uncle: runner '%s' is not supported (Cline support was removed). "
-            "Set it to claude, codex, kimi or self-hosted with 'uncle' -> Configure." % runner)
+            "Set it to claude, codex, kimi, self-hosted or aws-bedrock with 'uncle' -> Configure." % runner)
 
 
 def runner_command(runner, side):
@@ -657,6 +711,7 @@ def runner_command(runner, side):
     if side == REVIEWER:
         table = {
             "self-hosted": shim("reviewer-self-hosted.sh"),
+            "aws-bedrock": shim("reviewer-self-hosted.sh"),
             "codex": "codex",
             "claude": shim("reviewer-claude.sh"),
             "kimi": shim("reviewer-kimi.sh"),
@@ -664,6 +719,7 @@ def runner_command(runner, side):
     else:
         table = {
             "self-hosted": shim("agent-self-hosted.sh"),
+            "aws-bedrock": shim("agent-self-hosted.sh"),
             "claude": "claude",
             "kimi": shim("agent-kimi.sh"),
             "codex": shim("agent-codex.sh"),
@@ -692,7 +748,14 @@ def runners_for(side):
                 continue
             installed.append("self-hosted" if binary == "opencode" else binary)
             break
+    if "self-hosted" not in installed:
+        installed.append("self-hosted")  # local runner is always offered
     return installed
+
+
+def selectable_runners(side):
+    """Runners offered in Configure: the installed ones plus the HTTP-only AWS Bedrock runner."""
+    return runners_for(side) + ["aws-bedrock"]
 
 
 
@@ -847,6 +910,34 @@ def edit_insert(text, cursor, value, limit=COMPOSER_LIMIT):
     return text[:cursor] + value + text[cursor:], cursor + len(value), ''
 
 
+_PASTE_DROP = set(range(0, 32)) - {9, 10} | {127} | set(range(0x80, 0xA0)) \
+    | set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A))
+
+
+def sanitize_paste(text):
+    """CRLF/CR -> LF; drop ESC, C0 (except LF/TAB), DEL, C1 and bidi controls."""
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    return ''.join(ch for ch in text if ord(ch) not in _PASTE_DROP)
+
+
+def classify_escape(seq):
+    """Classify the bytes that follow ESC: 'paste', 'newline' or None.
+
+    Only Ctrl (modifier 5) Enter is a newline; other modifiers are plain Enter."""
+    if isinstance(seq, bytes):
+        seq = seq.decode('latin-1')
+    if seq in ('\r', '\n'):
+        return 'newline'
+    if not seq.startswith('['):
+        return None
+    body = seq[1:]
+    if body == '200~':
+        return 'paste'
+    if body in ('13;2u', '27;2;13~'):
+        return 'newline'
+    return None
+
+
 def edit_backspace(text, cursor):
     if cursor <= 0:
         return text, 0, ''
@@ -962,7 +1053,145 @@ def restore_tty(fd, saved):
         pass
 
 
+def _inline_enabled():
+    """Build window and home page render as ordinary terminal output (UNCLE_INLINE=1)."""
+    return os.environ.get('UNCLE_INLINE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _tty_write(text):
+    """Raw output to the terminal, in order after anything curses has flushed."""
+    try:
+        os.write(_tty_fd(), text.encode('utf-8', 'replace'))
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+TERMINAL_MODES_ENABLE = '\x1b[?2004h\x1b[>4;2m'   # bracketed paste + modifyOtherKeys 2 (D-2)
+TERMINAL_MODES_DISABLE = '\x1b[?2004l\x1b[>4;0m'
+
+
+def _terminal_modes_default_enabled():
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except (ValueError, AttributeError):
+        return False
+
+
+class TerminalModes:
+    """Enable/disable bracketed paste and enhanced keys; disable is idempotent
+    and only written if enable was written."""
+
+    def __init__(self, writer=None, enabled=None):
+        self.writer = writer or _tty_write
+        self.enabled = enabled or _terminal_modes_default_enabled
+        self.active = False
+
+    def enable(self):
+        if self.active or not self.enabled():
+            return False
+        self.active = True
+        self.writer(TERMINAL_MODES_ENABLE)
+        return True
+
+    def disable(self):
+        if not self.active:
+            return False
+        self.active = False
+        self.writer(TERMINAL_MODES_DISABLE)
+        return True
+
+
+def _sgr_color(code, base):
+    if code is None or code < 0:
+        return ''
+    if code < 8:
+        return ';%d' % (base + code)
+    if code < 16:
+        return ';%d' % (base + 60 + code - 8)
+    return ';%d;5;%d' % (base + 8, code)
+
+
+def _sgr_for_attr(attr):
+    """SGR escape for a curses attribute (bold/dim/underline/reverse plus its colour pair)."""
+    codes = ''
+    for flag, code in ((curses.A_BOLD, ';1'), (curses.A_DIM, ';2'), (curses.A_UNDERLINE, ';4'), (curses.A_REVERSE, ';7')):
+        if attr & flag:
+            codes += code
+    pair = curses.pair_number(attr) if hasattr(curses, 'pair_number') else 0
+    if pair:
+        try:
+            fg, bg = curses.pair_content(pair)
+            codes += _sgr_color(fg, 30) + _sgr_color(bg, 40)
+        except curses.error:
+            pass
+    return '\x1b[0%sm' % codes
+
+
+def _window_rows_as_ansi(win, width):
+    """The rows of an off-screen curses window as plain text with SGR styling, each at most width columns."""
+    rows = []
+    height, wide = win.getmaxyx()
+    columns = max(0, min(width, wide))
+    for y in range(height):
+        try:
+            # instr counts bytes, and box-drawing characters are three each: read the whole row, then cut by character.
+            text = win.instr(y, 0, wide * 4).decode('utf-8', 'replace')[:columns]
+        except curses.error:
+            text = ' ' * columns
+        out, current = [], None
+        for x, ch in enumerate(text):
+            try:
+                cell = win.inch(y, x)
+            except curses.error:
+                cell = 0
+            attr = cell & ~0xFF if cell > 0xFF else 0
+            style = (attr & (curses.A_BOLD | curses.A_DIM | curses.A_UNDERLINE | curses.A_REVERSE),
+                     curses.pair_number(attr) if hasattr(curses, 'pair_number') else 0)
+            if style != current:
+                out.append(_sgr_for_attr(attr))
+                current = style
+            out.append(ch)
+        rows.append(''.join(out).rstrip() + '\x1b[0m' if out else '')
+    return rows
+
+
 class UncleTUI:
+    @property
+    def input_buf(self):
+        return self._input_buf
+
+    @input_buf.setter
+    def input_buf(self, value):
+        # Assigning a whole value puts the cursor at its end.
+        self._input_buf = value
+        self.input_cur = len(value)
+
+    def _edit_input(self, k):
+        """Line editing for the text fields: arrows, Home/End, ^A ^E ^K, backspace, delete."""
+        buf = self._input_buf
+        cur = max(0, min(self.input_cur, len(buf)))
+        if k == curses.KEY_LEFT:
+            cur = max(0, cur - 1)
+        elif k == curses.KEY_RIGHT:
+            cur = min(len(buf), cur + 1)
+        elif k in (1, curses.KEY_HOME):
+            cur = 0
+        elif k in (5, curses.KEY_END):
+            cur = len(buf)
+        elif k == 11:
+            buf, cur = "", 0
+        elif k in (curses.KEY_BACKSPACE, 127, 8):
+            if cur:
+                buf, cur = buf[:cur - 1] + buf[cur:], cur - 1
+        elif k == curses.KEY_DC:
+            buf = buf[:cur] + buf[cur + 1:]
+        elif 32 <= k <= 126:
+            buf, cur = buf[:cur] + chr(k) + buf[cur:], cur + 1
+        else:
+            return
+        self._input_buf = buf
+        self.input_cur = cur
+
     VIEWER_PROGRAMS =("cursor", "code", "glow", "bat", "less", "more", "cat")
 
     # Assigning the composer (the ~20 sites that clear or fill it) puts the
@@ -1031,6 +1260,7 @@ class UncleTUI:
         self.stage_networks = {}
         self.stage_base_urls = {}
         self.stage_api_keys = read_keys(CONFIG_PATH)
+        self.bedrock_keys = read_keys(CONFIG_PATH, profile="aws-bedrock")
         self.notice = ""
         self.config_sel = 0
         self.config_scroll = 0
@@ -1151,6 +1381,8 @@ class UncleTUI:
             return self._config_items()[self.config_sel]
         if section == "opencode":
             return "@connection"
+        if section == "bedrock":
+            return "@bedrock"
         if section == "misc":
             return "!misc"
         if section == "supervision":
@@ -1165,6 +1397,10 @@ class UncleTUI:
 
     def _profile_targets(self):
         return ["@new"] + ["@" + name for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
+
+    def _keys_for(self, runner):
+        """The key store of an HTTP runner's profile."""
+        return self.bedrock_keys if runner == "aws-bedrock" else self.stage_api_keys
 
     # ---- effective values ----
     def _stage_value(self, stage, values):
@@ -1183,7 +1419,7 @@ class UncleTUI:
         runner = self._stage_value(stage, self.stage_runners)
         if runner in ("opencode", "aider"):
             return "self-hosted"
-        if runner and runner not in ("claude", "codex", "kimi", "self-hosted"):
+        if runner and runner not in ("claude", "codex", "kimi") + HTTP_RUNNERS:
             # Saved value is unsupported (e.g. a removed runner): leave the stage
             # unselected and say why; the config file is not rewritten.
             self.notice = unsupported_runner_message(runner)
@@ -1194,14 +1430,14 @@ class UncleTUI:
         # so the installed-agent scan below is what actually decides.
         if DEFAULT_RUNNER:
             return DEFAULT_RUNNER
-        installed = runners_for(STAGE_SIDE.get(stage, AGENT))
+        installed = selectable_runners(STAGE_SIDE.get(stage, AGENT))
         return installed[0] if installed else ""
 
     def stage_effort(self, stage):
         configured = self._stage_value(stage, self.stage_efforts)
         if configured:
             return configured
-        return "none" if self.stage_runner(stage) == "self-hosted" else default_stage_effort(stage)
+        return "none" if self.stage_runner(stage) in HTTP_RUNNERS else default_stage_effort(stage)
 
     def stage_network(self, stage):
         """Whether this stage's sandbox may reach the network. Default off."""
@@ -1210,7 +1446,7 @@ class UncleTUI:
     def stage_model(self, stage):
         """The model for a stage, or "" when its runner takes none."""
         runner = self.stage_runner(stage)
-        if runner == "self-hosted":
+        if runner in HTTP_RUNNERS:
             return self._stage_value(stage, self.stage_models)
         if runner in ("claude", "codex", "kimi"):
             # Stored id or ""; "" means the runner's own default. Kimi stores
@@ -1228,10 +1464,12 @@ class UncleTUI:
         model's reasoningEffort option. Claude, codex, and kimi take a model
         from their own catalogue; codex's row order keeps network above model.
         """
+        if stage == "@bedrock":
+            return ["region", "api_key"]
         if stage.startswith("@"):
             return ["base_url", "api_key"]
         runner = self.stage_runner(stage)
-        if runner == "self-hosted":
+        if runner in HTTP_RUNNERS:
             return ["runner", "effort", "model"]
         if runner == "codex":
             return ["runner", "effort", "network", "model"]
@@ -1247,6 +1485,12 @@ class UncleTUI:
             return getattr(self, "supervision", {}).get(field, "")
         if stage == "@connection":
             return connection_settings(self.stage_api_keys).get(field, "")
+        if stage == "@bedrock":
+            connection = connection_settings(self.bedrock_keys)
+            if field == "region":
+                import bedrock_protocols
+                return connection.get("region") or bedrock_protocols.region_from_url(connection.get("base_url")) or ""
+            return connection.get(field, "")
         if stage.startswith("@"):
             name = stage[1:]
             if field == "name":
@@ -1270,17 +1514,19 @@ class UncleTUI:
         stored = self._field_value(stage, field)
         if field == "api_key":
             return "********" if stored else "not set"
-        if field == "base_url" or (field == "model" and self.stage_runner(stage) == "self-hosted"):
+        if field in ("base_url", "region") or (field == "model" and self.stage_runner(stage) in HTTP_RUNNERS):
             return stored or "not set"
-        if field == "runner" and stored == "self-hosted":
-            return "Self hosted"
+        if field == "runner" and stored in HTTP_RUNNERS:
+            return runner_display(stored)
         if stored:
             if field == "model":
                 label = MODEL_LABELS.get(stored, "")
                 return "%s  %s" % (stored, label) if label else stored
             return stored
         if field == "runner":
-            return "%s  (default)" % (self.stage_runner(stage) or "No agents installed")
+            default = self.stage_runner(stage)
+            default = runner_display(default)
+            return "%s  (default)" % (default or "No agents installed")
         if field == "effort":
             return "%s  (default)" % default_stage_effort(stage)
         if field == "network":
@@ -1314,19 +1560,51 @@ class UncleTUI:
                 self.supervision.pop(field, None)
             self.save_config()
             return
-        if stage == "@connection":
-            connection = connection_settings(self.stage_api_keys)
+        if stage == "@bedrock":
+            import bedrock_protocols
+            keys = self._keys_for("aws-bedrock")
+            old = connection_settings(keys)
+            connection = {"region": self._field_value("@bedrock", "region"), "api_key": old.get("api_key", "")}
+            value = value.strip() if field == "region" else value
+            try:
+                if value and field == "region":
+                    value = bedrock_protocols.validate_region(value)
+                if value and field == "api_key":
+                    validate_bedrock_token(value)
+            except ValueError as exc:
+                self.notice = str(exc)
+                return
             connection[field] = value
-            if connection.get('base_url') and connection.get('api_key'):
-                self.notice = "Discovering supported self-hosted models…"
+            if connection["region"] and connection["api_key"]:
+                self.notice = "Discovering supported AWS Bedrock models…"
                 try:
-                    refresh_models(self.stage_api_keys, connection['base_url'], connection['api_key'])
+                    refresh_bedrock_models(keys, connection["region"], connection["api_key"])
                 except ValueError as exc:
+                    # A failed discovery keeps the prior connection, region and catalog untouched.
                     self.notice = str(exc)
                     return
                 self.notice = ""
             else:
-                self.stage_api_keys['__opencode_connection__'] = connection
+                keys["__opencode_connection__"] = connection
+            self.save_config()
+            return
+        if stage == "@connection":
+            runner = "self-hosted"
+            keys = self._keys_for(runner)
+            connection = connection_settings(keys)
+            connection[field] = value
+            if connection.get('base_url') and connection.get('api_key'):
+                self.notice = "Discovering supported self-hosted models…"
+                try:
+                    refresh_models(keys, connection['base_url'], connection['api_key'])
+                except ValueError as exc:
+                    # A failed discovery keeps the prior catalog; keep the typed values.
+                    keys['__opencode_connection__'] = connection
+                    self.notice = str(exc)
+                    return
+                self.notice = ""
+            else:
+                keys['__opencode_connection__'] = connection
             self.save_config()
             return
         if field == "runner" and value != self.stage_runner(stage):
@@ -1348,10 +1626,12 @@ class UncleTUI:
         """Use the selected stage's connection throughout the workflow."""
         self.maybe_reload()
         source = self.stage_target
-        if self.stage_runner(source) != "self-hosted":
-            self.notice = "Select Self hosted and configure its connection first."
+        runner = self.stage_runner(source)
+        if runner not in HTTP_RUNNERS:
+            self.notice = "Select Self hosted or AWS Bedrock and configure its connection first."
             return
-        for store in (self.stage_models, self.stage_base_urls, self.stage_api_keys):
+        display = PROFILES[runner]["display"] if runner in PROFILES else runner
+        for store in (self.stage_models, self.stage_base_urls, self._keys_for(runner)):
             value = store.get(source, "")
             for stage in CONFIG_STAGES:
                 if value:
@@ -1359,20 +1639,32 @@ class UncleTUI:
                 else:
                     store.pop(stage, None)
         for stage in CONFIG_STAGES:
-            self.stage_runners[stage] = "self-hosted"
+            self.stage_runners[stage] = runner
         self.save_config()
-        self.notice = "Self hosted and this LLM connection selected for all stages."
+        self.notice = "%s and this LLM connection selected for all stages." % display
+
+    def _use_temperature(self):
+        """`self-hosted.use-temperature`: whether Self Hosted requests send a temperature. Off unless set on."""
+        return str(getattr(self, 'self_hosted_settings', {}).get('self-hosted.use-temperature', '')).strip().lower() \
+            in ('on', '1', 'true', 'yes')
+
+    def _toggle_use_temperature(self):
+        self.self_hosted_settings['self-hosted.use-temperature'] = 'off' if self._use_temperature() else 'on'
+        self.save_config()
 
     def _config_items(self):
         section = getattr(self, "config_section", "")
         if not section:
-            return ["1. Configure stages", "2. Configure self hosting", "3. Miscellaneous", "4. Supervision", "5. Recovery"]
+            return ["1. Configure stages", "2. Configure self hosting", "3. Configure AWS Bedrock", "4. Miscellaneous", "5. Supervision", "6. Recovery"]
         if section == "supervision":
             return self._supervision_items()
         if section == "recovery":
             return ["Recovery model — diagnose failures and propose repairs"]
         if section == "opencode":
-            return ["Connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
+            return ["Connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {})),
+                    "Temperature: " + ("on" if self._use_temperature() else "off")]
+        if section == "bedrock":
+            return ["Connection — Region and AWS Bedrock Token", "Refresh supported models (%d loaded)" % len(self.bedrock_keys.get("__opencode_models__", {}))]
         if section == "misc":
             return ["Auto mode: " + ("off" if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "false" else "on"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
@@ -1381,7 +1673,7 @@ class UncleTUI:
         width = max(len(s) for s in BUILD_CONFIG_STAGES)
         rows = []
         for stage in BUILD_CONFIG_STAGES:
-            parts = ["Self hosted" if self.stage_runner(stage) == "self-hosted" else self.stage_runner(stage)]
+            parts = [runner_display(self.stage_runner(stage))]
             model = self.stage_model(stage)
             if model:
                 parts.append(MODEL_LABELS.get(model, model))
@@ -1398,8 +1690,10 @@ class UncleTUI:
         """Rows of the open stage's popup."""
         stage = self.stage_target
         rows = []
+        profile = PROFILES["aws-bedrock" if stage == "@bedrock" else "self-hosted"]
         for field in self.stage_fields(stage):
-            rows.append("%s  %s" % ({"base_url": "Base URL", "api_key": "API key"}.get(field, field).ljust(8), self._field_display(stage, field)))
+            label = {"base_url": profile["url_label"], "region": "Region", "api_key": profile["token_label"]}.get(field, field)
+            rows.append("%s  %s" % (label.ljust(8), self._field_display(stage, field)))
         return rows
 
     def _stage_field(self):
@@ -1419,12 +1713,14 @@ class UncleTUI:
         if self.state == "stage":
             field = self._stage_field()
             desc = CONFIG_DESC.get("field:%s" % field, "")
+            if field == "model" and self.stage_runner(self.stage_target) == "aws-bedrock":
+                return "Choose one of your configured AWS Bedrock models. Set the Region and AWS Bedrock Token to discover models in Configure → Configure AWS Bedrock."
             if field == "model" and self.stage_runner(self.stage_target) == "self-hosted":
                 return "Choose one of your configured self-hosted models. Set the Base URL and API key to discover models in Configure → Configure self hosting."
             if field == "runner":
                 side = STAGE_SIDE.get(self.stage_target, AGENT)
                 desc += " This is a %s stage, so its choices are %s." % (
-                    side, ", ".join(runners_for(side)))
+                    side, ", ".join(selectable_runners(side)))
             return desc
         if getattr(self, "config_section", "") == "misc":
             return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. It asks nothing: blocking final-audit findings are skipped and ledgered as accepted without human review, no completion or star dialog opens, nothing is committed, pushed or opened as a PR, and the finished-build line is printed on exit. The approval name identifies your manual approvals."
@@ -1432,6 +1728,11 @@ class UncleTUI:
             return self._supervision_desc()
         if not getattr(self, "config_section", ""):
             return "Choose a configuration section."
+        if getattr(self, "config_section", "") == "opencode" and self.config_sel == 2:
+            return ("Whether Self Hosted requests send a temperature. Off (the default) sends none and the model server "
+                    "uses its own default, which is what some hosted gateways require. On sends 0 (1 for the requirements "
+                    "stage); change the value with self-hosted.temperature in .uncle/config. Press Enter to toggle. "
+                    "Stored as self-hosted.use-temperature; WORKFLOW_SELF_HOSTED_USE_TEMPERATURE overrides it.")
         return CONFIG_DESC.get(self._config_row(), "")
 
     # ---- generic picker (model / effort / runner) ----
@@ -1444,10 +1745,10 @@ class UncleTUI:
             return [("option", e) for e in EFFORTS] + [("custom", "Custom… (type an effort)")]
         if self.picker_kind == "runner":
             if self.picker_target == "!supervision":
-                return [("option", runner) for runner in runners_for(AGENT)
+                return [("option", runner) for runner in selectable_runners(AGENT)
                         if runner in supervision_lib.SUPPORTED_RUNNERS]
             side = STAGE_SIDE.get(self.picker_target, AGENT)
-            return [("option", r) for r in runners_for(side)]
+            return [("option", r) for r in selectable_runners(side)]
         if self.picker_kind == "network":
             # Two states and no custom row: the sandbox is either open or it
             # is not, and a typed value here would read as a setting while
@@ -1455,8 +1756,8 @@ class UncleTUI:
             return [("option", v) for v in NETWORK_CHOICES]
         runner = (self.supervision.get("runner", supervision_lib.DEFAULTS["runner"])
                   if self.picker_target == "!supervision" else self.stage_runner(self.picker_target))
-        if self.picker_kind == "model" and runner == "self-hosted":
-            return ([("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
+        if self.picker_kind == "model" and runner in HTTP_RUNNERS:
+            return ([("option", name) for name in sorted(self._keys_for(runner).get("__opencode_models__", {}))]
                     + [("custom", "Custom… (type a model id)")])
         if self.picker_kind == "model":
             # Each vendor picker offers only its own catalogue: ids from a
@@ -1504,26 +1805,32 @@ class UncleTUI:
             return self.stage_network(stage)
         if self.picker_kind == "markdown_viewer":
             return self._field_value(stage, self.picker_kind)
-        return self.stage_model(stage)
+        model = self.stage_model(stage)
+        if not model and self.picker_kind == "model" and self.stage_runner(stage) == "claude":
+            # Nothing stored: the stage runs the default, so open on that row.
+            return DEFAULT_MODEL_FOR_RUNNER["claude"]
+        return model
 
     def _open_picker(self, kind, target):
         self.notice = ""
         self.picker_kind = kind
         self.picker_target = target
-        available_runners = ([(runner) for runner in runners_for(AGENT)
+        available_runners = ([(runner) for runner in selectable_runners(AGENT)
                               if runner in supervision_lib.SUPPORTED_RUNNERS]
-                             if target == "!supervision" else runners_for(STAGE_SIDE.get(target, AGENT)))
+                             if target == "!supervision" else selectable_runners(STAGE_SIDE.get(target, AGENT)))
         if kind == "runner" and not available_runners:
             self.notice = "No agents installed. Install claude, codex, kimi, or opencode and add its executable to PATH."
             return
-        if kind in ("name", "base_url", "api_key", "approval_name"):
+        if kind in ("name", "base_url", "region", "api_key", "approval_name"):
             self.input_buf = self._field_value(target, kind)
             self.state = "config_edit"
             return
         runner = (self.supervision.get("runner", supervision_lib.DEFAULTS["runner"])
                   if target == "!supervision" else self.stage_runner(target))
-        if kind == "model" and runner == "self-hosted" and not self.stage_api_keys.get("__opencode_models__"):
-            self.notice = "Set up your endpoint in Configure → Configure self hosting to discover models first."
+        if kind == "model" and runner in HTTP_RUNNERS and not self._keys_for(runner).get("__opencode_models__"):
+            self.notice = ("Set up your endpoint in Configure → Configure AWS Bedrock to discover models first."
+                           if runner == "aws-bedrock" else
+                           "Set up your endpoint in Configure → Configure self hosting to discover models first.")
             return
         self.pick_filter = ""
         cur = (self._picker_current() or "").lower()
@@ -1615,6 +1922,9 @@ class UncleTUI:
 
     def load_config(self):
         self.self_hosted_request_options = {}
+        # Hand-written `self-hosted.<option>` lines (use-temperature, temperature, prefetch...). Kept verbatim so a save
+        # from this screen never drops them.
+        self.self_hosted_settings = {}
         exists = os.path.exists(CONFIG_PATH)
         self.misc = {}
         self.supervision = {}
@@ -1624,6 +1934,7 @@ class UncleTUI:
         self.stage_networks = {}
         self.stage_base_urls = {}
         self.stage_api_keys = read_keys(CONFIG_PATH)
+        self.bedrock_keys = read_keys(CONFIG_PATH, profile="aws-bedrock")
         # Normalize existing projects too.  Earlier versions performed this
         # only while creating the first configuration, so a project with an
         # existing config and a legacy bare `.uncle/` rule kept its generated
@@ -1661,6 +1972,8 @@ class UncleTUI:
                     key, val = parts[0].strip(), parts[1].strip()
                     if key in ("misc.auto_mode", "misc.approval_name"):
                         self.misc[key.split(".", 1)[1]] = val
+                    elif key.startswith("self-hosted."):
+                        self.self_hosted_settings[key] = val
                     elif key.startswith("supervision."):
                         # Kept verbatim, valid or not: the typed parser reports
                         # an invalid value on the Supervision screen and the
@@ -1774,6 +2087,8 @@ class UncleTUI:
                 fh.write(header)
                 for key, value in getattr(self, 'self_hosted_request_options', {}).items():
                     fh.write('%s %s\n' % (key, value))
+                for key, value in getattr(self, 'self_hosted_settings', {}).items():
+                    fh.write('%s %s\n' % (key, value))
                 for key, value in getattr(self, "misc", {}).items():
                     fh.write("misc.%s %s\n" % (key, value))
                 for key, value in getattr(self, "supervision", {}).items():
@@ -1804,6 +2119,7 @@ class UncleTUI:
         except Exception:
             pass
         save_keys(CONFIG_PATH, self.stage_api_keys)
+        save_keys(CONFIG_PATH, getattr(self, "bedrock_keys", {}), profile="aws-bedrock")
         self._config_stamp = self._stamp()
 
     def stage_env(self):
@@ -2041,6 +2357,12 @@ class UncleTUI:
                     message = reason + '. Stage chat disconnected. Type /homepage to return to the menu.'
                     self.home_history.append(('system', message))
                     self.chat_error = message
+                    last = ''
+                    for held in reversed(getattr(self, 'output', [])):
+                        if str(held).strip():
+                            last = str(held)
+                            break
+                    getattr(self, 'output', []).append(format_failure_line(self.workflow_exit_code, last))
                 host = getattr(self, 'supervision_host', None)
                 if host is not None:
                     # Triage owns a failure exit; an in-flight diagnosis is
@@ -2077,8 +2399,8 @@ class UncleTUI:
             return
         try:
             result = subprocess.run(
-                ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2"',
-                 "_", ROOT, _project_root()],
+                ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2" "$3"',
+                 "_", ROOT, _project_root(), self._startup_action or ""],
                 capture_output=True, text=True, timeout=120,
                 env=dict(os.environ, ROOT=ROOT), cwd=_project_root())
         except (OSError, subprocess.SubprocessError):
@@ -2181,6 +2503,7 @@ class UncleTUI:
         self.build_wrapped_count = 0
         self._message_snapshot = ([], [])
         self._message_stream = []
+        self._inline_last = None
         self.partial = ""
         self.prompt_kind = ""
         self.prompt_text = ""
@@ -2208,6 +2531,14 @@ class UncleTUI:
             env.pop("UNCLE_ATTENDED_STDIN", None)
             if not self.workflow_unattended:
                 env["UNCLE_ATTENDED_STDIN"] = "1"
+                # The launcher exported UNCLE_MODE_RESOLVED=1/UNCLE_UNATTENDED=1
+                # for the session's default mode. A session override (Shift-Tab)
+                # that makes this run attended would otherwise be refused by
+                # mode.sh as "already resolved as unattended".
+                env.pop("UNCLE_MODE_RESOLVED", None)
+                env.pop("UNCLE_UNATTENDED", None)
+                env.pop("UNCLE_MODE_SOURCE", None)
+                env.pop("UNCLE_MODE", None)
             self.proc = subprocess.Popen(command, cwd=_project_root(), env=env,
                                          stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -2368,9 +2699,29 @@ class UncleTUI:
         if desktop == "handled":
             self._completion_dialog(False)
             return
-        if _workflow_family() == "app":
+        if _workflow_family() == "app" or self._removal_after_preview_pending():
             self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
+
+    def _removal_after_preview_pending(self):
+        """A published web-app change run left its worktree for the preview (change-pr.sh writes remove-after-preview)."""
+        return os.path.isfile(os.path.join(_project_root(), ".uncle", "workflow", "remove-after-preview"))
+
+    def _remove_previewed_worktree(self):
+        """Once the preview is closed, remove the worktree the driver kept for it. Never raises."""
+        record = os.path.join(_project_root(), ".uncle", "workflow", "remove-after-preview")
+        try:
+            with open(record, encoding="utf-8") as handle:
+                spec = handle.read().strip()
+        except OSError:
+            return
+        wt = _project_root()
+        script = '. "$1/scripts/lib/worktree-merge.sh"; IFS="|" read -r wt main branch keep published <<< "$3"; worktree_merge_remove "$wt" "$main" "$branch" "$keep" "$published"'
+        try:
+            subprocess.run(["bash", "-c", script, "uncle", ROOT, wt, spec],
+                           cwd=os.path.dirname(wt), timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            pass
 
     # ---- desktop app launch (both workflow families) ----
     _DESKTOP_OFF = ("0", "false", "no", "off")
@@ -3318,6 +3669,74 @@ class UncleTUI:
         self.agent_origin_message = ''
         self.agent_handoff = ''
         self.agent_unavailable_noted = False
+        self.agent_preload_cancel = None
+        self.agent_lock = threading.RLock()
+
+    def _preload_allowed(self):
+        """The one guard for the startup preload; used by run() and _preload_home_agent."""
+        if os.environ.get('UNCLE_NOUI') == '1' or os.environ.get('UNCLE_HOME_AGENT') == '0':
+            return False
+        try:
+            return supervision_lib.load_config(CONFIG_PATH).runner == 'claude'
+        except (OSError, ValueError):
+            return False
+
+    def _start_preload_thread(self):
+        """Thread-start seam for tests to patch."""
+        threading.Thread(target=self._preload_home_agent, daemon=True).start()
+
+    def _preload_home_agent(self):
+        """Startup thread: hand the home agent a bounded snapshot so its first answer skips exploration."""
+        if not self._preload_allowed():
+            return
+        self._agent_state()
+        try:
+            snapshot = home_preload.gather(_project_root())
+            if not snapshot:
+                return
+            prompt = home_preload.preload_prompt(snapshot)
+        except Exception:
+            return
+        event = threading.Event()
+        session = None
+        created = errored = False
+        timer = None
+        with self.agent_lock:
+            try:
+                if self.agent_session is not None or self.chat_calls:
+                    return  # an operator turn got there first; never preload over it
+                self.agent_preload_cancel = event
+                self.agent_preloading = True  # read only under agent_lock, by _agent_note_unavailable
+                try:
+                    session = self._home_agent_session()
+                finally:
+                    self.agent_preloading = False
+                if session is None:
+                    return
+                created = True
+                if event.is_set():
+                    return
+                timer = threading.Timer(PRELOAD_TIMEOUT_S, event.set)
+                timer.daemon = True
+                timer.start()
+                session.turn(prompt, io.BytesIO(), time.monotonic() + PRELOAD_TIMEOUT_S, event)
+            except Exception:
+                errored = True
+            finally:
+                if timer is not None:
+                    timer.cancel()
+                failed = event.is_set() or errored
+                if self.agent_preload_cancel is event:
+                    self.agent_preload_cancel = None
+                if created and session is not None and (failed or self.agent_session is not session):
+                    if self.agent_session is session:
+                        self.agent_session = None
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+                elif created and session is not None and not session.alive():
+                    self.agent_session = None
 
     def _home_agent_idle(self):
         """Idle is evaluated once, at send time (D-7)."""
@@ -3329,6 +3748,8 @@ class UncleTUI:
                 and self.agent_pending is None and not self.agent_closing)
 
     def _agent_note_unavailable(self, text):
+        if getattr(self, 'agent_preloading', False):
+            return  # a failed startup preload is silent; the operator's first message reports it if it still applies
         if not self.agent_unavailable_noted:
             self.agent_unavailable_noted = True
             self.home_history.append(('system', text))
@@ -3342,8 +3763,12 @@ class UncleTUI:
                 'partly run, so check the current state before repeating any side effect.]\n' + '\n'.join(lines))
 
     def _home_agent_session(self):
-        """The persistent home agent for the current project root; None when unavailable (D-3, D-7)."""
         self._agent_state()
+        with self.agent_lock:
+            return self._home_agent_session_locked()
+
+    def _home_agent_session_locked(self):
+        """The persistent home agent for the current project root; None when unavailable (D-3, D-7)."""
         if os.environ.get('UNCLE_HOME_AGENT') == '0':
             return None
         root = _project_root()
@@ -3376,6 +3801,9 @@ class UncleTUI:
         self._agent_state()
         self.agent_closing = True
         dead = True
+        preload, self.agent_preload_cancel = self.agent_preload_cancel, None
+        if preload is not None:
+            preload.set()
         try:
             request = getattr(self, 'home_request', None)
             if request is not None and getattr(request, 'home_agent', False) is True:
@@ -3416,6 +3844,18 @@ class UncleTUI:
 
     def _agent_turn(self, message, resend=False):
         """Send one homepage message to the home agent. False if it is unavailable."""
+        self._agent_state()
+        preload = self.agent_preload_cancel
+        if preload is not None:
+            # Do not queue behind the startup preload: abort it and wait a bounded time for the lock.
+            preload.set()
+            if self.agent_lock.acquire(timeout=PRELOAD_CANCEL_WAIT_S):
+                self.agent_lock.release()
+            else:
+                stuck, self.agent_session = self.agent_session, None
+                self.agent_preload_cancel = None
+                if stuck is not None:
+                    stuck.close()
         session = self._home_agent_session()
         if session is None:
             return False
@@ -3823,7 +4263,7 @@ class UncleTUI:
             return session
         try:
             config, homepage_stage = self.homepage_supervision_config()
-            if config.runner == 'self-hosted':
+            if config.runner in HTTP_RUNNERS:
                 # Direct HTTP on a persistent connection of the supervisor's own.
                 from self_hosted import http_transport
                 if not http_transport():
@@ -4471,6 +4911,15 @@ class UncleTUI:
             if start:
                 self.workflow_idx = 0 if kind == 'app' else 2
                 self._run()
+                # _run returns without starting for several reasons (recovery
+                # pending, home agent still alive, a backgrounded build). It
+                # reports why in chat_error; claiming "Started" and clearing
+                # that error left the brief replaced and nothing running.
+                if self.state != 'running':
+                    reason = self.chat_error or 'the workflow did not start'
+                    self.home_history.append(('system', 'Not started: ' + reason + ' ' + filename +
+                                              ' was written; start it again once that is resolved.'))
+                    return
                 self.home_history.append(('system', 'Started the ' + kind + ' workflow using ' + filename + '.'))
         self.chat_error = ''
 
@@ -4504,6 +4953,13 @@ class UncleTUI:
                 self._home_action(action, replace_approved=True)
             elif self._startup_action == 'change_request':
                 text = self._read_startup_text_file(self._startup_text_file)
+                # A finished run leaves its request behind; archive it rather than refusing every later one
+                # (UNCLE_KEEP_CHANGE_REQUEST=1 restores the refusal).
+                try:
+                    for archived in run_duties.archive_change_request(_project_root()):
+                        self.home_history.append(('system', 'Archived the previous change request to ' + sanitize(archived)))
+                except OSError:
+                    raise StartupRefused(CHANGE_REQUEST_EXISTS) from None
                 if any(os.path.lexists(os.path.join(_project_root(), *part, 'CHANGE_REQUEST.md'))
                        for part in ((), ('.uncle', 'docs'))):
                     raise StartupRefused(CHANGE_REQUEST_EXISTS)
@@ -4556,12 +5012,17 @@ class UncleTUI:
         try:
             parent = os.lstat(os.path.dirname(path))
             info = os.lstat(path)
-            safe = (stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid()
-                    and not parent.st_mode & 0o077
-                    and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid())
+            if hasattr(os, 'getuid'):
+                safe = (stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid()
+                        and not parent.st_mode & 0o077
+                        and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid())
+            else:
+                # Windows has no uid or 0700 modes; keep the regular-file and
+                # no-symlink checks (a reparse point is not S_ISREG via lstat).
+                safe = stat.S_ISDIR(parent.st_mode) and stat.S_ISREG(info.st_mode)
             if not safe:
                 raise OSError
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
             with os.fdopen(fd, 'r', encoding='utf-8', newline='') as stream:
                 text = stream.read()
         except (OSError, UnicodeDecodeError):
@@ -4828,10 +5289,11 @@ class UncleTUI:
         command = [runner_command(runner, AGENT)] + triage_runner_flags(effort, model, tools)
         env = triage_scrub_env(os.environ)
         env['UNCLE_CONFIG'] = str(CONFIG_PATH)
-        if runner == 'self-hosted':
+        if runner in HTTP_RUNNERS:
             values = home_settings(CONFIG_PATH, 'triage')
+            prefix = 'UNCLE_AWS_BEDROCK_' if runner == 'aws-bedrock' else 'UNCLE_SELF_HOSTED_'
             for field in ('model', 'base_url', 'api_key'):
-                env['UNCLE_SELF_HOSTED_' + field.upper()] = values[field]
+                env[prefix + field.upper()] = values[field]
         self.triage_turn = turn
         self.triage_proposals = []
         self.triage_pending = {'mode': mode, 'proposal': proposal, 'digest': info['digest'], 'turn': turn}
@@ -5236,10 +5698,37 @@ class UncleTUI:
         target = (target or '').strip()
         if not target:
             if getattr(self, 'workflow_idx', None) is None:
+                # Nothing started in this session: resume the most recently active stopped run
+                # among its worktrees (the project root included) (a change run has no issue number to name).
+                latest = self._latest_resumable_run(Path(_project_root()))
+                if latest is not None:
+                    return self._resume_run_worktree(str(latest))
                 return self._resume_app_build()
             self.triage_resume()
             return ''
         return self._resume_run_worktree(target)
+
+    def _latest_resumable_run(self, root):
+        """The worktree of the most recently active run that is stopped and not COMPLETE, or None."""
+        best, best_time = None, -1.0
+        try:
+            rows = worktree_runs.runs(str(root))
+        except (OSError, ValueError):
+            return None
+        for row in rows:
+            path = Path(row['path'])
+            workflow = path / '.uncle' / 'workflow'
+            try:
+                state = workflow.joinpath('state').read_text().strip().split(':', 1)[-1]
+                family = workflow.joinpath('family').read_text().strip()
+                stamp = workflow.joinpath('state').stat().st_mtime
+            except OSError:
+                continue
+            if not state or state == 'COMPLETE' or family not in ('app', 'change') or self._run_locked(path):
+                continue
+            if stamp > best_time:
+                best, best_time = path, stamp
+        return best
 
     def _resume_app_build(self):
         """Bare /resume before any workflow this session: the application
@@ -5699,8 +6188,15 @@ class UncleTUI:
         self.chat_picker_kind = 'file'
         self.chat_picker = bool(match)
         self.chat_ref_start = match.start() if match else len(self.chat_composer)
-        self.chat_choices = self.chat.refs.browse(match.group(1) if match.group(1) is not None else match.group(2)) if match else []
+        self.chat_choices = self._browse_with_up(match.group(1) if match.group(1) is not None else match.group(2)) if match else []
         self.chat_pick = 0
+
+    def _browse_with_up(self, prefix):
+        """Directory listing with a leading '..' row when browsing a directory."""
+        rows = self.chat.refs.browse(prefix)
+        if prefix.endswith('/') and prefix != '/':
+            rows = ['..'] + rows
+        return rows
 
     def _complete_chat_file(self):
         if getattr(self, 'chat_picker_kind', 'file') == 'issue':
@@ -5717,8 +6213,21 @@ class UncleTUI:
             self.chat_error = 'No matching files. Keep typing or press Esc to close.'
             return
         name = self.chat_choices[self.chat_pick]
+        if name == '..':
+            current = self.chat_composer[self.chat_ref_start:].lstrip('@').lstrip('"')
+            parts = current.rstrip('/').split('/') if current.rstrip('/') else []
+            if parts and parts[-1] not in ('..', '~'):
+                name = '/'.join(parts[:-1]) + '/' if len(parts) > 1 else ''
+                if current.startswith('/') and len(parts) == 1:
+                    name = '/'
+            else:
+                name = current + '../' if current not in ('~',) and not current.startswith('/') else '/'.join(parts[:-1]) + '/'
+            choices = self._browse_with_up(name)
+            self.chat_composer = self.chat_composer[:self.chat_ref_start] + '@' + name
+            self.chat_choices, self.chat_pick, self.chat_error = choices, 0, ''
+            return
         if name.endswith('/'):
-            choices = self.chat.refs.browse(name)
+            choices = self._browse_with_up(name)
             reference = '@"' + name if any(c.isspace() for c in name) else '@' + name
             self.chat_composer = self.chat_composer[:self.chat_ref_start] + reference
             self.chat_choices = choices
@@ -5836,6 +6345,11 @@ class UncleTUI:
         if k == 12:  # Ctrl-L
             self.stdscr.clearok(True)
             return True
+        if k == 7:  # Ctrl-G
+            self._set_mouse(not getattr(self, 'mouse_capture', False))
+            self.chat_error = ('Mouse ON (Ctrl-G): wheel scrolls, drag selects and copies; Shift/Option-drag uses the terminal'
+                               if self.mouse_capture else 'Mouse OFF (Ctrl-G): the terminal selects text and scrolls')
+            return True
         if k == curses.KEY_BTAB:
             self.session_auto_mode = not self._next_run_unattended()
             self.chat_error = ('Next run: UNATTENDED (Shift-Tab)' if self.session_auto_mode
@@ -5863,7 +6377,7 @@ class UncleTUI:
     def _control_hint(self, width, build=True):
         """CB-8/INV-6: control keys, Shift-Tab only when terminfo has kcbt."""
         keys = ['Esc interrupt', 'Esc Esc rewind', '^R transcript', '^B background'] if build else []
-        keys += ['^L redraw', 'Up/Down history']
+        keys += ['^L redraw', '^G wheel/select', 'Up/Down history']
         if getattr(self, 'has_kcbt', False):
             keys.append('Shift-Tab mode')
         return '/homepage  / cmds  Tab chat  ' + '  '.join(keys) if build else '/ cmds  Ctrl-P menu  Tab chat  ' + '  '.join(keys)
@@ -5932,7 +6446,7 @@ class UncleTUI:
             self.chat_picker = False
             self.chat_choices = []
         elif self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'file' and not self.chat_composer[self.chat_ref_start:].startswith('@'):
-            self.chat_choices = self.chat.refs.browse(self.chat_composer[self.chat_ref_start:])
+            self.chat_choices = self._browse_with_up(self.chat_composer[self.chat_ref_start:])
             self.chat_pick = 0
         else:
             self._chat_suggestions()
@@ -5955,6 +6469,15 @@ class UncleTUI:
             if follow in (ord('b'), ord('f'), ord('d'), curses.KEY_BACKSPACE, 127, 8):
                 self._chat_meta(follow)
                 return follow
+            if follow in (10, 13) and self._plain_composing():
+                self._composer_newline()
+                return follow
+            if follow == ord('['):
+                handled = self._read_csi(screen)
+                if handled is not None:
+                    return handled
+                self.esc_follow = True
+                return None
             try:
                 curses.ungetch(follow)
             except curses.error:
@@ -5963,6 +6486,136 @@ class UncleTUI:
             return None
         finally:
             screen.timeout(saved)
+
+    def _plain_composing(self):
+        return not (getattr(self, 'chat_picker', False) or getattr(self, 'chat_choices', None)
+                    or getattr(self, 'chat_edit', False) or self._chat_menu())
+
+    def _composer_newline(self):
+        cursor = self._composer_cursor()
+        self._set_composer(self.chat_composer[:cursor] + '\n' + self.chat_composer[cursor:], cursor + 1)
+
+    def _read_csi(self, screen):
+        """After ESC [, read one CSI sequence. Returns a key when handled, else
+        None with every byte pushed back unchanged (reverse order)."""
+        screen.timeout(50)
+        read = [ord('[')]
+        body = ''
+        while len(body) < 32:
+            ch = screen.getch()
+            if not isinstance(ch, int) or ch == -1:
+                break
+            read.append(ch)
+            if 0x40 <= ch <= 0x7e:
+                body += chr(ch)
+                break
+            body += chr(ch) if ch < 256 else '?'
+        final = body[-1:] if body and 0x40 <= ord(body[-1]) <= 0x7e and read[-1] == ord(body[-1]) else ''
+        if body == '200~':
+            self._read_paste(screen)
+            return 27
+        enter_mod = None
+        m = re.fullmatch(r'13;(\d+)u|27;(\d+);13~', body)
+        if m:
+            enter_mod = int(m.group(1) or m.group(2))
+        if enter_mod is not None:
+            if enter_mod == 2:   # Shift+Enter (Ctrl+Enter submits like Enter)
+                if self._plain_composing():
+                    self._composer_newline()
+                return 13
+            self._chat_key(13)
+            return 13
+        m = re.fullmatch(r'(?:27;(\d+);(\d+)~|(\d+);(\d+)u)', body)
+        if m:
+            mod = int(m.group(1) or m.group(4))
+            code = int(m.group(2) or m.group(3))
+            if mod == 5 and 97 <= code <= 122:
+                self._chat_key(code - 96)   # Ctrl+letter -> its control byte
+                return code - 96
+            if mod == 3 and code in (98, 102, 100):
+                self._chat_meta(code)
+                return code
+            # With modifyOtherKeys 2 the terminal reports EVERY modified key this way, Shift+i included, as ESC [ 27 ; 2 ; 73 ~ (or
+            # ESC [ 73 ; 2 u): a capital letter or a shifted symbol is the character itself, typed. Before this it fell through,
+            # was pushed back unread, and the composer printed "[27;2;73~" after the letter.
+            if mod in (1, 2) and (32 <= code < 127 or code >= 160):
+                self._type_reported_char(code)
+                return code
+            # Any other well-formed report (Ctrl+Shift+letter, Alt+symbol, Shift+Tab, ...) has no meaning here. Consume it: showing the
+            # raw sequence as text is never right.
+            return code
+        if final or read:
+            for ch in reversed(read):
+                try:
+                    curses.ungetch(ch)
+                except curses.error:
+                    pass
+        return None
+
+    def _type_reported_char(self, code):
+        """A printable character a terminal reported as an escape sequence (a Shift key under modifyOtherKeys): type it."""
+        if code < 127:
+            self._chat_key(code)
+        elif self._plain_composing():
+            cursor = self._composer_cursor()
+            self._set_composer(self.chat_composer[:cursor] + chr(code) + self.chat_composer[cursor:], cursor + 1)
+
+    def _read_paste(self, screen):
+        """Read a bracketed paste to ESC[201~ (or timeout) and insert it."""
+        screen.timeout(100)
+        end = b'\x1b[201~'
+        data = bytearray()
+        timed_out = False
+        while True:
+            ch = screen.getch()
+            if not isinstance(ch, int) or ch == -1:
+                timed_out = True
+                break
+            if len(data) < COMPOSER_LIMIT * 4:
+                data.append(ch & 0xFF)
+            if data.endswith(end):
+                del data[-len(end):]
+                break
+        payload = bytes(data).replace(b'\x1b[200~', b'')
+        if timed_out:
+            self._paste_tail_until = time.monotonic() + 0.15
+        if not self._plain_composing():
+            return
+        text = sanitize_paste(payload.decode('utf-8', errors='replace'))
+        room = COMPOSER_LIMIT - len(self.chat_composer.encode('utf-8'))
+        text = text.encode('utf-8')[:max(room, 0)].decode('utf-8', errors='ignore')
+        if text:
+            cursor = self._composer_cursor()
+            new, cur, _ = edit_insert(self.chat_composer, cursor, text)
+            self._set_composer(new, cur)
+
+    def _enter_is_burst(self, k):
+        """Nodelay peek: Enter with 2+ keys already pending is a newline."""
+        now = time.monotonic()
+        tail = getattr(self, '_paste_tail_until', 0)
+        if tail and now < tail:
+            self._paste_tail_until = now + 0.15
+            return True
+        screen = getattr(self, 'stdscr', None)
+        if screen is None:
+            return False
+        saved = getattr(self, 'input_timeout', 80)
+        pending = []
+        try:
+            screen.timeout(0)
+            for _ in range(2):
+                nxt = screen.getch()
+                if not isinstance(nxt, int) or nxt == -1:
+                    break
+                pending.append(nxt)
+        finally:
+            screen.timeout(saved)
+        for nxt in reversed(pending):
+            try:
+                curses.ungetch(nxt)
+            except curses.error:
+                pass
+        return len(pending) >= 2
 
     # ---- incremental search (issue 97) ----
     def _chat_search(self, k):
@@ -6065,7 +6718,7 @@ class UncleTUI:
             self._quit()
             return True
         if k == 9:
-            other = 'menu' if self.state == 'menu' else 'gate'
+            other = 'gate'  # the home page has no menu to focus
             self.chat_focus = other if self.chat_focus == 'chat' else 'chat'
             return True
         if self.state == 'menu' and self.chat_focus == 'menu':
@@ -6097,7 +6750,7 @@ class UncleTUI:
                     self.chat_edit = False
                 elif self.state in ('chat', 'menu'):
                     self.state = 'menu'
-                    self.chat_focus = 'menu'
+                    self.chat_focus = 'chat'
                     self.sel = 0
                 elif self.state == 'running' and not self.chat_composer:
                     self._composer_esc()
@@ -6112,6 +6765,18 @@ class UncleTUI:
             if self.chat_choices and k in (curses.KEY_UP, curses.KEY_DOWN):
                 self.chat_pick = (self.chat_pick + (1 if k == curses.KEY_DOWN else -1)) % len(self.chat_choices)
                 return True
+            if k in (curses.KEY_UP, curses.KEY_DOWN) and not self.chat_picker and '\n' in self.chat_composer:
+                text, cursor = self.chat_composer, self._composer_cursor()
+                start = _line_start(text, cursor)
+                if k == curses.KEY_UP and start > 0:
+                    prev = _line_start(text, start - 1)
+                    self._set_composer(text, prev + min(cursor - start, start - 1 - prev))
+                    return True
+                end = _line_end(text, cursor)
+                if k == curses.KEY_DOWN and end < len(text):
+                    nxt = end + 1
+                    self._set_composer(text, nxt + min(cursor - start, _line_end(text, nxt) - nxt))
+                    return True
             if k in (curses.KEY_UP, curses.KEY_DOWN) and not self.chat_picker and not self.chat_edit:
                 self._recall_input(-1 if k == curses.KEY_UP else 1)
                 return True
@@ -6191,7 +6856,11 @@ class UncleTUI:
                      curses.KEY_RIGHT: lambda: min(len(text), cursor + 1),
                      curses.KEY_HOME: lambda: _line_start(text, cursor), 1: lambda: _line_start(text, cursor),
                      curses.KEY_END: lambda: _line_end(text, cursor), 5: lambda: _line_end(text, cursor)}
-            if k in edits:
+            if k == 21:  # Ctrl-U clears the whole composer (it shrinks to one row)
+                if text:
+                    self.chat_kill = text
+                self._set_composer('', 0)
+            elif k in edits:
                 text, cursor, killed = edits[k](text, cursor)
                 if killed:
                     self.chat_kill = killed
@@ -6304,7 +6973,283 @@ class UncleTUI:
         self.stdscr.refresh()
 
     # ---- drawing ----
+    # ---- inline build window and home page: ordinary scrolling terminal output ----
+    # The transcript is printed as normal lines, so the terminal's own scrollback, wheel and text selection all work.
+    # The composer, stage status and prompts are a short "live" block at the end of the output: each update moves
+    # up over the previous block, clears it and prints it again, using only cursor-up and clear-to-end.
+    INLINE_STATUS_ROWS = 2
+
+    def _inline_active(self):
+        """'build', 'home' or None: which view renders as ordinary terminal output."""
+        if not _inline_enabled():
+            return None
+        if self.state == 'running' and not getattr(self, 'transcript_full', False):
+            return 'build'
+        if self.state == 'menu':
+            return 'home'
+        return None
+
+    def _inline_status_text(self, width):
+        """One line replacing the stage sidebar: running stage(s) and session totals."""
+        lines = self._session_panel_lines()
+        styles = getattr(self, '_panel_stage_styles', {})
+        def field(index, offset):
+            try:
+                return lines[index + offset].split(None, 1)[1]
+            except (IndexError, ValueError):
+                return '?'
+        stages = [(i, t) for i, t in enumerate(lines) if t in styles]
+        running = [(i, t) for i, t in stages if t.startswith('> ')] or stages[-1:]
+        parts = ['%s %s %s tok' % (t.replace('> ', '', 1).strip(), field(i, 1), field(i, 2).replace(' tokens', ''))
+                 for i, t in running]
+        if not stages:
+            parts = ['waiting for stage...']
+        total = ''
+        if 'TOTALS' in lines:
+            at = lines.index('TOTALS')
+            total = '  |  total %s  %s tok' % (field(at, 1), field(at, 2))
+        mark = SPINNER[getattr(self, '_spinner_count', 0) % len(SPINNER)] if any(
+            t.startswith('> ') for _, t in stages) else '*'
+        return (' ' + mark + ' ' + '  +  '.join(parts) + total)[:max(0, width - 1)]
+
+    @staticmethod
+    def _inline_wrap(text, width):
+        out = []
+        for line in str(text).splitlines() or ['']:
+            line = ''.join(c for c in line.expandtabs(4) if c.isprintable())
+            out.extend(textwrap.wrap(line, max(1, width), drop_whitespace=False) or [''])
+        return out
+
+    def _inline_new_build_lines(self, width):
+        """Wrapped lines for build/chat stream entries not yet printed."""
+        self._build_messages()
+        stream = self._message_stream
+        last = getattr(self, '_inline_last', None)
+        start = 0
+        if last is not None:
+            for i in range(len(stream) - 1, -1, -1):
+                if stream[i] is last:
+                    start = i + 1
+                    break
+            else:
+                start = len(stream)  # entry replaced under us: never re-print history
+        fresh = stream[start:]
+        if stream:
+            self._inline_last = stream[-1]
+        return [line for item in fresh for line in self._inline_wrap(item[2], width)]
+
+    def _home_entries(self):
+        """(finished entries, live reply text) for the home page history."""
+        entries = list(self.chat_entries())
+        pending = getattr(self, 'home_replace_proposal', None)
+        live = ''
+        if getattr(self, 'chat_partial', '') and getattr(self, 'home_request', None) is not None and entries:
+            live = self.chat_partial
+            entries = entries[:-1]
+        if pending:
+            filename = 'REQUIREMENTS.md' if pending['uncle_action'] == 'create_app' else 'CHANGE_REQUEST.md'
+            entries.append(('proposal', 'Replace ' + filename + '? Previous file will be archived.'))
+            entries.append(('proposal', 'Type "approve replacement" or "decline replacement".'))
+        return entries, live
+
+    def _inline_new_home_lines(self, width):
+        done, live = self._home_entries()
+        emitted = getattr(self, '_home_emitted', None)
+        banner = []
+        if emitted is None:
+            if not done:
+                pad = ' ' * max(0, (width - LOGO_W) // 2)
+                paint = _sgr_for_attr(getattr(self, 'color', {}).get('title', 0))
+                # The pin leaves blank rows above the banner; the same number below it centres the logo vertically.
+                gap = max(1, (getattr(self, '_inline_avail', 0) - len(LOGO)) // 2)
+                banner = [pad + paint + row + '\x1b[0m' for row in LOGO] + [''] * gap
+            emitted = []
+        common = 0
+        for old, new in zip(emitted, done):
+            if old != new:
+                break
+            common += 1
+        self._home_emitted = list(done[-2000:])
+        # A streaming reply flows into the scrollback as it renders: every finished line is printed at once and only the
+        # unfinished last line stays in the footer. `printed` is how many of its lines are already out, so when the
+        # reply lands in the history as a finished entry only the remainder is printed.
+        stream_text = getattr(self, '_home_stream_text', '')
+        printed = getattr(self, '_home_stream_printed', 0)
+        out = []
+        for _, text in done[common:]:
+            wrapped = self._inline_wrap(text, width)
+            if printed and stream_text and text.startswith(stream_text[:40]):
+                wrapped = wrapped[printed:]
+                printed, stream_text = 0, ''
+            out.extend(wrapped)
+        if live:
+            text = 'Supervisor: ' + live
+            if stream_text and not text.startswith(stream_text[:40]):
+                printed = 0  # a different reply began; nothing of it has been printed
+            complete = self._inline_wrap(text, width)[:-1]
+            out.extend(complete[printed:])
+            printed, stream_text = max(printed, len(complete)), text
+        else:
+            printed, stream_text = 0, ''
+        self._home_stream_text, self._home_stream_printed = stream_text, printed
+        return banner + out
+
+    def _home_live_tail(self, width):
+        """The unfinished last line of the streaming reply: one line, no control characters."""
+        live = self._home_entries()[1]
+        if not live:
+            return ''
+        return self._inline_wrap('Supervisor: ' + live, width)[-1].strip()
+
+    def _home_menu_bar(self, w):
+        """The old top menu bar as [(row, col, text, selected)] plus its row count."""
+        focused = self.chat_focus == 'menu'
+        bar, x, y = [], 0, 0
+        for i, label in enumerate(self.menu_items()):
+            selected = focused and i == self.sel
+            text = ('› ' if selected else '') + label
+            if x:
+                if x + 3 + len(text) > w - 1:
+                    y += 1
+                    x = 0
+                else:
+                    text = '   ' + text
+            bar.append((y, x, text, selected))
+            x += len(text)
+        return bar, y + 1
+
+    def _inline_erase_live(self):
+        """Escape sequence that erases the live block, leaving the cursor where it started."""
+        live = getattr(self, '_inline_live', 0)
+        if not live:
+            return ''
+        self._inline_live = 0
+        return '\r' + ('\x1b[%dA' % (live - 1) if live > 1 else '') + '\x1b[J'
+
+    def _inline_enter(self):
+        import atexit
+        if not getattr(self, '_inline_atexit', False):
+            self._inline_atexit = True
+            atexit.register(lambda: _tty_write('\x1b[?25h'))
+        self._set_mouse(False)
+        _tty_write('\x1b[?1049l\r')  # back to the normal screen, below whatever the shell printed
+        self._inline_on = True
+        self._inline_live = 0
+        self._inline_size = None
+        self._inline_shown = None
+        self._inline_pin = True  # first frame: start the block so the composer sits at the bottom of the screen
+
+    def _inline_leave(self):
+        if not getattr(self, '_inline_on', False):
+            return
+        _tty_write(self._inline_erase_live() + '\x1b[?1049h')
+        self._inline_on = False
+        self._inline_shown = None
+        if getattr(self, '_root_scr', None) is not None:
+            self._root_scr.clearok(True)
+
+    def _draw_inline(self, kind):
+        root = self._root_scr
+        h, w = root.getmaxyx()
+        if not getattr(self, '_inline_on', False):
+            self._inline_enter()
+        status_rows = self.INLINE_STATUS_ROWS
+        chat_height = modal = comp_rows = popup = 0
+        bar, live = [], ''
+        # The stage sidebar: a column at the right of the pinned block, as on the full-screen build page.
+        panel = min(34, w // 3) if kind == 'build' and w >= 60 else 0
+        left_w = w - panel
+        if panel:
+            status_rows = 1  # the streaming line, just above the composer
+        if kind == 'build':
+            if getattr(self, 'chat_open', False):
+                text = sanitize(self.chat_composer).expandtabs(4).lstrip()
+                extra = min(len(self._wrap_input(text, max(8, left_w - 2))), 6) - 1 if text else 0
+                chat_height = min(6 + extra, max(0, h - 4))
+            if self.prompt_kind:
+                modal = max(8, min(h // 2, h - 4 - chat_height - status_rows))
+        else:
+            live = self._home_live_tail(w - 3)
+            status_rows = 1  # just the streaming-reply row: the old top menu is gone, its actions are slash commands
+            text = sanitize(self.chat_composer).expandtabs(4).lstrip()
+            extra = min(len(self._wrap_input(text, max(8, w - 6))), 6) - 1 if text else 0
+            popup = 6 if (getattr(self, 'chat_picker', False) or self._slash_choices() or self._chat_menu()) else 0
+            comp_rows = min(8 + extra, max(3, h - status_rows - popup - 1))
+            chat_height = comp_rows + popup
+        rows = max(2, min(h - 2, max(status_rows + chat_height + modal, min(20, max(10, h - 12)) if panel else 0)))
+        out = ''
+        size = (h, w)
+        if getattr(self, '_inline_size', None) not in (None, size):
+            out += '\r\n'  # the terminal reflowed the old block; abandon it rather than erase the wrong rows
+            self._inline_live = 0
+            self._inline_shown = None
+        self._inline_size = size
+        # Off-screen window: drawn with the existing code, never refreshed, then read back as text.
+        win = curses.newwin(rows, w, 0, 0)
+        win.erase()
+        saved = self.stdscr
+        self.stdscr = win
+        try:
+            try:
+                if kind == 'build':
+                    if not panel:
+                        win.addnstr(0, 0, self._inline_status_text(w), w - 1, curses.A_BOLD)
+                    tail = ' '.join(self.partial.split()) if not self.prompt_kind else ''
+                else:
+                    color = getattr(self, 'color', {})
+                    for y, x, text, selected in bar:
+                        win.addnstr(y, x, text, min(len(text), max(0, w - x - 1)),
+                                    color.get('sel', curses.A_REVERSE) if selected else color.get('accent', 0))
+                    tail = live
+                if tail and rows > 1:
+                    row_for_tail = (rows - chat_height - 1 if panel else 1) if kind == 'build' else status_rows - 1
+                    win.addnstr(row_for_tail, 0, ' ' + tail[-(left_w - 3):], left_w - 1)
+            except curses.error:
+                pass
+            if kind == 'build':
+                top_rows = 0 if panel else status_rows
+                if self.prompt_kind and modal:
+                    area = win.derwin(rows - chat_height - top_rows, left_w, top_rows, 0)
+                    self.stdscr = area
+                    self._draw_modal(rows - chat_height - top_rows, left_w)
+                    self.stdscr = win
+                if chat_height:
+                    self._draw_chat_panel(rows - chat_height, rows, 0, left_w)
+                if panel:
+                    self._draw_session_stats(rows + 1, w, panel)
+            else:
+                self._draw_chat_composer(rows - comp_rows, rows, w, 2, max(1, w - 4), True)
+        finally:
+            self.stdscr = saved
+        footer = _window_rows_as_ansi(win, w - 1)
+        while footer and not footer[-1].strip('\x1b[0m'):
+            footer.pop()  # trailing blank rows add nothing but height
+        footer = footer or ['']
+        self._inline_avail = h - len(footer)  # rows above the visible footer: the logo is centred in them
+        new_lines = (self._inline_new_build_lines if kind == 'build' else self._inline_new_home_lines)(w - 1)
+        if not new_lines and footer == getattr(self, '_inline_shown', None):
+            return
+        self._inline_shown = footer
+        if getattr(self, '_inline_pin', False):
+            self._inline_pin = False
+            out += '\n' * (h - 1) + ('\x1b[%dA' % (len(footer) - 1) if len(footer) > 1 else '')
+        # A block that shrinks (a popup closing) keeps its height: the freed rows become blank space above the composer,
+        # so the composer stays at the bottom of the screen. New output printed above it uses that space up.
+        previous = getattr(self, '_inline_live', 0)
+        pad = max(0, previous - len(new_lines) - len(footer)) if previous else 0
+        out += self._inline_erase_live() + ''.join(line + '\r\n' for line in new_lines) + '\r\n' * pad + '\r\n'.join(footer)
+        self._inline_live = len(footer) + pad
+        _tty_write('\x1b[?25l' + out)
+
     def draw(self):
+        inline = self._inline_active()
+        if getattr(self, '_inline_on', False) and not inline:
+            self._inline_leave()
+        if inline:
+            self._root_scr = getattr(self, '_root_scr', None) or self.stdscr
+            self._ensure_chat()
+            self._draw_inline(inline)
+            return
         if self.state == 'triage':
             self._draw_triage()
             return
@@ -6330,7 +7275,7 @@ class UncleTUI:
                 # Left-justified, as wide as the output, and a row taller per
                 # wrap — every row it takes comes from the build output.
                 chat_width = w - panel
-                text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+                text = sanitize(self.chat_composer).expandtabs(4).lstrip()
                 extra = min(len(self._wrap_input(text, max(8, chat_width - 2))), 6) - 1 if text else 0
                 chat_height = min(6 + extra, max(0, h - 3))
             # The chat panel sits at the very bottom, in the row the old
@@ -6353,6 +7298,15 @@ class UncleTUI:
         self._paint_support_link()
 
     def _homepage_key(self, k):
+        if k in (9, 16) and not (k == 9 and self.chat_focus == 'chat' and self._chat_menu()):
+            return True  # the home page has no menu; Tab still completes a slash command
+        if k in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+            step = max(1, getattr(self, '_home_page_rows', 5) - 1)
+            offset = getattr(self, 'home_scroll', 0) + (step if k == curses.KEY_PPAGE else -step)
+            self.home_scroll = max(0, offset)  # the draw clamps the upper bound
+            return True
+        if k in (10, 13):
+            self.home_scroll = 0  # sending a message follows the newest output
         if k == 16:  # Ctrl-P: the homepage command menu.
             self.home_menu_open = not getattr(self, 'home_menu_open', False)
             self.chat_focus = 'menu' if self.home_menu_open else 'chat'
@@ -6586,26 +7540,13 @@ class UncleTUI:
             entries.append(('proposal', 'Replace ' + filename + '? Previous file will be archived.'))
             entries.append(('proposal', 'Type "approve replacement" or "decline replacement".'))
         history = [line for _, line in entries]
-        width = max(1, min(76, w - 4))
+        width = max(1, w - 4)
         left = max(0, (w - width) // 2)
         compact = h < len(LOGO) + 12
         footer_rows = 8 if compact else 12
-        # The menu is a bar along the very top; Ctrl-P/Tab only change focus.
-        focused = self.chat_focus == 'menu'
-        bar = []
-        x = 0
-        bar_y = 0
-        for i, label in enumerate(items):
-            selected = focused and i == self.sel
-            text = ('› ' if selected else '') + label
-            if x:
-                if x + 3 + len(text) > w - 1:
-                    bar_y += 1
-                    x = 0
-                else:
-                    text = '   ' + text
-            bar.append((bar_y, x, text, selected))
-            x += len(text)
+        # The home page has no menu: everything it offered is a slash command (/requirements, /issue, /change,
+        # /configure, /quit).
+        bar, bar_y = [], -1
         # The homepage is the menu and the prompt. Listing every worktree run
         # here put a growing block of paths above both -- and now that an issue
         # run takes its own worktree by default, that list only gets longer.
@@ -6617,12 +7558,21 @@ class UncleTUI:
         body_rows = len(LOGO) if logo_fits else 0
         if h < 18:
             body_rows = 0
-        top = max(run_y, (h - body_rows - footer_rows) // 2)
+        if history:
+            # Chat history fills the space above the composer.
+            body_rows = max(body_rows, h - footer_rows - run_y)
+        # The composer block is anchored to the bottom; history fills what is above it.
+        block_start = self._home_anchor(h, width, compact)[2]
+        top = run_y
+        body_rows = max(0, block_start - top)
         logo_left = left + max(0, (width - LOGO_W) // 2)
         if logo:
+            logo_top = max(0, (block_start - len(logo)) // 2)  # centred in the rows above the composer
             for i, line in enumerate(logo):
+                if logo_top < 0:
+                    break
                 try:
-                    self.stdscr.addnstr(top + i, logo_left, line, LOGO_W, color.get('title', 0))
+                    self.stdscr.addnstr(logo_top + i, logo_left, line, LOGO_W, color.get('title', 0))
                 except curses.error:
                     pass
         def put(y, text, attr=0, centered=False):
@@ -6634,9 +7584,11 @@ class UncleTUI:
                 self.stdscr.addnstr(y, x, text, min(width, max(0, w - x - 1)), attr)
             except curses.error:
                 pass
-        if history:
+        self._text_view = None
+        self._home_page_rows = 0
+        if history and body_rows:
             joined = '\n'.join(history)
-            tail = joined[-max(1, width * body_rows * 2):]
+            tail = joined[-200000:]
             # Each surviving line takes the role of the entry that owns its first
             # character; the text itself is cut and split exactly as before.
             spans = []
@@ -6650,11 +7602,27 @@ class UncleTUI:
                 role = next((r for s, r in reversed(spans) if s <= offset), None)
                 offset += len(raw)
                 lines.extend((role, part) for part in textwrap.wrap(line, width) or [''])
-            room = max(0, body_rows - 1)
-            for i, (role, line) in enumerate(lines[-room:] if room else []):
-                put(top + 1 + i, line, self.chat_attr(role, color.get('accent', 0)))
-        row = top + body_rows
-        self._draw_chat_composer(row, h, w, left, width, compact)
+            # A scrolled view spends its first row on the "newer lines" note.
+            header = 1 if getattr(self, 'home_scroll', 0) and body_rows > 1 else 0
+            room = body_rows - header
+            self._home_page_rows = room
+            self.home_scroll = max(0, min(getattr(self, 'home_scroll', 0), len(lines) - room))
+            header = 1 if self.home_scroll and body_rows > 1 else 0
+            room = body_rows - header
+            end = len(lines) - self.home_scroll
+            visible = lines[max(0, end - room):end] if room else []
+            for i, (role, line) in enumerate(visible):
+                put(top + header + i, line, self.chat_attr(role, color.get('accent', 0)))
+            self._text_view = {'state': self.state, 'top': top + header, 'left': left, 'width': width, 'rows': len(visible),
+                               'start': max(0, end - room), 'lines': [text for _, text in lines]}
+            self._paint_selection()
+            if header:
+                put(top, '↓ %d newer lines · PgDn to follow' % self.home_scroll,
+                    color.get('muted', curses.A_DIM), True)
+        else:
+            self._text_view = {'state': self.state, 'top': block_start, 'left': left, 'width': width, 'rows': 0,
+                               'start': 0, 'lines': []}
+        self._draw_chat_composer(block_start, h, w, left, width, compact, anchor_bottom=True)
         for y, x, text, selected in bar:
             try:
                 self.stdscr.addnstr(y, x, text, min(len(text), max(0, w - x - 1)),
@@ -6665,62 +7633,79 @@ class UncleTUI:
 
     @staticmethod
     def _wrap_input(text, width):
-        # Wrap on words but keep every typed space: the cursor position is
-        # derived from the wrapped text, so dropping whitespace stalls it.
-        chunks, current = [], ''
-        for word in text.split(' '):
-            candidate = word if not current else current + ' ' + word
-            while len(candidate) > width:
-                if current:
-                    chunks.append(current)
-                    current, candidate = '', word
-                else:
-                    chunks.append(candidate[:width])
-                    candidate = candidate[width:]
-            current = candidate
-        if text:
-            chunks.append(current)
-        return chunks
+        # Each newline starts a new row; every logical line wraps on words but
+        # keeps every typed space (the cursor is derived from the wrapped text).
+        chunks = []
+        for line in text.split('\n'):
+            current, row = '', []
+            for word in line.split(' '):
+                candidate = word if not current else current + ' ' + word
+                while len(candidate) > width:
+                    if current:
+                        row.append(current)
+                        current, candidate = '', word
+                    else:
+                        row.append(candidate[:width])
+                        candidate = candidate[width:]
+                current = candidate
+            row.append(current)
+            chunks.extend(row)
+        return chunks if text else []
 
     def _composer_cursor_cell(self, text, width):
         """(row, column) of the buffer cursor in _wrap_input(text, width).
 
         text is the drawn composer; the cursor offset is found by pushing
         composer[:cursor] through the same sanitize/expandtabs/lstrip."""
-        full = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4)
-        prefix = sanitize(self.chat_composer[:self._composer_cursor()]).replace('\n', ' / ').expandtabs(4)
+        full = sanitize(self.chat_composer).expandtabs(4)
+        prefix = sanitize(self.chat_composer[:self._composer_cursor()]).expandtabs(4)
         offset = max(0, min(len(text), len(prefix) - (len(full) - len(full.lstrip()))))
-        # Replay _wrap_input, tracking where each chunk starts in text.
-        starts, chunks, current, start, position = [], [], '', 0, 0
-        for word in text.split(' '):
-            candidate = word if not current else current + ' ' + word
-            if not current:
-                start = position
-            while len(candidate) > width:
-                if current:
-                    chunks.append(current)
-                    starts.append(start)
-                    current, candidate, start = '', word, position
-                else:
-                    chunks.append(candidate[:width])
-                    starts.append(start)
-                    candidate = candidate[width:]
-                    start += width
-            current = candidate
-            position += len(word) + 1
-        if text:
+        # Replay _wrap_input per logical line, tracking where each chunk starts.
+        starts, chunks, base = [], [], 0
+        for line in text.split('\n'):
+            current, start, position = '', 0, 0
+            for word in line.split(' '):
+                candidate = word if not current else current + ' ' + word
+                if not current:
+                    start = position
+                while len(candidate) > width:
+                    if current:
+                        chunks.append(current)
+                        starts.append(base + start)
+                        current, candidate, start = '', word, position
+                    else:
+                        chunks.append(candidate[:width])
+                        starts.append(base + start)
+                        candidate = candidate[width:]
+                        start += width
+                current = candidate
+                position += len(word) + 1
             chunks.append(current)
-            starts.append(start)
-        if not chunks:
+            starts.append(base + start)
+            base += len(line) + 1
+        if not text:
             return 0, 0
-        row = max(i for i, s in enumerate(starts) if s <= offset)
+        row = max(i for i, st in enumerate(starts) if st <= offset)
         return row, min(offset - starts[row], len(chunks[row]))
 
-    def _draw_chat_composer(self, row, h, w, left, width, compact=True):
+    def _home_anchor(self, h, width, compact):
+        """Bottom-anchored home layout: (composer_row, shown_rows, block_start)."""
+        text = sanitize(self.chat_composer).expandtabs(4).lstrip()
+        count = len(self._wrap_input(text, max(8, width - 2))) if text else 1
+        shown = max(1, min(count, 6, h - 3))
+        composer_row = h - 2 - shown
+        return composer_row, shown, max(0, composer_row - (3 if compact else 5))
+
+    def _draw_chat_composer(self, row, h, w, left, width, compact=True, anchor_bottom=False):
         """Shared homepage and build chat appearance."""
         first_row = row
         build = self.state == 'running'
-        if build and compact:
+        anchored = bool(anchor_bottom) and not build and h >= 2
+        if anchored:
+            first_row = 0
+            row = self._home_anchor(h, width, compact)[0] - (3 if compact else 6)
+            greeting = True
+        elif build and compact:
             # No greeting on the build page; the build output gets the row.
             row -= 1
             greeting = False
@@ -6740,7 +7725,7 @@ class UncleTUI:
             except curses.error:
                 pass
         if greeting:
-            put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
+            put(row + (0 if compact else 2), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
         if build:
             hint = (self._control_hint(width) if width >= 100 else
                     '/homepage to leave   / commands   @ files   # issues   Tab to chat' if width >= 66
@@ -6753,9 +7738,14 @@ class UncleTUI:
                     else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52
                     else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 35
                     else '@ files  Ctrl-P menu Tab chat' if width >= 29 else 'Ctrl-P menu')
-        put(row + (1 if compact else 3), hint, color.get('muted', curses.A_DIM), not build)
+        if not build and not self._background_status():
+            hint = ('/ commands   @ files   # issues   /configure   /quit' if width >= 56
+                    else '/ commands  @ files  # issues' if width >= 32 else '/ cmds @ files')
+        feedback_active = bool(self.chat_error or self.chat_choices or self.chat_composer.startswith('/'))
+        if not (anchored and compact and feedback_active):
+            put(row + (1 if compact else 3 if feedback_active else 4), hint, color.get('muted', curses.A_DIM), not build)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
-        text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+        text = sanitize(self.chat_composer).expandtabs(4).lstrip()
         placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
         if self.state == 'running' and getattr(self, 'prompt_kind', '') and self.chat_focus == 'chat':
             placeholder = 'Ask a question · Tab returns to the pending dialog'
@@ -6764,7 +7754,7 @@ class UncleTUI:
         # The composer grows as the input wraps; long pastes scroll to the tail.
         chunks = self._wrap_input(text, wrap_width)
         cursor_row, cursor_col = self._composer_cursor_cell(text, wrap_width)
-        shown = max(1, min(6, h - composer_row - 3))
+        shown = self._home_anchor(h, width, compact)[1] if anchored else max(1, min(6, h - composer_row - 3))
         cursor_row -= max(0, len(chunks) - shown)
         chunks = chunks[-shown:]
         extra = len(chunks) - 1 if text else 0
@@ -6818,11 +7808,15 @@ class UncleTUI:
             tests = self.test_execution_status()
             if tests:
                 model_status = 'Tests: ' + tests + '  ·  ' + model_status
-        status_row = composer_row + extra + (2 if build or compact else 3)
+        status_row = h - 1 if anchored else composer_row + extra + (2 if build or compact else 3)
         right_width = min(len(project_status), max(1, width - 18))
         put(status_row, model_status[:max(0, width - right_width - 2)], color.get('muted', curses.A_DIM))
         put(status_row, project_status[:right_width], color.get('good', 0) if auto else color.get('accent', 0), right=True)
         feedback_row = status_row + 1
+        if anchored:
+            # Status owns the last row, so feedback takes the spare row above
+            # the top rule (non-compact) or replaces the hint (compact).
+            feedback_row = composer_row - 2
         if self.chat_error:
             put(feedback_row, self.chat_error, color.get('warning', curses.A_BOLD))
         elif self.chat_choices:
@@ -6898,11 +7892,16 @@ class UncleTUI:
         self.build_wrapped_count = len(wrapped)
         self.build_scroll = min(offset, max(0, len(wrapped) - rows))
         end = len(wrapped) - self.build_scroll
-        for i, (role, line) in enumerate(wrapped[max(0, end - rows):end] if rows else []):
+        shown = wrapped[max(0, end - rows):end] if rows else []
+        for i, (role, line) in enumerate(shown):
             try:
                 self.stdscr.addnstr(i, 0, line, message_width, self.chat_attr(role))
             except curses.error:
                 pass
+        # Where the transcript sits, so the mouse can select it (the stage sidebar is outside this column).
+        self._text_view = {'state': self.state, 'top': 0, 'left': 0, 'width': message_width, 'rows': len(shown), 'start': max(0, end - rows),
+                           'lines': [line for _, line in wrapped]}
+        self._paint_selection()
         if self.prompt_kind:
             self._draw_modal(h, w)
 
@@ -7279,7 +8278,7 @@ class UncleTUI:
         if self.state == "config_edit":
             if getattr(self, "notice", ""):
                 return self.notice
-            return "%s %s (Enter save, Esc back)" % (self.picker_target, self.picker_kind)
+            return "%s %s (Enter save, Esc back, ←/→ move, ^A start, ^E end, ^K clear)" % (self.picker_target, self.picker_kind)
         if self.state == "stage":
             if getattr(self, "notice", ""):
                 return self.notice
@@ -7287,7 +8286,7 @@ class UncleTUI:
                 return "Recovery model — Enter: change, d: default, q back"
             if self.stage_target.startswith("@"):
                 return "Connection — Enter: edit, q back"
-            return "%s — Enter: change, a: use Self hosted for all stages, d: default, q back" % self.stage_target
+            return "%s — Enter: change, a: use this connection for all stages, d: default, q back" % self.stage_target
         title = {
             "menu": "The man from uncle",
             "issue_mode": "Seed as",
@@ -7399,7 +8398,7 @@ class UncleTUI:
                     text.lower() == (self._picker_current() or "").lower()
                 marker = "  <current>" if cur else ""
                 label = MODEL_LABELS.get(text, "") if kind == "model" else ""
-                display_text = "Self hosted" if self.picker_kind == "runner" and text == "self-hosted" else text
+                display_text = runner_display(text) if self.picker_kind == "runner" else text
                 disp = prefix + display_text + ("  %s" % label if label else "") + marker
             try:
                 self.stdscr.addnstr(top + i, cx, disp, w - 1 - cx, attr)
@@ -7480,7 +8479,8 @@ class UncleTUI:
             except curses.error:
                 pass
             try:
-                self.stdscr.addstr(row, cx + len(self.input_buf), "█", self.color["cursor"])
+                c = min(self.input_cur, len(shown_input))
+                self.stdscr.addstr(row, cx + c, shown_input[c] if c < len(shown_input) else "█", self.color["cursor"])
             except curses.error:
                 pass
 
@@ -7641,7 +8641,164 @@ class UncleTUI:
             pass
 
     # ---- input ----
+    def _set_mouse(self, on):
+        """Mouse capture on or off. On: the wheel scrolls and a drag selects text in the output column (copied on
+        release). Off: the terminal's own selection and scrollback."""
+        try:
+            curses.mouseinterval(0)
+            curses.mousemask((curses.ALL_MOUSE_EVENTS | getattr(curses, 'REPORT_MOUSE_POSITION', 0)) if on else 0)
+            self.mouse_capture = bool(on)
+        except curses.error:
+            self.mouse_capture = False
+        # curses asks the terminal for press/release only. 1002 adds motion reports while a button is held (a drag),
+        # and nothing for plain movement.
+        _tty_write('\x1b[?1002h' if self.mouse_capture else '\x1b[?1002l')
+        if not self.mouse_capture:
+            self._sel = None
+
+    # ---- text selection in the output column ----
+    def _view_cell(self, x, y, clamp=False):
+        """(line index, column) of a screen cell in the recorded text view, or None outside it."""
+        view = getattr(self, '_text_view', None)
+        if not view or view.get('state') != self.state or not view['rows']:
+            return None
+        row, col = y - view['top'], x - view['left']
+        if not clamp and not (0 <= row < view['rows'] and 0 <= col < view['width']):
+            return None
+        row = max(0, min(row, view['rows'] - 1))
+        col = max(0, min(col, view['width']))
+        return (view['start'] + row, col)
+
+    def _selection_span(self):
+        sel = getattr(self, '_sel', None)
+        if not sel:
+            return None
+        a, b = sel['a'], sel['b']
+        return (a, b) if a <= b else (b, a)
+
+    def _selected_text(self):
+        span, view = self._selection_span(), getattr(self, '_text_view', None)
+        if not span or not view:
+            return ''
+        (l1, c1), (l2, c2) = span
+        out = []
+        for idx in range(l1, l2 + 1):
+            if not 0 <= idx < len(view['lines']):
+                continue
+            text = view['lines'][idx]
+            start = c1 if idx == l1 else 0
+            end = c2 + 1 if idx == l2 else len(text)
+            out.append(text[start:end].rstrip())
+        return '\n'.join(out)
+
+    def _paint_selection(self):
+        """Reverse-video the selected cells; called at the end of a draw that recorded a text view."""
+        span, view = self._selection_span(), getattr(self, '_text_view', None)
+        if not span or not view:
+            return
+        (l1, c1), (l2, c2) = span
+        for i in range(view['rows']):
+            idx = view['start'] + i
+            if not l1 <= idx <= l2 or idx >= len(view['lines']):
+                continue
+            start = c1 if idx == l1 else 0
+            end = c2 + 1 if idx == l2 else max(len(view['lines'][idx]), start + 1)
+            count = min(end, view['width']) - start
+            if count > 0:
+                try:
+                    self.stdscr.chgat(view['top'] + i, view['left'] + start, count, curses.A_REVERSE)
+                except curses.error:
+                    pass
+
+    def _copy_to_clipboard(self, text):
+        """System clipboard tool when there is one, plus the terminal's OSC 52 (works over ssh)."""
+        import base64
+        copied = False
+        for command in (['pbcopy'], ['wl-copy'], ['xclip', '-selection', 'clipboard'],
+                        ['xsel', '--clipboard', '--input'], ['clip.exe']):
+            if shutil.which(command[0]):
+                try:
+                    subprocess.run(command, input=text.encode('utf-8'), check=True, timeout=3)
+                    copied = True
+                    break
+                except (OSError, subprocess.SubprocessError):
+                    continue
+        payload = base64.b64encode(text.encode('utf-8')).decode()
+        if len(payload) < 100000:
+            _tty_write('\x1b]52;c;%s\x07' % payload)
+        return copied
+
+    def _scroll_view(self, delta):
+        if self.state == 'menu':
+            self.home_scroll = max(0, getattr(self, 'home_scroll', 0) + delta)
+        elif self.state == 'running':
+            self.build_scroll = max(0, getattr(self, 'build_scroll', 0) + delta)
+
+    def _handle_mouse(self, x, y, bstate):
+        """Wheel scrolls; press-drag-release selects text in the output column and copies it."""
+        sel = getattr(self, '_sel', None)
+        dragging = bool(sel and sel.get('drag'))
+        press, release = getattr(curses, 'BUTTON1_PRESSED', 0), getattr(curses, 'BUTTON1_RELEASED', 0)
+        report = getattr(curses, 'REPORT_MOUSE_POSITION', 0)
+        if bstate is None:  # getmouse failed: wheel-down on an ncurses without BUTTON5
+            if not dragging:
+                self._wheel(None)
+            return
+        if bstate & getattr(curses, 'BUTTON4_PRESSED', 0):
+            self._wheel(bstate)
+        elif release and bstate & release:
+            if dragging:
+                cell = self._view_cell(x, y, clamp=True)
+                if cell:
+                    sel['b'] = cell
+                sel['drag'] = False
+                if sel['a'] == sel['b']:
+                    self._sel = None  # a plain click clears
+                else:
+                    text = self._selected_text()
+                    if text:
+                        self._copy_to_clipboard(text)
+                        self.chat_error = 'Copied %d characters' % len(text)
+        elif press and bstate & press:
+            cell = None if getattr(self, 'prompt_kind', '') else self._view_cell(x, y)
+            self._sel = {'a': cell, 'b': cell, 'drag': True} if cell else None
+        elif report and bstate & report:
+            if dragging:
+                cell = self._view_cell(x, y, clamp=True)
+                if cell:
+                    sel['b'] = cell
+                view = getattr(self, '_text_view', None)
+                if view and y <= view['top']:
+                    self._scroll_view(1)  # dragging past the top edge scrolls back
+                elif view and y >= view['top'] + view['rows'] - 1:
+                    self._scroll_view(-1)
+            else:
+                self._wheel(None)  # wheel-down arrives as a bare position report; plain movement sends nothing
+
+    def _on_mouse_key(self):
+        try:
+            _, x, y, _, bstate = curses.getmouse()
+        except curses.error:
+            x = y = 0
+            bstate = None
+        self._handle_mouse(x, y, bstate)
+
+    def _wheel(self, bstate, lines=3):
+        """Scroll the home-page history or build transcript by mouse wheel."""
+        # macOS's system ncurses (mouse protocol v1) has no button 5: BUTTON5_PRESSED is 0
+        # and a wheel-down event makes getmouse() raise, so the caller passes bstate=None.
+        up = bool(bstate) and bool(bstate & getattr(curses, 'BUTTON4_PRESSED', 0))
+        down = bstate is None or bool(bstate & getattr(curses, 'BUTTON5_PRESSED', 0))
+        if not (up or down):
+            return
+        delta = lines if up else -lines
+        if self.state == 'menu':
+            self.home_scroll = max(0, getattr(self, 'home_scroll', 0) + delta)
+        elif self.state == 'running':
+            self.build_scroll = max(0, getattr(self, 'build_scroll', 0) + delta)
+
     def handle_key(self, k):
+        self._sel = None  # any key clears the highlighted selection
         self.esc_follow = None  # what _read_meta_key saw behind this key's Esc
         # Ctrl-L redraws everywhere; triage keeps its own keys otherwise.
         if (k == 12 or self.state != 'triage') and self._control_key(k):
@@ -7685,6 +8842,18 @@ class UncleTUI:
             except (OSError, ValueError) as exc:
                 self.chat_error = sanitize(str(exc))
                 return
+        if k in (10, 13) and chat_composing and self._plain_composing():
+            cur = self._composer_cursor()
+            if cur > 0 and self.chat_composer[cur - 1] == '\\':
+                # Terminals mapped for Shift+Enter send backslash then Enter.
+                self._set_composer(self.chat_composer[:cur - 1] + '\n' + self.chat_composer[cur:], cur)
+                return
+        if k in (10, 13) and chat_composing and self._plain_composing() and self._enter_is_burst(k):
+            try:
+                self._composer_newline()
+            except (OSError, ValueError) as exc:
+                self.chat_error = sanitize(str(exc))
+            return
         if k == 9 and chat_composing and self._chat_menu():
             try:
                 self._chat_accept()
@@ -7844,7 +9013,7 @@ class UncleTUI:
             elif k in (10, 13):
                 section = getattr(self, "config_section", "")
                 if not section:
-                    self.config_section = ("stages", "opencode", "misc", "supervision", "recovery")[self.config_sel]
+                    self.config_section = ("stages", "opencode", "bedrock", "misc", "supervision", "recovery")[self.config_sel]
                     self.config_sel = self.config_scroll = 0
                 elif section == "supervision":
                     self._supervision_enter()
@@ -7858,6 +9027,10 @@ class UncleTUI:
 
                 elif section == "opencode" and self.config_sel == 1:
                     self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
+                elif section == "opencode" and self.config_sel == 2:
+                    self._toggle_use_temperature()
+                elif section == "bedrock" and self.config_sel == 1:
+                    self._set_field("@bedrock", "region", self._field_value("@bedrock", "region"))
                 else:
                     self._open_stage(self._config_row())
             elif k in (ord("q"), ord("Q")):
@@ -7921,10 +9094,8 @@ class UncleTUI:
         if self.state in ("issue", "config_edit"):
             if k in (10, 13):
                 self._confirm_text()
-            elif k in (curses.KEY_BACKSPACE, 127, 8):
-                self.input_buf = self.input_buf[:-1]
-            elif 32 <= k <= 126:
-                self.input_buf += chr(k)
+            else:
+                self._edit_input(k)
             return
 
     def _go_back(self):
@@ -8003,7 +9174,7 @@ class UncleTUI:
         elif self.state == "config_edit":
             val = self.input_buf if self.picker_kind == "markdown_viewer" else self.input_buf.strip()
             runner = self.stage_runner(self.picker_target)
-            if self.picker_kind == "model" and runner != "self-hosted" and not valid_model_id(val, runner):
+            if self.picker_kind == "model" and runner not in HTTP_RUNNERS and not valid_model_id(val, runner):
                 # Storing it would only surface as a failed stage later.
                 self.notice = "enter a model id for %s" % runner
                 return
@@ -8068,6 +9239,7 @@ class UncleTUI:
         self._desktop_close()
         if getattr(self, "completion_preview", None):
             self.completion_preview.close()
+        self._remove_previewed_worktree()
         self._close_early_preview()
         self._close_supervisor_session()
         self._close_home_agent()
@@ -8084,10 +9256,47 @@ class UncleTUI:
         # while the homepage is being read instead of in front of the first
         # answer. A failure here is not an error -- the per-call path remains.
         threading.Thread(target=self._warm_supervisor, daemon=True).start()
+        if self._preload_allowed():
+            self._start_preload_thread()
         self._start_model_refresh()
+        import atexit
+        modes = getattr(self, 'terminal_modes', None) or TerminalModes()
+        self.terminal_modes = modes
+        atexit.register(modes.disable)
+        saved_signals = {}
+        for name in ('SIGHUP', 'SIGTSTP', 'SIGCONT'):
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue
+            try:
+                saved_signals[sig] = signal.getsignal(sig)
+            except (ValueError, OSError):
+                continue
+        def stopped(signum, frame):
+            modes.disable()
+            signal.signal(signal.SIGTSTP, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGTSTP)
+            signal.signal(signal.SIGTSTP, stopped)
+        def resumed(signum, frame):
+            modes.enable()
+        try:
+            if hasattr(signal, 'SIGTSTP'):
+                signal.signal(signal.SIGTSTP, stopped)
+                signal.signal(signal.SIGCONT, resumed)
+        except (ValueError, OSError):
+            pass
+        modes.enable()
         try:
             self._run_loop()
         finally:
+            modes.disable()
+            for sig, handler in saved_signals.items():
+                if sig == getattr(signal, 'SIGHUP', None):
+                    continue
+                try:
+                    signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
+                except (ValueError, OSError):
+                    pass
             self._close_supervisor_session()
             self._close_home_agent()
             try:
@@ -8196,6 +9405,12 @@ class UncleTUI:
         except curses.error:
             pass
         self.stdscr.keypad(True)
+        # Capturing the mouse lets the wheel scroll the transcript but stops the
+        # terminal selecting text, so copy/paste works by default. Ctrl-G toggles
+        # capture; UNCLE_MOUSE=1 starts with it on. PageUp/PageDown always scroll.
+        self.mouse_capture = False
+        self._set_mouse(os.environ.get('UNCLE_MOUSE', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+                        and not _inline_enabled())
         self.input_timeout = 80
         self.stdscr.timeout(self.input_timeout)
         try:
@@ -8240,7 +9455,10 @@ class UncleTUI:
                     self._reload_tick = 0
                     dirty = self.maybe_reload() or dirty
             k = self.stdscr.getch()
-            if k != -1:
+            if k == curses.KEY_MOUSE:
+                self._on_mouse_key()
+                dirty = True
+            elif k != -1:
                 self.handle_key(k)
                 dirty = True
             current_size = self.stdscr.getmaxyx()
@@ -8294,6 +9512,11 @@ def main(stdscr):
             return ui.finished_build_lines()
         finally:
             try:
+                ui._inline_leave()
+            except Exception:
+                pass
+            _tty_write('\x1b[?1002l')  # button-drag mouse reporting off
+            try:
                 _EXIT_SUMMARY_LINES = ui.exit_token_summary_lines()
             except Exception:
                 _EXIT_SUMMARY_LINES = ['Token summary unavailable']
@@ -8344,7 +9567,10 @@ if __name__ == "__main__":
     os.environ.setdefault('ESCDELAY', '25')  # D-1: fast single Esc, user value wins
     _stub_mode = os.environ.get('UNCLE_TUI_TEST_MAIN')
     _title_session_begin()
-    for _sig in (signal.SIGTERM, signal.SIGHUP):
+    # SIGHUP does not exist on Windows.
+    for _sig in (signal.SIGTERM, getattr(signal, 'SIGHUP', None)):
+        if _sig is None:
+            continue
         try:
             signal.signal(_sig, _title_signal_exit)
         except (ValueError, OSError):

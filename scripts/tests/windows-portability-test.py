@@ -159,6 +159,22 @@ class Portability(unittest.TestCase):
         process_tree.finish_check(child)
         job.close.assert_called_once()
 
+    def test_windows_keep_stdin_leaves_pipe_open_and_writes_no_sentinel(self):
+        import windows_job
+        job = Mock()
+        child = Mock()
+        written = []
+        child.stdin.write.side_effect = written.append
+        with patch.object(windows_job, 'Job', return_value=job), \
+             patch.object(windows_job.subprocess, 'Popen', return_value=child) as popen:
+            result = windows_job.start(['worker'], prompt=process_tree.KEEP_STDIN)
+        self.assertIs(result, child)
+        self.assertEqual(written, [b'G'])          # only the handshake; never the sentinel object
+        child.stdin.flush.assert_called()          # the handshake reaches the shim while the pipe stays open
+        child.stdin.close.assert_not_called()
+        self.assertIsNotNone(child.stdin)
+        self.assertIn('--forward-stdin', popen.call_args[0][0])
+
     def test_finish_without_timing_does_not_emit_and_still_closes_job(self):
         job = Mock()
         child = Mock(pid=123, _uncle_job=job)
@@ -294,6 +310,17 @@ class Portability(unittest.TestCase):
                                 capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 7)
         self.assertEqual(result.stdout.replace(b'\r\n',b'\n'), b'hello\n')
+
+
+class TuiPosixOnlyNamesTests(unittest.TestCase):
+    """Names Windows' stdlib lacks must never be read bare at TUI startup."""
+
+    def test_tui_never_reads_posix_only_names_unguarded(self):
+        import re
+        source = (Path(__file__).resolve().parents[2] / 'uncle_tui.py').read_text(encoding='utf-8')
+        for name in ('SIGHUP', 'SIGQUIT', 'SIGTSTP', 'SIGUSR1', 'SIGUSR2'):
+            self.assertIsNone(re.search(r'\bsignal\.' + name + r'\b', source),
+                              'signal.%s does not exist on Windows; use getattr(signal, %r, None)' % (name, name))
 
 
 if __name__ == '__main__':

@@ -155,9 +155,35 @@ def _names_option(detail, options):
     return False
 
 
+def _server_reason(error, limit=300):
+    """The server's own words for a refusal, on one line, for error messages."""
+    try:
+        detail = ' '.join(_error_detail(error).split())
+    except Exception:
+        return ''
+    return (': ' + detail[:limit]) if detail else ''
+
+
+# The reason the last tool-capable turn was refused, so "no tool calling" can say what the server said.
+last_rejection = ''
+
+
+def _has_temperature(body):
+    return 'temperature' in body or 'temperature' in (body.get('options') or {})
+
+
+def _without_temperature(body):
+    clean = {key: value for key, value in body.items() if key != 'temperature'}
+    if isinstance(clean.get('options'), dict):
+        clean['options'] = {key: value for key, value in clean['options'].items() if key != 'temperature'}
+    return clean
+
+
 def compatible_post(values, body, timeout, url=None):
     """Reserve reasoning separately from the deliverable cap on every transport."""
     from self_hosted_stream import ANSWER_CAP, answer_signal, output_accounting
+    if isinstance(values, dict) and values.get('_profile') == 'aws-bedrock':
+        return _bedrock_converse_post(values, _strip_temperature(body), timeout)  # Self Hosted bodies stay untouched
     answer_cap = body.get('max_tokens', body.get('options', {}).get('num_predict'))
     if answer_cap is None:
         return _compatible_output_post(values, body, timeout, url)
@@ -187,6 +213,117 @@ def compatible_post(values, body, timeout, url=None):
         return data
     finally:
         ANSWER_CAP.reset(token)
+
+
+def _profile_prefix(region):
+    head = (region or '').split('-', 1)[0]
+    return {'eu': 'eu', 'ap': 'apac', 'us': 'us'}.get(head, 'global')
+
+
+_CONVERSE_REASONS = {'end_turn': 'stop', 'max_tokens': 'length', 'tool_use': 'tool_calls'}
+
+
+def _bedrock_converse_post(values, body, timeout):
+    """Converse transport: translate the OpenAI-style body, POST via the `_request` seam (never redirected,
+    so the token stays on the region's runtime host), return an OpenAI-shaped response so callers are unchanged."""
+    import bedrock_protocols as bp
+    token, model = values['api_key'], values['model']
+    schema, name = None, 'result'
+    rf = body.get('response_format') or {}
+    if rf.get('type') == 'json_schema':
+        schema, name = rf['json_schema']['schema'], rf['json_schema'].get('name', 'result')
+    native = _strip_temperature(bp.build_body(body['messages'], body.get('max_tokens', 4096), body.get('tools'), schema, name))
+    region = values.get('region') or bp.region_from_url(values.get('base_url')) or ''
+    url = bp.build_url(region, model)
+    def attempt(payload):
+        # Parallel workers share one account quota: throttling (429) and overload (503, 529) are retried with
+        # backoff instead of failing the stage.
+        import random, time
+        for tries in range(8):
+            try:
+                return attempt_once(payload)
+            except HTTPError as error:
+                if error.code not in (429, 503, 529) or tries == 7:
+                    raise
+                delay = min(60.0, 2.0 * (2 ** tries)) * (0.5 + random.random() / 2)
+                print('Self hosted: AWS Bedrock HTTP %d; retrying in %.0fs.' % (error.code, delay), file=sys.stderr, flush=True)
+                time.sleep(delay)
+
+    def attempt_once(payload):
+        nonlocal url, model
+        try:
+            return _request(url, token, payload, timeout, headers=bp.build_headers(token))
+        except HTTPError as error:
+            # Newer models only accept an inference-profile ID (geo prefix) for on-demand use.
+            prefix = _profile_prefix(region)
+            if error.code != 400 or model.split('.', 1)[0] in ('us', 'eu', 'apac', 'global', 'jp', 'au', 'ca', 'us-gov'):
+                raise
+            try:
+                raw_body = error.read() or b'{}'
+                error.fp = __import__('io').BytesIO(raw_body)  # keep the body for detail()
+                note = json.loads(raw_body).get('message', '')
+            except (ValueError, AttributeError, OSError):
+                note = ''
+            if 'inference profile' not in str(note).lower():
+                raise
+            model = prefix + '.' + model
+            url = bp.build_url(region, model)
+            return _request(url, token, payload, timeout, headers=bp.build_headers(token))
+
+    def detail(error):
+        # AWS's own explanation (never the token: _request already redacted it), bounded.
+        try:
+            message = json.loads(error.read() or b'{}').get('message', '')
+        except (ValueError, AttributeError, OSError):
+            return ''
+        return ': ' + message[:300].replace('\n', ' ') if isinstance(message, str) and message else ''
+
+    try:
+        try:
+            raw = attempt(native)
+        except HTTPError as error:
+            # Models differ in their output ceiling; retry once at the smallest common one.
+            limit = native['inferenceConfig']['maxTokens']
+            note = detail(error)
+            if error.code == 400 and 'toolConfig' in native and any(w in note.lower() for w in ('tool', 'schema')):
+                # The model rejects forced tool schemas: ask for the JSON in plain text instead
+                # (the callers already request it in the prompt and validate it).
+                native.pop('toolConfig')
+                try:
+                    return _converse_result(attempt(native), None, model)
+                except HTTPError as again:
+                    again.detail = detail(again)
+                    raise
+            if error.code != 400 or limit <= 4096 or 'token' not in note.lower():
+                error.detail = note
+                raise
+            native['inferenceConfig']['maxTokens'] = 4096
+            try:
+                raw = attempt(native)
+            except HTTPError as again:
+                again.detail = detail(again)
+                raise
+    except HTTPError as error:
+        if 300 <= error.code < 400:
+            raise ValueError('AWS Bedrock request for model %s was redirected (HTTP %d); not followed' % (model, error.code)) from None
+        raise ValueError('AWS Bedrock request failed (HTTP %d); check the Region, token and model %s%s'
+                         % (error.code, model, getattr(error, 'detail', ''))) from None
+    return _converse_result(raw, name if schema else None, model)
+
+
+def _converse_result(raw, schema_name, model):
+    import bedrock_protocols as bp
+    try:
+        parsed = bp.parse_response(raw, schema_name)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ValueError('AWS Bedrock Converse response for model %s has no output.message.content' % model) from None
+    message = {'role': 'assistant', 'content': parsed['text']}
+    if parsed['tool_calls']:
+        message['tool_calls'] = [{'id': c['id'], 'type': 'function', 'function': {'name': c['name'], 'arguments': json.dumps(c['arguments'])}}
+                                 for c in parsed['tool_calls']]
+    u, reason = parsed['usage'], parsed['reason']
+    return {'choices': [{'message': message, 'finish_reason': _CONVERSE_REASONS.get(reason, reason)}],
+            'usage': {'prompt_tokens': u['input'], 'completion_tokens': u['output'], 'total_tokens': u['input'] + u['output']}}
 
 
 def _compatible_output_post(values, body, timeout, url=None):
@@ -221,19 +358,38 @@ def _compatible_output_post(values, body, timeout, url=None):
                 clean.pop(key, None)
         return clean
 
+    no_temperature = features.setdefault('no_temperature_models', set())
+
+    def post_body(candidate):
+        """Hosted OpenAI-compatible gateways refuse `temperature` on some models (newer Claude and GPT
+        models on Bedrock-backed gateways). Retry without it once and omit it for that model from then on."""
+        model = candidate.get('model')
+        if model in no_temperature:
+            candidate = _without_temperature(candidate)
+        try:
+            return post(url, values['api_key'], candidate, timeout)
+        except HTTPError as error:
+            if not (400 <= error.code < 500 and _has_temperature(candidate) and
+                    _names_option(_error_detail(error), {'temperature': None})):
+                raise
+            print('Self hosted [%s]: server rejected temperature for model %s; retrying without it and '
+                  'omitting it for this model on this Base URL for this process.' % (stage, model), file=sys.stderr)
+            no_temperature.add(model)
+            return post(url, values['api_key'], _without_temperature(candidate), timeout)
+
     def send(candidate):
         clean = without_options(candidate)
         if not applied or features.get('request_options') is False:
-            return post(url, values['api_key'], clean, timeout)
+            return post_body(clean)
         try:
-            return post(url, values['api_key'], candidate, timeout)
+            return post_body(candidate)
         except HTTPError as error:
             detail = _error_detail(error)
             if not 400 <= error.code < 500:
                 raise
             if _names_option(detail, applied):
                 disabled()
-                return post(url, values['api_key'], clean, timeout)
+                return post_body(clean)
             # Explicit errors about a different protocol feature belong to
             # its own fallback. A generic 400 warrants an otherwise-identical
             # A/B probe, without changing effort or schema during that probe.
@@ -242,7 +398,7 @@ def _compatible_output_post(values, body, timeout, url=None):
                     'structured_outputs', 'guided_json', 'tools', 'tool_choice', 'format', 'stream', 'stream_options'))):
                 raise
             try:
-                result = post(url, values['api_key'], clean, timeout)
+                result = post_body(clean)
             except HTTPError:
                 raise error from None  # no evidence against options; retain support
             disabled()
@@ -533,6 +689,8 @@ def _config_values(path=None):
 
 
 def _parse_temperature(text, source):
+    if text.strip().lower() in ('none', 'omit', 'off'):
+        return None  # send no temperature at all, for servers that refuse the field
     try:
         value = float(text)
     except ValueError:
@@ -542,15 +700,29 @@ def _parse_temperature(text, source):
     return value
 
 
-def temperature(stage=None):
-    """Sampling temperature for a request, 0 unless configured.
+def temperature_enabled():
+    """Whether Self Hosted requests carry a temperature at all: `self-hosted.use-temperature` on|off, off by default."""
+    value = option('use-temperature', 'off')
+    if value in ('off', '0', 'false', 'no'):
+        return False
+    if value in ('on', '1', 'true', 'yes'):
+        return True
+    raise ValueError('self-hosted.use-temperature must be on or off')
 
-    Order, first match wins: WORKFLOW_SELF_HOSTED_TEMPERATURE_<STAGE>, then
+
+def temperature(stage=None):
+    """Sampling temperature for a request, or None when none is sent.
+
+    None unless `self-hosted.use-temperature` (env WORKFLOW_SELF_HOSTED_USE_TEMPERATURE) is on; the model server then
+    chooses its own default. When it is on, the value is, first match wins: WORKFLOW_SELF_HOSTED_TEMPERATURE_<STAGE>, then
     WORKFLOW_SELF_HOSTED_TEMPERATURE, then `<stage>.temperature` and
     `self-hosted.temperature` in .uncle/config, then the built-in per-stage
     defaults (requirements runs at 1), then 0.  A stage inherits from its parent:
     a worker from its stage, `requirements-investigate` from `requirements`.
+    `none` (or `omit`/`off`) returns None: the request carries no temperature.
     """
+    if not temperature_enabled():
+        return None
     stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
     names = stage_names(stage)
     for name in names:
@@ -920,18 +1092,23 @@ def _via_http2(method, url, data, headers, timeout):
         return response.status_code, response.reason_phrase, response.headers, raw
 
 
-def _request(url, api_key, body=None, timeout=30):
+def _request(url, api_key, body=None, timeout=30, headers=None):
     """GET, or POST when `body` is given; returns parsed JSON.
 
     Redirects are never followed (the key must not leave the configured host).
     A non-2xx answer raises urllib's HTTPError so callers can read its code.
     """
     data = json.dumps(body).encode('utf-8') if body is not None else None
-    headers = {'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json', 'Accept': 'application/json'}
+    headers = dict(headers or {'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json'}, Accept='application/json')
     method = 'POST' if data is not None else 'GET'
     transport = _via_http2 if wants_http2(urlsplit(url).scheme) else _via_http1
     status, reason, response_headers, raw = transport(method, url, data, headers, timeout)
     if not 200 <= status < 300:
+        if api_key and not isinstance(raw, dict):
+            # An upstream body or reason may echo the Authorization value; scrub it and bound what is kept.
+            import self_hosted
+            raw = self_hosted.redact_token((raw or b'')[:4000], api_key)
+            reason = self_hosted.redact_token(reason, api_key)
         raise HTTPError(url, status, reason, response_headers, io.BytesIO(raw))
     return raw if isinstance(raw, dict) else json.loads(raw or b'null')
 
@@ -980,12 +1157,37 @@ def _flatten(messages):
     return [{'role': 'user', 'content': '\n\n'.join(parts)}]
 
 
+def _strip_temperature(node):
+    if isinstance(node, dict):
+        # Keys of a JSON-Schema `properties` map are user-chosen names, not sampling fields: keep them.
+        return {k: (({n: _strip_temperature(sub) for n, sub in v.items()} if k == 'properties' and isinstance(v, dict) else _strip_temperature(v)))
+                for k, v in node.items() if k != 'temperature' or k == 'properties'}
+    if isinstance(node, list):
+        return [_strip_temperature(v) for v in node]
+    return node
+
+
+def sampling(values):
+    """Sampling fields for a request body. Fails closed for Bedrock: never a temperature."""
+    profile = values.get('_profile') if isinstance(values, dict) else None
+    if profile is None:
+        config = _config_values()
+        stage = os.environ.get('UNCLE_STATUS_STAGE', '')
+        import self_hosted
+        if self_hosted.resolve_profile(config, stage) == 'aws-bedrock':
+            raise ValueError('AWS Bedrock request values lack _profile; refusing to send a request (never defaults to Self Hosted)')
+    elif profile == 'aws-bedrock':
+        return {}
+    value = temperature()
+    return {} if value is None else {'temperature': value}
+
+
 def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
     """One schema-constrained request in `mode`; returns (text, reason, usage)."""
     base_url, key = values['base_url'].rstrip('/'), values['api_key']
     if mode == 'ollama_format':
         body = {'model': values['model'], 'messages': _flatten(messages), 'stream': False, 'format': schema,
-                'options': {'num_predict': limit, 'temperature': temperature()}}
+                'options': dict({'num_predict': limit}, **sampling(values))}
         if effort:
             body['reasoning_effort'] = effort
         data = compatible_post(values, body, timeout, url=_origin(base_url) + '/api/chat')
@@ -993,8 +1195,8 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
                      completion_tokens=data.get('eval_count', 0))
         reason = 'length' if data.get('done_reason') == 'length' else 'stop'
         return strip_reasoning(data['message']['content']), reason, usage
-    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
-            'temperature': temperature()}
+    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False}
+    body.update(sampling(values))
     if effort:
         body['reasoning_effort'] = effort
     if mode == 'json_schema':
@@ -1013,6 +1215,14 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
 def constrained_completion(values, messages, schema, name, limit, effort=None, timeout=3600, skip=()):
     """Ask for `schema`-shaped output; returns (text, reason, usage, mode)."""
     values = configure_request_options(values)
+    if values.get('_profile') == 'aws-bedrock':
+        # Converse only: no capability probe, no mode fallback.
+        effort = reasoning_effort(values, effort)
+        try:
+            text, reason, usage = _final_call(values, messages, schema, name, 'json_schema', limit, effort, timeout)
+        except TimeoutError:
+            raise _no_answer(timeout, limit) from None
+        return text, reason, usage, 'json_schema'
     caps = capabilities(values['base_url'], values['api_key'])
     effort = reasoning_effort(values, effort)
     last = None
@@ -1024,12 +1234,14 @@ def constrained_completion(values, messages, schema, name, limit, effort=None, t
             return text, reason, usage, mode
         except HTTPError as error:
             if error.code not in REJECTED:
-                raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
+                raise ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model'
+                                 % (error.code, _server_reason(error))) from None
             caps['rejected'].add(mode)
             last = error
         except TimeoutError:
             raise _no_answer(timeout, limit) from None
-    raise ValueError('Model API rejected every request form (HTTP %s); check the model name' % getattr(last, 'code', '?'))
+    raise ValueError('Model API rejected every request form (HTTP %s%s); check the model name'
+                     % (getattr(last, 'code', '?'), _server_reason(last) if last is not None else ''))
 
 
 # Every mode that asks the server's grammar engine to shape the output.  The one
@@ -1106,8 +1318,8 @@ def conforms(value, schema, path='$'):
 
 def chat(values, messages, tools, limit, effort=None, timeout=3600):
     """One tool-capable turn; None means the server rejected tool calling."""
-    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
-            'temperature': temperature()}
+    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False}
+    body.update(sampling(values))
     if tools:
         body['tools'] = tools
     effort = reasoning_effort(values, effort)
@@ -1120,7 +1332,10 @@ def chat(values, messages, tools, limit, effort=None, timeout=3600):
         return data
     except HTTPError as error:
         if error.code not in REJECTED:
-            raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
+            raise ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model'
+                             % (error.code, _server_reason(error))) from None
+        global last_rejection
+        last_rejection = 'HTTP %d%s' % (error.code, _server_reason(error))
     except TimeoutError:
         raise _no_answer(timeout, limit) from None
     return None

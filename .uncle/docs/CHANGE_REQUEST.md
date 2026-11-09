@@ -1,106 +1,52 @@
-# Change Request
-
-Issue 149
-
-Seeded from [unclehq/uncle#149](https://github.com/unclehq/uncle/issues/149).
+# Branch and worktree policy
 
 ## Change Type
-
-Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
+Behavior change
 
 ## Summary
-
-Uncle must not edit .gitignore at the end of a change request; the repo must be clean when the PR is pushed
+Uncle should do change work (existing-code changes, issue and PR work, fixes) on a newly created branch. New application builds should run directly in the main branch of the current checkout, with no worktree and no separate branch.
 
 ## Motivation
-
-## Problem
-
-When Uncle finishes a change request, it edits `.gitignore` one more time. Depending on the run, that last edit is left uncommitted in the checkout, or goes out with the PR. Either way the repository is not in the state the audit approved:
-
-- **Uncommitted:** the checkout reads as modified (` M .gitignore`) after the PR is pushed. The same condition makes `git worktree remove` and Uncle's own post-PR removal guard (`auto_removal_content_refusal`: "uncommitted changes to tracked files") refuse to clean up. It also pollutes the operator's next `git status` and `git diff`.
-- **Pushed:** the PR carries a `.gitignore` change nobody reviewed or asked for, so the diff the human approved is not the diff that merges.
-
-I confirmed the symptom (` M .gitignore` in the checkout, in the Uncle repo itself) but have not traced which call makes the last edit. Candidates in the current code:
-
-- `uncle_tui.py` calls `_ensure_uncle_gitignored(...)` at startup (around line 1556), which runs `uncle_gitignore.ensure(project_root)`.
-- `scripts/lib/worktrees.sh` runs `uncle_gitignore.py` on every new worktree.
-- `change-pr.sh` already special-cases `.gitignore` in its snapshot and strips Uncle's managed lines, which suggests the file keeps changing during a run.
-
-Part of the work is finding the exact trigger for the end-of-run edit.
-
-## Requested behavior
-
-At the end of a change request, and when the PR is pushed:
-
-1. Uncle makes **no further edit** to `.gitignore` (or any tracked file) after the final audit snapshot is taken.
-2. The checkout and the worktree are **clean and unmodified**, apart from files the PR commit contains. The commit tree equals the audited tree.
-3. If a `.gitignore` update is needed for Uncle to work, it happens **before** the audit snapshot and is part of what the human reviews, or it is made through a mechanism that never touches tracked files (see open questions).
-
-## Observable behaviors
-
-| Id | Trigger | Expected result | Failure behavior |
-|---|---|---|---|
-| G-1 | A change request finishes and the PR is published | `git status --porcelain` is empty in the worktree apart from the committed files; `.gitignore` is byte-identical to the audited tree | If a tracked file differs after publish, the run reports which file and why instead of ending as COMPLETE |
-| G-2 | The PR is created | `.gitignore` in the PR matches the version that was audited, with no line added after the audit | If the PR tree differs from the audited tree, publish stops and says so |
-| G-3 | Post-PR worktree removal | Not blocked by a modified `.gitignore` | A different dirty file is still refused, as today |
-| G-4 | A project's `.gitignore` lacks Uncle's managed block | The block is added before the audit snapshot, or Uncle uses a non-tracked ignore (`.git/info/exclude`); the audit shows the change | Never added silently at the end |
-| G-5 | A run with no PR (COMPLETE, no PR) | The checkout is clean; no `.gitignore` edit is left behind | Same as G-1 |
-| G-6 | Starting the TUI or a driver in a clean project | Same rule applies at startup: no tracked file is modified without it appearing in a reviewed diff | Refuse or defer the edit with a message |
-
-## Invariants
-
-- **I-1:** no tracked file is modified after the final audit snapshot until the PR is published. Enforced by comparing the working tree to the audited tree immediately before and after publish.
-- **I-2:** the PR commit tree equals the audited tree. (Publish already validates this; the check must also hold for `.gitignore`.)
-- **I-3:** Uncle's end-of-run bookkeeping never writes to a tracked file; run state stays under `.uncle/workflow/`, which is ignored.
-- **I-4:** a worktree that finished a PR has no tracked-file modifications, so the removal guards pass without any special case.
-
-## Open questions
-
-- **Where should the ignore rules live?** Writing them to `.git/info/exclude` never touches tracked files and would remove this class of problem. The catch is that the `!.uncle/docs/` negation exists specifically so the approved documents stay visible to git and to the removal guard; confirm that `info/exclude` can express this, and that the PR snapshot still sees `.uncle/docs/`.
-- **If `.gitignore` must stay the mechanism:** apply the change once, before the first audit snapshot, as its own visible entry in the plan or the diff, so it is reviewed rather than appended at the end.
-- **Existing runs:** the snapshot code strips managed lines from `.gitignore` before comparing. Decide whether to keep that tolerance for in-flight runs or remove it once the final edit is gone.
-
-## Verification
-
-- A regression test using a fixture repo: run a change to completion (with and without a PR) and assert that `git status --porcelain` is empty and `.gitignore` is unchanged from the audited tree.
-- A test that fails when any code path writes a tracked file between the final audit and publish.
-- A driver test where the base `.gitignore` lacks the managed block, and one where it is already canonical.
-- Defect injection: reintroduce a final `ensure()` call and confirm the test fails.
-- Manual check: complete a real change request and confirm that the worktree is removed automatically after the PR.
-
-## Non-goals
-
-- Changing which paths Uncle ignores (the canonical block stays as is).
-- Changing the PR snapshot's treatment of `.uncle/workflow/`.
-- Other cleanup of the worktree, such as stale `parallel/step-*` registrations; that is a separate problem.
+The operator wants a predictable policy. Changes are isolated on a new branch. New application builds land directly in main and do not use a worktree.
 
 ## Observed Current Behavior
-
-Describe what the system currently does.
+Worktrees are opt-in for issue runs through `scripts/from-issue.sh --worktree` (see docs/worktrees.md). `scripts/stagegate.sh` can run a new application build in an Uncle-owned worktree and then merge the finished build back into the source checkout's branch (see `worktree_merge_owned` and `worktree_merge_finish_all`). The branch behavior for non-issue change runs is not yet documented. It must be established from `scripts/change-workflow.sh` and `scripts/lib/change-pr.sh`.
 
 ## Desired Behavior
-
-Describe what the system should do after the change.
+1. Change work (`change-workflow.sh`, `from-issue.sh`, and `create_change` / `run_change` / `github_issue` actions from the home agent) creates and switches to a new branch before making any edits, unless the run is already on a non-default branch created for it.
+2. New application builds (`stagegate.sh` / `create_app` / `run_app`) run in the main branch of the current checkout. They never create or use a worktree, and they do not create a separate branch.
+3. The new application path ignores any worktree option or setting. If one is requested, Uncle reports plainly that it is not used for application builds.
+4. Existing opt-in worktree support for issue runs is preserved unless it conflicts with the rules above.
 
 ## Reproduction
-
-For a bug, provide exact steps to reproduce it.
-
-For other change types, write "Not applicable."
+Start a new application build from a clean checkout on main and observe whether an Uncle-owned worktree is created. Start a change run and observe whether a new branch is created before edits.
 
 ## Constraints
-
-List compatibility, security, performance, timing, or scope constraints.
+- Do not delete or force-modify existing branches or worktrees.
+- Do not weaken the approval gates or the verification gates.
+- Keep domain logic separate from git plumbing. Keep the policy decision in one place.
+- Refuse to start a new application build if the checkout is not on main or has uncommitted changes, and say why.
 
 ## Known Relevant Files
-
-List files or components if known.
+- scripts/stagegate.sh
+- scripts/change-workflow.sh
+- scripts/from-issue.sh
+- scripts/lib/worktrees.sh
+- scripts/lib/worktree-merge.sh
+- scripts/lib/change-pr.sh
+- scripts/lib/worktree_runs.py
+- scripts/lib/home_actions.py
+- prompts/home-agent.md
+- docs/worktrees.md
+- scripts/README.md
 
 ## Out of Scope
-
-List behavior or components that must not be changed.
+- Changing the review, plan, or verification stages.
+- Removing worktree support for issue runs.
+- Pushing branches or opening pull requests differently than today.
 
 ## Success Criteria
-
-Describe the observable evidence that proves the change works.
+- A change run starts on a newly created branch, shown by `git branch --show-current` before the first edit.
+- A new application build runs on main with no worktree created, shown by `git worktree list` and `git branch` before and after.
+- Tests cover both paths and the refusal case, and the existing worktree tests still pass.
+- docs/worktrees.md and prompts/home-agent.md describe the new policy.

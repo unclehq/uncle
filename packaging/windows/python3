@@ -4,12 +4,23 @@ set -euo pipefail
 if [[ -n "${UNCLE_WINDOWS_PYTHON:-}" ]]; then
     exec "$(cygpath -u "$UNCLE_WINDOWS_PYTHON")" "$@"
 fi
+# Prefer a Python that can import curses (the full-screen UI needs it); the
+# first usable Python is only the fallback.
+ok='import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)'
 for candidate in python python.exe; do
-    if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)' >/dev/null 2>&1; then
+    if "$candidate" -c "$ok" >/dev/null 2>&1 && "$candidate" -c 'import curses' >/dev/null 2>&1; then
         exec "$candidate" "$@"
     fi
 done
-if command -v py >/dev/null 2>&1 && py -3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)' >/dev/null 2>&1; then
+if command -v py >/dev/null 2>&1 && py -3 -c "$ok" >/dev/null 2>&1 && py -3 -c 'import curses' >/dev/null 2>&1; then
+    exec py -3 "$@"
+fi
+for candidate in python python.exe; do
+    if "$candidate" -c "$ok" >/dev/null 2>&1; then
+        exec "$candidate" "$@"
+    fi
+done
+if command -v py >/dev/null 2>&1 && py -3 -c "$ok" >/dev/null 2>&1; then
     exec py -3 "$@"
 fi
 echo 'Uncle needs Python 3.9+. Install Python from python.org or Scoop and disable Microsoft Store aliases.' >&2

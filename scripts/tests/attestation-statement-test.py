@@ -95,7 +95,7 @@ class Fixture(unittest.TestCase):
         (self.repo / 'source.txt').write_text('before\n')
         (self.repo / 'CHANGE_REQUEST.md').write_text('## Summary\n\nAttested change\n')
         (self.repo / '.uncle').mkdir()
-        (self.repo / '.uncle/allowed_signers').write_text('fixture@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderKeyFixtureOnly0000000000000000\n')
+        (self.repo / '.uncle/allowed_signers').write_text('me@brian.biz ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderKeyFixtureOnly0000000000000000\n')
         self.git('add', '-A')
         self.git('add', '-f', '.uncle/allowed_signers')
         self.original = fixture_repo.commit(self.repo, 'initial', env=self.env, add_all=False)
@@ -325,7 +325,7 @@ class StatementTests(Fixture):
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.assertEqual(verify.returncode, 1, verify.stdout)
         self.assertIn('required gate IMPLEMENTATION_REVIEW has no human approval', verify.stdout)
-        self.assertTrue(verify.stdout.rstrip().endswith('NOT VERIFIED'))
+        self.assertTrue(verify.stdout.rstrip().endswith('NOT HUMAN VERIFIED'))
 
     def test_delegated_plan_approval_is_kept_verbatim_and_not_human(self):
         self.seed_envelopes()

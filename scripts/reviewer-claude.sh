@@ -34,14 +34,14 @@ case "${OSTYPE:-}" in
 esac
 
 CLAUDE_CMD="${WORKFLOW_REVIEWER_CLAUDE_CMD:-claude}"
-DEFAULT_MODEL="${WORKFLOW_REVIEWER_CLAUDE_MODEL:-claude-sonnet-5}"
+DEFAULT_MODEL="claude-sonnet-5-5"
 MAX_TURNS="${WORKFLOW_REVIEWER_CLAUDE_TURNS:-80}"
 TOOLS="${WORKFLOW_REVIEWER_CLAUDE_TOOLS:-Read,Glob,Grep}"
 if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
     TOOLS="$TOOLS,Write"
 fi
 
-model="$DEFAULT_MODEL"
+model="${WORKFLOW_REVIEWER_CLAUDE_MODEL:-$DEFAULT_MODEL}"
 effort=""
 output_file=""
 prompt=""
@@ -129,7 +129,7 @@ fi
 # stage log — while keeping the raw events for the extraction below.
 set +e
 printf '%s' "$prompt" \
-    | env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$CLAUDE_CMD" "${claude_flags[@]}" \
+    | env -u ANTHROPIC_BASE_URL -u ANTHROPIC_BEDROCK_BASE_URL -u ANTHROPIC_VERTEX_BASE_URL -u ANTHROPIC_FOUNDRY_BASE_URL -u ANTHROPIC_FOUNDRY_API_KEY -u ANTHROPIC_CUSTOM_HEADERS -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX -u CLAUDE_CODE_USE_FOUNDRY -u AWS_BEARER_TOKEN_BEDROCK -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$CLAUDE_CMD" "${claude_flags[@]}" \
     | tee "$stream" \
     | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -R -r --unbuffered '
         (fromjson? | select(type == "object")) as $e

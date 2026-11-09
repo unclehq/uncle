@@ -36,6 +36,15 @@ def main(argv):
         fail('Error: --change-request input contains NUL or control characters')
     if not text.strip():
         fail('Error: --change-request text cannot be empty')
+    # A finished run leaves its request behind. The text is valid, so the old one is archived (run_duties.archive_change_request;
+    # UNCLE_KEEP_CHANGE_REQUEST=1 keeps the refusal) instead of making the operator delete it by hand.
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import run_duties
+        for archived in run_duties.archive_change_request(root):
+            sys.stderr.write('Archived the previous change request to %s\n' % archived)
+    except (OSError, ImportError):
+        pass
     if any(os.path.lexists(os.path.join(root, *part, 'CHANGE_REQUEST.md'))
            for part in ((), ('.uncle', 'docs'))):
         fail(EXISTS)

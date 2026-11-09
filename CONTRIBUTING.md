@@ -1,4 +1,4 @@
-# Contributing to Stagegate
+# Contributing to Uncle
 
 Thanks for taking the time to contribute. This project is small and
 opinionated, so the best way to start is to open an issue and describe what you

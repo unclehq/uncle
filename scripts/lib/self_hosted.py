@@ -25,8 +25,56 @@ def runner_directory(prefix):
         cleanup_directory(directory)
 
 
-def key_file(config):
-    return Path(config).parent / 'self-hosted-keys.json'
+BEDROCK = 'aws-bedrock'
+SELF_HOSTED = 'self-hosted'
+
+
+def key_file(config, profile=SELF_HOSTED):
+    return Path(config).parent / (BEDROCK + '-keys.json' if profile == BEDROCK else 'self-hosted-keys.json')
+
+
+def stage_names(stage):
+    """The stage's own name then its parents, mirroring stage_names in stage-config.sh."""
+    names = [stage]
+    for suffix in ('-investigate',):
+        if stage.endswith(suffix):
+            names.append(stage[:-len(suffix)])
+    for marker in ('-review-worker-', '-worker-'):
+        if marker in stage:
+            names.append(stage.split(marker, 1)[0])
+    if stage.startswith('implementation-step-') or stage == 'implementation-report':
+        names.append('implementation')
+    return [name for name in names if name]
+
+
+def resolve_profile(values, stage=''):
+    """Profile from config runner values only; never from shell-normalized values or CMD overrides."""
+    names = stage_names(stage) if stage else []
+    if stage:
+        names += [name for name in stage_names(config_stage(stage, values)) if name not in names]
+    for name in names:
+        runner = (values.get(name + '.runner') or '').strip().lower()
+        if runner:
+            return BEDROCK if runner == BEDROCK else SELF_HOSTED
+    return BEDROCK if (values.get('runner') or '').strip().lower() == BEDROCK else SELF_HOSTED
+
+
+def redact_token(text, token):
+    """The single Bedrock redactor: scrub the token (and its Bearer form) from any text or bytes."""
+    if not token:
+        return text
+    if isinstance(text, bytes):
+        return text.replace(token.encode('utf-8'), b'[redacted]')
+    return str(text).replace(token, '[redacted]')
+
+
+def _bedrock_url_ok(url):
+    parts = urlsplit(url)
+    return parts.scheme in ('http', 'https') and bool(parts.netloc) and not (parts.username or parts.password or parts.query or parts.fragment)
+
+
+def _bedrock_model(name):
+    return name.removeprefix('openai/').removeprefix('local/')
 
 
 def local_model(name):
@@ -34,8 +82,10 @@ def local_model(name):
     return name if name.startswith('local/') else 'local/' + name
 
 
-def read_keys(config):
-    path = key_file(config)
+def read_keys(config, profile=SELF_HOSTED):
+    path = key_file(config, profile)
+    # Bedrock model IDs are used as-is; only self-hosted catalogs carry the local/ provider prefix.
+    local_model = _bedrock_model if profile == BEDROCK else globals()['local_model']
     keys = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     # Read old credentials without rewriting them until the user saves config.
     if '__opencode_models__' not in keys and '__aider_models__' in keys:
@@ -51,18 +101,31 @@ def read_keys(config):
     return keys
 
 
-def save_keys(config, keys):
-    path = key_file(config)
+def save_keys(config, keys, profile=SELF_HOSTED):
+    path = key_file(config, profile)
     if not keys and not path.exists():
         return
+    bedrock = profile == BEDROCK
+    if bedrock:
+        connection = keys.get('__opencode_connection__') or {}
+        urls = [connection.get('base_url', '')] + [m.get('base_url', '') for m in (keys.get('__opencode_models__') or {}).values()]
+        if any(url and not _bedrock_url_ok(url) for url in urls):
+            raise ValueError('AWS Bedrock requires an http(s) Bedrock URL without credentials, query, or fragment')
+    entry = '/' + path.name
     path.parent.mkdir(parents=True, exist_ok=True)
     ignore = path.parent / '.gitignore'
-    existing = ignore.read_text(encoding='utf-8') if ignore.exists() else ''
-    if '/self-hosted-keys.json' not in existing.splitlines():
-        with ignore.open('a', encoding='utf-8', newline='\n') as stream:
-            stream.write(('\n' if existing and not existing.endswith('\n') else '') + '/self-hosted-keys.json\n')
-    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.self-hosted-')
     try:
+        existing = ignore.read_text(encoding='utf-8') if ignore.exists() else ''
+        if entry not in existing.splitlines():
+            with ignore.open('a', encoding='utf-8', newline='\n') as stream:
+                stream.write(('\n' if existing and not existing.endswith('\n') else '') + entry + '\n')
+    except OSError:
+        if bedrock:
+            raise ValueError('AWS Bedrock token not saved: could not add %s to .uncle/.gitignore' % entry.lstrip('/')) from None
+        raise
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.aws-bedrock-' if bedrock else '.self-hosted-')
+    try:
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             json.dump(keys, stream)
         os.replace(temporary, path)
@@ -106,6 +169,70 @@ def discover_models(base_url, api_key):
         raise ValueError('Expected an OpenAI-compatible models response with data and model IDs') from None
 
 
+_MODEL_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/-]*$')
+
+
+def _discovery_get(url, headers):
+    """The one discovery GET seam (tests patch it): no redirects, at most 2 MB + 1 byte read."""
+    from urllib.request import Request, build_opener, HTTPRedirectHandler
+
+    class NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    with build_opener(NoRedirect).open(Request(url, headers=headers), timeout=10) as response:
+        return response.read(2_000_001)
+
+
+def discover_bedrock_models(region, api_key):
+    """List foundation models and inference profiles for `region` (no redirects, paginated, bearer auth).
+
+    Errors are actionable ValueErrors that never include the token or a response body."""
+    from urllib.parse import quote
+    from urllib.error import HTTPError, URLError
+    import bedrock_protocols as bp
+    region = bp.validate_region(region)
+    validate_bedrock_token(api_key)
+    control = bp.control_url(region)
+
+    def pages(path, query):
+        found, seen, token = [], set(), None
+        for _ in range(101):
+            parts = list(query) + (['nextToken=' + quote(token, safe='')] if token else [])
+            try:
+                raw = _discovery_get(control + path + ('?' + '&'.join(parts) if parts else ''),
+                                     {'Authorization': 'Bearer ' + api_key, 'Accept': 'application/json'})
+            except HTTPError as exc:
+                if 300 <= exc.code < 400:
+                    raise ValueError(f'AWS Bedrock model discovery for region {region} was redirected (HTTP {exc.code}); not followed') from None
+                raise ValueError(f'AWS Bedrock model discovery failed (HTTP {exc.code}); check the Region and token') from None
+            except (URLError, OSError):
+                raise ValueError(f'Could not reach AWS Bedrock in region {region}; check the Region and network') from None
+            if len(raw) > 2_000_000:
+                raise ValueError('AWS Bedrock model response is too large')
+            try:
+                page = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeError):
+                raise ValueError('AWS Bedrock returned a malformed model list') from None
+            if not isinstance(page, dict):
+                raise ValueError('AWS Bedrock returned a malformed model list')
+            found.append(page)
+            token = page.get('nextToken')
+            if not token:
+                return found
+            if not isinstance(token, str) or token in seen:
+                raise ValueError('AWS Bedrock model list pagination did not terminate')
+            seen.add(token)
+        raise ValueError('AWS Bedrock model list has too many pages')
+
+    foundation = pages('/foundation-models', [])
+    profiles = pages('/inference-profiles', ['maxResults=100'])
+    names = [n for n in bp.parse_models(foundation, profiles) if _MODEL_ID.match(n)]
+    if not names:
+        raise ValueError(f'AWS Bedrock returned no usable models for region {region}')
+    return names
+
+
 def connection_settings(keys):
     return dict(keys.get('__opencode_connection__') or next(iter(keys.get('__opencode_models__', {}).values()), {}))
 
@@ -117,6 +244,16 @@ def refresh_models(keys, base_url, api_key):
     keys['__opencode_connection__'] = connection
     keys['__opencode_models__'] = {name: dict(connection, model=name.removeprefix('local/')) for name in names}
     return names
+
+
+def refresh_bedrock_models(keys, region, api_key):
+    names = discover_bedrock_models(region, api_key)
+    connection = dict(region=region, api_key=api_key)
+    # Commit only after a successful discovery; failures retain the old catalog and connection.
+    keys['__opencode_connection__'] = connection
+    keys['__opencode_models__'] = {name: dict(connection, model=name) for name in names}
+    return names
+
 
 
 def config_stage(stage, values):
@@ -181,43 +318,112 @@ def config_stage(stage, values):
     return stage
 
 
+def _text_or_empty(value):
+    return value.strip() if isinstance(value, str) else ('' if value is None else str(value))
+
+
+def validate_bedrock_token(token):
+    """Non-empty printable ASCII, no whitespace/control characters. Never echoes the token."""
+    if not isinstance(token, str) or not token:
+        raise ValueError('AWS Bedrock requires a token (set it in Configure → AWS Bedrock Token)')
+    if any(not 0x21 <= ord(c) <= 0x7E for c in token):
+        raise ValueError('AWS Bedrock token must be a single line of printable ASCII without spaces')
+    return token
+
+
+def _bedrock_result(values, stage, stored):
+    """Bedrock connection: region + token from env/connection; entries supply only the model ID (D1, D4, D9)."""
+    import bedrock_protocols as bp
+    profiles = stored.get('__opencode_models__', {})
+    connection = stored.get('__opencode_connection__')
+    selected = values.get(stage + '.model', '')
+    if selected and selected not in profiles:
+        selected = _bedrock_model(selected)
+    entry = profiles.get(selected) if selected in profiles else None
+    if not isinstance(entry, dict):
+        entry = None
+    # A cleared connection must not revive stale per-model values.
+    stale = entry if connection is None else None
+    conn = connection if isinstance(connection, dict) else {}
+    region = ''
+    for source in (os.environ.get('UNCLE_AWS_BEDROCK_REGION'), values.get(stage + '.region'), values.get(BEDROCK + '.region'),
+                   conn.get('region'), (stale or {}).get('region')):
+        text = _text_or_empty(source)
+        if text:
+            region = bp.validate_region(text)  # an invalid value never falls through
+            break
+    if not region:
+        for url in (conn.get('base_url'), (stale or {}).get('base_url'), values.get(stage + '.base_url'), values.get(BEDROCK + '.base_url')):
+            region = bp.region_from_url(url) if isinstance(url, str) else None
+            if region:
+                break
+    if not region:  # shell fallbacks come last: anything configured wins
+        for source in (os.environ.get('AWS_REGION'), os.environ.get('AWS_DEFAULT_REGION'), os.environ.get('REGION')):
+            text = _text_or_empty(source)
+            if text:
+                region = bp.validate_region(text)
+                break
+    if not region:
+        raise ValueError('AWS Bedrock Region is not set; set Region in Configure → AWS Bedrock')
+    token = (os.environ.get('UNCLE_AWS_BEDROCK_API_KEY') or conn.get('api_key') or stored.get(stage) or (stale or {}).get('api_key')
+             or os.environ.get('AWS_BEARER_TOKEN_BEDROCK') or '')
+    model = (os.environ.get('UNCLE_AWS_BEDROCK_MODEL') or (entry or {}).get('model', selected if entry else '')
+             or values.get(stage + '.model') or values.get(BEDROCK + '.model', ''))
+    if not model and profiles:
+        raise ValueError('No aws bedrock model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (stage, stage))
+    model = model.removeprefix('openai/').removeprefix('local/')
+    if not model:
+        raise ValueError('AWS Bedrock requires a model name')
+    validate_bedrock_token(token)
+    return dict(model=model, base_url=bp.runtime_url(region), api_key=token, region=region)
+
+
 def settings(config, stage):
     from self_hosted_http import _config_values, request_options
     values = _config_values(config)
     options = request_options(stage, values)  # validate before credential lookup
     requested_stage = stage
+    profile = resolve_profile(values, requested_stage)
+    bedrock = profile == BEDROCK
+    env = 'UNCLE_SELF_HOSTED_'
     stage = config_stage(stage, values)
-    result = {}
-    for field in ('base_url', 'model'):
-        result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or values.get(stage + '.' + field) or values.get('self-hosted.' + field, '')
-    result['api_key'] = os.environ.get('UNCLE_SELF_HOSTED_API_KEY') or read_keys(config).get(stage, '')
-    profiles = read_keys(config).get('__opencode_models__', {})
-    selected = values.get(stage + '.model', '')
-    if selected and selected not in profiles:
-        selected = local_model(selected)
-    if selected in profiles:
-        profile = profiles[selected]
-        result = dict(model=profile.get('model', selected), base_url=profile.get('base_url', ''), api_key=profile.get('api_key', ''))
-    elif profiles and not values.get(stage + '.base_url'):
-        raise ValueError('No self-hosted model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (stage, stage))
-    for field in ('model', 'base_url', 'api_key'):
-        result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or result[field]
-    result['model'] = result['model'].removeprefix('openai/').removeprefix('local/')
-    url = urlsplit(result['base_url'])
-    if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
-        raise ValueError('Self hosted requires an http(s) Base URL without credentials, query, or fragment')
-    if not result['model']:
-        raise ValueError('Self hosted requires a model name')
-    if '\n' in result['api_key'] or '\r' in result['api_key']:
-        raise ValueError('API key must be a single line')
-    if not result['api_key']:
-        raise ValueError('Self hosted requires an API key (use a placeholder for a server without authentication)')
+    stored = read_keys(config, profile)
+    if bedrock:
+        result = _bedrock_result(values, stage, stored)
+    else:
+        result = {}
+        for field in ('base_url', 'model'):
+            result[field] = os.environ.get(env + field.upper()) or values.get(stage + '.' + field) or values.get('self-hosted.' + field, '')
+        result['api_key'] = os.environ.get(env + 'API_KEY') or stored.get(stage, '')
+        profiles = stored.get('__opencode_models__', {})
+        selected = values.get(stage + '.model', '')
+        if selected and selected not in profiles:
+            selected = local_model(selected)
+        if selected in profiles:
+            profile_entry = profiles[selected]
+            result = dict(model=profile_entry.get('model', selected), base_url=profile_entry.get('base_url', ''), api_key=profile_entry.get('api_key', ''))
+        elif profiles and not values.get(stage + '.base_url'):
+            raise ValueError('No self hosted model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (stage, stage))
+        for field in ('model', 'base_url', 'api_key'):
+            result[field] = os.environ.get(env + field.upper()) or result[field]
+        result['model'] = result['model'].removeprefix('openai/').removeprefix('local/')
+        url = urlsplit(result['base_url'])
+        if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
+            raise ValueError('Self hosted requires an http(s) Base URL without credentials, query, or fragment')
+        if not result['model']:
+            raise ValueError('Self hosted requires a model name')
+        if '\n' in result['api_key'] or '\r' in result['api_key']:
+            raise ValueError('API key must be a single line')
+        if not result['api_key']:
+            raise ValueError('Self hosted requires an API key (use a placeholder for a server without authentication)')
     # Callers such as home chat can pass a config path without exporting it.
     # Carry even an explicit {} with that connection, so it cannot accidentally
     # be replaced by options from a different config when the loop starts.
     if (any(key.endswith('.request-options') for key in values) or
             any(key.startswith('WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS') for key in os.environ)):
         result.update(_request_options=options, _request_options_stage=requested_stage)
+    if bedrock:
+        result['_profile'] = BEDROCK
     return result
 
 
@@ -1866,10 +2072,41 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
             raise wrapped from None
 
 
-def profile_menu(config, choose=False):
+APPLY_ALL_STAGES = ('requirements change-spec project-plan change-plan adversarial-review updated-plan '
+                    'updated-change-plan preflight implementation repair test-review manual-checklist '
+                    'execute-checklist final-audit').split()
+
+
+def validate_profile(value=None):
+    """The one profile check for models, choose-model, set-key and apply-all: absent or aws-bedrock only."""
+    if value is None or value == '':
+        return SELF_HOSTED if value is None else None
+    return BEDROCK if value == BEDROCK else None
+
+
+def profile_menu(config, choose=False, profile=SELF_HOSTED):
     import getpass
-    keys = read_keys(config)
+    bedrock = profile == BEDROCK
+    keys = read_keys(config, profile)
     profiles = keys.setdefault('__opencode_models__', {})
+    if choose and bedrock:
+        names = sorted(profiles)
+        if not names:
+            print('No AWS Bedrock models are configured; add models in Configure → AWS Bedrock', file=sys.stderr)
+            return 1
+        for name in names:
+            print('  ' + name, file=sys.stderr)
+        print('AWS Bedrock model name: ', end='', file=sys.stderr, flush=True)
+        try:
+            name = input().strip()
+        except EOFError:
+            name = ''
+        key = name if name in profiles else _bedrock_model(name) if name else ''
+        if key not in profiles:
+            print('Choose a configured AWS Bedrock model; add models in Configure → AWS Bedrock', file=sys.stderr)
+            return 1
+        print(profiles[key].get('model') or key.removeprefix('local/'))
+        return 0
     if choose:
         for name in sorted(profiles):
             print('  ' + name, file=sys.stderr)
@@ -1880,27 +2117,74 @@ def profile_menu(config, choose=False):
         print(name)
         return 0
     old = connection_settings(keys)
+    if bedrock:
+        return _bedrock_configure(config, keys, old, profile)
     url = input('Base URL [' + old.get('base_url', '') + ']: ').strip() or old.get('base_url', '')
     key = getpass.getpass('API key (hidden; blank keeps existing): ').strip() or old.get('api_key', '')
     print('Discovering OpenCode models…', flush=True)
     names = refresh_models(keys, url, key)
-    save_keys(config, keys)
+    save_keys(config, keys, profile)
     print(f'Loaded {len(names)} OpenCode models: ' + ', '.join(names))
+    return 0
+
+
+def _bedrock_configure(config, keys, old, profile):
+    """Shell Configure → AWS Bedrock: Region + token only. Nothing is saved unless discovery succeeds."""
+    import getpass
+    import bedrock_protocols as bp
+    current = _text_or_empty(old.get('region')) or bp.region_from_url(old.get('base_url')) or ''
+    try:
+        region = bp.validate_region(input('Region [' + current + ']: ').strip() or current)
+        token = getpass.getpass('AWS Bedrock Token (hidden; blank keeps existing): ').strip() or old.get('api_key', '')
+        validate_bedrock_token(token)
+        print('Discovering AWS Bedrock models…', flush=True)
+        names = refresh_bedrock_models(keys, region, token)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    save_keys(config, keys, profile)
+    print(f'Loaded {len(names)} AWS Bedrock models: ' + ', '.join(names))
     return 0
 
 
 def main(side, args):
     started = time.monotonic()
+    if side in ('models', 'choose-model', 'set-key', 'apply-all'):
+        position = 2 if side == 'set-key' else 1
+        raw = args[position] if len(args) > position else None
+        profile = validate_profile(raw)
+        if profile is None:
+            print('Unsupported profile %r; only aws-bedrock is accepted' % raw, file=sys.stderr)
+            return 2
+        if side == 'apply-all' and raw is None:
+            print('apply-all requires the aws-bedrock profile', file=sys.stderr)
+            return 2
     if side in ('models', 'choose-model'):
-        return profile_menu(args[0], side == 'choose-model')
+        return profile_menu(args[0], side == 'choose-model', profile)
+    if side == 'apply-all':
+        if len(args) < 3:
+            print('apply-all requires a source stage', file=sys.stderr)
+            return 2
+        keys = read_keys(args[0], profile)
+        token = keys.get(args[2])
+        if not isinstance(token, str) or not token:
+            print('AWS Bedrock token for the source stage is not set', file=sys.stderr)
+            return 1
+        targets = args[3:] or APPLY_ALL_STAGES
+        for target in targets:
+            keys[target] = token
+        save_keys(args[0], keys, profile)
+        return 0
     if side == 'set-key':
-        keys = read_keys(args[0])
+        keys = read_keys(args[0], profile)
         key = sys.stdin.read().strip()
         if key:
             keys[args[1]] = key
+        elif args[1] in keys:
+            keys.pop(args[1])
         else:
-            keys.pop(args[1], None)
-        save_keys(args[0], keys)
+            return 0  # nothing stored: leave the file byte-identical
+        save_keys(args[0], keys, profile)
         return 0
     if side not in ('agent','reviewer'):
         raise ValueError('Invalid runner side')

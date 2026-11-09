@@ -331,8 +331,11 @@ final_audit_override_recovery() {
                 && [[ "${UNATTENDED:-0}" == 1 ]] && [[ "${WORKFLOW_AUTO_REPAIR:-1}" == 1 ]] \
                 && [[ "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" -lt "${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-2}" ]] \
                 && [[ "${GREEN_CHECK:-1}" == 1 && -s "${GREEN_CLASS:-}" ]] \
-                && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
-            echo 'Unattended final audit is NOT READY with a driver-observed verification failure; repairing once before any unreviewed waiver.'
+                && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
+                && { [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" != critical ]] \
+                     || python3 -B "$ROOT/scripts/lib/failure_severity.py" critical "$GREEN_CLASS" "${LOG_DIR:-$STATE_DIR/logs}/green-check.log" > /dev/null \
+                     || python3 -B "$ROOT/scripts/lib/failure_severity.py" audit-critical "$STATE_DIR/documents/FINAL_AUDIT.json" > /dev/null; }; then
+            echo 'Unattended final audit is NOT READY with a critical failure; repairing once before any unreviewed waiver.'
             printf '%s\n' .uncle/docs/FINAL_AUDIT.md > "$STATE_DIR/repair-source"
             set_state REPAIR
             return 0

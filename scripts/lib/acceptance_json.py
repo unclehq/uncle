@@ -29,9 +29,13 @@ def result(path, expected=()):
             required[row['id']] = row.get('status')
         elif row.get('severity_downgraded') is True:
             downgraded.add(row['id'])       # failure_severity.py: a non-critical finding the driver chose not to repair
-    if not required or any(identifier not in required and identifier not in INFORMATIONAL and identifier not in downgraded
-                           for identifier in expected):
+    # A table with no required rows is rejected (a reviewer who dropped them all), unless the driver downgraded every failing one: then
+    # there is nothing left to enforce, the findings are in the ledger for the final audit, and it is a pass.
+    if (not required and not downgraded) or any(identifier not in required and identifier not in INFORMATIONAL and identifier not in downgraded
+                                                for identifier in expected):
         return 'UNKNOWN'
+    if not required:
+        return 'PASS'
     statuses = set(required.values())
     if 'FAIL' in statuses: return 'REPAIR'
     if 'BLOCKED-IMPOSSIBLE' in statuses: return 'BLOCKED-IMPOSSIBLE'

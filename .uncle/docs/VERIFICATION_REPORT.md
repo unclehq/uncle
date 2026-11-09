@@ -2,159 +2,95 @@
 
 ## Findings
 
-### MC-101
+### MC-104
 
-- **Action:** Ran `printf '/q\n' | ./uncle --noui` from the worktree (piped stdin, not a TTY) and read the exit status.
-- **Expected result:** The session quits and the process exit status is 0.
-- **Actual result:** Session started, printed the banner, and exited with status 0.
+- **Action:** In a scratch git repo (main, no remote), sourced the real scripts/lib/run-policy.sh and called run_policy_change_branch (the guard change-workflow.sh runs before any stage) with WORKFLOW_WORKTREE=0: (1) from main; (2) re-ran on the created branch (resume); (3) from a feature branch feature/x. I did not run the full change-workflow.sh driver, to avoid launching agent stages.
+- **Expected result:** Each first run prints `Branch: <name>` and `git branch --show-current` shows a new branch; the resume creates no further branch.
+- **Actual result:** From main: printed `Branch: uncle/change`, current branch uncle/change, main SHA unchanged. Resume on uncle/change: no output, rc=0, branch list unchanged (main, uncle/change). From feature/x: printed `Branch: uncle/change-2`, current branch uncle/change-2, feature/x left intact.
 - **Defects:** None
 
-### MC-102
+### MC-106
 
-- **Action:** Ran `printf '/s\n/S\n/s extra\n/mode\n/quit\n' | ./uncle --noui` from the worktree (piped stdin).
-- **Expected result:** Each of /s, /S and /s extra is refused with `ambiguous command: /s (matches: /settings, /stop)`, no command runs, and /mode still answers.
-- **Actual result:** All three inputs printed `ambiguous command: /s (matches: /settings, /stop)`. The session continued and `/mode` answered `mode: unattended`. The process exit status was 2 after /quit. The check does not specify an exit status, and the likely cause is the earlier refused commands, but I did not investigate.
-- **Defects:** None
-
-### MC-103
-
-- **Action:** Piped `/qu`, `/frob`, `/x`, `/1`, `/?`, `/` (one per line) then `/mode` into `uncle --noui` from /tmp/mcw (non-TTY stdin).
-- **Expected result:** Each line refused with `unknown command: /<name>`, nothing expands or runs, session continues and `/mode` answers.
-- **Actual result:** All six lines printed `unknown command: /qu`, `/frob`, `/x`, `/1`, `/?`, and `/` (bare slash), each followed by the command list. Nothing expanded. `/mode` then answered `mode: unattended`.
-- **Defects:** None
-
-### MC-105
-
-- **Action:** Piped `/q now`, `/e foo`, `/mode`, `/Q` into `uncle --noui` and captured exit status.
-- **Expected result:** `usage: /quit` and `usage: /exit` printed, neither quits, `/mode` answers, `/Q` quits with exit 0.
-- **Actual result:** Output was `usage: /quit`, `usage: /exit`, `mode: unattended`; session then ended on `/Q` with EXIT=0.
-- **Defects:** None
-
-### MC-200
-
-- **Action:** Piped '/s', '/s extra', '/S', '/h', '/q' into `./uncle --noui` (stdin not a TTY), captured output and exit status. Also ran '/q' and '/quit' alone.
-- **Expected result:** Each of /s, /s extra, /S prints 'ambiguous command: /s (matches: /settings, /stop)' and runs nothing; /h shows help; /q exits with status 0.
-- **Actual result:** The three refusals printed exactly 'ambiguous command: /s (matches: /settings, /stop)', nothing ran, and /h printed help. But after the refusals, /q exited with status 2, not 0. A lone '/q' or '/quit' exits 0. Running python3 scripts/lib/uncle_repl.py directly with '/x' then '/q' exited 0, so the 2 comes from running through ./uncle. I did not find the cause.
-- **Defects:** Observed defect: ./uncle --noui exits 2 on /q or /quit after an earlier refusal; expected 0. Not yet logged in DEFECTS.md (worker may not edit it).
-
-### MC-201
-
-- **Action:** Piped '/qu', '/x', '/1', '/?', '/', '/q' into `./uncle --noui` and captured output and exit status.
-- **Expected result:** Each of /qu, /x, /1, /?, / is refused as an unknown command, nothing expands or runs, and /q exits with status 0.
-- **Actual result:** All five were refused with 'unknown command: /<token>' followed by the Commands line, and nothing ran or expanded. The session continued to /q, but the final exit status was 2, not 0.
-- **Defects:** Same defect as MC-200: exit status 2 after /q following refusals, expected 0.
-
-### MC-202
-
-- **Action:** Ran `uncle --noui` (worktree ./uncle) in /tmp/mc2 with piped stdin: `/q now`, `/e foo`, `/Q`; captured output and exit status.
-- **Expected result:** `/q now` prints `usage: /quit`, `/e foo` prints `usage: /exit`, session does not quit on either; `/Q` quits with status 0.
-- **Actual result:** Output: banner, `usage: /quit`, `usage: /exit`. Session continued past both (the subsequent commands were processed) and `/Q` ended it with exit=0.
+- **Action:** In a scratch git repo (/tmp/mc106.TOiw/repo, main, stub gh returning issue 7 'Add widget'), ran `from-issue.sh 7 --change --worktree --seed-only` (seed-only added so no agent driver started), then `from-issue.sh 7 --new --worktree`. Also ran `from-issue.sh 7 --worktree` without --change (mode derivation reached the agent step, which failed in the scratch environment; not relevant to the guard).
+- **Expected result:** The first creates a worktree on a new branch as before; the second exits 1 with `--worktree and --worktree-dir require --change`.
+- **Actual result:** First run printed 'Created worktree /tmp/mc106.TOiw/repo-issue-7 on branch uncle/add-widget' and wrote CHANGE_REQUEST.md; git worktree list shows the new worktree on uncle/add-widget. Second printed '--worktree and --worktree-dir require --change; --new is not supported.' plus usage, and exited 1 (exit status observed in an earlier invocation of the same form; the later PIPESTATUS capture was empty because of the pipeline). Caveats: the literal `N --worktree` without --change was not exercised for worktree creation, and the bare `--new --worktree` form without an issue number prints usage only.
 - **Defects:** None
 
 ### MC-203
 
-- **Action:** Ran `uncle --noui` with piped stdin: `/m unattended`, `/mode`, `/M attended`, `/mode`, `/q`.
-- **Expected result:** `/m unattended` acts like `/mode unattended` (mode: unattended), `/mode` reports unattended, `/M attended` gives mode: attended.
-- **Actual result:** Output lines in order: `mode: unattended`, `mode: unattended`, `mode: attended`, `mode: attended`. Uppercase /M expanded and argument was kept.
+- **Action:** In a scratch git repo on main (no remote), invoked the change run guard run_policy_change_branch from scripts/lib/run-policy.sh (the first thing change-workflow.sh runs before any stage) with WORKFLOW_WORKTREE=0; listed branches and main SHA before and after. Did not launch the full agent workflow, only the guard it calls.
+- **Expected result:** Run is on a new non-main branch, 'Branch: <name>' printed, main SHA unchanged, no other branch created/deleted.
+- **Actual result:** Printed 'Branch: uncle/change'; current branch uncle/change; branches before: main; after: main, uncle/change. main SHA 74c909a4... before and after. run-branch marker written with uncle/change.
 - **Defects:** None
 
 ### MC-204
 
-- **Action:** Ran repo ./uncle --noui (and installed uncle for the first pass) feeding /h, /i, /c, /t, /d, /r each followed by /e, and /e alone followed by /h, piping output through cat -v.
-- **Expected result:** Each one-letter command behaves as its full command; usage complaints are the full command's own; /e ends the session.
-- **Actual result:** /h printed the help text and command list; /i printed 'usage: /issue N' (the /issue command's own usage); /c printed 'clear_build is available in the full-screen UI only'; /t printed '/triage needs the TUI'; /d printed '/do needs the TUI'; /r printed 'resume_build is available in the full-screen UI only' (all are the full commands' own noui messages, none say unknown or ambiguous); /e ended the session (the following /h produced no output, exit code 0).
+- **Action:** Re-invoked the guard in the MC-203 repo (already on its recorded run branch). Separately, in two fresh scratch repos on main, planted .uncle/workflow/run-branch containing 'main' and 'ghost' (nonexistent) respectively and invoked the guard.
+- **Expected result:** Resumed run creates no further branch; planted stale markers do not suppress the guard, so run moves to a new branch.
+- **Actual result:** Resume: no output, rc=0, branches unchanged (main, uncle/change). Stale 'main' marker: printed 'Branch: uncle/change', now on uncle/change, main preserved. Stale 'ghost' marker: same result.
 - **Defects:** None
 
-### MC-205
+### MC-206
 
-- **Action:** Ran: printf '/\033[31mred\n/q\n' | ./uncle --noui | cat -v
-- **Expected result:** Unknown-command refusal appears without the raw escape byte (no ^[[31m in cat -v), then the session quits on /q.
-- **Actual result:** Output was 'unknown command: /red' followed by the command list; no ^[ or [31m sequence appeared; the session terminated on /q without hanging.
-- **Defects:** None
-
-### MC-301
-
-- **Action:** Ran `printf '/q\n' | env -u UNCLE_RUNTIME_ROOT ./uncle --noui; echo EXIT=$?` from the worktree. The ambient UNCLE_RUNTIME_ROOT points at the installed brew build, so I unset it to exercise the worktree's scripts/lib/uncle_repl.py. Input was piped, not typed in a TTY.
-- **Expected result:** The session quits and the process exit status is 0.
-- **Actual result:** The session printed its banner and quit with no error. EXIT=0.
-- **Defects:** None
-
-### MC-302
-
-- **Action:** Ran `printf '/s\n/qu\n/frob\n/1\n/q extra\n/q\n' | env -u UNCLE_RUNTIME_ROOT ./uncle --noui; echo EXIT=$?` from the worktree, so the worktree's uncle_repl.py was used. The 'Commands:' hint lines that follow each unknown-command message were filtered out of the transcript.
-- **Expected result:** /s prints the ambiguous message. /qu, /frob and /1 each print 'unknown command: /<name>'. '/q extra' prints 'usage: /quit' and does not quit. Every refusal leaves the session running, and the final /q quits.
-- **Actual result:** All messages matched. /s gave 'ambiguous command: /s (matches: /settings, /stop)'. /qu, /frob and /1 each gave 'unknown command: /<name>'. '/q extra' gave 'usage: /quit' without quitting. The session stayed alive through every refusal, and the final /q quit with EXIT=0. The installed brew build (older, 41398a8) returned EXIT=2 after refusals followed by /q. That is a stale-install difference. The worktree code (scripts/lib/uncle_repl.py loop) returns 0 on an explicit /quit.
-- **Defects:** None
-
-### MC-303
-
-- **Action:** Piped `/m`, `/m unattended`, `/mode`, `/h`, `/S`, `/Q` into `./uncle --noui` from the worktree (non-tty, piped stdin) and captured output and exit status.
-- **Expected result:** /m prints current mode; /m unattended prints `mode: unattended`; /mode reports unattended; /h prints help; /S refused as ambiguous with same message as /s; /Q quits.
-- **Actual result:** Output: `mode: unattended` (/m), `mode: unattended` (/m unattended), `mode: unattended` (/mode), help text (`Type a message to chat...` and `Commands: /help /mode [attended|unattended] /issue N /stop /resume [N] /clear /triage /do /settings /quit`), `ambiguous command: /s (matches: /settings, /stop)` for /S, then the session ended on /Q. Process exit status was 2 in that run (the status of the earlier refusal carried through; `/Q` alone exits 0, and `/S` then `/Q` also exits 2). The check does not assert an exit status, so this is noted only as an observation relevant to MC-402/MC-403 style exit-status expectations.
+- **Action:** In a scratch git repo (origin github.com/o/r, committed .uncle/config file) with a stub `gh` returning issue 7, ran `from-issue.sh 7 --change --worktree --seed-only` with UNCLE_PROJECT_ROOT set to the scratch repo; then ran `from-issue.sh 7 --new --worktree`. Also ran `from-issue.sh --new --worktree` literally.
+- **Expected result:** The first creates a sibling worktree on a new branch with a copy of .uncle/config. The second exits 1 with '--worktree and --worktree-dir require --change'.
+- **Actual result:** First run: 'Created worktree .../repo-issue-7 on branch uncle/scratch-thing'; git worktree list showed the sibling worktree on uncle/scratch-thing; its .uncle/config contained 'KEY=val' (a copy). Second run printed '--worktree and --worktree-dir require --change; --new is not supported.' followed by usage. Literal `--new --worktree` with no issue number instead printed 'Unrecognized issue argument: --new', so the message needs an issue number first. Exit codes were not captured (PIPESTATUS was empty in this shell); the message is printed immediately before an `exit 1` in scripts/from-issue.sh. Side effect: early runs that lacked UNCLE_PROJECT_ROOT created a stray worktree and branch uncle/scratch-thing in the real project, and one unexplained stray worktree reappeared after later runs. Both were removed with `git worktree remove --force` and `git branch -D`, and the final worktree list had no scratch entries.
 - **Defects:** None
 
 ### MC-304
 
-- **Action:** Piped `/<ESC>[31mx`, `/?`, `/mode`, `/q` into `./uncle --noui`, captured output to a file, inspected with `cat -v` and counted ESC bytes.
-- **Expected result:** Both inputs refused as unknown commands; no raw escape byte emitted; terminal colour not changed; session keeps running.
-- **Actual result:** Output `unknown command: /x` and `unknown command: /?`, each followed by the commands help line; `/mode` still answered `mode: unattended`, so the session kept running. ESC byte count in the output was 0 and `cat -v` showed no `^[` sequence. Terminal colour was not changed (output was captured to a file, so a live terminal colour was not watched). Exit status was 2, which this check does not assert.
+- **Action:** In a scratch git repo on main (no remote), with WORKFLOW_WORKTREE=0, invoked the same guard change-workflow.sh calls at startup (run_policy_change_branch from scripts/lib/run-policy.sh, sourced as change-workflow.sh does) rather than the full agent-driven run; then ran git branch --show-current and git branch.
+- **Expected result:** Checkout is on a newly created branch, not main; a 'Branch: <name>' line printed; main unchanged.
+- **Actual result:** Printed 'Branch: uncle/change'; current branch uncle/change; main commit SHA unchanged. The full change run with agent stages was not launched; only the startup branch guard was exercised.
+- **Defects:** None
+
+### MC-305
+
+- **Action:** In the same scratch repo, re-invoked the run-policy branch guard (the resume path, run_policy_change_branch) while on the run branch, then ran git branch.
+- **Expected result:** No further branch is created on resume.
+- **Actual result:** No new branch created, no Branch line printed, and the checkout stayed on uncle/change. The branch listing was identical before and after. Resume was simulated by re-invoking the guard, not by stopping and resuming a real agent-driven run.
+- **Defects:** None
+
+### MC-306
+
+- **Action:** In scratch repo /tmp/mc306/repo (main, origin=github.com/acme/widget, stub gh returning issue 7) ran `from-issue.sh 7 --change --worktree --seed-only`, then `git worktree list`/`git branch`. Then ran `from-issue.sh 7 --new --worktree` and the literal `from-issue.sh --new --worktree` (no issue number), recording exit codes.
+- **Expected result:** First creates a worktree on a new branch as before. Second exits 1 with '--worktree and --worktree-dir require --change'.
+- **Actual result:** First: exit 0, 'Created worktree /tmp/mc306/repo-issue-7 on branch uncle/stub'; worktree list shows the new worktree and branch uncle/stub; main untouched. Second (with issue number 7): exit 1, message '--worktree and --worktree-dir require --change; --new is not supported.' (starts with the expected text, plus a suffix and usage). The literal command without an issue number exits 1 with 'Unrecognized issue argument: --new' because the issue number is a required positional, so the checklist wording needs an <N> to reach the check. I added --change and --seed-only to the first run to avoid launching the full driver.
 - **Defects:** None
 
 ### MC-401
 
-- **Action:** Piped '/help', '/mode', '/mode unattended', '/mode attended', '/quit' into `./uncle --noui` (worktree launcher) and captured transcript and exit status.
-- **Expected result:** Full commands behave as before: help lists commands, mode reports and switches, /quit exits 0.
-- **Actual result:** Banner and command list printed; '/mode' reported 'mode: unattended'; '/mode unattended' -> 'mode: unattended'; '/mode attended' -> 'mode: attended'; session ended with exit status 0.
+- **Action:** Created a scratch git repo (/private/tmp/mc401.EbmyEG/proj, main, one commit, .uncle/config containing 'x', origin https://github.com/o/r.git) and a stub `gh` on PATH returning issue #7 'Fix widget'. Ran the repo's scripts/from-issue.sh with a clean env (env -i, UNCLE_PROJECT_ROOT set to the scratch repo, so the installed-runtime UNCLE_* variables did not redirect it): `from-issue.sh 7 --worktree --change --seed-only`. Then ran `git worktree list`, `git branch -a` and inspected the worktree's .uncle. Earlier attempts that inherited the worker env or used the real repo as project root failed for setup reasons (installed runtime root / real repo's pre-existing issue-7 worktree) and were discarded.
+- **Expected result:** An opt-in issue worktree is created on a new branch exactly as before, with a copy of .uncle/config; no policy refusal or 'worktrees not used' notice appears.
+- **Actual result:** Exit 0. Output: 'Preparing worktree (new branch 'uncle/fix-widget')', 'Created worktree /private/tmp/mc401.EbmyEG/proj-issue-7 on branch uncle/fix-widget', 'Freezing files attached to o/r#7', 'Wrote .uncle/docs/CHANGE_REQUEST.md'. git worktree list shows main and proj-issue-7 [uncle/fix-widget]; git branch shows the new branch uncle/fix-widget. The worktree's .uncle/config exists with content 'x' (copied). Output contained no refusal or 'worktrees not used' text (grep count 0). Only --seed-only was used, so the full workflow was not run. Scratch dir was not deleted (rm blocked by a safety check); it is left at /private/tmp/mc401.EbmyEG.
 - **Defects:** None
 
 ### MC-402
 
-- **Action:** Piped '/qu', '/frob', '/x', '/', '/?', '/1', then '/q' into `./uncle --noui`; captured transcript and exit status. Also ran '/q' alone, '/frob' then '/quit', and '/frob' then EOF.
-- **Expected result:** First six each print 'unknown command: /<name>' with refusal status 2, nothing expands, session stays open until '/q' quits with exit status 0.
-- **Actual result:** All six printed 'unknown command: /qu', '/frob', '/x', '/', '/?', '/1' (followed by the command list) and nothing expanded; session stayed open and /q quit silently. However the final process exit status was 2, not 0. '/q' alone exits 0. '/frob' then '/quit' via ./uncle also exits 2. Running scripts/lib/uncle_repl.py directly (also with UNCLE_NOUI=1) with '/frob' then '/quit' exits 0, so the code comment 'explicit /quit is a clean exit' holds in the module but not via the ./uncle --noui launcher path; cause not determined.
-- **Defects:** Unrecorded: exit status 2 instead of 0 after /q following refusals when launched via ./uncle --noui (module-direct run returns 0)
+- **Action:** In a scratch git repo ran `scripts/from-issue.sh 1 --new --worktree` (issue number required as first arg; a first attempt without it was rejected as an unrecognized argument and is not the tested path). Checked exit status, message, and compared the line in the script against HEAD.
+- **Expected result:** Exits 1 with message `--worktree and --worktree-dir require --change`, unchanged from before.
+- **Actual result:** Exit status 1. Message: `--worktree and --worktree-dir require --change; --new is not supported.` followed by usage. The message line is byte-identical to HEAD (scripts/from-issue.sh:543 in both HEAD and the working tree; git diff HEAD for that file is empty). The expected text is a prefix of the full message.
+- **Defects:** None
 
 ### MC-403
 
-- **Action:** Piped '/s','/S','/s extra','/q extra','/q' into `uncle --noui` from /tmp/mc4 and captured output and exit status; then isolated with '/q' alone, '/s' then '/q', '/s' then '/quit', '/q extra' then '/q'.
-- **Expected result:** First three print exactly `ambiguous command: /s (matches: /settings, /stop)`, run nothing. `/q extra` prints `usage: /quit` and does not quit. Bare `/q` then quits with exit status 0.
-- **Actual result:** Output matched for the first three (identical ambiguous line x3) and `/q extra` printed `usage: /quit` without quitting; session then quit on `/q`. But the process exit status was 2, not 0. Isolation: '/q' alone -> 0; '/q extra' then '/q' -> 0; any prior ambiguous command ('/s' then '/q' or '/quit') -> exit 2. The ambiguous status 2 is carried into the final exit code of the quit.
-- **Defects:** New: bare /q (or /quit) after an ambiguous slash command exits with status 2 instead of 0 (last-command status leaks into quit exit code). Not recorded in DEFECTS.md by this worker.
-
-### MC-404
-
-- **Action:** Piped '/m','/m unattended','/m','/mode','/h','/Q' into `uncle --noui`; separately ran '/help','/mode unattended','/q' as reference.
-- **Expected result:** `/m` and `/mode` print the same mode line, `/m unattended` switches the mode as `/mode unattended` does, `/h` prints same help as `/help`, `/Q` quits with exit 0.
-- **Actual result:** `/m`, `/m unattended`, `/m`, `/mode` all printed `mode: unattended`; `/h` printed the same two-line help text as `/help` in the reference run; `/mode unattended` in reference printed `mode: unattended` same as `/m unattended`; `/Q` quit with EXIT=0. Note: the starting mode was already unattended so a real switch was not distinguishable from a no-op.
-- **Defects:** None
-
-### MC-405
-
-- **Action:** Piped printf '/\x1b[31mred\n/q\n' (real ESC byte) into `./uncle --noui` and captured the raw output through xxd.
-- **Expected result:** Unknown-command refusal does not emit a raw ESC byte; session continues until /q quits it.
-- **Actual result:** Output was 'unknown command: /red' followed by the commands help line; the ESC byte and the '[31m' sequence were stripped. No 0x1b byte appears in the hex dump. /q then ended the session cleanly with no further unknown-command message and exit code 0.
+- **Action:** Created a scratch git repo (branch main, bare remote origin, pushed, clean apart from an untracked CHANGE_REQUEST.md brief) and called worktree_auto from scripts/lib/worktrees.sh with WORKFLOW_WORKTREE unset and kind 'change'. This is the driver's default-worktree function, not the full ./scripts/change-workflow.sh launcher. Then ran git worktree list and git branch, and compared main's SHA before and after.
+- **Expected result:** The change run still gets its default worktree on a new branch, and main's ref is unchanged.
+- **Actual result:** worktree_auto printed a new worktree directory, <scratch>-change, on new branch uncle/change. git worktree list shows the original checkout on [main] and the new one on [uncle/change]. main stayed at 9776eb1b5e406047d32f0b0708e2c7d728405a01 before and after. Caveat: my harness sourced worktrees.sh from the scratch directory, so it printed a harmless 'state.sh: no such file' error. It did not affect the result. The full launcher was not run.
 - **Defects:** None
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-101 | YES | PASS | Transcript: 'uncle --noui interactive session. Type /help for commands, /quit to exit.' exit=0. Run used piped stdin rather than an interactive terminal. |
-| MC-102 | YES | PASS | Transcript: three identical ambiguous-command lines, then 'mode: unattended'. |
-| MC-103 | YES | PASS | Transcript: 'unknown command: /qu' ... 'unknown command: /' then 'mode: unattended'. Note: in a combined run, process exit status was 2 after unknown commands (not asserted by this check). |
-| MC-105 | YES | PASS | Transcript: 'usage: /quit' / 'usage: /exit' / 'mode: unattended' / EXIT=0. Standalone `/Q` also gave EXIT=0. |
-| MC-200 | YES | FAIL | Transcript: 'ambiguous command: /s (matches: /settings, /stop)' x3, then the help line, then exit status 2 (`echo $?` after the run). Source comment at scripts/lib/uncle_repl.py:387 says an explicit /quit after a refusal should return 0, but via ./uncle --noui the status was 2. Same exit 2 for '/x' then '/quit' and for '/h', '/x', '/q'. |
-| MC-201 | YES | FAIL | Transcript: 'unknown command: /qu', '/x', '/1', '/?' and '/', each followed by the Commands line. `echo $?` printed 2. |
-| MC-202 | YES | PASS | Transcript: 'uncle --noui interactive session. Type /help for commands, /quit to exit.' / 'usage: /quit' / 'usage: /exit'; exit=0. Piped stdin rather than a TTY. |
-| MC-203 | YES | PASS | Transcript after banner: mode: unattended / mode: unattended / mode: attended / mode: attended. Piped stdin rather than a TTY. |
-| MC-204 | YES | PASS | Terminal transcript: '/h' -> 'Commands: /help /mode ... /quit'; '/i' -> 'usage: /issue N'; '/t' -> '/triage needs the TUI; run uncle without --noui.'; '/e' then '/h' -> only the banner line. |
-| MC-205 | YES | PASS | cat -v output: 'unknown command: /red' / 'Commands: /help /mode [attended/unattended] /issue N /stop /resume [N] /clear /triage /do /settings /quit' |
-| MC-301 | YES | PASS | Transcript: 'uncle --noui interactive session. Type /help for commands, /quit to exit.' then 'EXIT=0'. The installed brew build also gave EXIT=0 for bare /q. |
-| MC-302 | YES | PASS | Transcript: ambiguous command: /s (matches: /settings, /stop) / unknown command: /qu / unknown command: /frob / unknown command: /1 / usage: /quit / EXIT=0. |
-| MC-303 | YES | PASS | Captured transcript of the run in a temp dir; separate runs: `printf '/Q\n' / uncle --noui` -> exit 0; `printf '/S\n/Q\n' / uncle --noui` -> `ambiguous command: /s (matches: /settings, /stop)`, exit 2. |
-| MC-304 | YES | PASS | `cat -v b.out` showed no `^[`; `grep -c $'\x1b' b.out` -> 0. |
-| MC-401 | YES | PASS | Transcript: 'Commands: /help /mode [attended/unattended] /issue N /stop /resume [N] /clear /triage /do /settings /quit', 'mode: unattended', 'mode: unattended', 'mode: attended'; exit=0. |
-| MC-402 | YES | FAIL | Transcript in /tmp/mc402.txt; `printf '/qu\n/frob\n/x\n/\n/?\n/1\n/q\n' / ./uncle --noui` -> exit=2; `printf '/frob\n/quit\n' / ./uncle --noui` -> exit=2; same input to python3 scripts/lib/uncle_repl.py -> exit=0. |
-| MC-403 | YES | FAIL | Transcript: 'ambiguous command: /s (matches: /settings, /stop)' x3, 'usage: /quit', EXIT=2. Isolation runs: '/s\n/q' EXIT=2; '/s\n/quit' EXIT=2; '/q' EXIT=0. |
-| MC-404 | YES | PASS | Run 1 output: 'mode: unattended' x4, then 'Type a message to chat...' / 'Commands: /help /mode [attended/unattended] /issue N /stop /resume [N] /clear /triage /do /settings /quit', EXIT=0. Reference run help text identical. |
-| MC-405 | YES | PASS | xxd offsets 0x4a-0x5b: '756e 6b6e 6f77 6e20 636f 6d6d 616e 643a 202f 7265 640a' = 'unknown command: /red\n'. Full dump (0x00-0xcb) contains no 0x1b byte. |
+| MC-104 | YES | PASS | Terminal output: 'main' -> 'Branch: uncle/change' -> 'uncle/change', 'main-sha-same'; resume 'rc=0' with 'main, * uncle/change'; feature run 'Branch: uncle/change-2' with branches feature/x, main, uncle/change, * uncle/change-2. .uncle/workflow/run-branch recorded uncle/change. |
+| MC-106 | YES | PASS | git worktree list: /private/tmp/mc106.TOiw/repo a015d9a [main]; /private/tmp/mc106.TOiw/repo-issue-7 a015d9a [uncle/add-widget]. Message text begins with the expected string. |
+| MC-203 | YES | PASS | Terminal output from scratch repo: before '* main'; after '  main / * uncle/change'; identical main SHA; rc=0. |
+| MC-204 | YES | PASS | Terminal output: resume branch list 'main, * uncle/change'; both stale-marker repos show 'Branch: uncle/change' and '* uncle/change'. |
+| MC-206 | YES | PASS | Terminal output as above. A first attempt with a directory-valued .uncle/config failed with 'Could not copy .uncle/config ... worktree removed', which was a fixture error (the real one is a file), not a product defect. Exit status 1 for the second command is inferred from the code, not observed. |
+| MC-304 | YES | PASS | Console: 'Branch: uncle/change'; git branch: '  main' / '* uncle/change'; 'main same: yes'. |
+| MC-305 | YES | PASS | git branch after resume: '  main' / '* uncle/change' (same as before). |
+| MC-306 | YES | PASS | git worktree list: /private/tmp/mc306/repo 7027547 [main]; /private/tmp/mc306/repo-issue-7 7027547 [uncle/stub]. git branch: * main, + uncle/stub. Exit codes: A=0, B=1, C=1. |
+| MC-401 | YES | PASS | Console output in /private/tmp/mc401.EbmyEG/out.txt; git worktree list: '/private/tmp/mc401.EbmyEG/proj 1caa073 [main]' and '/private/tmp/mc401.EbmyEG/proj-issue-7 1caa073 [uncle/fix-widget]'; ls -a proj-issue-7/.uncle: config docs workflow x; cat config: x. |
+| MC-402 | YES | PASS | exit=1; stderr/stdout first line: '--worktree and --worktree-dir require --change; --new is not supported.'; git show HEAD:scripts/from-issue.sh line 543 equals working tree line 543; no diff for from-issue.sh. |
+| MC-403 | YES | PASS | dir=.../scratch-change; 'Preparing worktree (new branch uncle/change)'; before=after=9776eb1b5e406047d32f0b0708e2c7d728405a01; git branch: '* main', '+ uncle/change'. |

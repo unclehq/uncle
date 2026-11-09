@@ -13,6 +13,48 @@ def artifact_patterns():
     return [part.strip().replace('\\\n', '').strip() for part in case.split('|')]
 
 
+def file_hash(path):
+    """Git blob id of a working-tree file, or None when it cannot be read."""
+    result = subprocess.run(['git', 'hash-object', '--', path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return result.stdout.decode().strip() or None if not result.returncode else None
+
+
+def write_hashes(baseline):
+    """Record a content hash beside the baseline for every path it lists.
+
+    The baseline names paths that predate the change so they are not charged
+    to it. A path alone cannot tell "left alone" from "left alone, then
+    edited by the implementation": a project whose files are all untracked
+    (never committed) would show an empty change and be reported as
+    undelivered. The sidecar lets paths() keep a baseline file only while its
+    content is unchanged.
+    """
+    names = Path(baseline).read_text(errors='surrogateescape').splitlines()
+    lines = []
+    for name in names:
+        digest = file_hash(name)
+        if digest and '\t' not in name:
+            lines.append('%s\t%s' % (name, digest))
+    Path(str(baseline) + '.hashes').write_text('\n'.join(lines) + ('\n' if lines else ''), errors='surrogateescape')
+
+
+def unchanged_baseline(baseline):
+    """Baseline paths whose content still matches the recorded hash.
+
+    A baseline with no sidecar (older run) keeps the original behaviour: every
+    listed path is treated as unchanged.
+    """
+    names = set(Path(baseline).read_text(errors='surrogateescape').splitlines())
+    sidecar = Path(str(baseline) + '.hashes')
+    if not sidecar.is_file():
+        return names
+    recorded = {}
+    for line in sidecar.read_text(errors='surrogateescape').splitlines():
+        name, _, digest = line.partition('\t')
+        recorded[name] = digest
+    return {name for name in names if name not in recorded or file_hash(name) == recorded[name]}
+
+
 def paths(baseline=None):
     exclusions = ['--', '.', ':(exclude).uncle/workflow', ':(exclude).uncle/workflow-history']
     def git(args):
@@ -23,7 +65,7 @@ def paths(baseline=None):
     untracked = git(['ls-files', '--others', '--exclude-standard', '-z', *exclusions])
     old = set()
     if baseline and Path(baseline).is_file():
-        old = set(Path(baseline).read_text(errors='surrogateescape').splitlines())
+        old = unchanged_baseline(baseline)
     patterns = artifact_patterns()
     candidates = {os.fsdecode(p) for p in (diff.stdout + untracked.stdout).split(b'\0') if p}
     # `git diff` reports tracked files whatever the ignore rules say, and
@@ -40,6 +82,9 @@ def paths(baseline=None):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) == 3 and sys.argv[1] == '--record-hashes':
+        write_hashes(sys.argv[2])
+        raise SystemExit(0)
     for path in paths(os.environ.get('WORKFLOW_UNTRACKED_BASELINE')):
         if '\n' in path or '\r' in path:
             raise SystemExit('Review cannot represent a filename containing a newline')

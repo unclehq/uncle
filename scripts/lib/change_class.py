@@ -26,10 +26,12 @@ text; nothing here depends on one runner's output protocol.
     change_class.py current  FAMILY PROJECT PLAN                    # exit 0 when change-class.json matches this plan
     change_class.py get      PROJECT KEY [DEFAULT]                  # class | lenses | edit_slice | source
     change_class.py recheck  FAMILY PROJECT PLAN                    # after planning: raise the class if the plan outgrew it
+    change_class.py skip-review FAMILY PROJECT PLAN                 # write the stub review if skipping is still justified (exit 1 if not)
     change_class.py budget   PROJECT                                # the planner's size paragraph for a small application
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -329,19 +331,111 @@ def merge(cls_floor, cls_model):
     return CLASSES[max(CLASSES.index(cls_floor), CLASSES.index(cls_model))]
 
 
+# Paths a "small" change may not touch if its adversarial review is to be skipped: auth, secrets, shell, the driver and its gates.
+SENSITIVE_PATH = re.compile(r'(?i)(auth|secret|credential|token|password|crypt|sign|approv|gate|driver|workflow|permission)|\.(sh|bash|zsh)$')
+SKIP_CLASSES = ('docs', 'test-only', 'small')
+REVIEW_STUB_PREFIX = 'skipped: class '
+
+
+def skip_enabled():
+    """Skipping is on only when WORKFLOW_SKIP_REVIEW is unset or exactly "1"; any other value forces a full review."""
+    return os.environ.get('WORKFLOW_SKIP_REVIEW', '1') == '1'
+
+
+def review_decision(cls, raw_hits, owned, skip_requested, model_cls=None):
+    """('skip'|'full', reason). Fails closed: skip needs a model's exact "skip", a docs/test-only/small class, no raw (pre-waiver)
+    risk hit, declared owned files, and owned paths that fit the class. Plan text never enters this decision."""
+    if not skip_enabled():
+        return 'full', 'WORKFLOW_SKIP_REVIEW disables review skipping'
+    if not skip_requested:
+        return 'full', 'the classifier did not ask to skip review'
+    if model_cls != cls:
+        return 'full', 'the floor raised the class from %s to %s' % (model_cls, cls)
+    if cls not in SKIP_CLASSES:
+        return 'full', 'class %s is always reviewed' % cls
+    if raw_hits:
+        return 'full', 'risk keywords matched: %s' % ', '.join(raw_hits[:5])
+    if not owned:
+        return 'full', 'the plan declares no owned files'
+    kinds = [kind_of(path) for path in owned]
+    if cls == 'docs' and any(kind != 'docs' for kind in kinds):
+        return 'full', 'a docs change owns a non-documentation file'
+    if cls == 'test-only' and any(kind != 'test' for kind in kinds):
+        return 'full', 'a test-only change owns a non-test file'
+    if cls == 'small' and any(SENSITIVE_PATH.search(path) for path in owned if kind_of(path) != 'test'):
+        return 'full', 'an owned path touches auth, secrets, shell, the driver or a gate'
+    return 'skip', 'class %s, no risk hits' % cls
+
+
 def build(family, project, plan, proposal, source, note=''):
     features_found = features(family, project, plan)
     proposal = proposal if isinstance(proposal, dict) else None
     f, waived = apply_waivers(features_found, proposal)     # what the class is judged on; `features` keeps what was matched
     floor = deterministic_class(f)
     cls = merge(floor, proposal.get('class') if proposal else None)
+    # A model's answer that omits `review` takes the class default (small/docs/test-only skip); any other value but "skip" is full.
+    requested = source == 'model' and proposal is not None and proposal.get('review', 'skip') == 'skip'
+    review, review_reason = review_decision(cls, features_found['risk_hits'], plan_steps_and_owns(plan)[1], requested,
+                                          proposal.get('class') if proposal else None)
     result = {
         'schema': 'uncle.artifact/v1', 'kind': 'change-class', 'family': family, 'class': cls, 'source': source,
         'floor_class': floor, **profile(cls, f, proposal),
         'rationale': str((proposal or {}).get('rationale') or note)[:300], 'waived_risk_hits': waived,
+        'review': review, 'review_reason': review_reason[:300],
         'features': features_found,
     }
     return result
+
+
+def skip_review(family, project, plan):
+    """Write the stub adversarial review when, and only when, the decision recomputed now against this plan is still skip.
+    Returns True when the stub was written. The stored `review` is advisory; the sha, source and floor are re-verified here."""
+    project = Path(project)
+    json_path = project / '.uncle/workflow/documents/ADVERSARIAL_REVIEW.json'
+    marker = project / '.uncle/workflow/review-skipped'
+    try:
+        existing = json.loads(_read(json_path)) if json_path.is_file() else None
+    except ValueError:
+        existing = {}
+    is_stub = isinstance(existing, dict) and not existing.get('findings') \
+        and str(existing.get('overall_assessment', '')).startswith(REVIEW_STUB_PREFIX)
+
+    def discard():
+        if is_stub:
+            for stale in (json_path, project / '.uncle/docs/ADVERSARIAL_REVIEW.md'):
+                stale.unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)
+
+    try:
+        stored = json.loads(_read(project / OUTPUT))
+    except ValueError:
+        stored = None
+    plan_sha = ((stored or {}).get('features') or {}).get('plan_sha') if isinstance(stored, dict) else None
+    ok = (isinstance(stored, dict) and stored.get('review') == 'skip' and stored.get('source') == 'model'
+          and isinstance(plan_sha, str) and plan_sha and plan_sha == digest(_read(plan)))
+    decision = ('full', '')
+    if ok:
+        fresh = features(family, project, plan)
+        cls = merge(deterministic_class(apply_waivers(fresh, stored)[0]), stored.get('class'))
+        decision = review_decision(cls, fresh['risk_hits'], plan_steps_and_owns(plan)[1], True, stored.get('class'))
+    if decision[0] != 'skip' or (existing is not None and not is_stub):
+        if decision[0] != 'skip':
+            discard()
+        return False
+    text = REVIEW_STUB_PREFIX + '%s, no risk hits' % cls
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': [], 'overall_assessment': text}
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import artifact_json
+    artifact_json.write(project, 'ADVERSARIAL_REVIEW.json', payload)
+    markdown = project / '.uncle/docs/ADVERSARIAL_REVIEW.md'
+    markdown.parent.mkdir(parents=True, exist_ok=True)
+    markdown.write_text(artifact_json.render_adversarial(payload), encoding='utf-8')
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(text + '\n', encoding='utf-8')
+    stored['review_reason'] = decision[1]
+    write(project, stored)
+    print('Adversarial review ' + text)
+    return True
 
 
 def write(project, result):
@@ -350,6 +444,14 @@ def write(project, result):
     temporary = target.with_suffix('.tmp')
     temporary.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     temporary.replace(target)
+
+
+def _no_duplicate_review(pairs):
+    """A duplicate `review` key is ambiguous, so it counts as absent (full review); the rest of the answer is kept."""
+    result = dict(pairs)
+    if sum(1 for key, _ in pairs if key == 'review') > 1:
+        result['review'] = 'full'
+    return result
 
 
 def proposal_from(delivery, log=None):
@@ -369,7 +471,7 @@ def proposal_from(delivery, log=None):
     for text in candidates:
         for chunk in [text] + re.findall(r'\{.*\}', text, re.S):
             try:
-                payload = json.loads(chunk.strip().strip('`'))
+                payload = json.loads(chunk.strip().strip('`'), object_pairs_hook=_no_duplicate_review)
             except ValueError:
                 continue
             if isinstance(payload, dict) and payload.get('kind') == 'change-class':
@@ -435,6 +537,14 @@ def recheck(family, project, plan):
     f, _ = apply_waivers(features(family, project, plan), stored)    # a waiver the model gave stands for the plan too
     floor = deterministic_class(f)
     if CLASSES.index(floor) <= CLASSES.index(current):
+        if stored.get('source') == 'model':
+            # Re-decide against the plan as it is now: it may have outgrown the skip, or (owned files are only known
+            # once the plan exists) may now qualify for one. A small/docs/test-only class skips unless a guard says otherwise.
+            raw = features(family, project, plan)
+            cls = merge(floor, current)
+            review, reason = review_decision(cls, raw['risk_hits'], plan_steps_and_owns(plan)[1], True, current)
+            if review != stored.get('review'):
+                write(project, dict(stored, review=review, review_reason=reason[:300], features=raw))
         return ''
     result = build(family, project, plan, {'class': current}, 'plan-recheck',
                    'Raised from %s to %s: the plan (%d steps, %d files) is larger than the %s class allows.'
@@ -522,6 +632,8 @@ def main(argv):
         raised = recheck(*argv[2:5])
         if raised:
             print('Build class raised to %s: the plan is larger than the class it was planned under.' % raised)
+    elif command == 'skip-review' and len(argv) == 5:
+        return 0 if skip_review(*argv[2:5]) else 1
     elif command == 'budget' and len(argv) == 3:
         sys.stdout.write(plan_budget(argv[2]))
     elif command == 'get' and len(argv) in (4, 5):

@@ -24,6 +24,15 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+# Run policy: an in-place change run never works on main or a pre-existing
+# branch; the guard switches to a new run branch before any stage (and before
+# change_pr_engine start, which adopts it). UNCLE_RUN_POLICY=off skips it.
+if [[ "${UNCLE_RUN_POLICY:-}" == "off" ]]; then
+    echo "Run policy: skipped (UNCLE_RUN_POLICY=off)" >&2
+else
+    . "$ROOT/scripts/lib/run-policy.sh"
+    run_policy_change_branch || exit 1
+fi
 # Every workflow-generated document lives here, never the project root.
 mkdir -p .uncle/docs
 . "$ROOT/scripts/lib/generated-input.sh"
@@ -503,6 +512,8 @@ on_exit() {
         finished_extras print --kind change --reason "$(change_pr_extras_reason 2>/dev/null || echo not-published)" --stopped
     fi
     triage_on_exit "$rc"
+    # After every writer above: a removed run worktree's directory is recreated by the state they write.
+    if declare -f worktree_merge_sweep > /dev/null; then worktree_merge_sweep; fi
 }
 trap on_exit EXIT
 trap 'uncle_cancel 130' INT
@@ -2036,7 +2047,7 @@ run_claude() {
     cmd="$(stage_agent_cmd "$log_name")" || return 1
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
-        claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
+        claude|codex) client_cmd=(env -u ANTHROPIC_BASE_URL -u ANTHROPIC_BEDROCK_BASE_URL -u ANTHROPIC_VERTEX_BASE_URL -u ANTHROPIC_FOUNDRY_BASE_URL -u ANTHROPIC_FOUNDRY_API_KEY -u ANTHROPIC_CUSTOM_HEADERS -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX -u CLAUDE_CODE_USE_FOUNDRY -u AWS_BEARER_TOKEN_BEDROCK -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
     if [[ -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]] \
        && { [[ "${UNCLE_STEERING:-}" == 1 ]] \
@@ -2461,7 +2472,7 @@ run_codex() {
     cmd="$(stage_reviewer_cmd "$log_name")" || return 1
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
-        claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
+        claude|codex) client_cmd=(env -u ANTHROPIC_BASE_URL -u ANTHROPIC_BEDROCK_BASE_URL -u ANTHROPIC_VERTEX_BASE_URL -u ANTHROPIC_FOUNDRY_BASE_URL -u ANTHROPIC_FOUNDRY_API_KEY -u ANTHROPIC_CUSTOM_HEADERS -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX -u CLAUDE_CODE_USE_FOUNDRY -u AWS_BEARER_TOKEN_BEDROCK -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
     if [[ -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]] \
        && { [[ "${UNCLE_STEERING:-}" == 1 ]] \
@@ -3517,6 +3528,18 @@ change_preflight_collect() {
 # it; unattended it is repaired once before any browser or checklist work; attended it stops. Returns 0 to go on, 2 when the state changed.
 change_route_unrunnable_application() {
     python3 -B "$ROOT/scripts/lib/failure_severity.py" unrunnable "$LOG_DIR/green-check.log" || return 0
+    # "Port N is already in use" is a collision with another process (often a concurrent run's dev server), not a defect in the
+    # application, so a repair pass cannot fix it and stopping the run for it is wrong. The port is usually free again moments later:
+    # run the checks once more before deciding anything.
+    local port_retry="$STATE_DIR/green-port-retry-attempted"
+    if grep -Eqi 'port [0-9]+ is already in use|EADDRINUSE' "$LOG_DIR/green-check.log" 2>/dev/null && [[ ! -e "$port_retry" ]]; then
+        touch "$port_retry"
+        echo 'The verification log shows a port collision, not an application defect; running the checks once more.'
+        rm -f "$STATE_DIR/green-check.fingerprint"
+        run_green_check || true
+        change_route_unrunnable_application
+        return $?
+    fi
     local marker="$STATE_DIR/runtime-readiness-repair-attempted" recorded="$STATE_DIR/runtime-unrunnable-recorded" run_id count
     count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"; case "$count" in ''|*[!0-9]*) count=0 ;; esac
     if [[ "$WORKFLOW_REPAIR" != 1 || "$((10#$count))" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
@@ -3959,6 +3982,23 @@ while true; do
             ;;
 
         ADVERSARIAL_REVIEW)
+
+            # A plan classified as needing no review gets a visible stub instead of a panel; a declined skip reruns as a full review.
+            if [[ -e "$STATE_DIR/review-skip-declined" ]]; then
+                rm -f "$STATE_DIR/review-skipped" "$STATE_DIR/review-skip-declined"
+            elif change_class_review_skipped .uncle/docs/CHANGE_PLAN.md; then
+                if python3 -B "$CHANGE_CLASS_PY" skip-review change . .uncle/docs/CHANGE_PLAN.md; then
+                    : > "$STATE_DIR/review-skipped"
+                    record_cost review-skip 0 - - - - -
+                    echo "Adversarial review skipped: class $(python3 -B "$CHANGE_CLASS_PY" get . class), no risk hits"
+                    set_state VALIDATE_ADVERSARIAL_REVIEW
+                    continue
+                fi
+                echo "Review skip could not be applied; running the full review." >&2
+                rm -f "$STATE_DIR/review-skipped"
+            else
+                rm -f "$STATE_DIR/review-skipped"
+            fi
 
             # Written before the reviewer runs: a reviewer that never returns
             # leaves the reason nothing was verified, and blocks release.
@@ -4523,6 +4563,23 @@ REPAIR
             repair_count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
             case "$repair_count" in ''|*[!0-9]*) echo "Invalid repair-count; inspect $STATE_DIR/repair-count." >&2; exit 1 ;; esac
             repair_count=$((10#$repair_count))
+            # Repair is for critical failures only (scripts/lib/failure_severity.py), as in stagegate.sh: a failed checklist row while the
+            # driver's own verification is clean and the application runs is evidence for the final audit, not something to repair.
+            # WORKFLOW_REPAIR_SEVERITY=all restores repair for every failure.
+            if [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical && -s "${GREEN_CLASS:-/nonexistent}" ]]; then
+                case "$(basename "$repair_source")" in
+                    FINAL_AUDIT.md|VERIFICATION_INTEGRITY.md|runtime-unrunnable-application) ;;   # blocking by nature
+                    *)
+                        if ! python3 -B "$ROOT/scripts/lib/failure_severity.py" critical "$GREEN_CLASS" "$LOG_DIR/green-check.log" >/dev/null; then
+                            echo "Repair not run: no critical failure. The application builds and runs, so $(basename "$repair_source") goes to the final audit as unresolved evidence."
+                            echo "(WORKFLOW_REPAIR_SEVERITY=all repairs every failure.)"
+                            record_nonblocking_failure "$(basename "$repair_source")" 'no critical failure; repair not run'
+                            record_test_failure_disposition || true
+                            if [[ -e "$STATE_DIR/checklist-ran" ]]; then set_state FINAL_AUDIT; else set_state "$(change_repair_next_stage)"; fi
+                            continue
+                        fi ;;
+                esac
+            fi
             if [[ "$repair_count" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
                 # The passes are used up (or repair is off). The finding goes to the audit as unresolved evidence.
                 echo "The repair passes are used up for $(basename "$repair_source"); it is carried on as unresolved evidence."
@@ -4539,6 +4596,11 @@ REPAIR
             plan_status=0
             plan_before_write "repair-$repair_count" || plan_status=$?
             case "$plan_status" in 0|22) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+            echo
+            python3 -B "$ROOT/scripts/lib/repair_reason.py" "$STATE_DIR" "$repair_source" "$repair_count" "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" \
+                | tee "$STATE_DIR/REPAIR_REASON.md" || true
+            { printf '\n--- %s ---\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; cat "$STATE_DIR/REPAIR_REASON.md"; } >> "$STATE_DIR/repair-history.md" 2>/dev/null || true
+            echo
             repair_begin || exit 1
             envelope_invalidate IMPLEMENT
             envelope_guard_begin
@@ -4822,6 +4884,10 @@ PY
             # not change source, tests, or configuration.
             start_green_check_bg
             wait_green_check_bg || exit $?
+            # A repair that changed nothing (repair_judge 6) re-enters here after envelope_invalidate IMPLEMENT removed the verification
+            # envelope, and nothing wrote it again: release then refused with "verification result unavailable; envelope missing" and an
+            # unattended build could not publish. The driver's green check is current at this point, so record it.
+            [[ -s "$STATE_DIR/envelopes/verification.json" ]] || write_verification_envelope
             runtime_ready_rc=0
             change_route_unrunnable_application || runtime_ready_rc=$?
             if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
@@ -4983,6 +5049,14 @@ PY
                 echo "Build complete without a commit. PR publication requires an existing base commit; the issue remains open."
             else
                 echo "Build complete without a commit. PR publication requires an existing base commit; no PR was created."
+            fi
+            # After the summary: a local merge's worktree is still read by the lines above.
+            ! declare -f change_pr_remove_merged_worktree >/dev/null || change_pr_remove_merged_worktree
+            # A failed worktree publication must not read as success. Only
+            # when issue closing is on; non-worktree runs keep exiting 0.
+            if [[ "${pr_rc:-0}" != 0 && "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] \
+                && declare -f change_pr_in_worktree >/dev/null && change_pr_in_worktree; then
+                exit 1
             fi
             exit 0
             ;;

@@ -7,6 +7,8 @@ set -euo pipefail
 # The TUI moves it out of its environment before it starts anything, so no
 # stage, supervisor, reviewer or helper ever inherits it.
 uncle_model_key="${ANTHROPIC_API_KEY:-}"
+# Same treatment for a gateway bearer token: the refresh may use it, no stage may.
+uncle_model_auth_token="${ANTHROPIC_AUTH_TOKEN:-}"
 
 # The caller's working directory is the project being configured; the scripts
 # cd to the install dir ($ROOT), so capture it before that happens.
@@ -67,6 +69,7 @@ Usage: uncle [-h|--help|--performance|--runs] [--attended] [--noui]
        uncle --application [TEXT] [--attended]
        uncle --issue [ISSUE] [--attended]
        uncle --change-request [--attended] < request.md
+       uncle --audit [BRANCH]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -82,6 +85,9 @@ and per-stage overrides from `.uncle/config` (menu option 4).
   q) Quit
 
 Runs with no arguments. -h / --help print this message and exit 0.
+--audit [BRANCH] re-runs the final audit of a finished change in the current
+checkout (or the worktree of BRANCH) and prints the verdict. It cannot be
+combined with other startup options and never reads stdin or opens the TUI.
 Mode: --application, --issue and --change-request run unattended
 by default (approval gates are delegated to the agent and recorded as unreviewed).
 --attended (or UNCLE_ATTENDED=1) makes every gate wait for you and needs a
@@ -115,7 +121,7 @@ tool-using agents, especially with --unattended. --application, --issue and
 --unattended is passed to the driver you pick: it runs every human gate
 without a person, records what nobody reviewed, and reports that at the end.
 --noui (or UNCLE_NOUI=1) runs a startup action headlessly: no curses, plain
-text progress on stdout. With one of --application, --issue or
+text progress on stdout; driver errors go to stderr. With one of --application, --issue or
 --change-request it runs that action; on its own it starts a plain-text
 interactive REPL (chat with the home agent, /help for commands).
 It cannot be combined with --noinput. Unlike --noinput (the TUI's
@@ -223,6 +229,29 @@ if [[ "$_exclusive" -gt 1 ]]; then
     printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
     exit 1
 fi
+# --audit combined with another startup option is refused here too, before any
+# stdin read. Early-exit flags act in argument order: one before --audit means
+# --audit is never parsed, so it is not counted.
+_audit_n=0
+_audit_other=0
+_skip=""
+for _a in "$@"; do
+    if [[ -n "$_skip" ]]; then
+        _skip=""
+        if [[ -n "$_a" && "$_a" != -* ]]; then continue; fi
+    fi
+    case "$_a" in
+        -h|--help|verify|--performance|--runs)
+            if [[ "$_audit_n" -eq 0 ]]; then break; fi
+            _audit_other=$((_audit_other + 1)) ;;
+        --audit) _audit_n=$((_audit_n + 1)); _skip=1 ;;
+        --application|--application=*|--issue|--change-request) _audit_other=$((_audit_other + 1)) ;;
+    esac
+done
+if [[ "$_audit_n" -gt 0 && ( "$_audit_n" -gt 1 || "$_audit_other" -gt 0 ) ]]; then
+    printf 'Error: --audit cannot be combined with other startup options or early-exit flags\n' >&2
+    exit "$UNCLE_REFUSE_CODE"
+fi
 UNCLE_FLAG_NOUI=""
 _noinput_seen=""
 _noui_seen=""
@@ -242,6 +271,29 @@ while [[ $# -gt 0 ]]; do
         verify)        shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/uncle-verify.py" "$@" ;;
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
         --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
+        --audit)
+            if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
+                printf 'Error: --audit cannot be combined with other startup options\n' >&2
+                exit "$UNCLE_REFUSE_CODE"
+            fi
+            shift
+            UNCLE_AUDIT_BRANCH=""
+            if [[ $# -gt 0 && "$1" != -* ]]; then
+                if [[ -z "$1" ]]; then
+                    printf 'Error: --audit BRANCH cannot be empty\n' >&2
+                    exit "$UNCLE_REFUSE_CODE"
+                fi
+                UNCLE_AUDIT_BRANCH="$1"
+                shift
+            elif [[ $# -gt 0 && -z "$1" ]]; then
+                printf 'Error: --audit BRANCH cannot be empty\n' >&2
+                exit "$UNCLE_REFUSE_CODE"
+            fi
+            UNCLE_STARTUP_ACTION="audit"
+            ;;
+        --audit=*)
+            printf 'Error: --audit takes BRANCH as a separate argument, not %s\n' "$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177')" >&2
+            exit "$UNCLE_REFUSE_CODE" ;;
         --unattended)  UNCLE_FLAG_UNATTENDED=1; shift ;;
         --attended)    UNCLE_FLAG_ATTENDED=1; shift ;;
         --noui)        UNCLE_FLAG_NOUI=1; shift ;;
@@ -318,6 +370,10 @@ while [[ $# -gt 0 ]]; do
             shift "$issue_shift"
             ;;
         *)
+            if [[ "$UNCLE_STARTUP_ACTION" == audit && "$1" != -* ]]; then
+                printf 'Error: --audit takes at most one BRANCH; unexpected argument: %s\n' "$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177')" >&2
+                exit "$UNCLE_REFUSE_CODE"
+            fi
             printf 'Unknown argument: %s\n' "$1" >&2
             if [[ -n "$UNCLE_PENDING_STDIN" && "$1" == --* ]]; then
                 printf 'If the text for %s begins with --, use %s=TEXT.\n' "$UNCLE_PENDING_STDIN" "$UNCLE_PENDING_STDIN" >&2
@@ -327,7 +383,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request --audit verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else
@@ -391,6 +447,12 @@ UNCLE_UNATTENDED=""
 [[ "$UNATTENDED" != 1 ]] || UNCLE_UNATTENDED=1
 export UNCLE_MODE_RESOLVED=1
 if [[ -n "$UNCLE_UNATTENDED" ]]; then export UNCLE_UNATTENDED=1; else export UNCLE_UNATTENDED=0; fi
+# --audit: no upgrade check, no stdin, no TUI. Hand off to the helper.
+if [[ "$UNCLE_STARTUP_ACTION" == audit ]]; then
+    cd "$PROJECT_ROOT" || exit "$UNCLE_REFUSE_CODE"
+    export UNCLE_AUDIT_BRANCH UNCLE_REFUSE_CODE
+    exec bash "$ROOT/scripts/audit-command.sh" ${UNCLE_AUDIT_BRANCH:+"$UNCLE_AUDIT_BRANCH"}
+fi
 [[ -z "$UNCLE_PENDING_STDIN" ]] || read_stdin_option
 
 # Per-project paths/config. Resolve and export these BEFORE launching the TUI:
@@ -480,7 +542,7 @@ uncle_run_tui() {
     # this lock needs is recorded by uncle_tui.py itself at startup instead.
     mkdir -p "$PROJECT_ROOT/.uncle"
     uncle_kill_stale_tui
-    UNCLE_MODEL_REFRESH_KEY="$uncle_model_key" "$@"
+    UNCLE_MODEL_REFRESH_KEY="$uncle_model_key" UNCLE_MODEL_REFRESH_AUTH_TOKEN="$uncle_model_auth_token" "$@"
 }
 
 # Early-exit commands have already left above. Check before either UI starts.
@@ -677,7 +739,7 @@ run_workflow() {
     . "$ROOT/scripts/lib/worktrees.sh"
     case "${1##*/}" in
         from-issue.sh) uncle_worktree="" ;;
-        *) uncle_worktree="$(worktree_auto "$PWD" || true)" ;;
+        *) uncle_worktree="$(worktree_auto "$PWD" "${1##*/}" || true)" ;;
     esac
     if [[ -n "$uncle_worktree" ]]; then
         echo "Working in $uncle_worktree"
@@ -748,16 +810,33 @@ config_clear() {
 # One stage at a time: pick the stage, then its runner, effort, and
 # for self-hosted its model. This is the fallback for a terminal the
 # full-screen TUI cannot drive; both write the same file.
+uncle_selectable_runners() {
+    local installed
+    installed="$(uncle_installed_runners)"
+    [[ -z "$installed" ]] || printf '%s\n' "$installed"
+    # Local (self-hosted) and Bedrock are always offered, installed CLIs or not.
+    [[ $'\n'"$installed"$'\n' == *$'\nself-hosted\n'* ]] || printf 'self-hosted\n'
+    printf 'aws-bedrock\n'
+}
+
 configure_stage() {
-    local stage="$1" side sel runner model effective
+    local stage="$1" side sel runner model effective raw
     side="$(stage_side "$stage")"
     while true; do
         effective="$(uncle_stage_runner "$stage")"
+        raw="$(uncle_raw_stage_runner "$stage")"
         echo
         printf '%s%s%s  (%s stage)\n' "$C_CYAN$C_BOLD" "$stage" "$C_RESET" "$side"
-        printf '  runner  %s\n' "${effective}${C_DIM}${C_RESET}"
+        if [[ "$raw" == "aws-bedrock" ]]; then
+            printf '  runner  %s\n' "aws-bedrock${C_DIM}${C_RESET}"
+        else
+            printf '  runner  %s\n' "${effective}${C_DIM}${C_RESET}"
+        fi
         printf '  effort  %s\n' "$(uncle_stage_effort "$stage")"
-        if [[ "${effective}" == "self-hosted" ]]; then
+        if [[ "$raw" == "aws-bedrock" ]]; then
+            printf '  model     %s\n' "$(config_get "$stage.model")"
+            printf 'Set [r]unner [m]odel, [a]pply AWS Bedrock to all stages, [d]efaults, [q]back: '
+        elif [[ "${effective}" == "self-hosted" ]]; then
             printf '  model     %s\n' "$(config_get "$stage.model")"
             printf 'Set [r]unner [m]odel, [a]pply Self hosted to all stages, [d]efaults, [q]back: '
         else
@@ -769,9 +848,8 @@ configure_stage() {
         case "$sel" in
             r)
                 local choices
-                choices="$(uncle_installed_runners)"
+                choices="$(uncle_selectable_runners)"
                 choices="${choices//$'\n'/ }"
-                if [[ -z "$choices" ]]; then uncle_no_runner || true; continue; fi
                 printf 'Runner (%s; opencode = Self hosted): ' "$choices"
                 if ! read -r runner; then echo; return 0; fi
                 runner="$(printf '%s' "$runner" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
@@ -780,12 +858,32 @@ configure_stage() {
                     *" $runner "*)
                         config_set "$stage.runner" "$runner"
                         # Self-hosted stages use an explicit model.
-                        [[ "$runner" == "self-hosted" ]] || config_clear "$stage.model"
+                        [[ "$runner" == "self-hosted" || "$runner" == "aws-bedrock" ]] || config_clear "$stage.model"
                         ;;
                     *) printf '%sNot a %s runner: %s%s\n' "$C_YELLOW" "$side" "$runner" "$C_RESET" ;;
                 esac
                 ;;
             a)
+                if [[ "$raw" == "aws-bedrock" ]]; then
+                    local btarget bfield bvalue
+                    if [[ -z "$(config_get "$stage.model")" || -z "$(config_get "$stage.base_url")" ]]; then
+                        echo 'AWS Bedrock needs a model and connection on this stage first; configure it, then apply to all.'
+                        continue
+                    fi
+                    if ! python3 "$ROOT/scripts/lib/self_hosted.py" apply-all "$UNCLE_CONFIG" aws-bedrock "$stage" $CONFIG_STAGES; then
+                        echo 'AWS Bedrock token is not set for this stage; configure AWS Bedrock first.'
+                        continue
+                    fi
+                    for btarget in $CONFIG_STAGES; do
+                        config_set "$btarget.runner" aws-bedrock
+                        for bfield in model base_url; do
+                            bvalue="$(config_get "$stage.$bfield")"
+                            config_set "$btarget.$bfield" "$bvalue"
+                        done
+                    done
+                    echo 'AWS Bedrock and this connection selected for all stages.'
+                    continue
+                fi
                 if [[ "${effective}" != "self-hosted" ]]; then
                     echo 'Select Self hosted and configure its connection first.'
                     continue
@@ -822,6 +920,11 @@ PYKEYS
                 config_set "$stage.effort" "$CL_EFFORT"
                 ;;
             m)
+                if [[ "$raw" == "aws-bedrock" ]]; then
+                    if ! model="$(python3 "$ROOT/scripts/lib/self_hosted.py" choose-model "$UNCLE_CONFIG" aws-bedrock)"; then continue; fi
+                    config_set "$stage.model" "$model"
+                    continue
+                fi
                 if [[ "${effective}" == "self-hosted" ]]; then
                     if ! model="$(python3 "$ROOT/scripts/lib/self_hosted.py" choose-model "$UNCLE_CONFIG")"; then continue; fi
                     config_set "$stage.model" "$model"
@@ -835,6 +938,7 @@ PYKEYS
                 config_clear "$stage.model"
                 config_clear "$stage.base_url"
                 printf '' | python3 "$ROOT/scripts/lib/self_hosted.py" set-key "$UNCLE_CONFIG" "$stage"
+                printf '' | python3 "$ROOT/scripts/lib/self_hosted.py" set-key "$UNCLE_CONFIG" "$stage" aws-bedrock
                 ;;
             q|"") return 0 ;;
             *) printf 'Unrecognized choice: %s\n' "$sel" ;;
@@ -845,12 +949,13 @@ PYKEYS
 configure_menu() {
     local choice value
     while true; do
-        printf '\nConfigure\n  1) Configure stages\n  2) Configure self hosting\n  3) Miscellaneous\n  q) Back\nChoice: '
+        printf '\nConfigure\n  1) Configure stages\n  2) Configure self hosting\n  3) Configure AWS Bedrock\n  4) Miscellaneous\n  q) Back\nChoice: '
         read -r choice || return 0
         case "$choice" in
             1) configure_stages_menu ;;
             2) python3 "$ROOT/scripts/lib/self_hosted.py" models "$UNCLE_CONFIG" || true ;;
-            3)
+            3) python3 "$ROOT/scripts/lib/self_hosted.py" models "$UNCLE_CONFIG" aws-bedrock || true ;;
+            4)
                 auto_mode="$(config_get misc.auto_mode)"
                 printf 'Auto mode (true/false) [%s]: ' "${auto_mode:-true}"
                 read -r value || return 0
@@ -860,6 +965,7 @@ configure_menu() {
                 [[ -z "$value" ]] || config_set misc.approval_name "$value"
                 ;;
             q|Q|"") return 0 ;;
+            *) printf 'Unrecognized choice: %s\n' "$choice" ;;
         esac
     done
 }
@@ -873,6 +979,7 @@ configure_stages_menu() {
         for stage in $CONFIG_STAGES; do
             n=$((n+1))
             runner="$(uncle_stage_runner "$stage")"
+            [[ "$(uncle_raw_stage_runner "$stage")" != "aws-bedrock" ]] || runner=aws-bedrock
             effort="$(uncle_stage_effort "$stage")"
             [[ -n "$effort" ]] || effort="$DEFAULT_EFFORT"
             printf '  %s%2d)%s %-22s %s · %s\n' \
@@ -884,7 +991,17 @@ configure_stages_menu() {
         sel="$(printf '%s' "$sel" | tr -d '[:space:]')"
         case "$sel" in
             q|Q|"") return 0 ;;
-            m|M) python3 "$ROOT/scripts/lib/self_hosted.py" models "$UNCLE_CONFIG" || true; continue ;;
+            m|M)
+                local mstage mhit=""
+                for mstage in $CONFIG_STAGES; do
+                    [[ "$(uncle_raw_stage_runner "$mstage")" != "aws-bedrock" ]] || mhit=1
+                done
+                if [[ -n "$mhit" ]]; then
+                    echo 'AWS Bedrock models are set per stage: choose a stage, then m.'
+                else
+                    python3 "$ROOT/scripts/lib/self_hosted.py" models "$UNCLE_CONFIG" || true
+                fi
+                continue ;;
         esac
         if [[ "$sel" =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= n )); then
             idx=0
@@ -963,6 +1080,11 @@ run_from_issue() {
 run_change_workflow() {
     run_workflow "$ROOT/scripts/change-workflow.sh" ${UNCLE_ARGS[@]+"${UNCLE_ARGS[@]}"}
 }
+
+# Source guard: when sourced (e.g. by tests) only define functions.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+fi
 
 # First time in this project root (no .uncle/config yet): create the workflow directory
 # dir the scripts write state/logs into, then go straight to the configure menu

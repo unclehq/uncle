@@ -181,7 +181,20 @@ PR: https://github.com/org/repo/pull/12 (#12, draft)
   `created`, marked `draft` when applicable. Otherwise it gives a reason:
   `none (handoff disabled)`, `none (no base commit)`,
   `not created (publication pending)`, or `none (not published)`.
-- New-application builds always print `PR: none (not applicable to new-application builds)`.
+- **Published PR (no issue origin):** once the PR exists the worktree is removed after the summary; the branch stays, it is the PR head.
+  The run's own files (`.uncle/`, the root `FINAL_AUDIT.md`) are written after the commit and do not keep it; any other uncommitted
+  file does, and the command to remove it is printed. An issue run's worktree is removed by `from-issue.sh`.
+- **No git remote:** a run in uncle's own worktree has nowhere to open a PR, so a READY audit is committed on the run branch (the
+  audited tree, unsigned), merged into the branch the source checkout is on, and the worktree and its merged branch are removed after
+  the summary prints (`PR: none (no remote; merged into the source branch)`). A non-READY verdict, a failed binding, a source
+  checkout that is detached, or a merge git refuses (it is aborted, leaving the checkout as it was) merges nothing, keeps the
+  worktree and branch, and exits 1 on an unattended run. `WORKFLOW_LOCAL_MERGE=0` opts out.
+- New-application builds have no PR path. In uncle's own worktree a clean READY build (no green or audit override) is committed (the
+  files the run left, not `.uncle/workflow`), merged into the source checkout's branch, and the worktree and branch removed after the
+  summary, whether or not the repository has a remote (`PR: none (merged into the source branch locally; no PR)`). Nothing is pushed.
+  A source checkout holding an untracked `.gitignore` of only uncle's own entries (a first build) has it replaced by the project's; any
+  other conflict keeps the worktree, says why, and exits 1 on an unattended run. Otherwise they print
+  `PR: none (not applicable to new-application builds)`.
 - A stopped or failed run prints `Total time:` so far, and a `PR:` line only
   if a PR already exists.
 - Limitation: if the PR draft state is absent from the journal, the PR is
@@ -300,6 +313,15 @@ change workflow inside it:
 
   Removal or refusal never changes the exit status: the script exits as the run
   did.
+- **Every worktree run publishes a PR.** A change run inside a git worktree
+  (git dir differs from the common git dir; a marker file alone does not count)
+  auto-publishes its PR at `COMPLETE` whether or not the change came from an
+  issue or an `origin` remote exists, when `CLOSE_ISSUE=1` (without an origin
+  record, the driver-owned `worktree-owned` marker is also required). With `CLOSE_ISSUE=0`
+  it does not publish and exits 0. Attended runs keep their existing dialogs, and
+  a declined dialog is not a failure. If an unattended worktree run cannot
+  publish (for example the push fails), the driver exits non-zero rather than
+  reporting success. Non-worktree runs behave as before.
 - Without the flag nothing changes: same files, cwd and driver arguments.
 
 With valid PR evidence the prompt is never shown, in any mode (interactive,
@@ -692,7 +714,7 @@ it runs in CI on a machine that has never seen Uncle. It carries its own copy
 of the RFC 8785 canonicalizer and of `ARTIFACT_EXCLUDES` from
 `scripts/lib/envelope.py`; `scripts/tests/envelope-test.py` fails when the
 two drift. Checks 1-8, the output format, and the exit codes (0 `VERIFIED`,
-1 `NOT VERIFIED`, 2 usage or missing required tool, 3 integrity only) are
+1 `NOT HUMAN VERIFIED`, 2 usage or missing required tool, 3 integrity only) are
 described in `GITHUB_INTEGRATION.md` under Attestation.
 
 ### agent-kimi.sh
@@ -736,8 +758,19 @@ stdin and stdout are real terminals it opens a full-screen TUI (`uncle_tui.py`);
 otherwise it falls back to a line menu. `uncle --runs` lists the runs across
 the project's git worktrees (see `from-issue.sh --worktree`); the line menu's
 "From GitHub issue" entry asks `Run in a new worktree? [y/N]` for change
-runs, and the TUI offers `change request in worktree` as an issue mode. The
-config is `STAGE VALUE` lines:
+runs, and the TUI offers `change request in worktree` as an issue mode.
+
+`uncle --audit [BRANCH]` re-runs the final audit of a finished change run
+(current checkout, or the worktree of `BRANCH`) via `scripts/audit-command.sh`,
+then prints the verdict class and the `.uncle/docs/FINAL_AUDIT.md` path
+(`verdict: unknown` when no fresh verdict was written). The exit status is the
+driver's. It refuses, without touching state, when not in a git repo, when the
+run is not a change run past implementation (or at `FINAL_AUDIT`), when the
+driver lock is held, from a home-agent session, or when combined with
+`--application`, `--issue`, `--change-request`, `verify`, `--runs`, or
+`--performance`. It never reads stdin or starts the TUI.
+
+The config is `STAGE VALUE` lines:
 
 | Key | Meaning |
 |---|---|
@@ -876,3 +909,13 @@ Kimi server (or legacy Wire), and OpenCode server. The locally installed runner
 must provide that interface. Token and reported cost updates continue in the
 stage sidebar, including follow-up turns; unavailable provider costs remain
 unavailable. Command-line workflows without the TUI keep their existing transport.
+
+### Branch and worktree policy
+
+New-application builds run on `main` in the project checkout and never in a
+worktree; they are refused, with the reason, when the checkout is off `main`,
+dirty, or on a detached HEAD. `WORKFLOW_WORKTREE=1` on a fresh app start creates
+no worktree and prints a "worktree not used" notice once. An in-place change run
+on `main` or a non-run branch first switches to a new run branch, with or
+without a remote. Resume is unaffected. `UNCLE_RUN_POLICY=off` skips the app
+preflight and the change-branch guard. See [docs/worktrees.md](../docs/worktrees.md).

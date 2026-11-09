@@ -15,6 +15,8 @@ change_pr_person_channel() {
 # Reason for a missing PR, read by the driver's finished-extras block. Set by
 # change_pr_complete on each path that returns without a created PR.
 CHANGE_PR_EXTRAS_REASON=""
+. "$(cd "${BASH_SOURCE[0]%/*}" && pwd)/worktree-merge.sh"
+
 change_pr_extras_reason() {
     printf '%s\n' "${CHANGE_PR_EXTRAS_REASON:-not-published}"
 }
@@ -23,13 +25,20 @@ change_pr_extras_reason() {
 # managed-line tolerance); without one only the clean tracked-status check applies. Nothing under .uncle/ outside the allowlist may
 # be tracked or staged, and no .uncle/docs artifact of the attested tree may be ignored. Untracked artifacts never fail it.
 # Offending paths and the reason go to stderr; returns nonzero on any failure.
+#
+# $2 = pre: the call is made before `handoff`, which is what commits the audited tree. The change is still uncommitted then, so
+# modified tracked files are expected and the clean-status check does not apply (it is the post-commit check, and applying it here
+# refused every run whose change edits a tracked file). The audit's root FINAL_AUDIT.md is written by the handoff, so its absence
+# (or a stale copy an earlier run left tracked) is not a difference either, provided the attested copy is this run's audit. Content drift from the attested tree and ignored artifacts still refuse.
 assert_tree_matches_attested() {
-    local tree="${1:-}" bad=0 line path
+    local tree="${1:-}" when="${2:-}" bad=0 line path
     local allow='^\.uncle/(docs/.*|attestation\.json|attestation\.sig|allowed_signers)$'
-    while IFS= read -r line; do
-        [[ -n "$line" ]] || continue
-        echo "tracked file not clean: $line" >&2; bad=1
-    done < <(git status --porcelain --untracked-files=no 2>&1)
+    if [[ "$when" != pre ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            echo "tracked file not clean: $line" >&2; bad=1
+        done < <(git status --porcelain --untracked-files=no 2>&1)
+    fi
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
         [[ "$path" == .uncle/* && ! "$path" =~ $allow ]] || continue
@@ -42,6 +51,13 @@ assert_tree_matches_attested() {
             # An approved artifact that is merely untracked is not a difference.
             # Likewise a file of the change that is not yet tracked: present on disk, absent from the index.
             if [[ "$status" == D && ( "$path" =~ $allow || -e "$path" ) ]]; then continue; fi
+            # The attestation and its signature are sealed after the tree is bound, so they are present now and absent from it.
+            if [[ "$status" == A && "$path" =~ ^\.uncle/(attestation\.json|attestation\.sig|allowed_signers)$ ]]; then continue; fi
+            # The root FINAL_AUDIT.md is the audit copy the handoff writes (sync_audit_copy). Before it runs the disk copy is absent
+            # (D) or, when an earlier run's merge left one tracked, stale (M). Either is fine when the attested tree's copy is
+            # exactly the audit this run produced in .uncle/docs/.
+            if [[ "$when" == pre && "$path" == FINAL_AUDIT.md && ( "$status" == D || "$status" == M ) ]] \
+               && git show "$tree:FINAL_AUDIT.md" 2>/dev/null | cmp -s - .uncle/docs/FINAL_AUDIT.md; then continue; fi
             echo "path differs from the attested tree ($status): $path" >&2; bad=1
         done < <(git diff --name-status --no-renames "$tree" 2>/dev/null)
         while IFS= read -r line; do
@@ -52,7 +68,130 @@ assert_tree_matches_attested() {
     return "$bad"
 }
 
+# True only in a linked git worktree: git-dir differs from git-common-dir.
+# False when git fails. The worktree-owned marker alone never counts.
+change_pr_in_worktree() {
+    local gd cd
+    gd="$(git rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+    cd="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+    [[ -n "$gd" && -n "$cd" ]] || return 1
+    cd="$(cd "$cd" 2>/dev/null && pwd -P)" || return 1
+    gd="$(cd "$gd" 2>/dev/null && pwd -P)" || return 1
+    [[ "$gd" != "$cd" ]]
+}
+
+# True when the driver created this worktree (marker under STATE_DIR).
+change_pr_worktree_owned() {
+    local d="${STATE_DIR:-.uncle/workflow}"
+    [[ "$d" == /* ]] || d="$(pwd -P)/$d"
+    [[ -e "$d/worktree-owned" ]]
+}
+
+# A run in uncle's own worktree on a repository with no remote has nowhere to open a PR. The finished change is committed on the run
+# branch, merged into the branch the source checkout is on, and the worktree is removed (change_pr_remove_merged_worktree, called
+# once the driver has printed its summary, because the summary still reads files in the directory). WORKFLOW_LOCAL_MERGE=0 opts out.
+change_pr_local_merge_applies() {
+    worktree_merge_owned || return 1
+    [[ -z "$(git remote 2>/dev/null)" && ! -s "${ORIGIN_FILE:-/nonexistent}" ]]
+}
+
+# Always returns 0; the outcome is CHANGE_PR_EXTRAS_REASON (merged-local, or the reason nothing was merged), which change_pr_complete
+# turns into the exit status. Nothing is merged unless the audit verdict is READY: there is no PR for a person to review instead.
+change_pr_local_merge() {
+    local branch verdict tree main why
+    CHANGE_PR_EXTRAS_REASON=""
+    WORKTREE_MERGE_PENDING=""
+    branch="$(git branch --show-current 2>/dev/null)"
+    if [[ -z "$branch" ]]; then
+        change_pr_no_pr local-merge-failed "the worktree has no branch (detached HEAD)"; return 0
+    fi
+    verdict="$(awk -F'\t' 'NR == 1 {print $2}' "${VERDICT_FILE:-.uncle/workflow/audit-verdict}" 2>/dev/null)"
+    case "$verdict" in
+        READY|READY_WITH_NON_BLOCKING_ISSUES) ;;
+        *) change_pr_no_pr verdict-not-ready "the audit verdict is '${verdict:-unknown}', so nothing was merged; branch $branch is kept"; return 0 ;;
+    esac
+    change_pr_engine validate >/dev/null || { change_pr_no_pr validate-failed "the audit binding no longer matches; nothing was merged"; return 0; }
+    tree="$(change_pr_engine commit-tree 2>/dev/null)" || tree=""
+    if [[ -z "$tree" ]] || ! assert_tree_matches_attested "$tree" pre; then
+        echo "Not merging: the tree differs from the audited tree." >&2
+        change_pr_no_pr tree-mismatch "the tree differs from the audited tree"; return 0
+    fi
+    main="$(git worktree list --porcelain | head -n 1)"; main="${main#worktree }"
+    # Stage exactly the audited tree and commit it; the signing hook is bypassed as the automatic PR commit does.
+    if ! git read-tree "$tree" || ! git -c commit.gpgsign=false commit -q --no-gpg-sign -m "uncle: $(printf '%s' "${branch#*/}" | tr '-' ' ')"; then
+        change_pr_no_pr local-merge-failed "committing the audited tree failed; nothing was merged"; return 0
+    fi
+    [[ -z "$(git ls-files -- FINAL_AUDIT.md)" ]] || git checkout-index -f -- FINAL_AUDIT.md 2>/dev/null || true
+    echo "Committed the audited tree on $branch."
+    if ! why="$(worktree_merge_into_source "$branch" "$main" 2>&1)"; then
+        change_pr_no_pr local-merge-failed "$why; branch $branch and this worktree are kept"; return 0
+    fi
+    printf '%s\n' "$why"
+    CHANGE_PR_EXTRAS_REASON=merged-local
+    WORKTREE_MERGE_PENDING="$(pwd -P)|$main|$branch"
+    return 0
+}
+
+# Prints "published" when every file in this worktree outside .uncle/ is byte-identical to the tree the PR commit holds (the PR is made
+# from the audited tree without moving this checkout's HEAD, so the files read as uncommitted although the PR has them), else nothing.
+change_pr_published_state() {
+    local ct idx now
+    ct="$(python3 -c 'import json; print(json.load(open(".uncle/workflow/pr/journal.json")).get("commit_tree",""))' 2>/dev/null)" || return 0
+    [[ -n "$ct" ]] || return 0
+    idx="$(mktemp "${TMPDIR:-/tmp}/uncle-idx.XXXXXX")" || return 0
+    rm -f "$idx"   # git must create the index itself; an empty file is read as a corrupt one
+    now="$(GIT_INDEX_FILE="$idx" git add -A -- . ':(exclude).uncle' ':(exclude)FINAL_AUDIT.md' 2>/dev/null \
+        && GIT_INDEX_FILE="$idx" git write-tree 2>/dev/null)" || now=""
+    rm -f "$idx"
+    [[ -n "$now" ]] || return 0
+    git diff --quiet "$ct" "$now" -- . ':(exclude).uncle' ':(exclude)FINAL_AUDIT.md' 2>/dev/null && echo published
+    return 0
+}
+
+change_pr_remove_merged_worktree() { worktree_merge_remove_pending; }
+
+# Worktree runs with the handoff enabled return 1 unless a PR was published
+# (exact reason match); every other run returns 0 as before.
 change_pr_complete() {
+    local rc=0
+    if change_pr_local_merge_applies; then
+        change_pr_local_merge
+    else
+        change_pr_complete_route || rc=$?
+        # The change is on the remote and a PR holds it; the worktree has done its job. An issue run's worktree is removed by
+        # from-issue.sh, which still reads this one, so only a run with no issue origin is removed here. The branch is the PR head and stays.
+        case "${CHANGE_PR_EXTRAS_REASON:-}" in
+            published|published-draft-unreviewed)
+                # The worktree-owned marker is not required: a run started from the TUI or resumed lost it, and the PR then left the
+                # directory behind. A linked worktree that is a sibling of the main checkout named <main>-* is uncle's, and
+                # worktree_merge_remove still refuses anything dirty outside .uncle/.
+                local pr_main
+                pr_main="$(git worktree list --porcelain | head -n 1)"; pr_main="${pr_main#worktree }"
+                if [[ "${WORKFLOW_LOCAL_MERGE:-1}" == 1 && ! -s "${ORIGIN_FILE:-/nonexistent}" ]] && change_pr_in_worktree \
+                   && { worktree_merge_owned || [[ "$(dirname "$(pwd -P)")" == "$(dirname "$pr_main")" \
+                        && "$(basename "$(pwd -P)")" == "$(basename "$pr_main")"-* ]]; }; then
+                    if grep -q '"kind" *: *"webpage"' .uncle/launch.json 2>/dev/null && [[ "${WORKFLOW_PREVIEW_AFTER_PR:-1}" == 1 ]]; then
+                        # A web app: the TUI serves it from this worktree and opens the browser, then removes the worktree when the
+                        # preview ends (uncle_tui.py _remove_previewed_worktree). Removing it here would leave nothing to serve.
+                        printf '%s|%s|%s|keep-branch|%s\n' "$(pwd -P)" "$pr_main" "$(git branch --show-current 2>/dev/null)" \
+                            "$(change_pr_published_state)" > "${STATE_DIR:-.uncle/workflow}/remove-after-preview"
+                        echo "Worktree kept to preview the app; it is removed when the preview ends."
+                    else
+                        WORKTREE_MERGE_PENDING="$(pwd -P)|$pr_main|$(git branch --show-current 2>/dev/null)|keep-branch|$(change_pr_published_state)"
+                    fi
+                fi ;;
+        esac
+    fi
+    if [[ "$rc" == 0 && "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] && change_pr_in_worktree; then
+        case "${CHANGE_PR_EXTRAS_REASON:-}" in
+            published|published-draft-unreviewed|merged-local) ;;
+            *) echo "Worktree run: no PR was published (${CHANGE_PR_EXTRAS_REASON:-unset})." >&2; return 1 ;;
+        esac
+    fi
+    return "$rc"
+}
+
+change_pr_complete_route() {
     CHANGE_PR_EXTRAS_REASON=""
     # The publication boundary. The unattended stages have ended; whether the
     # handoff dialogs open depends only on whether someone can answer them.
@@ -63,11 +202,13 @@ change_pr_complete() {
     # are generated, a NOT_READY audit is published over on the record as a DRAFT
     # PR, and nothing waits on anyone. The release envelope and the PR banner still
     # say the audit failed; only the gesture is automated, never the verdict.
-    if [[ "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 && -s "$ORIGIN_FILE" ]]; then
+    # Any linked worktree counts, not only one uncle created: a worktree made from the TUI or by hand has no worktree-owned marker, and
+    # without this an unattended run fell through to a dialog nobody could answer ("No answer received; PR remains pending").
+    if [[ "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] && { [[ -s "$ORIGIN_FILE" ]] || change_pr_in_worktree; }; then
         echo "Unattended: publishing the PR without a dialog (draft when the audit is not READY)."
         local -x UNCLE_AUTO_PUBLISH=1
         change_pr_publish 0 </dev/null
-        CHANGE_PR_EXTRAS_REASON=publication-pending
+        [[ -n "$CHANGE_PR_EXTRAS_REASON" ]] || CHANGE_PR_EXTRAS_REASON=publication-pending
         return 0
     fi
     if [[ "$CLOSE_ISSUE" == 1 ]]; then
@@ -95,7 +236,7 @@ change_pr_complete() {
             return 0
         fi
         change_pr_publish 0 </dev/null
-        CHANGE_PR_EXTRAS_REASON=publication-pending
+        [[ -n "$CHANGE_PR_EXTRAS_REASON" ]] || CHANGE_PR_EXTRAS_REASON=publication-pending
         return 0
     fi
     if [[ "$boundary" == 1 ]]; then
@@ -117,14 +258,22 @@ change_pr_publish() {
     # Exit 3 is the one recoverable failure: the recorded verdict is not
     # READY, so the operator gets one explicit override decision, showing the
     # actual verdict. Headless runs are never asked.
+    CHANGE_PR_EXTRAS_REASON=""
+    local overridden=0
     change_pr_engine validate || status=$?
     if [[ "$status" == 3 ]]; then
         if { [[ "$interactive" == 1 ]] || [[ "${UNCLE_AUTO_PUBLISH:-0}" == 1 ]]; } && change_pr_engine verdict-override; then
-            change_pr_engine validate || return 0
+            overridden=1
+            if ! change_pr_engine validate; then
+                change_pr_no_pr validate-failed "validation failed after the verdict override"
+                return 0
+            fi
         else
+            change_pr_no_pr verdict-not-ready "the audit verdict is not READY and no override was given"
             return 0
         fi
     elif [[ "$status" != 0 ]]; then
+        change_pr_no_pr validate-failed "validation exited $status"
         return 0
     fi
     if [[ -s "$ORIGIN_FILE" ]]; then
@@ -145,7 +294,8 @@ change_pr_publish() {
                 issue_close_eligible "$recorded" \
                     "$(origin_field "$ORIGIN_FILE" 1)" "$(origin_field "$ORIGIN_FILE" 2)" \
                     "$VERDICT_FILE" "$ORIGIN_FILE" "$audit_artifact" "$MARKER_FILE" \
-                    1 "$ORIGIN_BOUND" 1 "$(origin_fetch_method "$ORIGIN_FILE")" || return 0
+                    1 "$ORIGIN_BOUND" 1 "$(origin_fetch_method "$ORIGIN_FILE")" \
+                    || { change_pr_no_pr issue-not-eligible "the issue is not eligible to close"; return 0; }
                 ;;
             *)
                 # Validation passed, so an operator override exists. An
@@ -156,8 +306,46 @@ change_pr_publish() {
     fi
     local attested
     attested="$(change_pr_engine commit-tree 2>/dev/null)" || attested=""
-    assert_tree_matches_attested "$attested" || { echo "Publish refused: the tree differs from the audited tree." >&2; return 0; }
-    change_pr_engine handoff || true
+    assert_tree_matches_attested "$attested" pre || {
+        echo "Publish refused: the tree differs from the audited tree." >&2
+        change_pr_no_pr tree-mismatch "the tree differs from the audited tree"
+        return 0
+    }
+    local rc=0
+    change_pr_engine handoff || rc=$?
+    if [[ "$rc" != 0 ]]; then
+        change_pr_no_pr handoff-failed "handoff exited $rc"
+        return 0
+    fi
+    local phase vclass jdraft
+    phase="$(python3 -c 'import json,sys; print(json.load(open(".uncle/workflow/pr/journal.json")).get("phase",""))' 2>/dev/null)" || phase=""
+    jdraft="$(python3 -c 'import json,sys; print("1" if json.load(open(".uncle/workflow/pr/journal.json")).get("draft") else "0")' 2>/dev/null)" || jdraft=0
+    if [[ "$phase" != created ]]; then
+        change_pr_no_pr handoff-incomplete "handoff exited 0 but the journal phase is '${phase:-unknown}', not created"
+        return 0
+    fi
+    vclass="$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE" 2>/dev/null)"
+    case "$vclass" in
+        READY|READY_WITH_NON_BLOCKING_ISSUES)
+            CHANGE_PR_EXTRAS_REASON=published
+            if [[ "$jdraft" == 1 ]]; then
+                echo "PR published (verdict $vclass): opened as a draft, not ready for review." >&2
+            else
+                echo "PR created (verdict $vclass): ready for review." >&2
+            fi
+            ;;
+        *)
+            CHANGE_PR_EXTRAS_REASON=published-draft-unreviewed
+            echo "PR published as unreviewed draft: published-draft-unreviewed: verdict ${vclass:-unknown} (draft, not ready for review)" >&2
+            ;;
+    esac
+    return 0
+}
+
+# Record why no PR exists and say so once on stderr.
+change_pr_no_pr() {
+    CHANGE_PR_EXTRAS_REASON="$1"
+    echo "PR not created: $1: $2" >&2
 }
 
 change_pr_engine() {
@@ -423,7 +611,14 @@ def attest(j):
         envelopes = env.load_envelopes(STATE)
     except env.EnvelopeError as failure:
         raise error(str(failure)) from failure
-    approvals = [env.approval_entry(STATE, name) for name in gate_names()] + [consent_entry(artifact)]
+    # `view_digest` is the committed Markdown's own hash; without it `uncle verify` cannot tie a gate to the document a human read.
+    def gate_entry(name):
+        entry = env.approval_entry(STATE, name)
+        view = env.sha256_file(Path('.uncle') / 'docs' / (name + '.md'))
+        if view:
+            entry['view_digest'] = view
+        return entry
+    approvals = [gate_entry(name) for name in gate_names()] + [consent_entry(artifact)]
     override = override_entry(j)
     reason = env.blocking_reason(envelopes, artifact, waived_stages(j))
     if reason and override:
@@ -553,8 +748,11 @@ def snapshot(audit=False, excludes=(), attestation=False):
         git('read-tree', '--empty', env=env)
         paths = set(subprocess.check_output(
             ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z']).split(b'\0'))
+        # A first build has no commit yet; its tracked set is then empty rather than an error.
+        has_head = subprocess.run(['git', 'rev-parse', '--verify', '-q', 'HEAD'],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
         head_paths = set(subprocess.check_output(
-            ['git', 'ls-tree', '-rz', '--name-only', 'HEAD']).split(b'\0'))
+            ['git', 'ls-tree', '-rz', '--name-only', 'HEAD']).split(b'\0')) if has_head else set()
         paths.update(head_paths)
         # .uncle/docs/ is always part of the tree (the canonical block re-includes it with `!.uncle/docs/`). A bare `.uncle` line
         # appended to .gitignore mid-run (by a test or a first-run refresh) ignores the whole directory, which hid every approved
@@ -1709,6 +1907,21 @@ def main():
                 or snapshot() != j['reviewed_tree'] or read(STATE / 'origin') != j['origin']):
             raise ValueError('Files, origin, HEAD or branch changed during audit; rerun FINAL_AUDIT.')
         check_remotes(j)
+        # Settle uncle's own ignore entries before the commit tree is bound. The reviewed snapshot above drops them, so a stray
+        # bare `.uncle` appended during the run passed; but the commit tree keeps the exact bytes, and that line sits after the
+        # canonical block and re-ignores `.uncle/docs/` and the attestation. Publish then refused the finished audit
+        # ('approved artifact is ignored', tree-mismatch) for a change nobody made. Only in a linked worktree, which uncle
+        # created and normalizes on creation; the user's own checkout is never rewritten here.
+        if git('rev-parse', '--absolute-git-dir') != git('rev-parse', '--path-format=absolute', '--git-common-dir'):
+            import sys as _sys
+            lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+            if lib not in _sys.path:
+                _sys.path.insert(0, lib)
+            try:
+                import uncle_gitignore
+                uncle_gitignore.ensure('.')  # worktree-only: see the comment above
+            except ImportError:
+                pass
         j.update(audit_hash=audit_hash(), commit_tree=snapshot(True),
                  verdict_run=read(STATE / 'audit-verdict').split('\t')[0], phase='bound')
         # Sealed here, after the last agent stage and before any handoff.

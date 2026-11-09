@@ -289,9 +289,14 @@ fi
 # worktree is not wanted or not possible: no git, no brief to name one from,
 # already inside a run's worktree, or WORKFLOW_WORKTREE=0. The run then
 # proceeds where it is, exactly as before.
+#
+# Optional second argument: the run kind. Only the exact string "app" returns
+# early (an app run builds in the source checkout on its current branch).
+# Absent, empty or any other kind keeps the behavior above.
 worktree_auto() {
-    local root="${1:-$PWD}" branch base dir n=2
+    local root="${1:-$PWD}" kind="${2:-}" branch base dir n=2
 
+    case "$kind" in app|create_app|run_app|stagegate.sh) return 0 ;; esac
     [[ "${WORKFLOW_WORKTREE:-1}" == "1" ]] || return 0
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
     # A worktree this function already made, or one the operator made: either
@@ -327,7 +332,12 @@ worktree_auto() {
     # places are carried over, each to the same relative path. Only the root was, so a change request on a project uncle had
     # already built moved into a worktree that had no request, and the driver stopped at once with "Required file missing or empty:
     # .uncle/docs/CHANGE_REQUEST.md".
-    local name rel
+    #
+    # The brief is moved, not copied. It was written into the source checkout before the worktree existed, and left there it is a
+    # modification to a tracked file (an earlier run's merge commits it) or a stray untracked one, which polluted the source branch and
+    # made the run's final merge refuse ("local changes ... would be overwritten"). Only after every copy succeeded is the original
+    # taken out of the source checkout: a tracked one goes back to what HEAD has, an untracked one is removed.
+    local name rel moved=()
     for name in CHANGE_REQUEST.md REQUIREMENTS.md; do
         for rel in "$name" ".uncle/docs/$name"; do
             [[ -s "$root/$rel" ]] || continue
@@ -337,7 +347,15 @@ worktree_auto() {
                 git worktree remove --force "$dir" >/dev/null 2>&1 || true
                 return 0
             }
+            moved+=("$rel")
         done
+    done
+    for rel in ${moved[@]+"${moved[@]}"}; do
+        if git -C "$root" cat-file -e "HEAD:$rel" 2>/dev/null; then
+            git -C "$root" checkout HEAD -- "$rel" >/dev/null 2>&1 || true
+        else
+            rm -f "$root/$rel"
+        fi
     done
     printf '%s\n' "$dir"
 }

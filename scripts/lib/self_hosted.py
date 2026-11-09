@@ -437,10 +437,18 @@ def parse_arguments(side, args):
     if turns == 0:
         turns = 80
     iterator = iter(args)
+    prompt_file = None
     valued = {'--model','-m','--sandbox','--allowedTools','--output-format',
               '--max-budget-usd','--resume','--mcp-config'}
     for arg in iterator:
-        if arg == '--output-last-message':
+        if arg == '--prompt-file':
+            if prompt_file is not None:
+                raise ValueError('--prompt-file may be given only once')
+            try:
+                prompt_file = next(iterator)
+            except StopIteration:
+                raise ValueError('--prompt-file requires a path')
+        elif arg == '--output-last-message':
             output = next(iterator)
         elif arg == '--max-turns':
             turns = int(next(iterator))
@@ -459,7 +467,18 @@ def parse_arguments(side, args):
             raise ValueError('Unsupported self-hosted runner option: ' + arg)
         else:
             prompt = arg
-    if side == 'agent':
+    if prompt_file is not None:
+        root = Path(os.environ.get('UNCLE_PROMPT_FILE_ROOT') or os.getcwd()).resolve()
+        try:
+            real = Path(prompt_file).resolve(strict=True)
+            if not (real == root or root in real.parents) or not real.is_file():
+                raise ValueError('--prompt-file must be a regular file inside %s: %s' % (root, prompt_file))
+            prompt = real.read_bytes().decode('utf-8')
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ValueError('--prompt-file unreadable: %s (%s)' % (prompt_file, exc))
+        if not prompt.strip():
+            raise ValueError('--prompt-file is empty: %s' % prompt_file)
+    elif side == 'agent':
         prompt = sys.stdin.read() or prompt
     if not prompt.strip() or turns < 1:
         raise ValueError('Self hosted requires a prompt and a positive turn limit')

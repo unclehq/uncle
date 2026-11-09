@@ -2575,9 +2575,24 @@ run_codex() {
         [[ -z "$review_schema" ]] || rm -f "$review_schema.out"
         # stdin is the operator's gate-answer channel, not stage input: codex
         # appends a non-TTY stdin to the prompt and would block on it forever.
-        ( env UNCLE_ARTIFACT_DELIVERY="$delivery_file" UNCLE_OUTPUT_SCHEMA_FILE="$review_schema" UNCLE_STRUCTURED_OUTPUT_PATH="${review_schema:+$review_schema.out}" "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
+        # File-capable clients (python3 running native_stage.py / self_hosted.py)
+        # receive the prompt by path; every other client keeps argv and is
+        # guarded against the per-argument size limit.
+        . "$ROOT/scripts/lib/reviewer-prompt.sh"
+        local prompt_kind=argv
+        case "${client_cmd[*]}" in *native_stage.py*|*self_hosted.py*) prompt_kind=file ;; esac
+        case "${cmd##*/}" in self_hosted.py|native_stage.py) prompt_kind=file ;; esac
+        reviewer_prompt_guard "$log_name" "$prompt_kind" "$prompt_file" || return 1
+        local -a prompt_args=()
+        if [[ "$prompt_kind" == file ]]; then
+            prompt_args=(--prompt-file "$prompt_file")
+        else
+            prompt_args=("$(cat "$prompt_file")")
+        fi
+        ( env UNCLE_ARTIFACT_DELIVERY="$delivery_file" UNCLE_OUTPUT_SCHEMA_FILE="$review_schema" UNCLE_STRUCTURED_OUTPUT_PATH="${review_schema:+$review_schema.out}" "${client_cmd[@]}" "${flags[@]}" "${prompt_args[@]}" \
             < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" ) &
         wait "$!" || status=$?
+        [[ "$status" == 0 ]] || reviewer_report_launch_failure "$log_name" "$status" "$LOG_DIR/${log_name}.log" || true
         # A Codex lens answered through its output schema: the runner already restored the object into the structured-output file.
         if [[ -n "$review_schema" && -s "$review_schema.out" ]]; then cp "$review_schema.out" "$output_file"; fi
         if [[ -n "$delivery_file" ]]; then

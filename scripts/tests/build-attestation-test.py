@@ -41,7 +41,7 @@ class BuildAttestationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         return result.stdout.strip()
 
-    def finish(self, green='PASS\tcmd\n', verdict='READY'):
+    def finish(self, green='PASS\tcmd\n', verdict='READY', extra=()):
         docs = self.repo / '.uncle/docs'
         for name in ('REQUIREMENTS_INTERPRETATION', 'ADVERSARIAL_REVIEW', 'UPDATED_PROJECT_PLAN',
                      'IMPLEMENTATION_NOTES', 'FINAL_AUDIT'):
@@ -53,7 +53,7 @@ class BuildAttestationTests(unittest.TestCase):
         artifact = run('bash', '-c', '. "%s/change-pr.sh"; change_pr_engine artifact' % LIB,
                        cwd=self.repo, env=self.env).stdout.strip()
         return run(sys.executable, str(LIB / 'build_attestation.py'), '--state', '.uncle/workflow',
-                   '--artifact', artifact, '--verdict', verdict, cwd=self.repo, env=self.env)
+                   '--artifact', artifact, '--verdict', verdict, *extra, cwd=self.repo, env=self.env)
 
     def test_verify_reads_main_even_when_another_branch_is_checked_out(self):
         self.assertEqual(self.finish().returncode, 0)
@@ -77,6 +77,13 @@ class BuildAttestationTests(unittest.TestCase):
         result = self.finish(verdict='NOT_READY')
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertFalse((self.repo / '.uncle/attestation.json').exists())
+
+    def test_overridden_build_is_attested_but_release_fails(self):
+        result = self.finish(green='REGRESSION\tcmd\n', verdict='NOT_READY', extra=('--overridden', '1'))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        text = (self.repo / '.uncle/attestation.json').read_text()
+        self.assertIn('completed over an override', text)
+        self.assertIn('NOT_READY', text)
 
 
 if __name__ == '__main__':

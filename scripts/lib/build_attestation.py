@@ -12,7 +12,7 @@ A stage with no record is written `unavailable`, never `pass`. Nothing here
 approves anything: gate approvals are copied from the driver's approval records.
 
 Usage: build_attestation.py --state DIR --artifact TREE --verdict CLASS
-           [--green-enabled 0|1] [--run-id ID] [--subject NAME]
+           [--green-enabled 0|1] [--overridden 0|1] [--run-id ID] [--subject NAME]
 Exit: 0 attestation written; 1 refused (the reason is printed and nothing is
 written to .uncle/attestation.*).
 """
@@ -88,7 +88,7 @@ def write_stages(state, artifact, verdict, green_enabled):
                        producer_stage='final-audit', producer_kind='reviewer')
 
 
-def attest(state, artifact, verdict, green_enabled, run_id, subject):
+def attest(state, artifact, verdict, green_enabled, run_id, subject, overridden=False):
     write_stages(state, artifact, verdict, green_enabled)
     envelopes = env.load_envelopes(state)
 
@@ -101,11 +101,14 @@ def attest(state, artifact, verdict, green_enabled, run_id, subject):
 
     approvals = [gate_entry(name) for name in gate_names(state)]
     reason = env.blocking_reason(envelopes, artifact)
+    if overridden:
+        # Written anyway, but never as a pass: the release says it was over an override.
+        reason = 'completed over an override' + ('; ' + reason if reason else '')
     release = env.write_envelope(state, 'release', 'fail' if reason else 'pass', reason=reason, artifact=artifact,
                                  inputs={'artifact': artifact}, evidence=['.uncle/docs/FINAL_AUDIT.md'],
                                  extra={'approvals': approvals})
     print('Envelope: release ' + release['result'])
-    if reason:
+    if reason and not overridden:
         print('Attestation not written: ' + reason)
         return 1
     envelopes['release'] = release
@@ -146,11 +149,12 @@ def main(argv):
     parser.add_argument('--artifact', required=True)
     parser.add_argument('--verdict', default='')
     parser.add_argument('--green-enabled', default='1')
+    parser.add_argument('--overridden', default='0')
     parser.add_argument('--run-id', default='')
     parser.add_argument('--subject', default='build')
     args = parser.parse_args(argv)
     try:
-        return attest(args.state, args.artifact, args.verdict, args.green_enabled, args.run_id, args.subject)
+        return attest(args.state, args.artifact, args.verdict, args.green_enabled, args.run_id, args.subject, args.overridden == '1')
     except env.EnvelopeError as error:
         print('Attestation not written: ' + str(error))
         return 1

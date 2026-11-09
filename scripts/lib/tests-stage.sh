@@ -140,7 +140,13 @@ tests_run_lane() {
     touch "$dir/lane-$lane.done"
 }
 
-tests_status_snapshot() { git status --porcelain=v1 -uall 2> /dev/null | LC_ALL=C sort; }
+# Scoped to the working directory with the repo-root prefix stripped: when the project lives inside a larger git repo, porcelain paths
+# are root-relative and include sibling projects, which would never match lane-listed paths and read as unclaimed changes.
+tests_status_snapshot() {
+    local prefix
+    prefix="$(git rev-parse --show-prefix 2> /dev/null)" || prefix=""
+    git status --porcelain=v1 -uall -- . 2> /dev/null | LC_ALL=C sed "s|^\(...\)${prefix}|\1|" | LC_ALL=C sort
+}
 
 # Whether $1 lies inside a protected scope.
 tests_covered() {

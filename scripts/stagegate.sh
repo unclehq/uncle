@@ -453,14 +453,17 @@ fi
 # The verdict the build finishes with. A waiver (a person's, or an unattended run's) leaves READY
 # in the verdict file and the auditor's own verdict in audit-verdict.original; the run reports
 # the effective one and says out loud, on the next line, that findings were waived unreviewed.
-# Write the build's attestation from the driver's records (scripts/lib/build_attestation.py). Only a READY-class verdict is
-# attested; a build over an override, or with no git history to bind a tree to, is left without one and says so.
+# Write the build's attestation from the driver's records (scripts/lib/build_attestation.py). A clean READY build is attested
+# as a pass. A build over an override is attested too, but honestly: the audit envelope carries the auditor's own verdict, the
+# release envelope says fail, and the attestation records that it completed over an override. No git history means no attestation.
 build_attest_completed() {
-    local verdict artifact
+    local verdict artifact overridden=0 original
     verdict="$(completed_verdict)"
     if [[ -s "$GREEN_OVERRIDE_FILE" || -s "$AUDIT_OVERRIDE_FILE" ]]; then
-        echo "Attestation skipped: the build completed over an override."
-        return 0
+        overridden=1
+        original="$(verdict_file_field "$STATE_DIR/audit-verdict.original" audit_class 2>/dev/null)"
+        [[ -n "$original" ]] && verdict="$original"
+        echo "Attestation will record that the build completed over an override (release: fail)."
     fi
     git rev-parse --git-dir >/dev/null 2>&1 || { echo "Attestation skipped: not a Git repository."; return 0; }
     # A bare `.uncle` ignore line would keep the attestation out of the commit; settle uncle's own entries first.
@@ -468,7 +471,7 @@ build_attest_completed() {
     artifact="$(change_pr_engine artifact 2>/dev/null)" && [[ -n "$artifact" ]] \
         || { echo "Attestation skipped: could not compute the build's artifact digest."; return 0; }
     python3 "$ROOT/scripts/lib/build_attestation.py" --state "$STATE_DIR" --artifact "$artifact" --verdict "$verdict" \
-        --green-enabled "$GREEN_CHECK" --run-id "${STAGEGATE_RUN_ID:-}" \
+        --green-enabled "$GREEN_CHECK" --overridden "$overridden" --run-id "${STAGEGATE_RUN_ID:-}" \
         --subject "$(basename "$PROJECT_ROOT")@$(git branch --show-current 2>/dev/null)" \
         || echo "Attestation not written; the build continues without one."
     return 0

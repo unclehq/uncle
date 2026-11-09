@@ -4551,6 +4551,23 @@ REPAIR
             repair_count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
             case "$repair_count" in ''|*[!0-9]*) echo "Invalid repair-count; inspect $STATE_DIR/repair-count." >&2; exit 1 ;; esac
             repair_count=$((10#$repair_count))
+            # Repair is for critical failures only (scripts/lib/failure_severity.py), as in stagegate.sh: a failed checklist row while the
+            # driver's own verification is clean and the application runs is evidence for the final audit, not something to repair.
+            # WORKFLOW_REPAIR_SEVERITY=all restores repair for every failure.
+            if [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical && -s "${GREEN_CLASS:-/nonexistent}" ]]; then
+                case "$(basename "$repair_source")" in
+                    FINAL_AUDIT.md|VERIFICATION_INTEGRITY.md|runtime-unrunnable-application) ;;   # blocking by nature
+                    *)
+                        if ! python3 -B "$ROOT/scripts/lib/failure_severity.py" critical "$GREEN_CLASS" "$LOG_DIR/green-check.log" >/dev/null; then
+                            echo "Repair not run: no critical failure. The application builds and runs, so $(basename "$repair_source") goes to the final audit as unresolved evidence."
+                            echo "(WORKFLOW_REPAIR_SEVERITY=all repairs every failure.)"
+                            record_nonblocking_failure "$(basename "$repair_source")" 'no critical failure; repair not run'
+                            record_test_failure_disposition || true
+                            if [[ -e "$STATE_DIR/checklist-ran" ]]; then set_state FINAL_AUDIT; else set_state "$(change_repair_next_stage)"; fi
+                            continue
+                        fi ;;
+                esac
+            fi
             if [[ "$repair_count" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
                 # The passes are used up (or repair is off). The finding goes to the audit as unresolved evidence.
                 echo "The repair passes are used up for $(basename "$repair_source"); it is carried on as unresolved evidence."
@@ -4855,6 +4872,10 @@ PY
             # not change source, tests, or configuration.
             start_green_check_bg
             wait_green_check_bg || exit $?
+            # A repair that changed nothing (repair_judge 6) re-enters here after envelope_invalidate IMPLEMENT removed the verification
+            # envelope, and nothing wrote it again: release then refused with "verification result unavailable; envelope missing" and an
+            # unattended build could not publish. The driver's green check is current at this point, so record it.
+            [[ -s "$STATE_DIR/envelopes/verification.json" ]] || write_verification_envelope
             runtime_ready_rc=0
             change_route_unrunnable_application || runtime_ready_rc=$?
             if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi

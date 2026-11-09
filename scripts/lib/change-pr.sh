@@ -173,7 +173,9 @@ change_pr_complete_route() {
     # are generated, a NOT_READY audit is published over on the record as a DRAFT
     # PR, and nothing waits on anyone. The release envelope and the PR banner still
     # say the audit failed; only the gesture is automated, never the verdict.
-    if [[ "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] && { [[ -s "$ORIGIN_FILE" ]] || { change_pr_worktree_owned && change_pr_in_worktree; }; }; then
+    # Any linked worktree counts, not only one uncle created: a worktree made from the TUI or by hand has no worktree-owned marker, and
+    # without this an unattended run fell through to a dialog nobody could answer ("No answer received; PR remains pending").
+    if [[ "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 ]] && { [[ -s "$ORIGIN_FILE" ]] || change_pr_in_worktree; }; then
         echo "Unattended: publishing the PR without a dialog (draft when the audit is not READY)."
         local -x UNCLE_AUTO_PUBLISH=1
         change_pr_publish 0 </dev/null

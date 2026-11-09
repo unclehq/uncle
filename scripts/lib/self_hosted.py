@@ -1734,7 +1734,14 @@ def _run_stage(side, values, prompt, root, stage=None, usage=None):
             validate_requirements(contents.decode('utf-8'))
         elif expected_kind == 'plan':
             validate_plan(contents.decode('utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
-        if target.is_symlink() or (target.read_bytes() if target.exists() else None) != original:
+        if target.is_symlink():
+            raise ValueError('Plan changed during generation; refusing to overwrite it')
+        if (target.read_bytes() if target.exists() else None) != original:
+            # In combined change-planning mode the artifact is the driver's delivery file, and
+            # publish_file_delivery() above has already written the canonical result there.
+            delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
+            if delivery and (Path(root) / delivery).resolve() == target.resolve():
+                return response, turns
             raise ValueError('Plan changed during generation; refusing to overwrite it')
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, pending = tempfile.mkstemp(prefix='.' + Path(artifact).name + '.', dir=target.parent)

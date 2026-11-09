@@ -64,8 +64,8 @@ tests_lanes() {
     if [[ -z "$wanted" ]]; then
         text="$(cat "$PLAN_DOC" REQUIREMENTS.md 2> /dev/null || true)"
         wanted="unit"
-        printf '%s' "$text" | grep -qiE 'playwright|e2e|end-to-end|cypress|browser test|in a browser' && wanted="$wanted e2e"
-        printf '%s' "$text" | grep -qiE 'defect.injection|mutation|representative defect' && wanted="$wanted mutation"
+        grep -qiE 'playwright|e2e|end-to-end|cypress|browser test|in a browser' <<< "$text" && wanted="$wanted e2e"
+        grep -qiE 'defect.injection|mutation|representative defect' <<< "$text" && wanted="$wanted mutation"
     fi
     case " $wanted " in *" harness "*) ;; *) wanted="harness $wanted" ;; esac
     printf '%s\n' $wanted
@@ -204,7 +204,7 @@ tests_red_check() {
     printf '## Red-state check (driver-run, before any application code)\n\n' >> "$out"
     while IFS= read -r cmd; do
         [[ -n "$cmd" ]] || continue
-        printf '%s' "$cmd" | grep -qiE 'vitest|jest|pytest|playwright|mocha|cypress|go test|cargo test|node --test|npm (run )?test|npm run test' || continue
+        grep -qiE 'vitest|jest|pytest|playwright|mocha|cypress|go test|cargo test|node --test|npm (run )?test|npm run test' <<< "$cmd" || continue
         log="$(mktemp)"
         status=0
         python3 -B -c '

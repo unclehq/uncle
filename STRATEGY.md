@@ -1,4 +1,4 @@
-# Stagegate — Positioning & Growth Strategy
+# Uncle — Positioning & Growth Strategy
 
 Saved from Claude Code session so you can resume work in a fresh instance.
 

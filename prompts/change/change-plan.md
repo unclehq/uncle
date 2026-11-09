@@ -221,6 +221,13 @@ failure behavior, dependencies, evidence requirements and restriction fields.
 Use concise tables initially, not an expanded narrative to compress afterward.
 Keep short None entries where appropriate; do not omit required sections.
 
+When the change adds or edits a test suite, the `## Verification commands` block must
+name it, or the driver never runs it. A runner that selects a default tier (Uncle's
+`run-python-tests.sh` and `run-shell-tests.sh` run only `scripts/tests/critical-suites.txt`)
+skips suites outside that tier, so add a command that runs the new suite explicitly, e.g.
+`bash scripts/run-python-tests.sh -- <name>` (name without `-test.py`). A green default
+command that never executed the new tests is not evidence for the change.
+
 Define each verification command and protected path once in its required
 location. Strategy and step rows reference those commands and check IDs; avoid
 second lists that can diverge. Before the single final write, reconcile coverage,

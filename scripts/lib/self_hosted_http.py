@@ -898,14 +898,32 @@ def reconnect_seconds():
         raise ValueError('WORKFLOW_SELF_HOSTED_RECONNECT_SECONDS must be a number') from None
 
 
+RETRYABLE_STATUS = (408, 409, 425, 429, 500, 502, 503, 504, 529)
+RETRY_LIMIT = 6
+
+
+def retry_delay(error, attempt):
+    """Seconds to wait after a transient HTTP error: Retry-After when sent (capped at 120), else jittered exponential backoff."""
+    import random
+    try:
+        header = error.headers.get('Retry-After') if error.headers else None
+        if header is not None:
+            return min(120.0, max(0.0, float(header)))
+    except (TypeError, ValueError):
+        pass
+    return min(60.0, 2.0 * (2 ** (attempt - 1))) * (0.5 + random.random() / 2)
+
+
 def post(url, api_key, body, timeout, what='model request'):
     """`_request` that rides out a lost network instead of failing the stage.
 
     A connection that cannot be made, or one that died mid-request, is tried again every
     few seconds for up to reconnect_seconds() (a VPN usually comes back within a minute).
-    A server that answered, or one that simply never did (a read timeout), is not retried.
+    A server that answered with a transient error (RETRYABLE_STATUS) is tried again with backoff,
+    up to RETRY_LIMIT tries, honoring Retry-After. Other answers, and a read timeout, are not retried.
     """
     started = time.monotonic()
+    answers = 0
     budget = _connections().reconnect_seconds
     if budget is None:
         budget = reconnect_seconds()
@@ -915,6 +933,14 @@ def post(url, api_key, body, timeout, what='model request'):
             result = _request(url, api_key, body, timeout)
             _outage_mark(url, clear=True)
             return result
+        except HTTPError as error:
+            answers += 1
+            if error.code not in RETRYABLE_STATUS or answers >= RETRY_LIMIT or _connections().aborting.is_set():
+                raise
+            delay = retry_delay(error, answers)
+            print('Self hosted: %s HTTP %d%s; retry %d of %d in %.0fs.' %
+                  (what, error.code, _server_reason(error), answers, RETRY_LIMIT - 1, delay), file=sys.stderr, flush=True)
+            time.sleep(delay)
         except (ServerUnreachable, NetworkLost) as error:
             if _connections().aborting.is_set():
                 raise  # the caller dropped this request on purpose; do not resend it

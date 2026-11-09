@@ -280,11 +280,11 @@ change workflow inside it:
   (no prompt); a whitespace-only file counts as existing. No prompt is shown for
   a resume, `UNCLE_NEW_WORKFLOW=1` or `--seed-only` (which keeps its existing
   no-overwrite behavior).
-- **Unattended default and opt-in.** With `--unattended` or `UNCLE_UNATTENDED=1`,
-  or when stdin is not a terminal, the prompt is never shown or read: the script
-  refuses with exit 1 and a stderr message naming `UNCLE_REPLACE_CHANGE_REQUEST=1`.
-  Setting `UNCLE_REPLACE_CHANGE_REQUEST=1` (exactly `1`; `0`, `true`, empty and
-  anything else refuse) permits replacement without a prompt, interactively or not.
+- **Replacement is the default.** `UNCLE_REPLACE_CHANGE_REQUEST` defaults to `1`, so an
+  existing `CHANGE_REQUEST.md` is replaced without a prompt. Setting it to anything
+  other than exactly `1` (`0`, `true`, empty) restores the guard: interactively the
+  prompt above is shown; with `--unattended`, `UNCLE_UNATTENDED=1` or a non-terminal
+  stdin the script refuses with exit 1 and a stderr message.
 - `.uncle/config` is copied into the worktree byte-for-byte when the project has
   one, so the run uses the same runner and model settings. `.uncle/workflow`
   (lock, state, approvals, origin) is per worktree, so two runs never share

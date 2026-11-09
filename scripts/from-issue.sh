@@ -116,11 +116,12 @@ confirm_replace_change_request() {
     local target answer
     target="$(generated_input_path CHANGE_REQUEST.md)"
     [[ -s "$target" ]] || return 0
-    if [[ "${UNCLE_REPLACE_CHANGE_REQUEST:-}" == 1 ]]; then
+    # Replacing is the default; set UNCLE_REPLACE_CHANGE_REQUEST to anything but 1 (e.g. 0) to be asked or refused.
+    if [[ "${UNCLE_REPLACE_CHANGE_REQUEST-1}" == 1 ]]; then
         return 0
     fi
     if [[ "$UNATTENDED" == 1 || "${UNCLE_UNATTENDED:-}" == 1 || ! -t 0 ]]; then
-        echo "Refusing to replace existing $target without confirmation; set UNCLE_REPLACE_CHANGE_REQUEST=1 to replace it." >&2
+        echo "Refusing to replace existing $target without confirmation; UNCLE_REPLACE_CHANGE_REQUEST is set to something other than 1." >&2
         exit 1
     fi
     printf '%s already exists. Proceed with the new change request and replace it? [y/N] ' "$target" >&2

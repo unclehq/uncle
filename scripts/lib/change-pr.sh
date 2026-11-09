@@ -146,9 +146,14 @@ change_pr_complete() {
         # from-issue.sh, which still reads this one, so only a run with no issue origin is removed here. The branch is the PR head and stays.
         case "${CHANGE_PR_EXTRAS_REASON:-}" in
             published|published-draft-unreviewed)
-                if worktree_merge_owned && [[ ! -s "${ORIGIN_FILE:-/nonexistent}" ]]; then
-                    local pr_main
-                    pr_main="$(git worktree list --porcelain | head -n 1)"; pr_main="${pr_main#worktree }"
+                # The worktree-owned marker is not required: a run started from the TUI or resumed lost it, and the PR then left the
+                # directory behind. A linked worktree that is a sibling of the main checkout named <main>-* is uncle's, and
+                # worktree_merge_remove still refuses anything dirty outside .uncle/.
+                local pr_main
+                pr_main="$(git worktree list --porcelain | head -n 1)"; pr_main="${pr_main#worktree }"
+                if [[ "${WORKFLOW_LOCAL_MERGE:-1}" == 1 && ! -s "${ORIGIN_FILE:-/nonexistent}" ]] && change_pr_in_worktree \
+                   && { worktree_merge_owned || [[ "$(dirname "$(pwd -P)")" == "$(dirname "$pr_main")" \
+                        && "$(basename "$(pwd -P)")" == "$(basename "$pr_main")"-* ]]; }; then
                     WORKTREE_MERGE_PENDING="$(pwd -P)|$pr_main|$(git branch --show-current 2>/dev/null)|keep-branch"
                 fi ;;
         esac

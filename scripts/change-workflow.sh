@@ -3528,6 +3528,18 @@ change_preflight_collect() {
 # it; unattended it is repaired once before any browser or checklist work; attended it stops. Returns 0 to go on, 2 when the state changed.
 change_route_unrunnable_application() {
     python3 -B "$ROOT/scripts/lib/failure_severity.py" unrunnable "$LOG_DIR/green-check.log" || return 0
+    # "Port N is already in use" is a collision with another process (often a concurrent run's dev server), not a defect in the
+    # application, so a repair pass cannot fix it and stopping the run for it is wrong. The port is usually free again moments later:
+    # run the checks once more before deciding anything.
+    local port_retry="$STATE_DIR/green-port-retry-attempted"
+    if grep -Eqi 'port [0-9]+ is already in use|EADDRINUSE' "$LOG_DIR/green-check.log" 2>/dev/null && [[ ! -e "$port_retry" ]]; then
+        touch "$port_retry"
+        echo 'The verification log shows a port collision, not an application defect; running the checks once more.'
+        rm -f "$STATE_DIR/green-check.fingerprint"
+        run_green_check || true
+        change_route_unrunnable_application
+        return $?
+    fi
     local marker="$STATE_DIR/runtime-readiness-repair-attempted" recorded="$STATE_DIR/runtime-unrunnable-recorded" run_id count
     count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"; case "$count" in ''|*[!0-9]*) count=0 ;; esac
     if [[ "$WORKFLOW_REPAIR" != 1 || "$((10#$count))" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then

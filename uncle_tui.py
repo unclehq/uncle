@@ -5678,10 +5678,37 @@ class UncleTUI:
         target = (target or '').strip()
         if not target:
             if getattr(self, 'workflow_idx', None) is None:
+                # Nothing started in this session: resume the most recently active stopped run
+                # among its worktrees (the project root included) (a change run has no issue number to name).
+                latest = self._latest_resumable_run(Path(_project_root()))
+                if latest is not None:
+                    return self._resume_run_worktree(str(latest))
                 return self._resume_app_build()
             self.triage_resume()
             return ''
         return self._resume_run_worktree(target)
+
+    def _latest_resumable_run(self, root):
+        """The worktree of the most recently active run that is stopped and not COMPLETE, or None."""
+        best, best_time = None, -1.0
+        try:
+            rows = worktree_runs.runs(str(root))
+        except (OSError, ValueError):
+            return None
+        for row in rows:
+            path = Path(row['path'])
+            workflow = path / '.uncle' / 'workflow'
+            try:
+                state = workflow.joinpath('state').read_text().strip().split(':', 1)[-1]
+                family = workflow.joinpath('family').read_text().strip()
+                stamp = workflow.joinpath('state').stat().st_mtime
+            except OSError:
+                continue
+            if not state or state == 'COMPLETE' or family not in ('app', 'change') or self._run_locked(path):
+                continue
+            if stamp > best_time:
+                best, best_time = path, stamp
+        return best
 
     def _resume_app_build(self):
         """Bare /resume before any workflow this session: the application

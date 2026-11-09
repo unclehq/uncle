@@ -206,6 +206,17 @@ final_audit_route_verdict() {
         READY|READY_WITH_NON_BLOCKING_ISSUES)
             set_state COMPLETE
             ;;
+        NOT_READY)
+            # The PR reviewer, not Uncle, decides whether a NOT_READY change merges: the run still completes, publishes
+            # its PR (a draft) and writes the attestation, all of which carry the NOT_READY verdict. Set
+            # WORKFLOW_NOT_READY_GATE=1 to hold the run for a human override instead.
+            if [[ "${WORKFLOW_NOT_READY_GATE:-0}" == "1" && "$AUDIT_GATE" == "1" ]]; then
+                set_state WAIT_AUDIT_OVERRIDE
+            else
+                echo "Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in the PR and attestation)."
+                set_state COMPLETE
+            fi
+            ;;
         *)
             if [[ "$AUDIT_GATE" == "1" ]]; then
                 set_state WAIT_AUDIT_OVERRIDE

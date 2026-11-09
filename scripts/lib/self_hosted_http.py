@@ -1113,17 +1113,55 @@ def _request(url, api_key, body=None, timeout=30, headers=None):
     return raw if isinstance(raw, dict) else json.loads(raw or b'null')
 
 
+FLAVORS = ('generic', 'ollama', 'vllm')
+FLAVOR_CACHE_SECONDS = 6 * 3600.0
+
+
+def _flavor_file(origin):
+    parts = urlsplit(origin)
+    name = re.sub(r'[^A-Za-z0-9._-]', '_', '%s-%s%s' % (parts.hostname, parts.port or 0, parts.path))
+    return os.path.join(os.environ.get('UNCLE_OUTAGE_DIR') or tempfile.gettempdir(), 'uncle-flavor-' + name)
+
+
 def detect_flavor(base_url, api_key):
-    """Name the server family when it identifies itself; 'generic' otherwise."""
+    """Name the server family when it identifies itself; 'generic' otherwise.
+
+    UNCLE_SELF_HOSTED_FLAVOR (generic|ollama|vllm) skips detection. A Base URL below the server root
+    (e.g. /publishers/<name>/v1) is a hosted service, not Ollama or vLLM, so it is generic without a check.
+    Probed answers are remembered across stage processes for FLAVOR_CACHE_SECONDS.
+    """
+    forced = os.environ.get('UNCLE_SELF_HOSTED_FLAVOR', '').strip().lower()
+    if forced:
+        if forced not in FLAVORS:
+            raise ValueError('UNCLE_SELF_HOSTED_FLAVOR must be one of: %s' % ', '.join(FLAVORS))
+        return forced
     origin = _origin(base_url)
-    for flavor, path in (('ollama', '/api/version'), ('vllm', '/version')):
+    if urlsplit(origin).path.strip('/'):
+        return 'generic'
+    cache = _flavor_file(origin)
+    try:
+        if time.time() - os.path.getmtime(cache) < FLAVOR_CACHE_SECONDS:
+            with open(cache) as handle:
+                cached = handle.read().strip()
+            if cached in FLAVORS:
+                return cached
+    except OSError:
+        pass
+    flavor = 'generic'
+    for name, path in (('ollama', '/api/version'), ('vllm', '/version')):
         try:
             data = _request(origin + path, api_key, timeout=5)
         except (HTTPError, URLError, OSError, ValueError):
             continue
         if isinstance(data, dict) and isinstance(data.get('version'), str):
-            return flavor
-    return 'generic'
+            flavor = name
+            break
+    try:
+        with open(cache, 'w') as handle:
+            handle.write(flavor)
+    except OSError:
+        pass
+    return flavor
 
 
 # Strongest first.  A server that rejects a mode is skipped and the next one is

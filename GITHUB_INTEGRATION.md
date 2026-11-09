@@ -71,3 +71,13 @@ uncle verify <pr-url|pr-number>               # needs gh; verifies the PR head's
 ### Audit override (no release)
 
 A `NOT READY` audit can still be overridden at the audit gate, in the findings dialog, or at publication, and the decision is recorded (`.uncle/workflow/audit-override`, `pr/verdict-override`, or the findings decisions) and reported at completion. With envelopes present that override no longer publishes: `audit.json` keeps `result: fail`, the handoff writes `release.json` with the blocking reason and the recorded override, and refuses with `PR pending: Attestation blocked` before any commit. The route to a PR after `NOT READY` is to fix the findings and re-run from `IMPLEMENT`. Journals from runs that predate envelopes (no `.uncle/workflow/envelopes/` directory) keep the previous behavior, and `uncle verify` reports them as `NOT HUMAN VERIFIED` because no attestation exists. Rolling back this feature while a handoff is at `prepared` requires `.uncle/attestation.*` to stay in the working tree or a rerun of `FINAL_AUDIT`.
+
+## Hand-off publish mode (workspaces that cannot push)
+
+When Uncle runs in a sandbox that has `git` but no GitHub login or `gh`, set `UNCLE_PUBLISH_MODE=handoff`. At the end of the
+run Uncle does not push or open a PR. It writes `.uncle/handoff/handoff.json`, prints its path and exits 0. The file holds the
+base commit, the proposed head branch, the commit message, PR title and body (including the attestation block), the draft flag
+(draft unless the final audit is READY), and every changed path with its action (`add`, `modify`, `delete`), file mode, blob
+id and full base64 content. Applying those changes to the base commit gives exactly the audited tree (`tree`). The host creates
+the branch, writes the files and opens the PR through the hosting API. Not yet covered: planning and building without a git
+remote, and `uncle verify` against the host-opened PR.

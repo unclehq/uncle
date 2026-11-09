@@ -1744,8 +1744,8 @@ def handoff(j):
         record = override_record()
         if len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash']:
             # An overridden verdict is not a READY verdict; the PR says so.
-            body = ('> Created by operator override over a **' + record[1]
-                    + '** audit verdict.\n\n') + body
+            body = ('> Published over a **' + record[1]
+                    + '** audit verdict. The PR reviewer decides whether it merges.\n\n') + body
         if envelopes_enabled():
             # The release envelope, Statement and signature; refuses here,
             # before any git write, when the blocking policy says so.
@@ -1819,7 +1819,7 @@ def handoff(j):
         j['attestation'] = sealed_attestation(j)
         j['body'] = attestation().attach_body(j['body'], j['attestation'])
         save(j)
-    j['draft'] = bool(auto_publish() and (j.get('release_skipped') or len(override_record()) == 4))
+    j['draft'] = bool((auto_publish() and j.get('release_skipped')) or len(override_record()) == 4)
     j['phase'] = 'creating'
     save(j)
     fd, body = tempfile.mkstemp(prefix='uncle-pr-body-')
@@ -1967,10 +1967,12 @@ def main():
             raise ValueError('Verdict binding changed; rerun FINAL_AUDIT.')
         if verdict[1] in ('READY', 'READY_WITH_NON_BLOCKING_ISSUES'):
             return
-        if os.environ.get('UNCLE_AUTO_PUBLISH') == '1':
+        if verdict[1] == 'NOT_READY' or os.environ.get('UNCLE_AUTO_PUBLISH') == '1':
+            # A NOT_READY audit never withholds the PR: it is published as a draft carrying the verdict and findings, and the PR
+            # reviewer, not Uncle, decides whether it merges. (An unreadable verdict still needs a person, unless unattended.)
             OVERRIDE.write_text('\t'.join([j['verdict_run'], verdict[1], j['audit_hash'],
                                            time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())]) + '\n')
-            print('Unattended: no human reviewed this; publishing a draft PR over a ' + verdict[1] + ' verdict.', flush=True)
+            print('Override recorded; publishing a draft PR over a ' + verdict[1] + ' verdict (the PR reviewer decides whether it merges).', flush=True)
             return
         if os.environ.get('UNCLE_UNATTENDED') == '1':
             raise NotReadyError('PR requires an owned READY verdict.')

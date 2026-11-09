@@ -940,7 +940,8 @@ def post(url, api_key, body, timeout, what='model request'):
             delay = retry_delay(error, answers)
             print('Self hosted: %s HTTP %d%s; retry %d of %d in %.0fs.' %
                   (what, error.code, _server_reason(error), answers, RETRY_LIMIT - 1, delay), file=sys.stderr, flush=True)
-            time.sleep(delay)
+            if _connections().aborting.wait(delay):
+                raise  # the caller dropped this request during the wait; do not resend it
         except (ServerUnreachable, NetworkLost) as error:
             if _connections().aborting.is_set():
                 raise  # the caller dropped this request on purpose; do not resend it

@@ -18,14 +18,6 @@ Describe an application or give Uncle a GitHub issue. It plans, implements, inde
 
 https://github.com/user-attachments/assets/5966ea18-5f58-418c-a0f3-c8415b68e354
 
-```text
-✗ head tree does not match the release artifact
-
-NOT HUMAN VERIFIED
-```
-
-That is the refusal message from [scripts/uncle-verify.py](scripts/uncle-verify.py). The recording will show the full run.
-
 ## Quick start
 
 You need at least one supported AI client installed and authenticated (Claude, Codex, Kimi, a self-hosted model, or AWS Bedrock). See [Prerequisites](PREREQUISITES.md).

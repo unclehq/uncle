@@ -2699,9 +2699,29 @@ class UncleTUI:
         if desktop == "handled":
             self._completion_dialog(False)
             return
-        if _workflow_family() == "app":
+        if _workflow_family() == "app" or self._removal_after_preview_pending():
             self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
+
+    def _removal_after_preview_pending(self):
+        """A published web-app change run left its worktree for the preview (change-pr.sh writes remove-after-preview)."""
+        return os.path.isfile(os.path.join(_project_root(), ".uncle", "workflow", "remove-after-preview"))
+
+    def _remove_previewed_worktree(self):
+        """Once the preview is closed, remove the worktree the driver kept for it. Never raises."""
+        record = os.path.join(_project_root(), ".uncle", "workflow", "remove-after-preview")
+        try:
+            with open(record, encoding="utf-8") as handle:
+                spec = handle.read().strip()
+        except OSError:
+            return
+        wt = _project_root()
+        script = '. "$1/scripts/lib/worktree-merge.sh"; IFS="|" read -r wt main branch keep published <<< "$3"; worktree_merge_remove "$wt" "$main" "$branch" "$keep" "$published"'
+        try:
+            subprocess.run(["bash", "-c", script, "uncle", ROOT, wt, spec],
+                           cwd=os.path.dirname(wt), timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            pass
 
     # ---- desktop app launch (both workflow families) ----
     _DESKTOP_OFF = ("0", "false", "no", "off")
@@ -9219,6 +9239,7 @@ class UncleTUI:
         self._desktop_close()
         if getattr(self, "completion_preview", None):
             self.completion_preview.close()
+        self._remove_previewed_worktree()
         self._close_early_preview()
         self._close_supervisor_session()
         self._close_home_agent()

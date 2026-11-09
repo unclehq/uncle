@@ -132,6 +132,22 @@ change_pr_local_merge() {
     return 0
 }
 
+# Prints "published" when every file in this worktree outside .uncle/ is byte-identical to the tree the PR commit holds (the PR is made
+# from the audited tree without moving this checkout's HEAD, so the files read as uncommitted although the PR has them), else nothing.
+change_pr_published_state() {
+    local ct idx now
+    ct="$(python3 -c 'import json; print(json.load(open(".uncle/workflow/pr/journal.json")).get("commit_tree",""))' 2>/dev/null)" || return 0
+    [[ -n "$ct" ]] || return 0
+    idx="$(mktemp "${TMPDIR:-/tmp}/uncle-idx.XXXXXX")" || return 0
+    rm -f "$idx"   # git must create the index itself; an empty file is read as a corrupt one
+    now="$(GIT_INDEX_FILE="$idx" git add -A -- . ':(exclude).uncle' ':(exclude)FINAL_AUDIT.md' 2>/dev/null \
+        && GIT_INDEX_FILE="$idx" git write-tree 2>/dev/null)" || now=""
+    rm -f "$idx"
+    [[ -n "$now" ]] || return 0
+    git diff --quiet "$ct" "$now" -- . ':(exclude).uncle' ':(exclude)FINAL_AUDIT.md' 2>/dev/null && echo published
+    return 0
+}
+
 change_pr_remove_merged_worktree() { worktree_merge_remove_pending; }
 
 # Worktree runs with the handoff enabled return 1 unless a PR was published
@@ -154,7 +170,15 @@ change_pr_complete() {
                 if [[ "${WORKFLOW_LOCAL_MERGE:-1}" == 1 && ! -s "${ORIGIN_FILE:-/nonexistent}" ]] && change_pr_in_worktree \
                    && { worktree_merge_owned || [[ "$(dirname "$(pwd -P)")" == "$(dirname "$pr_main")" \
                         && "$(basename "$(pwd -P)")" == "$(basename "$pr_main")"-* ]]; }; then
-                    WORKTREE_MERGE_PENDING="$(pwd -P)|$pr_main|$(git branch --show-current 2>/dev/null)|keep-branch"
+                    if grep -q '"kind" *: *"webpage"' .uncle/launch.json 2>/dev/null && [[ "${WORKFLOW_PREVIEW_AFTER_PR:-1}" == 1 ]]; then
+                        # A web app: the TUI serves it from this worktree and opens the browser, then removes the worktree when the
+                        # preview ends (uncle_tui.py _remove_previewed_worktree). Removing it here would leave nothing to serve.
+                        printf '%s|%s|%s|keep-branch|%s\n' "$(pwd -P)" "$pr_main" "$(git branch --show-current 2>/dev/null)" \
+                            "$(change_pr_published_state)" > "${STATE_DIR:-.uncle/workflow}/remove-after-preview"
+                        echo "Worktree kept to preview the app; it is removed when the preview ends."
+                    else
+                        WORKTREE_MERGE_PENDING="$(pwd -P)|$pr_main|$(git branch --show-current 2>/dev/null)|keep-branch|$(change_pr_published_state)"
+                    fi
                 fi ;;
         esac
     fi

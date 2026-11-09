@@ -65,6 +65,11 @@ matching this contract:
 
 Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance. If you reconsider your answer partway through, revise silently -- the final reply must contain the object exactly once. Including an earlier draft alongside the final one, or the same content twice, is rejected the same way a missing object is.
 
+Keep each check to one kind of observation. A requirement with a machine-checkable part (a listening address, an exit code,
+a file's content) and a human-only part (a browser tab opening, how a page looks) becomes two checks, so the part a machine can
+observe is not left unverified because the other part needs a person. Never make a required check depend on a visible browser tab
+or desktop window; write the machine-observable equivalent (the bound address and port, the HTTP response).
+
 Give every check a stable unique MC ID. Omit `status` (the driver writes
 `NOT RUN`) unless this environment already cannot perform the check's
 action -- then set `status` to `BLOCKED-SETUP`, `BLOCKED-HUMAN`, or

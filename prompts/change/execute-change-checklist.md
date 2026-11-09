@@ -99,6 +99,11 @@ without guessing at prose:
   the third -- so a bare BLOCKED throws that away and is read as SETUP
 - Defect reference
 
+A check that mixes a part you could observe with a part only a person can is not wholly blocked. Perform the observable part,
+record its evidence, and say exactly which part waits on whom. When the evidence you captured already proves the expected result
+(for example `lsof` showing the loopback listener a check requires), the status is PASS; do not leave a required check
+BLOCKED-HUMAN when your own evidence satisfies it.
+
 Rules:
 
 1. Never mark an unexecuted check as PASS.

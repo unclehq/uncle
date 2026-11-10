@@ -749,6 +749,15 @@ def split_list(text):
     return [strip_ticks(part) for part in re.split(r'[,;\n]\s*', text or '') if part.strip()]
 
 
+def owns_list(value, label):
+    """split_list for a step's owns, dropping non-path tokens with the same warning the Markdown parser prints."""
+    kept, dropped = [], []
+    for token in split_list(value):
+        (dropped if plan_steps.is_owns_junk(token) else kept).append(token)
+    plan_steps.warn_dropped(label, dropped)
+    return kept
+
+
 def block_of(model, node):
     """The rows or list block that holds `node` (a row, item or step)."""
     for section in model['sections']:
@@ -844,7 +853,7 @@ def typed_op(model, flat):
             if number < 1 or new.get('id') != 'step-%d' % number:
                 raise PlanError('a new step needs a number and the id step-<number>')
             item = {'id': new['id'], 'number': number, 'title': new.get('title', ''), 'text': new.get('text', ''),
-                    'owns': split_list(new.get('owns')), 'depends_on': dependency_list(new.get('depends_on') or '')}
+                    'owns': owns_list(new.get('owns'), number), 'depends_on': dependency_list(new.get('depends_on') or '')}
         elif block.get('kind') == 'list':
             item = {'id': new.get('id') or '', 'depth': 0, 'text': new.get('text', '')}
         else:
@@ -881,7 +890,7 @@ def new_step_op(model, flat):
         raise PlanError('new step depends_on must name an existing step id or new:N in this packet')
     return dict(op='insert_step', list=block['id'], **({'before': before} if before else {'after': after}),
                 new={'title': new.get('title', ''), 'text': new.get('text', ''),
-                     'owns': split_list(new.get('owns', [])), 'depends_on': deps})
+                     'owns': owns_list(new.get('owns', []), 'new'), 'depends_on': deps})
 
 
 def namespace_steps(ops, packet):
@@ -955,7 +964,7 @@ def authored_block(flat, block_id):
             if number < 1:
                 raise PlanError('a step needs a number')
             steps.append({'id': 'step-%d' % number, 'number': number, 'title': flat_step.get('title', ''),
-                          'text': flat_step.get('text', ''), 'owns': split_list(flat_step.get('owns')),
+                          'text': flat_step.get('text', ''), 'owns': owns_list(flat_step.get('owns'), number),
                           'depends_on': dependency_list(flat_step.get('depends_on') or '')})
         if not steps:
             raise PlanError('a steps block has no steps')

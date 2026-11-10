@@ -95,6 +95,20 @@ class ExternalCapacity402Tests(unittest.TestCase):
         self.assertTrue(sv.external_capacity_failure('HTTP 429 too many requests'))
 
 
+class ExternalCapacityCreditsTests(unittest.TestCase):
+    """A reviewer account with no credits left is not a defect a retry can fix."""
+    def test_codex_out_of_credits_and_usage_limit_match(self):
+        for text in ('Your workspace is out of credits. Add credits to continue.',
+                     "{'codexErrorInfo': 'usageLimitExceeded'}", 'You hit your usage limit',
+                     'usage limit exceeded'):
+            self.assertTrue(sv.external_capacity_failure(text), text)
+
+    def test_unrelated_credit_and_usage_words_do_not_match(self):
+        for text in ('credits are listed in the footer', 'usage report generated', 'usage limitations apply',
+                     'rolled the end credits', ''):
+            self.assertFalse(sv.external_capacity_failure(text), text)
+
+
 class FakeWorker:
     def __init__(self, result, meta):
         self._result = result

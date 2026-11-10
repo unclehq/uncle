@@ -2920,7 +2920,7 @@ run_updated_change_plan_edit_writers() {
         # here and let the caller's single call report it.
         local limited name_failed
         for name_failed in "${failed_names[@]}"; do
-            if grep -qiE "hit your (session|usage) limit|usage limit|rate.?limit|too many requests|quota" "$LOG_DIR/updated-change-plan-worker-edits-$name_failed.log" 2>/dev/null; then
+            if grep -qiE "hit your (session|usage) limit|usage.?limit|out of credits|rate.?limit|too many requests|quota" "$LOG_DIR/updated-change-plan-worker-edits-$name_failed.log" 2>/dev/null; then
                 echo "Updated-plan edit writers stopped by an account limit: $(grep -hiE 'limit|quota' "$LOG_DIR/updated-change-plan-worker-edits-$name_failed.log" | head -1)" >&2
                 return 1
             fi

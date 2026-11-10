@@ -2357,8 +2357,11 @@ run_codex_review() {
         # is guarded against the per-argument size limit.
         local prompt_kind=argv
         local -a prompt_args=()
-        if [[ "${client_cmd[0]}" == python3 ]]; then
+        prompt_kind="$(reviewer_prompt_kind ${client_cmd[@]+"${client_cmd[@]}"})"
+        if [[ "$prompt_kind" != file && "${client_cmd[0]:-}" == python3 ]]; then
             prompt_kind=file
+        fi
+        if [[ "$prompt_kind" == file ]]; then
             prompt_args=(--prompt-file "$prompt_file")
         fi
         local guard_output=""

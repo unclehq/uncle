@@ -406,16 +406,28 @@ def settings(config, stage):
             raise ValueError('No self hosted model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (stage, stage))
         for field in ('model', 'base_url', 'api_key'):
             result[field] = os.environ.get(env + field.upper()) or result[field]
+        import hosted
+        hosted_mode = hosted.is_hosted(os.environ)
+        from_standard = set()
+        if hosted_mode:  # after profile + env resolution, so a non-empty value is never overridden
+            standard = hosted.standard_model_settings(os.environ)
+            for field in ('base_url', 'model', 'api_key'):
+                if not result[field] and standard[field]:
+                    result[field] = standard[field]
+                    from_standard.add(field)
+        hint = ('. ' + hosted.HINT) if hosted_mode else ''
         result['model'] = result['model'].removeprefix('openai/').removeprefix('local/')
         url = urlsplit(result['base_url'])
         if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
-            raise ValueError('Self hosted requires an http(s) Base URL without credentials, query, or fragment')
+            if 'base_url' in from_standard:  # never echo the rejected value
+                raise ValueError('OPENAI_BASE_URL must be an http(s) Base URL without credentials, query, or fragment')
+            raise ValueError('Self hosted requires an http(s) Base URL without credentials, query, or fragment' + hint)
         if not result['model']:
-            raise ValueError('Self hosted requires a model name')
+            raise ValueError('Self hosted requires a model name' + hint)
         if '\n' in result['api_key'] or '\r' in result['api_key']:
             raise ValueError('API key must be a single line')
         if not result['api_key']:
-            raise ValueError('Self hosted requires an API key (use a placeholder for a server without authentication)')
+            raise ValueError('Self hosted requires an API key (use a placeholder for a server without authentication)' + hint)
     # Callers such as home chat can pass a config path without exporting it.
     # Carry even an explicit {} with that connection, so it cannot accidentally
     # be replaced by options from a different config when the loop starts.
@@ -657,6 +669,9 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
                 'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
                 'DOCUMENT_BUDGET_SOURCE'):
         env.pop(key, None)
+    import hosted
+    if hosted.is_hosted(os.environ):  # the key reaches the client only through UNCLE_OPENCODE_API_KEY, not tools/shell
+        env.pop('OPENAI_API_KEY', None)
     env.update(OPENCODE_CONFIG_CONTENT=json.dumps(config), UNCLE_OPENCODE_API_KEY=values['api_key'],
                OPENCODE_DISABLE_PROJECT_CONFIG='true', OPENCODE_DISABLE_CLAUDE_CODE='true',
                OPENCODE_DISABLE_DEFAULT_PLUGINS='true', OPENCODE_DISABLE_MODELS_FETCH='true',

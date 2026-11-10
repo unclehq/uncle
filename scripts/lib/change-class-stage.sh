@@ -47,7 +47,9 @@ classify_change_stage() {
     if [[ "$(UNCLE_CLASSIFY_FALLBACK_STAGE=x uncle_config_stage classify-change)" == supervision ]]; then
         export WORKFLOW_MODEL_CLASSIFY_CHANGE="${WORKFLOW_MODEL_CLASSIFY_CHANGE-$(uncle_config_get supervision.model || true)}"
         # "sonnet" is a Claude model alias; any other runner would reject it and the fail-open stage would hide that.
-        if [[ -z "$WORKFLOW_MODEL_CLASSIFY_CHANGE" && "$(uncle_config_get supervision.runner || true)" =~ ^(claude)?$ ]]; then
+        # Hosted: when the supervisor resolves to self-hosted the alias is wrong too; the hosted model comes from settings.
+        if [[ -z "$WORKFLOW_MODEL_CLASSIFY_CHANGE" && "$(uncle_config_get supervision.runner || true)" =~ ^(claude)?$ ]] \
+            && ! { uncle_is_hosted && [[ "$(uncle_stage_runner supervision)" == self-hosted ]]; }; then
             export WORKFLOW_MODEL_CLASSIFY_CHANGE=sonnet
         fi
         export WORKFLOW_EFFORT_CLASSIFY_CHANGE="${WORKFLOW_EFFORT_CLASSIFY_CHANGE-$(uncle_config_get supervision.effort || true)}"

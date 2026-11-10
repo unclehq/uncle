@@ -69,7 +69,7 @@ uncle__recorded_mode() {
 }
 
 uncle_resolve_mode() {
-  local arg a_flag=0 u_flag=0 want_attended=0 name mode source rec dir
+  local hosted_attended=0 arg a_flag=0 u_flag=0 want_attended=0 name mode source rec dir
   local legacy=()
   for arg in "$@"; do
     case "$arg" in
@@ -100,7 +100,10 @@ uncle_resolve_mode() {
         uncle__err "$(uncle_msg_refuse_mode_file "$dir/mode")"; return 1
       fi
     fi
-    if [ "$want_attended" = 1 ]; then
+    # Hosted (UNCLE_HOSTED exactly 1): an explicit UNCLE_UNATTENDED=0 (any non-empty, non-1 value) stays attended.
+    hosted_attended=0
+    if [ "${UNCLE_HOSTED:-}" = 1 ] && [ -n "${UNCLE_UNATTENDED:-}" ] && [ "${UNCLE_UNATTENDED}" != 1 ]; then hosted_attended=1; fi
+    if [ "$want_attended" = 1 ] || [ "$hosted_attended" = 1 ]; then
       mode=attended; source=flag
       [ "$a_flag" = 1 ] || source=env
     elif [ "${#legacy[@]}" -gt 0 ]; then
@@ -108,7 +111,7 @@ uncle_resolve_mode() {
       [ "$u_flag" = 1 ] && source=flag
     elif [ "$rec" = attended ] || [ "$rec" = unattended ]; then
       mode=$rec; source=resume
-    elif [ "$rec" = missing ]; then
+    elif [ "$rec" = missing ] && [ "${UNCLE_HOSTED:-}" != 1 ]; then
       mode=attended; source=resume
     else
       mode=unattended; source=default

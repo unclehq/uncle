@@ -1,71 +1,50 @@
 # Defects
 
-## MC-101
+## D-1
 
-- **Status:** NOT RUN
-- **Evidence:** See Findings MC-101.
-- **Expected result:** See MANUAL_CHECKLIST.md MC-101.
-- **Actual result:** Unsigned: verify exits 1 and reaches integrity checks (not 'no attestation'); its single refusal is 'required gate publication has no human approval', not an 'unauthenticated-attestation' finding. Signed: .sig listed as add, but verify was not run on the signed tree, so 'signed run exits 0' was not observed; by design (D-3) the delegated publication entry makes verify fail without a human approval. Checklist wording conflicts with the plan; not resolved here.
+- **Status:** BLOCKED-SETUP
+- **Evidence:** No release repo or host access. Action: supply both.
+- **Expected result:** Publish succeeds with no "must match one publisher operation" refusal.
+- **Actual result:** Not performed. Declared `Depends on: MC-100`, which is not in the checklist.
 
-## MC-102
+## D-1
 
-- **Status:** NOT RUN
-- **Evidence:** See Findings MC-102.
-- **Expected result:** See MANUAL_CHECKLIST.md MC-102.
-- **Actual result:** Empty-envelopes case observed via driver tests (blocked, handoff-failed, no handoff.json). NOT READY half not executed.
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Depends on MC-102 publish; no hire available.
+- **Expected result:** Zero approval prompts on install.
+- **Actual result:** Not performed.
 
-## MC-202
+## D-1
 
-- **Status:** NOT RUN
-- **Evidence:** See Findings MC-202.
-- **Expected result:** See MANUAL_CHECKLIST.md MC-202.
-- **Actual result:** Empty-envelopes half observed; NOT READY and stale release_skipped cases not executed.
+- **Status:** BLOCKED-SETUP
+- **Evidence:** No hosted build environment.
+- **Expected result:** No `Preview:` line, exit status 0, refusal reported.
+- **Actual result:** Not performed.
 
-## MC-204
+## D-1
 
-- **Status:** NOT RUN
-- **Evidence:** See Findings MC-204.
-- **Expected result:** See MANUAL_CHECKLIST.md MC-204.
-- **Actual result:** Both refusals observed. Checklist expects exit 3 for the publish-after-handoff refusal; the test asserts exit 1. Unchanged journal and absence of remote calls not asserted by those tests.
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Depends on MC-201 (undefined) and a publish.
+- **Expected result:** Zero approval prompts on reinstall of a pre-existing hire.
+- **Actual result:** Not performed.
 
-## MC-206
+## D-1
 
-- **Status:** NOT RUN
-- **Evidence:** See Findings MC-206.
-- **Expected result:** See MANUAL_CHECKLIST.md MC-206.
-- **Actual result:** Tracked allowed_signers not deleted; stale tracked .sig is a delete row with no content; tampered tree fails verify. The 'new untracked allowed_signers listed add' and 'digest mismatch' wording are not asserted exactly (tampered test only checks a tree-related failure).
+- **Status:** BLOCKED-SETUP
+- **Evidence:** No release repo or host access.
+- **Expected result:** Publish succeeds without the match refusal; otherwise BLOCKED-SETUP naming the access.
+- **Actual result:** Not performed.
 
-## MC-207
+## D-1
 
-- **Status:** NOT RUN
-- **Evidence:** See Findings MC-207.
-- **Expected result:** See MANUAL_CHECKLIST.md MC-207.
-- **Actual result:** Not executed.
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Depends on MC-301.
+- **Expected result:** Zero Daytona-write approval prompts; install succeeds.
+- **Actual result:** Not performed.
 
-## MC-303
+## D-1
 
-- **Status:** NOT RUN
-- **Evidence:** See Findings MC-303.
-- **Expected result:** See MANUAL_CHECKLIST.md MC-303.
-- **Actual result:** Empty envelopes half observed; NOT READY half not executed.
-
-## MC-304
-
-- **Status:** NOT RUN
-- **Evidence:** See Findings MC-304.
-- **Expected result:** See MANUAL_CHECKLIST.md MC-304.
-- **Actual result:** Unaltered tree passes 'no attestation' to integrity checks (exit 1 for the missing human approval, not 0); tampered tree fails verify. Checklist's exit 0 only applies if signed and approved; not observed.
-
-## MC-402
-
-- **Status:** NOT RUN
-- **Evidence:** See Findings MC-402.
-- **Expected result:** See MANUAL_CHECKLIST.md MC-402.
-- **Actual result:** Exporter exits 1 with no handoff.json. The 'Hand-off failed' wrapper text in change-pr.sh was not observed.
-
-## AC-10
-
-- **Status:** FAIL
-- **Evidence:** run-python-tests.sh exit 1; supervisor-test.py signing audit flags handoff-export-test.py:243. Defect D-1.
-- **Expected result:** Not recorded.
-- **Actual result:** Not recorded.
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Depends on MC-403 (undefined) and a publish.
+- **Expected result:** Zero Daytona-write approval prompts on reinstall.
+- **Actual result:** Not performed.

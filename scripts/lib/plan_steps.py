@@ -66,6 +66,9 @@ def sections(narrative):
     return result
 
 
+COMMENT_MARKER = re.compile(r'(--|//|#|;|/\*|<!--)(\s|$)|--[A-Za-z]')
+
+
 def paths(value):
     ticks = re.findall(r'`([^`]+)`', value)
     values = ticks[:]
@@ -80,7 +83,9 @@ def paths(value):
     for token in values:
         while token.startswith('./'):
             token = token[2:]
-        if token and not token.startswith('/'):
+        # A comment marker a model wrote into the list (a Haskell `-- EOF-GUARD`, `// end`, `# end`) is not a file the step
+        # owns. Dropping it here keeps one stray token from failing the whole plan ("owns: replace ... with a file or glob").
+        if token and not token.startswith('/') and not COMMENT_MARKER.match(token):
             result.append(token)
     return result
 

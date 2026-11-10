@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 233
+Issue 236
 
-Seeded from [unclehq/uncle#233](https://github.com/unclehq/uncle/issues/233).
+Seeded from [unclehq/uncle#236](https://github.com/unclehq/uncle/issues/236).
 
 ## Change Type
 
@@ -10,75 +10,72 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Hand-off mode leaves .uncle/attestation.json and .sig out of handoff.json, so a host-published PR has no attestation and `uncle verify <pr>` cannot check it
+Release must allow Daytona's signed preview-link call: the host offers it now, but #209 was closed before it did
 
 ## Motivation
 
 ## Summary
 
-In hand-off mode (`UNCLE_PUBLISH_MODE=handoff`), `.uncle/handoff/handoff.json` never lists `.uncle/attestation.json` or `.uncle/attestation.sig`. A host that publishes the hand-off exactly as written opens a PR that has no attestation file. The attestation appears only as the summary block in the PR body. `uncle verify <pr>` reads `.uncle/attestation.json` from the PR head, so it has nothing to verify.
+A hosted build can only make the publisher calls its release lists. To print a preview link (#207), the release must list Daytona's signed-link call. #209 asked for that and was closed with no change, because the host's Daytona publisher didn't offer the call yet. A release that listed it was refused with `Template grant 'daytona GET …' must match one publisher operation.`
 
-`.gitignore` is not the cause. The `!.uncle/attestation.json`, `!.uncle/attestation.sig` and `!.uncle/allowed_signers` lines work, and PRs from Uncle's normal publish commit `.uncle/attestation.json` and `.uncle/docs/` (for example #224, #227 and #229). In hand-off mode, the step that writes the attestation never runs.
+The host's Daytona publisher offers the call now. Until a release lists it, every hosted build's link request is refused and no `Preview:` line is printed. This is step 1 of #235.
 
-## How it happens
+## What the host offers now
 
-1. **At bind, after the final audit,** `commit_tree` is the snapshot of the audited tree, and `attestation` is the sealed summary for the PR body (`scripts/lib/change-pr.sh:1939-1942`, `scripts/lib/attestation.py:259-278`). On purpose, the snapshot leaves out `.uncle/attestation.json` and `.sig`. "The attestation names the tree it is committed into", so those files are added only when `snapshot(..., attestation=True)` is called (`change-pr.sh:827-832`, `:884-890`).
-2. **Normal publish** calls `attest(j)` after consent (`change-pr.sh:1753-1757`). That builds the release Statement, signs it when a signer exists, writes `.uncle/attestation.json` and `.sig`, and moves `commit_tree` to `snapshot(True, attestation=True)` (`:615-682`, files written at `:685-697`, tree moved at `:680-681`).
-3. **Hand-off mode** returns before step 2 (`change-pr.sh:205-213`). `handoff_export.py` then:
-   - takes `tree` from the bound `commit_tree` (`:89`), which is the tree without the attestation files;
-   - lists `changes` as the diff from the base commit to that tree (`:60-80`, `:112`);
-   - uses the bind-time summary, or seals one (`:93-97`), and puts it only in `pr_body` and the `attestation` field (`:106`, `:113-116`).
-4. **`uncle verify <pr-url|pr-number>`** reads `.uncle/attestation.json` (and `.sig` when present) from the PR head commit (`scripts/uncle-verify.py:424-426`). A host-published hand-off PR has neither.
+Read from the host's Daytona publisher on 2026-11-10:
 
-`GITHUB_INTEGRATION.md:81-83` already describes this: "Applying those changes to the base commit gives exactly the audited tree", and "Not yet covered: … `uncle verify` against the host-opened PR."
-
-`.uncle/allowed_signers` behaves differently. It is walked like any other file that isn't ignored. When the project has one, it is already in the bound tree and appears in `changes` as usual, so it only needs test coverage. The trust-root rule at `change-pr.sh:780-782` keeps a tracked copy from being deleted.
-
-## Code paths (main `5a5cd30`)
-
-Blame is `git blame -w`.
-
-| Where | What it does | Last changed in |
+| Method and path | What it does | Limits |
 |---|---|---|
-| `scripts/lib/change-pr.sh:205-214` | Hand-off branch: runs `handoff_export.py` and returns, so `change_pr_publish` and `attest(j)` never run. | `23b2da49` 2026-11-09 (#205, PR #219) |
-| `scripts/lib/handoff_export.py:60-80` | `changes(base, tree)`: every path that differs between base and `tree`, with full content. | `23b2da49` 2026-11-09 (#205, PR #219) |
-| `scripts/lib/handoff_export.py:89-97` | Takes `tree` from the bound `commit_tree`. Uses the bind-time sealed summary, or seals one, and sets `gate_publication` to `HANDOFF`. Writes no file. | `23b2da49` 2026-11-09 (#205, PR #219) |
-| `scripts/lib/handoff_export.py:106-116` | Attaches the summary to the PR body and writes `handoff.json` with `tree`, `attestation` and `changes`. | `23b2da49` 2026-11-09 (#205, PR #219) |
-| `scripts/lib/change-pr.sh:1939-1942` | Bind: `commit_tree=snapshot(True)` (no attestation files) and `attestation=seal_attestation(j)`. | `57312a8a` 2026-09-10, `63b65476` 2026-09-13 |
-| `scripts/lib/attestation.py:259-278` | `seal()`: the PR-body summary (issue, specification, agents, review, verification, tree). This is not the signed Statement. | `63b65476` 2026-09-13 |
-| `scripts/lib/change-pr.sh:827-832` | The snapshot walk skips `ATTESTATION_FILES`. | `f365a77c` 2026-09-16 (#59), `d9fd1a72` 2026-09-21 |
-| `scripts/lib/change-pr.sh:884-890` | With `attestation=True`, appends `.uncle/attestation.json` and `.sig` to the tree. | `f365a77c` 2026-09-16 (#59), `57312a8a`, `d9fd1a72` |
-| `scripts/lib/change-pr.sh:615-623`, `:677-697` | `attest(j)`: Statement, signature, `write_attestation_files`, then `commit_tree = snapshot(True, attestation=True)`. | `f365a77c` 2026-09-16 (#59) |
-| `scripts/lib/change-pr.sh:1753-1765` | Normal publish: `attest(j)` when envelopes exist; otherwise only the summary. | `f365a77c` 2026-09-16 (#59), `63b65476`, `efa8cb59` 2026-10-25 |
-| `scripts/lib/change-pr.sh:780-782` | Trust root: keeps a tracked `.uncle/allowed_signers` in the tree. | `5d87d59f` 2026-10-31 |
-| `scripts/uncle-verify.py:424-426` | `uncle verify <pr>` reads `.uncle/attestation.json` and `.sig` from the PR head. | `f365a77c` 2026-09-16 (#59) |
-| `GITHUB_INTEGRATION.md:75-83` | Hand-off docs, including "not yet covered: `uncle verify` against the host-opened PR". | `23b2da49` 2026-11-09 (#205, PR #219) |
+| `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url` | A link to the port with its token inside, so it opens with a click. | `expiresInSeconds` at most 3600. Daytona's default is 60. |
+| `POST /sandbox/{sandboxId}/ports/{port}/signed-preview-url/{token}/expire` | Ends a signed link early. | Needed only if the script ends links early. |
+| `GET /sandbox/{sandboxId}/ports/{port}/preview-url` | The plain link. Its token goes in a request header, which a click can't send. | Not needed. |
+
+The host classes the signed-link call as a change (a "mutation"), even though it is a GET.
+
+## How the host checks the release's list
+
+- Each entry is matched by method and path to exactly one publisher operation. The signed-link path differs from the plain-link path, so the entry matches one operation and needs no `operation_id`.
+- A script entry for a call that makes a change is allowed without approval on each call. On the script surface the host supports per-call approval only for sending mail, so set `require_approval` to false or leave it out.
+- Daytona runs on the host's own key, not on an account the person signed in with. Adding this entry doesn't make anyone approve the update before it installs.
+- The release already declares Daytona for its script, since the script creates and deletes sandboxes through it.
 
 ## Fix
 
-1. **Attest before exporting.** On the hand-off branch (`change-pr.sh:207`), run the same attestation step the normal publish runs (`change-pr.sh:1753-1765`) before `handoff_export.py`. When envelopes exist, call `attest(j)` with the publication gate recorded as the host hand-off. Otherwise, fall back to the summary as today. Then save the journal. Afterwards `commit_tree` is the attested tree, and `audited_tree` keeps the audited one, as on the normal path (`:680-681`).
-2. **Export the attested tree.** `handoff_export.py` then takes `tree` from the updated `commit_tree`. `changes(base, tree)` picks up `.uncle/attestation.json`, and `.sig` when a signer exists, with no special case. "Applying those changes to the base commit gives exactly `tree`" still holds. Add `audited_tree` to `handoff.json` so a host can show both.
-3. **Keep the PR-body summary**, taken from the same sealed state, so the body and the committed Statement can't disagree.
-4. **Refuse the same way the normal path does.** If `attest(j)` refuses under the blocking policy (an overridden `NOT READY` with envelopes), the hand-off fails with that message (`handoff-failed`) instead of writing a hand-off without an attestation.
-5. **Update `GITHUB_INTEGRATION.md:79-83`.** Say the hand-off includes the attestation files, and remove "`uncle verify` against the host-opened PR" from "not yet covered".
+1. Add to the release's script publisher grants: publisher `daytona`, method `GET`, path `/sandbox/{sandboxId}/ports/{port}/signed-preview-url`, `require_approval` false.
+2. Only if the script ends links early, add `POST /sandbox/{sandboxId}/ports/{port}/signed-preview-url/{token}/expire` the same way.
+3. Have the script ask for an `expiresInSeconds` of at most 3600.
+4. Publish a new release.
+
+## Code paths (main `09a832b`)
+
+Blame is `git blame`.
+
+| Where | What it does | Last changed in |
+|---|---|---|
+| The release definition (not in this repository) | Lists the script's publisher grants. This is where the change goes. | |
+| The build script (not in this repository) | Asks for the signed link to the port Uncle reports (#207). | |
+| `scripts/lib/host_preview.py:281-292` | Prints `UNCLE_PREVIEW_PORT=<n>`, the port the script asks a link for. | `bd3cde00` 2026-11-09 (#206, committed without a PR) |
+| `skills/uncle-build/SKILL.md:8-16` | Chat rules for the `Preview:` line the script prints. | `274a636e` 2026-11-09 (#210, PR #220) |
+
+## History
+
+- #207 (closed 2026-11-09): the build script asks for the signed link. It was written while the host still refused the call with 403.
+- #209 (closed 2026-11-09, no change): closed because the grant couldn't be published until the host's publisher offered the call. The closing comment asked for it to be reopened once it could be. It can't be reopened, so this issue replaces it.
+- #235: the end-to-end fix this unblocks.
 
 ## Tests
 
-- A hand-off from a run with envelopes lists `.uncle/attestation.json` as `add`, and its content is byte-for-byte the Statement that `attest(j)` wrote. Applying `changes` to `base_commit` gives `tree`, and `tree` equals the journal's attested `commit_tree`.
-- With a signer configured, `.uncle/attestation.sig` is listed too. Without one, it isn't, and no stale `.sig` is listed.
-- With `.uncle/allowed_signers` tracked in the base, the hand-off doesn't delete it. With a new one in the working tree (not ignored, thanks to `!.uncle/allowed_signers`), it is listed as `add`.
-- End to end: apply the hand-off to a copy of the base in a scratch repository, commit it, and run `uncle verify --tree <commit>` (or `uncle verify` at that `HEAD`). It reaches the integrity checks instead of failing with "no attestation".
-- An overridden `NOT READY` run with envelopes refuses the hand-off with the attestation-blocked message, and no `handoff.json` is written.
-- A run that predates envelopes still writes a hand-off with the summary only, as today.
+None in this repository: the change is in the release definition. The checks below run against the host.
 
 ## Checks after the fix
 
-- A hosted hand-off on a repository whose `.gitignore` has Uncle's block: the host-opened PR contains `.uncle/attestation.json` (and `.sig` when signed), and `uncle verify <pr>` runs its checks against it.
+1. The release publishes without the "must match one publisher operation" refusal.
+2. In a hosted build of a small web app, the signed-link call returns a link instead of being refused as not granted, and the output has a `Preview:` line.
+3. An existing hire installs the new release without being asked to approve a Daytona write.
 
 ## Related
 
-- #205 and PR #219 (hand-off mode), #59 (attestations).
-- A new-project build has no hand-off path. It attests and then commits locally (`scripts/stagegate.sh:472-484`, `:6892-6911`), so a host publishing one has to collect the files itself. That is out of scope here, but worth noting for hosted runs.
+#206, #207, #208, #209, #210, #235.
 
 ## Observed Current Behavior
 

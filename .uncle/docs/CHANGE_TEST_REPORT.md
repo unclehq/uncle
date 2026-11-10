@@ -4,17 +4,16 @@
 
 | Command | Status | Meaningful output | Requirements |
 |---|---|---|---|
-| python3 -B scripts/tests/handoff-export-test.py | PASS | Ran 25 tests, OK | AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8 |
-| bash scripts/tests/unattended-test.sh | PASS | 76 checks passed | AC-10 |
-| grep -n 'Not yet covered' -A1 GITHUB_INTEGRATION.md | PASS | lists only planning without a git remote | AC-9 |
-| bash scripts/run-shell-tests.sh; bash scripts/run-python-tests.sh | DRIVER PENDING | Driver owns the full regression run. | AC-10 |
-| formatter / type checker / lint / frontend build / migration / rollback / performance / security | N/A | No such tooling applies to these shell/python changes. | None stated |
+| grep -rl signed-preview-url --exclude-dir=.git --exclude-dir=.uncle . | PASS | No matches; confirms the change surface is outside this repo. | AC-1 |
+| LV-1..LV-4 live publish, hosted build, install, refusal path | BLOCKED | BLOCKED-SETUP: release repo path and host access required. | AC-2, AC-3, AC-4, AC-6 |
+| AC-5 grant diff | NOT RUN | No release repo to diff. | AC-5 |
+| bash scripts/run-shell-tests.sh; bash scripts/run-python-tests.sh | DRIVER PENDING | Driver owns the full regression run; no source changed. | None stated |
+| formatter / type checker / lint / frontend build / migration / rollback / performance / security | N/A | No code changed in this repo. | None stated |
 
 ## Coverage gaps
 
-- gates-repair group 5 red on clean HEAD, unrelated.
-- Signed-path e2e uses a fixture signer; no real ssh-keygen/cosign run.
+- All AC-1..AC-6 unverified: release repo and host access unavailable.
 
 ## Next action
 
-Driver runs the full regression block and compares against baseline.
+Operator supplies the release repo path and host access, then rerun implementation.

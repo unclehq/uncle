@@ -188,6 +188,12 @@ tests_collate() {
         path="${line:3}"
         [[ -n "$path" && "$path" != .uncle/* ]] || continue
         awk -F'\t' -v f="$path" '$2 == f { found = 1 } END { exit !found }' "$listed" && continue
+        # The driver installs dependencies itself while the lanes author (the concurrent wave's "Dependencies installed" step), which
+        # creates or rewrites the package manager's lockfile. No lane wrote it and no implementation step owns it, so it read as a
+        # stray and failed tests-complete (a calculator build stopped at IMPLEMENT on `package-lock.json`).
+        case "${path##*/}" in
+            package-lock.json|npm-shrinkwrap.json|yarn.lock|pnpm-lock.yaml|bun.lock|bun.lockb) continue ;;
+        esac
         # `git status` lines are a proxy for "changed during authoring", and the proxy breaks when ignore rules move: an
         # implementation running at the same time rewrote .gitignore, and a stale, untouched .vite/deps (hours older than the run)
         # stopped being ignored, so it looked like a new stray and failed the stage. A file that still exists and is older than the

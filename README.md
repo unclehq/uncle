@@ -26,7 +26,7 @@ You need at least one supported AI client installed and authenticated (Claude, C
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh && bash install.sh
-uncle --application 'build a groovy 1970s themed calculator react webapp with keyboard support'
+uncle --application 'build a groovy 1970s themed calculator react webapp with keyboard support' --attended
 ```
 
 **Windows (PowerShell)** (Scoop is required)
@@ -34,7 +34,7 @@ uncle --application 'build a groovy 1970s themed calculator react webapp with ke
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-uncle --application 'build a groovy 1970s themed calculator react webapp with keyboard support'
+uncle --application 'build a groovy 1970s themed calculator react webapp with keyboard support' --attended
 ```
 
 In an existing repository:
@@ -46,7 +46,7 @@ uncle
 
 Give Uncle a `REQUIREMENTS.md`, a `CHANGE_REQUEST.md`, or a GitHub issue. You can also pipe a request in with `cat request.md | uncle --change-request`. Treat piped text as untrusted input to tool-using agents.
 
-Runs are unattended by default, so a build goes straight through without approval gates. Add `--attended` to approve each stage yourself. Unattended runs record every gate as delegated rather than approved by a person, and `uncle verify` refuses such a change, so use `--attended` when you want a change that verifies. See [docs/UNATTENDED_DEFAULT_MIGRATION.md](docs/UNATTENDED_DEFAULT_MIGRATION.md). Windows support is newer than macOS and Linux.
+The commands above use `--attended`, which makes you approve each stage, because that is what produces a change that verifies. Without it, runs are unattended by default: a build goes straight through with no approval gates, every gate is recorded as delegated rather than approved by a person, and `uncle verify` refuses the result. That default exists so a demo can run hands-off. See [docs/UNATTENDED_DEFAULT_MIGRATION.md](docs/UNATTENDED_DEFAULT_MIGRATION.md). Windows support is newer than macOS and Linux.
 
 ## Help build Uncle
 
@@ -77,7 +77,7 @@ Limits worth knowing: the core drivers and `uncle_tui.py` are large, so changing
 
 Most coding tools focus on the agent doing the work. Uncle focuses on the **change**.
 
-The coding agent is untrusted and swappable. A broken or hostile agent can fail Uncle's checks, but it cannot declare itself verified.
+The coding agent is untrusted and swappable. A broken or careless agent cannot declare itself verified: the driver, not the agent, records the evidence. Defending against a hostile agent is harder. An unsigned attestation protects against mistakes, not against an agent that can write to the same filesystem, so that case requires a signing key the agent cannot reach (see [docs/verify.md](docs/verify.md)). Run agents in a sandbox if that matters to you.
 
 For a change to be verified, the artifact that was reviewed, verified, approved and published must be the same artifact.
 
@@ -107,7 +107,7 @@ Verification         tree f12b8...   PASS
 Publication          tree 91ae3...
 
                          ✗
-                    NOT HUMAN VERIFIED
+                    NOT VERIFIED: tree changed after review
 ```
 
 The review may have been valid. It just was not a review of the code being published. Uncle treats that distinction as an invariant.

@@ -114,6 +114,11 @@ def configure_request_options(values, stage=None, config=None):
     """Snapshot and validate at stage start, before tools or server discovery."""
     if os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1':
         options = dict(values.get('_request_options', request_options(stage, config)))
+        if not options and _lookup_request_options(stage, config)[0]:
+            # An explicit `{}` opts out of every extra request field (a gateway that refuses chat_template_kwargs, such as
+            # Seren's model route, relies on it): the cheap retry must not send the field anyway.
+            return dict(values, _request_options=options,
+                        _request_options_stage=stage or os.environ.get('UNCLE_STATUS_STAGE', ''))
         options['chat_template_kwargs'] = dict(options.get('chat_template_kwargs') or {}, enable_thinking=False)
         return dict(values, _request_options=options,
                     _request_options_stage=stage or os.environ.get('UNCLE_STATUS_STAGE', ''))

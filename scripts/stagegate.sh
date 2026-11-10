@@ -17,6 +17,19 @@ if [[ -n "${UNCLE_RUNTIME_ROOT:-}" && -d "$UNCLE_RUNTIME_ROOT/scripts" ]]; then
 else
     ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
+# Help/version: honored only as the first argument, before run-policy preflight,
+# with no state, directory, git or agent side effects. Any other argv (e.g.
+# `--unattended --version`) goes through the full preflight and normal parsing.
+case "${1:-}" in
+    -h|--help|--version)
+        eval "$(sed -n '/^usage() {$/,/^}$/p' "${BASH_SOURCE[0]}")"
+        if [[ "$1" == "--version" ]]; then
+            sed -n 's/^STAGEGATE_VERSION="\(.*\)"$/\1/p' "${BASH_SOURCE[0]}" | head -n 1
+        else
+            usage
+        fi
+        exit 0 ;;
+esac
 PROJECT_ROOT="${UNCLE_PROJECT_ROOT:-$ROOT}"
 if [[ ! -d "$PROJECT_ROOT" ]]; then
     echo "Project root does not exist: $PROJECT_ROOT" >&2

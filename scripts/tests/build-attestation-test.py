@@ -21,17 +21,25 @@ class BuildAttestationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
+        (self.repo / '.empty-gitconfig').write_text('')
+        (self.repo / '.home').mkdir()
+        empty = str(self.repo / '.empty-gitconfig')
         self.env = dict(os.environ, STATE_DIR='.uncle/workflow', UNCLE_LIB_DIR=str(LIB),
-                        GIT_CONFIG_GLOBAL='/dev/null', GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                        GIT_CONFIG_GLOBAL=empty, GIT_CONFIG_SYSTEM=empty, HOME=str(self.repo / '.home'),
+                        GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
                         GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        self.env.pop('GPG_AGENT_INFO', None)
+        self.env.pop('GNUPGHOME', None)
         self.git('init', '-q', '-b', 'main')
+        self.git('config', 'commit.gpgsign', 'false')
+        self.git('config', 'tag.gpgsign', 'false')
         (self.repo / '.gitignore').write_text('.uncle/*\n!.uncle/docs/\n!.uncle/attestation.json\n'
                                               '!.uncle/attestation.sig\n!.uncle/allowed_signers\n')
         (self.repo / 'app.txt').write_text('hi\n')
         (self.repo / '.uncle/docs').mkdir(parents=True)
         (self.repo / '.uncle/workflow/approvals').mkdir(parents=True)
         self.git('add', '-A')
-        self.git('commit', '-qm', 'init')
+        self.git('-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', 'commit', '--no-gpg-sign', '-qm', 'init')
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -59,7 +67,7 @@ class BuildAttestationTests(unittest.TestCase):
         self.assertEqual(self.finish().returncode, 0)
         self.assertTrue((self.repo / '.uncle/attestation.json').exists())
         self.git('add', '-A')
-        self.git('commit', '-qm', 'build')
+        self.git('-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', 'commit', '--no-gpg-sign', '-qm', 'build')
         self.git('checkout', '-q', '-b', 'feature')
         (self.repo / '.uncle/attestation.json').unlink()
         verify = run(sys.executable, str(VERIFY), cwd=self.repo, env=self.env)

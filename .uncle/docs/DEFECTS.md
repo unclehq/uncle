@@ -1,29 +1,57 @@
 # Defects
 
-## Duplicate 'Supervision corrections disabled' stderr line (config_notices + host.transcript of controller.status) in supervised_lock_run; expected exactly once.
-
-- **Status:** FAIL
-- **Evidence:** Observed stderr of both runs as above; duplicate emission arises from supervised_lock_run in scripts/lib/supervisor.py: config_notices() writes notice, then because config.enabled is still true HeadlessHost is built and 'if host.controller.status: host.transcript(host.controller.status)' prints the disabled reason again.
-- **Expected result:** Warnings (if any) first, then one 'Supervision corrections disabled' line (once each case) before the wrapped command runs; run not aborted.
-- **Actual result:** Run not aborted (rc=0, MARKER printed) in both. Ordering correct (warning, then disabled, before ERRMARK). BUT the 'Supervision corrections disabled' message is printed TWICE in each run: once bare (from config_notices) and once prefixed '[supervision] ' (from the HeadlessHost transcript of controller.status). Run 1 stderr: warning; 'Supervision corrections disabled: Hosted mode has no model: set SEREN_MODEL or UNCLE_MODEL (or supervision.model). Fix .uncle/config.'; same line prefixed '[supervision] '; ERRMARK. Run 2 stderr: 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.' then the same line prefixed '[supervision] ', then ERRMARK.
-
-## Duplicate 'Supervision corrections disabled' stderr line in supervised_lock_run (config_notices + host transcript); expected once. Not yet filed in DEFECTS.md (worker may not edit).
-
-- **Status:** FAIL
-- **Evidence:** Case 1 stderr: 'ignoring unknown supervision key: supervision.zzz' / '...yyy' / 'Supervision corrections disabled: Hosted mode has no model: ... Fix .uncle/config.' / '[supervision] Supervision corrections disabled: Hosted mode has no model: ... Fix .uncle/config.' / 'RUN STARTED'. Same duplication in case 2. Source: scripts/lib/supervisor.py:1850 (config_notices write) and the `host.transcript(host.controller.status)` call after HeadlessHost creation. Note: the first attempt without exporting UNCLE_HOSTED to the process env (only to the env dict) showed no disabled line; that was a harness setup mistake, corrected, not counted.
-- **Expected result:** Stderr shows warnings first in file order, then one 'Supervision corrections disabled: ...' line (including the missing-model error in case 1), once each; the run still starts; no config values echoed.
-- **Actual result:** Ordering, content, run start and redaction are as expected: warnings in file order first, then the disabled line (case 1 includes 'Hosted mode has no model: set SEREN_MODEL or UNCLE_MODEL...'; case 2 lists the max_calls_per_run error plus the missing-model error), then 'RUN STARTED', rc 0, and 'secretval1'/'notanumber' never echoed. DEVIATION: the disabled message appears twice in stderr in each case: once bare from config_notices, and again prefixed '[supervision] ' from the headless host's transcript (host.controller.status), so it is not emitted exactly once.
-
-## Reload-time 'Supervision disabled' transcript line is written to stderr in a hosted run (supervisor.py reload_config via HeadlessHost.transcript); expected no stderr output on reload. No DEFECTS.md entry written by this worker.
-
-- **Status:** FAIL
-- **Evidence:** /tmp/mc206/o0.err: '--- run started / --- run done'. /tmp/mc206/o1.err: entry 'ignoring unknown supervision key: supervision.bogus0', then '--- run started', '--- config rewritten', then '[supervision] Supervision disabled: ... Pending diagnosis cancelled; counters retained.', then '--- run done'. Cause: HeadlessHost.transcript writes to sys.stderr (supervisor.py:1721) and reload_config (supervisor.py:1024-1058) calls host.transcript.
-- **Expected result:** Non-hosted entry prints no notice to stderr; in the hosted run the entry notice appears once and the reload adds no stderr output, though status reflects the new disabled reason.
-- **Actual result:** Non-hosted: stderr contained only the stub's own markers, with no config notice (matches). Hosted: the entry notice 'ignoring unknown supervision key: supervision.bogus0' appeared once. But after the rewrite, the reload wrote a new stderr line: '[supervision] Supervision disabled: Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer; Hosted mode has no model: ... Fix .uncle/config.. Pending diagnosis cancelled; counters retained.' So the reload DID add stderr output, contrary to the expectation. The reload line also has a doubled period ('config..') and repeats the disabled reason. Caveat: my hosted config had no model, so the entry also printed a disabled-reason line and a '[supervision] ...' transcript line, but the reload-time stderr line is independent of that. The new disabled reason did appear in the reload message.
-
-## None. To finish the check, a person must run a real non-hosted supervised run in an interactive terminal with a configured runner, edit .uncle/config mid-run, and watch stderr and the TUI status.
+## None. Action: free disk space on the host volume, then rerun.
 
 - **Status:** BLOCKED-SETUP
-- **Evidence:** Probe output: 'entry stderr: '' status: '' enabled True' and 'reload stderr: '' status: 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.' enabled False'. The probe is in a temp directory and only exercises supervisor.py's load_config, Controller and reload_config.
-- **Expected result:** Interactive run starts normally with no stderr notice at entry; the mid-run reload prints nothing to stderr but status/TUI reflects the disabled reason after the invalid value is added.
-- **Actual result:** At the library level the behavior matches: entry stderr '' and status '' (enabled True); after the edit, reload stderr '' and status 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.' (enabled False), with one transcript line. The real wrapper/TUI run was not exercised, so the check is not confirmed end to end.
+- **Evidence:** Terminal output; df -h shows /System/Volumes/Data 100% used; 'no space left on device' errors from zsh and cp.
+- **Expected result:** Both runs pass; .gitignore hash identical after restoration.
+- **Actual result:** Run 1 (.uncle present): 13 tests, FAILED (failures=1, errors=2). Run 2 (clean): FAILED (errors=13). Shell reported 'no space left on device' (ENOSPC) during writes; volume at 100% (249Mi free). Failures are not attributable to the application. Restored .gitignore hash equals original (f65fdeed...), cmp byte-identical.
+
+## Missing-tool handling in worktree-run-test.sh does not emit 'missing prerequisite: <tool>'. Without the nested override the suite exits 77 (skip). No DEFECTS.md entry was written, because workers may not edit that file.
+
+- **Status:** FAIL
+- **Evidence:** exit=77 with empty stderr; exit=1 with stderr 'mktemp: command not found / mktemp -d failed'. grep -rIn 'missing prerequisite' in scripts/ returned nothing.
+- **Expected result:** stderr contains `missing prerequisite: <tool>`, exit is nonzero and not 127, and it is reported as FAILED, never passed or skipped.
+- **Actual result:** Plain run: stdout said 'skipped, an uncle build is driving this checkout', exit 77, stderr empty. That is a skip, not a failure. With UNCLE_TEST_ALLOW_NESTED=1: exit 1, stderr was 'line 59: mktemp: command not found' and 'worktree-run-test.sh: mktemp -d failed'. No 'missing prerequisite: <tool>' text appeared. The grep found no emitter of that string in scripts/; the only hits were in docs and prompts.
+
+## None. Free disk space on the host's tmp volume, then rerun with only git removed from PATH. A possible defect, still unconfirmed, is that no code emits `missing prerequisite: <tool>`.
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** worktree-run-test.sh: exit 1 with cp 'No space left on device' on the tmp fixture. gates-test.sh: exit 1 with 'canonical artifact missing: ...ADVERSARIAL_REVIEW.json' and FAIL [sg-missing-driver-results-block], and rm 'No such file or directory'. The only 'missing prerequisite' string in the repo is a prompt sentence in scripts/lib/gates.sh:406, not a runtime message about a missing tool.
+- **Expected result:** Stderr shows `missing prerequisite: <tool>`, and the exit code is nonzero and not 127. The suite is not reported as passed or skipped.
+- **Actual result:** Inconclusive. Both suites exited 1 (nonzero, not 127), but neither printed `missing prerequisite: git` in the captured output (grep for missing/prereq/skip found nothing relevant). The output was dominated by `No space left on device` (cp ENOSPC in the worktree-run fixtures) and cascading fixture failures such as 'canonical artifact missing'. The disk-full condition confounds the result, so it can't be attributed to the hidden tool. Without UNCLE_TEST_ALLOW_NESTED, worktree-run-test.sh exited 77 (skipped, because a build is driving the checkout). Suites that previously exited 127 were not separately enumerated.
+
+## None. Action: free disk space, then rerun.
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Same output as MC-105; disk 100% full.
+- **Expected result:** Both runs pass; .gitignore hash identical after restoration.
+- **Actual result:** Same as MC-105: runs failed under a full disk (ENOSPC), so they are inconclusive. Hash restored identically to the original.
+
+## None; free disk space on the host (/tmp or the volume), then rerun MC-305.
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** H0=fb94ad9fa6cae8a1, H1=fb94ad9fa6cae8a1. Test tail output: 'FAILED (failures=1, errors=1)' and 'FAILED (errors=13)'. Error: 'cp: /tmp/gi.bak: could not copy extended attributes to .gitignore: No space left on device'.
+- **Expected result:** Both runs pass; the restored .gitignore hash equals the original hash.
+- **Actual result:** Run with `.uncle` line: 13 tests, FAILED (failures=1, errors=1), 37s. Run clean: 13 tests, FAILED (errors=13), 0.7s. Restored hash fb94ad9fa6cae8a1 equals the original. The restore `cp` also reported 'No space left on device' (xattr copy), and a shell cwd write to /tmp failed with the same error, so the host disk was full during the runs. I could not read the failure detail or tell whether the failures are caused by the disk or by the code. The all-errors clean run points to an environment fault.
+
+## None
+
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** Test output ended 'Ran 39 tests ... OK' and 'Ran 12 tests ... OK'. Direct call printed: ValueError Cannot list this project's worktrees: fatal: not a git repository (or any of the parent directories): .git. Temp dir had 0 entries afterwards. Source: uncle_tui.py:5874-5882.
+- **Expected result:** Both suites pass; the TUI shows a refusal message when worktree listing fails, without a traceback and without changing state.
+- **Actual result:** Both suites passed (home-actions: 39 tests OK; early-branch: 12 tests OK). The resolver raised ValueError "Cannot list this project's worktrees: fatal: not a git repository ...", which is the refusal text, and the temp dir was left empty (no state change). I did not observe the rendered TUI screen, so I could not confirm that the TUI displays this ValueError without a traceback. No existing test covers the 'Cannot list' message.
+
+## None. Action: free disk space, then rerun.
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Same output as MC-105; disk 100% full.
+- **Expected result:** Both runs pass; .gitignore hash after restoration equals the original.
+- **Actual result:** Same as MC-105: runs failed under a full disk (ENOSPC), so they are inconclusive. Hash restored identically to the original.
+
+## New: worktree-run-test.sh does not detect a missing required tool or emit `missing prerequisite: <tool>`. It fails late with unrelated errors.
+
+- **Status:** FAIL
+- **Evidence:** Attempt 2 (git removed) exit=1; stderr contained 'bin/git: line 3: exec: : not found'. Attempt 1 stderr: 'chmod: command not found', 'cp: command not found'. grep for 'missing prerequisite' found only scripts/lib/gates.sh:406 (prose). worktree-run-test.sh lines 1-90 read: no `command -v` prerequisite guard other than REAL_GIT="$(command -v git)" at line 84, which is unchecked.
+- **Expected result:** Stderr shows `missing prerequisite: <tool>` and the exit code is nonzero and not 127; the result is not a pass or skip.
+- **Actual result:** The suite never printed `missing prerequisite: <tool>`. Attempt 1 exited 1 with 'chmod: command not found' and 'cp: command not found' on stderr, and fixtures reported 'expected exit 0, got 127' (the 127 came from fixtures, not the suite's own exit). Attempt 2 (git removed) exited 1 with FAIL lines such as 'Not a git repository' and the stub git wrapper's 'exec: : not found'; REAL_GIT resolved to empty and the suite carried on. The only occurrence of 'missing prerequisite' in scripts/ or uncle_tui.py is a prose sentence at scripts/lib/gates.sh:406. The suite has no up-front tool check. The exit was nonzero and not 127, but the required stderr message is absent.

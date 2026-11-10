@@ -122,6 +122,7 @@ class EarlyBranchFixture(unittest.TestCase):
     def driver(self, state='1:ANALYZE'):
         (self.state / 'state').write_text(state + '\n')
         env = dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo), WORKFLOW_CLOSE_ISSUE='0',
+                   UNCLE_RUN_POLICY='off',  # the run-policy branch switch has its own suites; this one tests change_pr_engine start
                    WORKFLOW_AGENT_CMD=str(self.bin / 'agent'))
         return subprocess.run(['bash', str(DRIVER)], cwd=self.repo, env=env, stdin=subprocess.DEVNULL, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)

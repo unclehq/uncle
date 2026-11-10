@@ -285,6 +285,8 @@ DRV
     g -C "$PROJ" config user.email me@brian.biz
     g -C "$PROJ" remote add origin https://github.com/owner/repo.git
     echo "hello" > "$PROJ/hello.txt"
+    # Three substantial source files, so mode detection (detect_mode.py) reads this as existing code (a change), not an empty or scaffold project.
+    for n in 1 2 3; do python3 -c 'print("# module %s\n" % __import__("sys").argv[1] + "x = 1\n" * 400)' "$n" > "$PROJ/mod$n.py"; done
     # Matches what _ensure_uncle_gitignored (uncle_tui.py) writes on a
     # project's first run: a generated REQUIREMENTS.md/CHANGE_REQUEST.md
     # under .uncle/docs stays tracked, so worktree removal's git-native

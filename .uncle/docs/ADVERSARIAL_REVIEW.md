@@ -1,168 +1,184 @@
-## AR-001: Plan does not say how unknown-key detection treats the 'runner'/'model' fallback and the case when ALL supervision keys
+## AR-001: The plan does not say how --help/--version combine with other arguments or an invalid argument.
 
 - Severity: HIGH
-- References: CHANGE_SPEC B-1/section 8 'Duplicate keys: first wins'; supervisor.py load_config adds key to `seen` before parse. Decision needed: 'An unknown key appearing N times yields exactly one warning; an empty key name `supervision.` is treated as unknown and warned.'
-- Failure: Plan does not say how unknown-key detection treats the 'runner'/'model' fallback and the case when ALL supervision keys are unknown or the key is bare (e.g. 'supervision.' with empty name) or a duplicate unknown key. Warning count/dedup is unspecified.
+- References: CHANGE_PLAN s1.1 (D-1) and SB-1/SB-2 only cover the flag in isolation; AC-1 says 'regardless of working-tree state'.
+- Failure: The plan does not say how --help/--version combine with other arguments or an invalid argument. Decision: 'The first of --help/-h/--version found in argv wins, is handled before preflight, and later arguments are ignored; an unknown argument alone still goes through preflight.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: B-7/AC-5 say the notice prints 'once' at supervised-run start, but config reload (reload_config) re-reads the file mid-r
+## AR-002: AC-7 allows suites to 'fail with a clear prerequisite message', but AC-8 requires run-all-tests.sh to exit 0 with 0 fail
 
 - Severity: HIGH
-- References: supervisor.py:991-1009 reload_config calls load_config; plan D-3 only calls config_notices at entry (~1816). State: 'reload_config emits no stderr notices; only the entry call prints, exactly once per process start.'
-- Failure: B-7/AC-5 say the notice prints 'once' at supervised-run start, but config reload (reload_config) re-reads the file mid-run and can newly produce warnings or errors; plan is silent on whether reloads print warnings/disabled reasons, and how 'once' is defined across reloads and resumed runs.
+- References: CHANGE_SPEC AC-7 vs AC-8; CHANGE_PLAN s13 'leave a suite red and list it'.
+- Failure: AC-7 allows suites to 'fail with a clear prerequisite message', but AC-8 requires run-all-tests.sh to exit 0 with 0 failed. Decision: 'A prerequisite-failing suite counts as FAILED for AC-8; the change is complete only when all suites pass, otherwise the suite is listed as unresolved.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Non-hosted (interactive) supervised runs with warnings are unspecified: D-3 prints warnings at entry (all warnings) but
+## AR-003: SB-5 gives two incompatible expected results: a defined refusal message, or a fixture made a valid repo.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-3 'returning stderr lines: all warnings; plus disabled_reason when hosted' vs CHANGE_SPEC B-7 trigger 'with UNCLE_HOSTED=1'. Decide: 'Warnings print at run entry in both hosted and non-hosted modes; disabled_reason prints only when hosted.' (or hosted-only for both).
-- Failure: Non-hosted (interactive) supervised runs with warnings are unspecified: D-3 prints warnings at entry (all warnings) but B-7 and AC-5 scope the stderr print to UNCLE_HOSTED=1 only, and the 'hosted' disabled_reason is gated while warnings are not.
+- References: CHANGE_SPEC SB-5 'Defined refusal message per tests (or fixture made a valid repo)'; CHANGE_PLAN s5.1 'root cause decided in step 4'.
+- Failure: SB-5 gives two incompatible expected results: a defined refusal message, or a fixture made a valid repo. Decision: 'The TUI shows a refusal message and does not raise when the worktree list is unavailable; the fixture changes only if the test asserts a valid repo.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: CLI `config` with errors AND warnings: ordering/streams and whether warnings are printed when exit is 1 are unspecified;
+## AR-004: AC-5 requires passing 'with a dirty host .gitignore', but D-2 makes fixtures create their own .gitignore, so no test exe
 
 - Severity: MEDIUM
-- References: supervisor.py:1923-1929 prints lines then disabled_reason; AC-4 covers only warnings-only and errors-only. State: 'With both, stdout lines, then each warning, then disabled_reason on stderr, exit 1.'
-- Failure: CLI `config` with errors AND warnings: ordering/streams and whether warnings are printed when exit is 1 are unspecified; also `lines` output on stdout when disabled.
+- References: CHANGE_SPEC AC-5 and SB-6 vs CHANGE_PLAN D-2 and change-impact row r3 'masks real ignore bug'.
+- Failure: AC-5 requires passing 'with a dirty host .gitignore', but D-2 makes fixtures create their own .gitignore, so no test exercises the dirty-host case. Decision: 'The attestation fixture writes its own .gitignore, with and without .uncle; at least one shard asserts the ignore-containing case.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Warning text embeds the key name verbatim from the config file; key names may contain control characters/newlines-free b
+## AR-005: The step-4 Owns list is closed, but the exit-127 and gates-verification-integrity fixes may touch other files, and 'fixt
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 10 and R-3 'message key only'; read_config_lines takes parts[0] unvalidated. Decide: 'Key names are truncated to 64 characters and redacted via the existing redact() when matching secret patterns.'
-- Failure: Warning text embeds the key name verbatim from the config file; key names may contain control characters/newlines-free but arbitrary long or secret-like tokens (e.g. 'supervision.sk-...'), contradicting the 'never echo secrets' rationale and unbounded length is unspecified.
+- References: CHANGE_PLAN s12 step-4 Owns vs s14.1.i1 and s7.1.
+- Failure: The step-4 Owns list is closed, but the exit-127 and gates-verification-integrity fixes may touch other files, and 'fixture setup, never assertions' is not defined. Decision: 'Any file outside the Owns list needs an IMPLEMENTATION_NOTES.md deviation entry before editing; a setup edit changes no assertion, expected value, or skip condition.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Existing parse_value still raises 'unknown supervision key', and the retained roundtrip test/other consumers (e.g.
+## AR-006: SB-8's 'clear prerequisite message' for a missing command does not say where it appears or what exit code it uses.
 
 - Severity: LOW
-- References: supervisor-test.py:925,930-932 loops assert errors, disabled_reason and values default. State: 'For bogus key: errors==[], disabled_reason=="", warnings==["ignoring unknown supervision key: supervision.bogus"], values equal DEFAULTS.'
-- Failure: Existing parse_value still raises 'unknown supervision key', and the retained roundtrip test/other consumers (e.g. TUI writing keys, status) may rely on that; plan says test expectation of ('bogus','1') changes but doesn't say what the replaced assertion checks for values/disabled_reason when the file contains only an unknown key.
+- References: CHANGE_SPEC s8 'Missing prerequisites yield a message naming the missing tool, not exit 127'; AC-7.
+- Failure: SB-8's 'clear prerequisite message' for a missing command does not say where it appears or what exit code it uses. Decision: 'A missing tool prints `missing prerequisite: <tool>` on stderr and exits with a code other than 127.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: reload_config also calls load_config mid-run, but the plan never says whether warnings or errors print on reload.
+## AR-007: Help/version moves before preflight, but mixed args (`--version --unattended`, `--help build`) are unspecified.
 
 - Severity: HIGH
-- References: supervisor.py:991-1009 reload_config; plan D-3 names only run entry (~1816) and CLI config. B-7 says 'printed once'.
-- Failure: reload_config also calls load_config mid-run, but the plan never says whether warnings or errors print on reload. Add: 'reload_config prints nothing to stderr; config_notices runs only at run entry and in the CLI config action.'
+- References: CHANGE_PLAN s1.1 D-1 and R-3 ('only help/version moved earlier'); AC-1/AC-2 say only 'regardless of tree state'.
+- Failure: Help/version moves before preflight, but mixed args (`--version --unattended`, `--help build`) are unspecified. Plan should say: help/version are honored only when they are the first recognized flag, never write state, and any real-run args still go through full preflight.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The hosted notice is unspecified for errors from _hosted_defaults (missing model) and for ordering relative to warnings.
+## AR-008: SB-8/AC-7 allow 'fail with clear prerequisite message', but AC-8 requires exit 0 with 0 failed.
+
+- Severity: HIGH
+- References: CHANGE_SPEC AC-7 vs AC-8; CHANGE_PLAN s13 'leave a suite red and list it'.
+- Failure: SB-8/AC-7 allow 'fail with clear prerequisite message', but AC-8 requires exit 0 with 0 failed. Plan should say: a prerequisite-failure suite counts as red, AC-8 is unmet until all pass, and any such suite is listed for the PR.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: Early-branch fix location (product vs fixture) is open, and step 4 Owns omits the early-branch product files.
 
 - Severity: MEDIUM
-- References: supervisor.py:242 appends the hosted missing-model error; D-3 and B-7 don't specify ordering or this case.
-- Failure: The hosted notice is unspecified for errors from _hosted_defaults (missing model) and for ordering relative to warnings. Add: 'Hosted notices are warnings in file order, then disabled_reason if errors is non-empty, one stderr line each, including the missing-model error.'
+- References: CHANGE_PLAN s9.1.r4 'early-branch code' unnamed; step-4 owns omits it.
+- Failure: Early-branch fix location (product vs fixture) is open, and step 4 Owns omits the early-branch product files. Plan should say: step 1 triage names the product files and step 4 Owns is amended before any edit.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: The plan doesn't say whether unknown keys enter `seen`, which drives runner/model fallback and _hosted_defaults.
+## AR-010: Isolating fixture .gitignore could mask a real defect when a repo .gitignore contains `.uncle`.
 
 - Severity: MEDIUM
-- References: supervisor.py:205-212 adds key to seen before parse_value; _hosted_defaults reads seen at line 231. D-1 says only 'skip keys not in KINDS'.
-- Failure: The plan doesn't say whether unknown keys enter `seen`, which drives runner/model fallback and _hosted_defaults. Add: 'Unknown keys are not added to seen and do not affect runner or model fallback; duplicate unknown keys warn once.'
+- References: CHANGE_PLAN s9.1.r3 risk 'masks real ignore bug'; CHANGE_SPEC SB-6, AC-5 'including with a dirty host .gitignore'.
+- Failure: Isolating fixture .gitignore could mask a real defect when a repo .gitignore contains `.uncle`. Plan should say whether the product must handle that case, and whether a check covers it or triage records it as out of scope.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: The plan doesn't say warnings stay out of stdout and Config.lines, nor the exit code for mixed warnings and errors.
+## AR-011: SB-5 gives two outcomes when worktree listing fails (refusal message, or repair the fixture) and defers the choice.
 
 - Severity: MEDIUM
-- References: supervisor.py:1925-1929 prints lines to stdout and the reason to stderr; the plan says 'lines output unchanged' only in the B-6 row.
-- Failure: The plan doesn't say warnings stay out of stdout and Config.lines, nor the exit code for mixed warnings and errors. Add: 'Warnings go only to stderr, never to Config.lines or stdout; exit is 1 if any error exists, else 0.'
+- References: CHANGE_SPEC SB-5 'or fixture made a valid repo'; CHANGE_PLAN s5.1 'decided in step 4'.
+- Failure: SB-5 gives two outcomes when worktree listing fails (refusal message, or repair the fixture) and defers the choice. Plan should say: WorktreeListError is caught in the resume path, shown as a refusal with no state change, and the fixture is repaired only if non-repo was unintended.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The plan doesn't say how the roundtrip test changes beyond 'replaced by a warning assertion'.
+## AR-012: Signing-fix scope is open-ended ('other flagged fixtures') while step 3 Owns lists two files.
 
 - Severity: LOW
-- References: supervisor-test.py:923-932 asserts loaded.errors for ('bogus','1'); plan section 10 is the only mention.
-- Failure: The plan doesn't say how the roundtrip test changes beyond 'replaced by a warning assertion'. Add: 'The bogus case is removed from the error loop and asserted separately as warning-only with values equal to the defaults.'
+- References: CHANGE_PLAN s9.1.r6 'and other flagged fixtures'; step-3 owns lists only two files.
+- Failure: Signing-fix scope is open-ended ('other flagged fixtures') while step 3 Owns lists two files. Plan should say: every file the supervisor-test.py audit flags is in scope for step 3 and no others.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Plan says warnings omit the value but not whether the key text is sanitized; the key comes raw from the file and is prin
+## AR-013: Plan moves help/version parsing before the run-policy preflight but does not say how arguments are parsed when --help/--
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-2 and section 10 say 'key only'; supervisor.py:172-173 takes parts[0] unfiltered from the file.
-- Failure: Plan says warnings omit the value but not whether the key text is sanitized; the key comes raw from the file and is printed to stderr, so control or ANSI characters could inject into hosted logs. Decision: warnings print the key only after restricting it to [A-Za-z0-9._-], truncated to 64 chars, other characters replaced with '?'.
+- References: CHANGE_PLAN s1 D-1 says preflight stays before any state write for all other args; R-3 'only help/version moved earlier'. Mixed forms like `--unattended --version` or `--version build` are unspecified.
+- Failure: Plan moves help/version parsing before the run-policy preflight but does not say how arguments are parsed when --help/--version appear alongside other args. Decide: help/version is honored only when it is the sole argument (or first), and any other combination still runs preflight before any state write.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: The hosted notice prints disabled_reason, which embeds error text.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-3 prints disabled_reason; supervisor.py:195 joins errors; secrets machinery at supervisor.py:247-270 is not referenced in the plan.
-- Failure: The hosted notice prints disabled_reason, which embeds error text. The secret-safety rule covers values only, so the plan never says printed text is redacted. Decision: config_notices passes every line through redact() with known_secret_values(environ), and no message contains a config value.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-014: The plan does not say how credential-like unknown keys such as supervision.api_key or supervision.base_url are treated;
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC non-goal 'Supporting base_url/api_key keys' and AC-7 docs; no test requirement that a secret-like value is absent from stderr.
-- Failure: The plan does not say how credential-like unknown keys such as supervision.api_key or supervision.base_url are treated; users may put real secrets there and the plan only warns. Decision: the warning names only the key, and the docs tell users not to put credentials in .uncle/config. A test must show a secret-like value never appears on stderr.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: Unspecified duplicate unknown keys and warning volume: it is unclear whether a repeated or numerous unknown key emits on
-
-- Severity: LOW
-- References: CHANGE_SPEC section 8 'Duplicate keys: first wins'; load_config seen-set at supervisor.py:206-208 skips duplicates before parse.
-- Failure: Unspecified duplicate unknown keys and warning volume: it is unclear whether a repeated or numerous unknown key emits one warning or many. Decision: emit one warning per distinct unknown key and cap the list at 20 lines with a '... and N more' line.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: Hosted notice 'once before the command' has no defined hook or count rule.
+## AR-014: No stated guarantee that the early help/version path performs no side effects (no state write, no journal, no worktree/b
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-3, AC-5; supervisor.py:991-1009 reload_config reloads config and could re-warn.
-- Failure: Hosted notice 'once before the command' has no defined hook or count rule. Settle: 'config_notices prints exactly once per process at run entry before the first stage starts; reload_config never reprints; tests assert one stderr occurrence.'
+- References: CHANGE_SPEC SB-1/SB-2 and SI-1 only specify output and exit code. Nothing in the plan or spec covers side-effect freedom for the early path.
+- Failure: No stated guarantee that the early help/version path performs no side effects (no state write, no journal, no worktree/branch creation, no reviewer launch). Add: 'The help/version path prints and exits 0 before sourcing any state, creating directories, or invoking git/agent CLIs; a test asserts the tree is unchanged afterward.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: Non-hosted runs with warnings/errors unspecified: D-3 prints warnings always but B-7 is hosted-only.
+## AR-015: Fixture signing hygiene covers only named files (tree-attested-final-audit-test.sh, build-attestation-test.py) while SB-
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN step 3 Owns lists two files; AC-6 requires every fixture commit/tag. Also unspecified: whether fixtures set repo-local gpgsign=false and neutralize inherited global config/GPG agent env.
+- Failure: Fixture signing hygiene covers only named files (tree-attested-final-audit-test.sh, build-attestation-test.py) while SB-7 says 'flagged fixtures' and 'every fixture git commit/tag'. Settle scope: all fixture git commit/tag/commit-tree calls under scripts/tests/** must carry the flags, and the supervisor audit is the enforcer.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: Fixture isolation for .gitignore and the exit-127 / WorktreeListError fixes lack a rule against a fix that reads or muta
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-2 and risk s22 (dirty host .gitignore); SB-6 tests must be 'independent of the host checkout's .gitignore'. The dirty .gitignore is also listed as modified in git status.
+- Failure: Fixture isolation for .gitignore and the exit-127 / WorktreeListError fixes lack a rule against a fix that reads or mutates the host checkout. State: fixtures run only in disposable temp repos with sanitized HOME/GIT_CONFIG_GLOBAL, and no fix may touch the project's real .gitignore or git config.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: Where a missing prerequisite becomes a 'clear message', the plan does not say the suite fails closed.
+
+- Severity: MEDIUM
+- References: AC-7 says 'pass or fail only with a clear prerequisite message', while AC-8 requires 0 skipped; D-4 permits adding prerequisite checks, and the two statements leave the outcome of a missing tool ambiguous.
+- Failure: Where a missing prerequisite becomes a 'clear message', the plan does not say the suite fails closed. Add: 'A missing tool produces a nonzero exit naming the tool; it must never be reported as a pass or a skip.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: The plan never says how args parse when --help/--version combine with other args (`--version --unattended`, a build requ
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-3 vs CHANGE_SPEC B-7 trigger.
-- Failure: Non-hosted runs with warnings/errors unspecified: D-3 prints warnings always but B-7 is hosted-only. Settle: 'Non-hosted supervised runs print nothing at entry; hosted runs print warnings then disabled_reason.'
+- References: CHANGE_PLAN s1.1 D-1 and R-3 ('only help/version moved earlier'); CHANGE_SPEC SB-1/SB-2 list only bare-flag triggers.
+- Failure: The plan never says how args parse when --help/--version combine with other args (`--version --unattended`, a build request, unknown flags). Settle it: 'If --help, -h or --version appears anywhere in argv, print it, exit 0, skip preflight and write no state; --help wins over --version.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: Duplicate or odd unknown keys unspecified.
+## AR-019: AC-8 requires 0 failed on run-all-tests.sh, but AC-7/SB-8 allow suites to 'fail with a clear prerequisite message'.
+
+- Severity: HIGH
+- References: CHANGE_SPEC AC-7 ('pass or fail only with a clear prerequisite message') vs AC-8 ('exits 0 reporting 0 failed').
+- Failure: AC-8 requires 0 failed on run-all-tests.sh, but AC-7/SB-8 allow suites to 'fail with a clear prerequisite message'. These conflict, and 'clear' is untestable. Settle it: 'A suite failing on a missing prerequisite counts as FAIL for AC-8; the message wording is checked by a named test or manual check.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: The causes of the exit 127 and gates-verification-integrity failures are unknown, so SB-8/AC-7 have no concrete expected
+
+- Severity: HIGH
+- References: CHANGE_SPEC s15 ('UNRESOLVED until reproduced'); CHANGE_PLAN s22.
+- Failure: The causes of the exit 127 and gates-verification-integrity failures are unknown, so SB-8/AC-7 have no concrete expected behavior to test. Settle it: 'Step 1 records each cause and its expected behavior; if no cause is found, the suite is listed as unresolved and AC-7 is marked not met.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: AC-5 requires passing 'with a dirty host .gitignore' but no step creates that condition; the dirty state of this worktre
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 8 duplicates first-wins; supervisor.py:203-211.
-- Failure: Duplicate or odd unknown keys unspecified. Settle: 'One warning per distinct unknown key in file order; duplicates get no second warning; key text is the part after supervision. verbatim.'
+- References: CHANGE_SPEC AC-5 verification is only 'run-all-tests.sh'; CHANGE_PLAN s9.1.r3.
+- Failure: AC-5 requires passing 'with a dirty host .gitignore' but no step creates that condition; the dirty state of this worktree is incidental. Settle it: 'attestation-statement-test.py is run with a host .gitignore containing `.uncle` and again with it clean; both must pass.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: No-value-echo is untestable as written.
+## AR-022: The plan says each suite 'fails before and passes after', but the baseline was taken in a dirty tree where some failures
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-2, section 10; CHANGE_PLAN R-3.
-- Failure: No-value-echo is untestable as written. Settle: 'Test uses a sentinel value and asserts it appears in none of stdout, stderr or warnings.'
+- References: CHANGE_PLAN s16-17 ('Each fails before and passes after') vs s22 (failures may 'vanish on clean main').
+- Failure: The plan says each suite 'fails before and passes after', but the baseline was taken in a dirty tree where some failures may be host artifacts, so the before-state is ambiguous. Settle it: 'Failures are judged against clean main; failures seen only in the dirty tree are recorded as host-state and need no code change.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: Unclear whether skipped unknown keys enter `seen`, affecting runner fallback and ordering vs hosted errors.
+## AR-023: SB-4 requires 'no ref, no journal, no mutation' in skip contexts, but the plan gives no way to detect 'no mutation'.
 
 - Severity: MEDIUM
-- References: supervisor.py:204-224 seen.add precedes parse_value; CHANGE_PLAN D-1.
-- Failure: Unclear whether skipped unknown keys enter `seen`, affecting runner fallback and ordering vs hosted errors. Settle: 'Unknown keys are not added to seen and never affect runner/model fallback.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-021: CLI output with errors plus warnings, and closed-stderr swallowing, have no AC.
-
-- Severity: LOW
-- References: supervisor.py:1923-1929; CHANGE_PLAN section 12.
-- Failure: CLI output with errors plus warnings, and closed-stderr swallowing, have no AC. Settle: 'Warnings print first then disabled_reason to stderr, exit 1; closed stderr never changes the exit code.'
+- References: CHANGE_SPEC SB-4 and SI-3; CHANGE_PLAN s9.1.r4 ('product or fixture per triage').
+- Failure: SB-4 requires 'no ref, no journal, no mutation' in skip contexts, but the plan gives no way to detect 'no mutation'. Settle it: 'Verification compares `git for-each-ref` and a file-hash inventory before and after each skip context; any difference fails.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

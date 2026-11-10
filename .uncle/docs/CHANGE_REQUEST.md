@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 226
+Issue 228
 
-Seeded from [unclehq/uncle#226](https://github.com/unclehq/uncle/issues/226).
+Seeded from [unclehq/uncle#228](https://github.com/unclehq/uncle/issues/228).
 
 ## Change Type
 
@@ -10,33 +10,40 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-One unknown supervision key (e.g. supervision.base_url) turns off all supervision corrections for an unattended run
+Fix failing tests so the full suite passes 100% green
 
 ## Motivation
 
-## What happened
+## Problem
 
-A hosted, unattended build's log began with:
+`./scripts/run-all-tests.sh` does not pass. Latest run on `main` (4c23afa): **96 passed, 11 failed, 0 skipped**. Goal: every suite green, with no skips and no weakened tests.
 
-```
-[supervision] Supervision corrections disabled: unknown supervision key: supervision.base_url. Fix .uncle/config.
-```
+## Failing suites
 
-The build script had written `supervision.base_url` into `.uncle/config`. Uncle doesn't recognize that key, so it turned off **all** supervision corrections for the whole run. Nobody saw the message: in an unattended hosted run there is no operator watching the log. The build went on, failed later, and had no supervisor to diagnose or correct the failing stage.
+- `scripts/tests/worktree-run-test.sh` (shards #3of4, #4of4): many checks fail with `expected exit 0, got 127` (command not found), so the cause is probably an environment or PATH assumption. Needs confirming.
+- `scripts/tests/attestation-statement-test.py` (shards #1of3, #2of3, #3of3):
+  - `test_not_ready_audit_with_driver_override_never_publishes`
+  - `test_gitignore_boundary`
+  - `test_final_audit_writes_audit_and_release_envelopes`
+- `scripts/tests/early-branch-test.py`: `test_t1_unknown_default_defers_without_guessing`, `test_t3_non_default_current_branch_is_the_head`, `test_t4_divergent_candidate_ref_is_never_overwritten`, `test_t5_unavailable_contexts_skip_without_journal_or_ref`, plus 1 error
+- `scripts/tests/supervisor-test.py`: `test_every_fixture_commit_and_tag_disables_signing`
+- `scripts/tests/unattended-test.sh`: `sg-version-flag` (expected `0.1.0`, got empty) and `stagegate-help` (`--unattended` not documented in `--help`)
+- `scripts/tests/home-actions-test.py`: 2 errors
+- `gates-verification-integrity`, `gates-verification-integrity-2`, `gates-verification-integrity-4`: workflow sits in `IMPLEMENT` where the tests expect `REPAIR`, `COMPLETE` or `VALIDATE_TEST_REVIEW` (`sg-repair-*`, `sg-review-cannot-bless-failed-command`, `sg-missing-driver-results-block`, `sg-verifier-rewrites-test`, `sg-command-rewrites-test`, `sg-approved-parallel-checks`, `sg-invalid-parallel-plan`)
 
-## Where (main `4c23afac10`)
+The first run printed the failing suites above, and a second run printed the individual `FAIL` lines. Re-run to get current output, since the list may shift.
 
-- `scripts/lib/supervisor.py:108-111` `parse_value`: an unknown key raises `unknown supervision key: supervision.<key>`.
-- `scripts/lib/supervisor.py:203-212` `load_config` collects that into `errors`. `:192-196` `disabled_reason` then disables corrections whenever `errors` is non-empty.
-- `scripts/lib/supervisor.py:57-72` `CONTROLS`: the supported keys. There is no `base_url` or `api_key`.
-- `scripts/lib/supervisor.py:227-242` `_hosted_defaults`: in hosted mode (`UNCLE_HOSTED=1`), supervision already uses the self-hosted runner and the hosted model, with the address and key from `OPENAI_BASE_URL` / `OPENAI_API_KEY` (`scripts/lib/hosted.py:18-23`). So a hosted script never needs `supervision.base_url`.
+## Requirements
 
-## What's needed
+- For each failure, decide whether the product or the test is wrong. Fix the root cause.
+- Do not weaken, delete or skip tests, and do not loosen assertions to get green. Any test change needs a requirement-based explanation.
+- Separate environment-dependent failures (for example exit 127) from real defects. Make the tests self-contained or have them fail with a clear prerequisite message.
+- Fix the `--version` and `--help` regressions in `stagegate.sh`.
 
-1. **One bad key shouldn't switch off the safety net.** Ignore an unknown `supervision.*` key with a warning, and keep supervision on with the remaining valid settings. Keep disabling only when a recognized key has an invalid value that makes supervision unsafe.
-2. **In unattended runs, make configuration errors visible before spending.** Either stop before the first paid stage with the message, or print it to stderr where the host's failure report will pick it up.
-3. **Say it in the docs.** `.uncle/config.example` and `README.md` should state that in hosted mode supervision reads `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `SEREN_MODEL`/`UNCLE_MODEL`, so no `supervision.base_url` is needed.
-4. **Build script:** stop writing `supervision.base_url` to `.uncle/config`, and rely on hosted mode.
+## Definition of done
+
+- `./scripts/run-all-tests.sh` exits 0 with `0 failed, 0 skipped` on a clean checkout of `main`.
+- Failures that were not code defects are documented in the PR.
 
 ## Observed Current Behavior
 

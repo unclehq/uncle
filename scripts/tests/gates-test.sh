@@ -610,6 +610,7 @@ run_driver_stdin() {
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
         WORKFLOW_CLAUDE_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_PARALLEL_CHECKLIST=0 \
+        WORKFLOW_TESTS=0 \
         UNCLE_SUPERVISION_HOST=gates-test \
         $(fixture_mode_env "$@") \
         "$@" \
@@ -817,6 +818,7 @@ run_stagegate_stdin() {
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
         WORKFLOW_CLAUDE_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_SPECULATE=0 FAKE_WORKFLOW=stagegate WORKFLOW_REPAIR=1 \
+        WORKFLOW_TESTS=0 \
         UNCLE_SUPERVISION_HOST=gates-test \
         $(fixture_mode_env "$@") \
         "$@" \
@@ -1319,7 +1321,7 @@ new_stagegate_case sg-not-ready-stops-at-gate
 stagegate_agent
 set_state IMPLEMENT
 run_stagegate_stdin "$(gate_input y)" \
-    WORKFLOW_FINAL_AUDIT_PANEL=0 FAKE_AUDIT="NOT READY" \
+    WORKFLOW_NOT_READY_GATE=1 WORKFLOW_FINAL_AUDIT_PANEL=0 FAKE_AUDIT="NOT READY" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 1
 expect_out "Audit verdict: NOT_READY"

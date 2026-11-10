@@ -1709,6 +1709,92 @@ run_initial_planning_agent() {
     SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 run_claude "$@"
 }
 
+# One model repair turn for a plan that failed its check, then a re-check (issue 231). <label> is a fixed literal
+# chosen by the call site -- never derived from plan text or validator output -- so the marker path is one of two files.
+plan_check_repair_once() {
+    local label="$1" file="$2"; shift 2
+    case "$label" in
+        project-plan|updated-plan) ;;
+        *) echo "plan_check_repair_once: unknown label" >&2; exit 2 ;;
+    esac
+    local marker="$STATE_DIR/plan-check-repair-$label" out hash before after agent_rc=0 repaired=1
+    if out="$("$@" 2>&1)"; then rm -f "$marker"; return 0; fi
+    printf '%s\n' "$out" >&2
+    hash="$(hash_file "$file" 2>/dev/null)" || hash=missing
+    if [[ -s "$marker" && "$(cat "$marker")" == "$hash" ]]; then
+        plan_check_repair_final "$label" "$file" "$out"
+    fi
+    if [[ -e "$STATE_DIR/spending-stop" ]]; then
+        { printf 'spending_limit: '; cat "$STATE_DIR/spending-stop"; } > "$STATE_DIR/stop-reason"
+        cat "$STATE_DIR/spending-stop" >&2
+        exit 1
+    fi
+    printf '%s' "$hash" > "$marker"
+    before="$(plan_check_tree_snapshot "$file")"
+    python3 -I -c '
+import sys
+tmpl, plan, err, dest, name = sys.argv[1:6]
+text = open(tmpl).read()
+body = open(plan, errors="replace").read() if __import__("os").path.exists(plan) else ""
+for key, value in (("{{PLAN_FILE}}", name), ("{{VALIDATOR_OUTPUT}}", err), ("{{PLAN_TEXT}}", body)):
+    text = text.replace(key, value)
+open(dest, "w").write(text)
+' "$ROOT/prompts/plan-check-repair.md" "$file" "$out" "$STATE_DIR/plan-check-repair-$label-prompt.md" "$file"
+    echo "Plan check failed; running one repair turn for $file." >&2
+    run_initial_planning_agent "$STATE_DIR/plan-check-repair-$label-prompt.md" "plan-check-repair-$label" || agent_rc=$?
+    if [[ -e "$STATE_DIR/spending-stop" ]]; then
+        rm -f "$marker"
+        { printf 'spending_limit: '; cat "$STATE_DIR/spending-stop"; } > "$STATE_DIR/stop-reason"
+        cat "$STATE_DIR/spending-stop" >&2
+        exit 1
+    fi
+    after="$(plan_check_tree_snapshot "$file")"
+    if [[ "$agent_rc" != 0 ]]; then
+        echo "Plan repair turn exited with status $agent_rc." >&2; repaired=0
+    elif [[ ! -s "$file" ]]; then
+        echo "Plan repair left $file missing or empty." >&2; repaired=0
+    elif [[ "$before" != "$after" ]]; then
+        echo "Plan repair changed files other than $file:" >&2
+        diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed -n '1,20p' >&2 || true
+        repaired=0
+    elif [[ "$(hash_file "$file")" == "$hash" ]]; then
+        echo "Plan repair left $file unchanged." >&2; repaired=0
+    fi
+    [[ "$repaired" == 1 ]] || plan_check_repair_final "$label" "$file" "$out"
+    if out="$("$@" 2>&1)"; then rm -f "$marker"; return 0; fi
+    printf '%s\n' "$out" >&2
+    plan_check_repair_final "$label" "$file" "$out"
+}
+
+# Content hashes and path inventory (untracked files included) of the tree outside the state dir, .git and the plan file.
+plan_check_tree_snapshot() {
+    python3 -I -c '
+import hashlib, os, sys
+skip = os.path.realpath(sys.argv[1]); state = os.path.realpath(sys.argv[2]); root = "."
+for d, dirs, files in os.walk(root):
+    dirs[:] = sorted(x for x in dirs if x not in (".git", "node_modules") and os.path.realpath(os.path.join(d, x)) != state)
+    for f in sorted(files):
+        p = os.path.join(d, f)
+        if os.path.realpath(p) == skip: continue
+        try: h = hashlib.sha256(open(p, "rb").read()).hexdigest()
+        except OSError: h = "unreadable"
+        print(h, p)
+' "$1" "$STATE_DIR"
+}
+
+plan_check_repair_final() {
+    local label="$1" file="$2" out="$3" steps
+    steps="$(printf '%s\n' "$out" | grep -oE 'step-[0-9]{1,6}' | sed 's/^step-//' | awk '!seen[$0]++' | paste -sd, - | sed 's/,/, /g')"
+    {
+        echo "Plan check failed after repair: $file"
+        echo "step: ${steps:-unknown}"
+        echo "validator: $out"
+        echo "Correct $file, then resume with: $0 (re-run in this project to continue)."
+    } >&2
+    supervision_validation_failed "$label" "$file" "$out"
+    exit 1
+}
+
 # Requirements agents must see the selected brief as literal prompt content.
 # Self-hosted runners do not inherit the driver's internal "packet" in the
 # way native clients do.  A prompt which merely says "read the document named
@@ -4699,6 +4785,7 @@ run_stage() {
             # WORKFLOW_PROJECT_PLAN_SECTIONS=1 forces sections. Any failure -- a worker, a section out
             # of its lane, an assembled plan the validators refuse -- leaves no investigation behind and
             # the single-pass plan runs as it always did.
+            rm -f "$STATE_DIR/plan-check-repair-project-plan"
             project_plan_sectioned=0
             project_plan_sections_status=1
             if project_plan_sections_enabled; then
@@ -4749,11 +4836,8 @@ run_stage() {
                 run_initial_planning_agent prompts/project-plan.md project-plan
             fi
             if [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
-                plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/PROJECT_PLAN.md . 2>&1)" || {
-                    printf '%s\n' "$plan_ingest_error" >&2
-                    supervision_validation_failed project-plan .uncle/docs/PROJECT_PLAN.md "$plan_ingest_error"
-                    exit 1
-                }
+                plan_check_repair_once project-plan .uncle/docs/PROJECT_PLAN.md \
+                    python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/PROJECT_PLAN.md .
                 ensure_project_plan_json || exit 1
             fi
             require_artifact .uncle/docs/PROJECT_PLAN.md
@@ -5591,7 +5675,7 @@ rm -f "$STATE_DIR/stop-reason" "$STATE_DIR/updated-plan-writers-exhausted" "$STA
 uncle_ensure_project_git || exit 1
 
 # A fresh run (no state file yet) drops any stale start stamp; a resume keeps it.
-[[ -e "$STATE_FILE" ]] || finished_extras reset
+[[ -e "$STATE_FILE" ]] || { finished_extras reset; rm -f "$STATE_DIR"/plan-check-repair-project-plan "$STATE_DIR"/plan-check-repair-updated-plan; }
 finished_extras start
 # Application builds do not inherit completed verification from an earlier
 # driver invocation. Preserve historical reports for inspection, not acceptance.
@@ -5804,15 +5888,13 @@ while true; do
             verify_approval \
                 .uncle/docs/ADVERSARIAL_REVIEW.md \
                 ADVERSARIAL_REVIEW
+            rm -f "$STATE_DIR/plan-check-repair-updated-plan"
             run_gated_stage UPDATED_PLAN \
                 .uncle/docs/ADVERSARIAL_REVIEW.md \
                 .uncle/docs/UPDATED_PROJECT_PLAN.md
             if [[ -s .uncle/docs/UPDATED_PROJECT_PLAN.md ]]; then
-                plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan .uncle/docs/UPDATED_PROJECT_PLAN.md . 2>&1)" || {
-                    printf '%s\n' "$plan_ingest_error" >&2
-                    supervision_validation_failed updated-plan .uncle/docs/UPDATED_PROJECT_PLAN.md "$plan_ingest_error"
-                    exit 1
-                }
+                plan_check_repair_once updated-plan .uncle/docs/UPDATED_PROJECT_PLAN.md \
+                    python3 "$ROOT/scripts/lib/plan_context.py" plan .uncle/docs/UPDATED_PROJECT_PLAN.md .
             fi
             # Prewarm only after the review has produced the final execution
             # plan.  Prewarming from PROJECT_PLAN can create sandboxes for a

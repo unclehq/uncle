@@ -1,5 +1,6 @@
 """Implementation steps, independent of the Markdown layout chosen by a planner."""
 import re
+import sys
 
 HEADING = re.compile(r'^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$')
 IMPLEMENTATION = re.compile(r'^(?:\d+[.)]\s*)?Implementation\s+(?:order|steps|sequence|plan)\b', re.I)
@@ -69,7 +70,24 @@ def sections(narrative):
 COMMENT_MARKER = re.compile(r'(--|//|#|;|/\*|<!--)(\s|$)|--[A-Za-z]')
 
 
-def paths(value):
+def is_owns_junk(token):
+    """True for a token that cannot be a file the step owns: whitespace, a comment marker, or a `..` path segment."""
+    return bool(re.search(r'\s', token) or COMMENT_MARKER.match(token) or '..' in token.split('/'))
+
+
+def safe_token(token):
+    token = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', str(token))
+    token = ''.join(c for c in token if c.isprintable())
+    return token[:77] + '...' if len(token) > 80 else token
+
+
+def warn_dropped(label, dropped):
+    for token in dropped or []:
+        print('warning: step %s owns: dropped %s' % (label, safe_token(token)), file=sys.stderr)
+
+
+def paths(value, dropped=None):
+    dropped = [] if dropped is None else dropped
     ticks = re.findall(r'`([^`]+)`', value)
     values = ticks[:]
     if not ticks:
@@ -77,7 +95,7 @@ def paths(value):
             match = re.fullmatch(r'([^\s]+?)[.;:]?(?:\s+\([^)]*\)[.]?)?', part.strip())
             if match and match[1].lower() not in ('none', '(none)', 'nothing', 'n/a'):
                 token = match[1].rstrip('.;:')
-                if re.fullmatch(r'[\w./*?\[\]@-]+', token) and token not in ('.', '..', '-'):
+                if re.fullmatch(r'[\w./*?\[\]@-]+', token) and token not in ('.', '-'):
                     values.append(token)
     result = []
     for token in values:
@@ -85,8 +103,11 @@ def paths(value):
             token = token[2:]
         # A comment marker a model wrote into the list (a Haskell `-- EOF-GUARD`, `// end`, `# end`) is not a file the step
         # owns. Dropping it here keeps one stray token from failing the whole plan ("owns: replace ... with a file or glob").
-        if token and not token.startswith('/') and not COMMENT_MARKER.match(token):
-            result.append(token)
+        if token and not token.startswith('/'):
+            if is_owns_junk(token):
+                dropped.append(token)
+            else:
+                result.append(token)
     return result
 
 
@@ -181,7 +202,12 @@ def extract_body(body):
             if target:
                 _, values = fields(rest)
                 for key, value in values:
-                    target[key].extend(paths(value) if key == 'owns' else references(value))
+                    if key == 'owns':
+                        dropped = []
+                        target[key].extend(paths(value, dropped))
+                        warn_dropped(target['label'], dropped)
+                    else:
+                        target[key].extend(references(value))
                 continue
             found = (label, '', '')
             _, metadata = fields(rest)
@@ -226,7 +252,12 @@ def extract_body(body):
             prefix.append(line)
         if current:
             for key, value in metadata:
-                current[key].extend(paths(value) if key == 'owns' else references(value))
+                if key == 'owns':
+                    dropped = []
+                    current[key].extend(paths(value, dropped))
+                    warn_dropped(current['label'], dropped)
+                else:
+                    current[key].extend(references(value))
                 if key == 'owns':
                     note = re.sub(r'`[^`]+`', '', value)
                     if '`' not in value:

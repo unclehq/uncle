@@ -1,76 +1,85 @@
-# Baseline report (Issue 230)
+# Baseline report: issue 231
 
-Omitted sections: Reproduction (not run; the 402 is reproduced by a new fake-server test); Areas outside change folded into section 14.
+Omitted sections: Reproduction result (not run; saved plan was deleted with the sandbox, inferred only); Current API/schema contracts (no external interface changes)
 
 ## 1. Change-request summary
-See .uncle/docs/CHANGE_REQUEST.md. HTTP 402 `budget_reached`/`balance_exhausted` from the host is reported as a Base URL/key problem; the parallel project-plan section schedulers treat it as any failure, discard the sections, and the single-pass fallback runs into the same limit. No code reads the host's budget headers (#213).
+See CHANGE_REQUEST.md (Issue 231). A failed project-plan check (`plan-unprotected`) exits 1 with no repair turn; headless runs never start the supervisor. Parser also admits non-path backticked spans in `Owns:`.
 
 ## 2. Repository architecture
-Shell driver `scripts/stagegate.sh` runs stages; Python helpers in `scripts/lib/`. Self-hosted model client: `scripts/lib/self_hosted_http.py` (HTTP) and `scripts/lib/self_hosted.py` (runner `main`, exit codes). Supervisor diagnosis: `scripts/lib/supervisor.py`. Concurrency: `scripts/lib/unit_scheduler.py`, `scripts/lib/model-jobs.sh`.
+Bash driver `scripts/stagegate.sh` runs stages; Python helpers in `scripts/lib/` (`plan_context.py` CLI, `plan_model.py` validator/model, `plan_steps.py` Markdown step parser). Tests are `scripts/tests/*-test.py` and `*-test.sh`.
 
 ## 3. Relevant code paths
 | Path | Role |
 |---|---|
-| scripts/lib/self_hosted_http.py:30 | `REJECTED` tuple; 163 `_server_reason`; 930 `RETRYABLE_STATUS`; 1330-1332 and 1428-1430 raise `ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model')` |
-| scripts/lib/self_hosted.py:2224 `main`, 2208-2210 | catches `ValueError`, returns 1 |
-| scripts/stagegate.sh:4281 `project_plan_section_run`, 4310 `_finish`, 4327 `_settle` | worker run/recovery/one retry |
-| scripts/stagegate.sh:4342-4396 | bounded scheduler; failure drains workers and returns 1 |
-| scripts/stagegate.sh:4398-4462 | unbounded scheduler; failure returns 1 |
-| scripts/stagegate.sh:4557-4570 | PROJECT_PLAN stage: any failure removes investigation and runs single pass |
-| scripts/stagegate.sh:2886, 4490 | `stop-reason` writes/reads |
-| scripts/lib/supervisor.py:406-412 | `_EXTERNAL_CAPACITY` regex; used at :1241 |
-| scripts/lib/unit_scheduler.py:65 | `capacity` (24 for self-hosted when unset) |
+| `scripts/lib/plan_steps.py:69-90` | `COMMENT_MARKER` + `paths()`; backticked spans taken unconditionally except comment markers (`:88`); plain tokens must match `[\w./*?\[\]@-]+` (`:80`) |
+| `scripts/lib/plan_model.py:474-482` | `validate` rejects invalid/dir `owns` tokens |
+| `scripts/lib/plan_model.py:738-749` | `split_list` keeps any string, strips backticks |
+| `scripts/lib/plan_context.py:335,358-361` | `plan-unprotected` action; prints `Correct the saved document and resume.` and exits 1 |
+| `scripts/stagegate.sh:4636-4643` | PROJECT_PLAN check: on failure prints, `supervision_validation_failed`, `exit 1`; no repair |
+| `scripts/stagegate.sh:5696-5700` | UPDATED_PLAN check: same shape, no repair |
+| `scripts/stagegate.sh:1708` | `run_initial_planning_agent` (model call) |
+| `scripts/stagegate.sh:4598-4604, 4431-4435` | existing spending-stop handling (`$STATE_DIR/spending-stop`, `stop-reason`) |
+| `scripts/stagegate.sh:5011-5030` | precedent: format-retry marker file + prompt with appended error |
+| `scripts/lib/supervision.sh:43-49`, `scripts/lib/supervisor.py:1204`, `scripts/lib/uncle_headless.py` | supervisor reacts only inside TUI; headless never starts it |
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | HTTP 402 from model API | ValueError 'check the Base URL, API key and model'; exit 1 | self_hosted_http.py:1330 | No (modified) |
-| B-2 | One section worker fails | other workers drained, return 1, sections discarded, single pass runs | stagegate.sh:4374-4378, 4557-4570 | Yes for non-spending failures |
-| B-3 | 429/5xx | retried per RETRYABLE_STATUS | self_hosted_http.py:930 | Yes |
-| B-4 | 400/404/405/415/422/501 | treated as option rejection, next mode tried | self_hosted_http.py:30,1332 | Yes |
-| B-5 | supervisor sees 429/quota/rate text | external capacity, no recurrence consumed | supervisor.py:406 | Yes |
-| B-6 | `--max-budget-usd` cap (#212) | Uncle's own cap in scripts/lib/budget.py | commit 3a20810 | Yes, separate |
+| B-1 | Owns line contains backticked comment marker (`-- EOF-GUARD`, `// end`, `# end`) | Marker dropped, real paths kept | `plan_steps.py:69,88`; `scripts/tests/plan-owns-comment-marker-test.py` | Yes |
+| B-2 | Owns line has backticked span that is neither a comment marker nor path-shaped (e.g. `foo bar`) | Kept as path; validate fails `owns: replace ...` | `plan_steps.py:73-74,83-89`; `plan_model.py:480` | No (MODIFY) |
+| B-3 | JSON `owns` array holds a non-path string | Kept after stripping backticks; validate fails | `plan_model.py:746` | No (MODIFY) |
+| B-4 | PROJECT_PLAN check fails | Error printed to stderr, status event, exit 1, no repair | `stagegate.sh:4636-4643` | No (MODIFY) |
+| B-5 | UPDATED_PLAN check fails | Same as B-4 | `stagegate.sh:5696-5700` | No (MODIFY) |
+| B-6 | Valid plan | Check passes, flow continues to `ensure_project_plan_json` | `stagegate.sh:4644` | Yes |
+| B-7 | Real path/glob spans (`src/**`, `.gitignore`, `.uncle/launch.json`) | Kept | plan-owns-comment-marker-test.py | Yes |
+| B-8 | Spending stop in model call | Stage stops cleanly with `stop-reason: spending_limit` | `stagegate.sh:4598-4604` | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | 402 is never retried | RETRYABLE_STATUS excludes it | self-hosted-retry-test.py | Medium |
-| I-2 | On section failure no worker keeps writing into fallback | drain before return 1 (stagegate.sh:4374) | none found | Low |
-| I-3 | Ordinary agent/validator failures keep supervisor recovery path | narrow regex | supervisor-test.py | Medium |
+| I-1 | Every `owns` token is a valid path/glob and not a directory | `plan_model.validate` `:474-482` | plan-executability / plan-model suites | High |
+| I-2 | An invalid saved plan never advances past the check | `exit 1` at `stagegate.sh:4642` | not directly tested | Medium |
+| I-3 | A model call stops on a host spending stop | `spending-stop` file checks | `plan-sections-spending-stop-test.sh`, `self-hosted-spending-stop-test.py` | High |
 
-## 6. Interface contracts
-Model client raises ValueError for HTTP errors; runner exit 1 on error. `stop-reason` is a one-line text file in `$STATE_DIR`. No schema involved.
+## 6. Existing automated-test coverage
+`plan-owns-comment-marker-test.py` (parser markers), `plan-executability-test.py`, `updated-plan-*-test.py`, `plan-disposition-gate-test.sh`, `headless-run-test.py`, spending-stop tests. No test covers a repair turn after a failed plan check, nor backticked non-path spans, nor `split_list` filtering. Shell and Python runners are independent (separate temp dirs), so they form one parallel group.
 
-## 7. Existing automated-test coverage
-Python suites under scripts/tests/*-test.py (self-hosted-retry, self-hosted-flavor, supervisor-test, etc.); shell suites scripts/tests/*-test.sh. No test covers section-scheduler failure semantics or 402 handling. The Python and shell runners use separate temp dirs and bind no shared ports, so they form one parallel group.
+## 7. Baseline test results (section 9)
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (the repo's documented runners; default tier = `scripts/tests/critical-suites.txt`). Results are supplied by the driver's baseline, not run here. Some Python suites may already fail on a clean tree (documented in the driver instructions).
 
-## 9. Baseline test results
-Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (present in repo). Not run here; the driver's baseline (.uncle/workflow/green-check.baseline.tsv) is authoritative. Some Python suites are known to fail on a clean checkout.
-
-## 10. Existing failures
-None established by this stage.
+## 10. Existing failures, warnings, flaky behavior
+None observed by reading; driver baseline is authoritative.
 
 ## 12. Likely change surface
-self_hosted_http.py, self_hosted.py, stagegate.sh (two schedulers + PROJECT_PLAN case), supervisor.py, unit_scheduler.py/model-jobs.sh (budget-aware concurrency), new tests.
+`plan_steps.py`, `plan_model.py` (owns call sites), `stagegate.sh` (two check sites + helper), `plan_context.py` message, one new prompt, new tests.
 
 ## 13. Regression-sensitive components
-Stage failure semantics in stagegate.sh; retry classification; supervisor recurrence logic.
+Plan ingestion for every project (`paths()` is used by three Owns routes); `ensure_project_plan_json` after a repaired plan; spending-stop flow; sectioned-plan flow.
 
 ## 14. Outside the change
-Uncle's own `--max-budget-usd` cap; #231 plan check; host-side budget accounting; hosted-mode concurrency default.
+Supervisor/TUI behavior, `uncle_headless.py`, section-writing workers, the validator rules themselves, other stages' retries.
 
 ## 15. Unknowns and assumptions
-- Exact header names beyond `x-seren-budget-task-remaining-atomic` are unknown; only that one is relied on.
-- Resume mechanism for finished sections: assumed existing section files in the investigation directory can be reused (verify in plan step).
-- Exit code value for spending stop is a design choice.
+- The issue says the parser takes every backticked span; the checked-out tree already drops comment markers, so only non-marker junk remains. Assumed the issue text predates that fix.
+- Exact resume command text for the headless message is taken from existing stop messages in the driver (implementer to reuse).
 
-## 16. Initial risk
-Medium: shell scheduler edits are in a hot path with little test coverage; mitigated by new scheduler tests.
+## 16. Initial risk assessment
+| Risk | Level |
+|---|---|
+| Path-shape filter drops a legitimate path containing a space | Medium (warned, plan then fails validation only if step ends with no owns, which is a warning) |
+| Repair turn rewrites more than the error | Medium |
+| Loop on repeated failure | Low with marker |
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
+```
+
+## Parallel verification groups
+
+```text
+1 2
 ```
 

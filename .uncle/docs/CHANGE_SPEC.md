@@ -1,76 +1,71 @@
-# Change spec (Issue 230)
+# Change spec: issue 231
 
-Omitted sections: Migration (none); Prototype isolation (not a prototype); Performance (no new requirement beyond not spawning doomed calls).
+Omitted sections: Performance (no hot path), Security (no new surface; the repair prompt contains only the saved plan and validator errors), Migration (none), Prototype isolation (not a prototype)
 
 ## 1. Change type
-Bug fix plus feature (spending-stop handling, budget-aware concurrency).
+Bug fix.
 
 ## 2. Problem statement
-A host spending stop (HTTP 402) discards parallel plan work, triggers a doomed fallback, and is reported as a config error. See CHANGE_REQUEST.md; baseline B-1, B-2.
+A project plan (or updated plan) failing its check ends a headless build with exit 1 and no repair, while other stages get one repair attempt. The trigger can be a non-path token the parser accepted from a backticked `Owns:` span.
 
 ## 3. Current behavior
-Baseline B-1, B-2, B-5.
+See baseline B-2..B-5.
 
 ## 4. Desired behavior
-Recognized typed stop; running workers finish; finished sections kept; no fallback; `stop-reason` = `spending_limit` with figures; distinct exit code; one-line message; resume reuses finished sections; concurrency limited by remaining task budget header.
+Non-path backticked/JSON `owns` tokens are dropped with a warning naming the step; a failed plan check gets exactly one model repair turn limited to the validator's errors; failure after repair exits 1 with an actionable message.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| SB-1 | ADD | 402 with code budget_reached or balance_exhausted | ValueError about Base URL | Typed `SpendingStop` carrying code, scope, limit, used, suggested increase, balance; message names limit and suggested amount | self-hosted-spending-stop-test.py |
-| SB-2 | PRESERVE | Other HTTP errors (401, 403, 400-class, other 402 bodies) | Baseline B-1/B-3/B-4 | Unchanged messages and handling | existing + new negative test |
-| SB-3 | MODIFY | SpendingStop in a bounded section worker | drain, return 1, discard, fallback | start no new workers, let running finish, keep finished sections, return distinct status | shell scheduler test |
-| SB-4 | MODIFY | Same in unbounded scheduler | same | same | shell scheduler test |
-| SB-5 | MODIFY | PROJECT_PLAN stage sees spending status | single-pass fallback | skip fallback, write `spending_limit: ...` to stop-reason, exit with dedicated code | shell scheduler test |
-| SB-6 | ADD | Spending stop | none | print one line `Stopped: the task spending limit ($X) was reached; about $Y more lets the next step start.` | test asserts output |
-| SB-7 | ADD | Resume after limit raised | all sections rerun | only missing sections run | resume test |
-| SB-8 | MODIFY | supervisor sees HTTP 402/budget_reached/balance_exhausted | diagnosed like a bug | `external_capacity_failure` true | supervisor-test.py |
-| SB-9 | ADD | Reply carries `x-seren-budget-task-remaining-atomic` | ignored | Parallel workers started capped by remaining budget / typical per-call cost (min 1); stop before a call the host would refuse | unit test of pure cap function + scheduler test |
-| SB-10 | PRESERVE | Non-spending worker failure | drain, return 1, fallback | unchanged | shell scheduler test |
+| BH-1 | PRESERVE | Owns line with comment-marker span | Dropped | Unchanged | existing marker test |
+| BH-2 | MODIFY | Owns line `` `app/Main.hs`, `test/Spec.hs` (ends with a `-- EOF-GUARD` comment) `` | Possible bad token | `owns == ['app/Main.hs','test/Spec.hs']` | new parser test |
+| BH-3 | MODIFY | Backticked span failing path shape (e.g. `foo bar`) | Kept, plan fails | Dropped; warning names step | new parser test |
+| BH-4 | MODIFY | JSON `owns` array with non-path string | Kept, plan fails | Dropped with warning | new model test |
+| BH-5 | MODIFY | PROJECT_PLAN check fails first time | exit 1 | One repair turn with plan + exact errors; re-check; continue if passes | new stage test |
+| BH-6 | MODIFY | Check still fails after repair | n/a | exit 1, diagnostic names file, step and resume command; no second repair | new stage test |
+| BH-7 | MODIFY | UPDATED_PLAN check fails | exit 1 | Same as BH-5/BH-6 | new stage test |
+| BH-8 | ADD | Repair turn hits host spending stop | n/a | Stage stops cleanly with spending_limit stop-reason, no re-check loop | new stage test |
+| BH-9 | ADD | Same failure in headless run (no TUI) | exit 1 | Same repair behavior, independent of supervisor | headless test |
+| BH-10 | PRESERVE | Valid plan | Passes | No repair turn, no marker | existing + new test |
+| BH-11 | PRESERVE | Real paths/globs in Owns | Kept | Kept | existing marker test |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| SI-1 | NEW | A spending stop is never reported as a Base URL/key problem | model client | self_hosted_http.py | SB-1 test |
-| SI-2 | NEW | After a SpendingStop no new section worker starts | both schedulers | stagegate.sh | scheduler test |
-| SI-3 | NEW | Finished sections survive a spending stop | section dir | stagegate.sh | scheduler + resume test |
-| SI-4 | NEW | Spending stop never triggers the single-pass fallback | PROJECT_PLAN | stagegate.sh | scheduler test |
-| SI-5 | EXISTING | 402 is not retried | HTTP client | RETRYABLE_STATUS | retry test |
-| SI-6 | EXISTING | Non-spending failures keep fallback behavior | PROJECT_PLAN | stagegate.sh | SB-10 test |
-| SI-7 | EXISTING | Uncle's own budget cap is independent | budget.py | unchanged | existing tests |
+| INV-1 | EXISTING | Every `owns` token in a validated plan is a valid path/glob, not a directory (baseline I-1) | plan_model.validate | `plan_model.py:474-482` | existing + new tests |
+| INV-2 | STRENGTHENED | At most one repair turn per plan check; it cannot loop | PROJECT_PLAN and UPDATED_PLAN checks | one-time marker in `$STATE_DIR` | stage test asserts one agent call |
+| INV-3 | EXISTING | An invalid plan never advances | stagegate.sh | exit 1 after failed repair | stage test |
+| INV-4 | EXISTING | A host spending stop halts model work (I-3) | repair turn | spending-stop check | stage test |
+| INV-5 | NEW | Repair changes only what the validator errors name | repair prompt | prompt instruction; re-check | reviewed manually (model behavior) |
+
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Other runners and error text for non-spending errors unchanged. `stop-reason` gains a new value only.
+Plans that validated before still validate (filter only drops tokens that previously failed or were non-paths). Exit codes unchanged on terminal failure.
 
-## 8. Error behavior
-Malformed or non-JSON 402 body, or unknown code: falls back to existing generic error. Missing budget headers: no cap, current concurrency applies. Worker killed by a stop before writing: its section is missing and reruns on resume.
-
-## 10. Security
-Stop message and figures contain no API key or request content.
+## 8. Error and failure behavior
+After a failed repair: stderr names the file, the step (parsed from the validator error), the validator message, and the resume command; `stop-reason` records validation failure; exit 1.
 
 ## 12. Rollback
-Revert the commit; no persisted format change except a new stop-reason string.
+Revert the change; no persisted format changes. A leftover marker file is harmless.
 
 ## 14. Non-goals
-Changing Uncle's own cap; host accounting; #231; changing default concurrency; GitHub issue edits (#213 note is a human follow-up).
+Starting the supervisor in headless mode; changing validator rules; repair for other stages; multi-attempt repair.
 
 ## 15. Assumptions
-- Atomic units are millionths of a USD.
-- Typical per-call cost is derived from spend observed so far in the stage, with a conservative constant default when none is known.
-- Exit code: 75 (EX_TEMPFAIL); name `SPENDING_STOP_EXIT`.
+A marker cleared on a passing check, retained on failure, so a resumed run does not repair again.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | HTTP 402 with JSON code `budget_reached` or `balance_exhausted` raises a typed SpendingStop (not ValueError); message names the limit and suggested increase (or balance). | scripts/tests/self-hosted-spending-stop-test.py with a fake server |
-| AC-2 | Other HTTP errors (e.g. 401, 402 with unrelated body, non-JSON body) keep the existing ValueError message. | Negative cases in self-hosted-spending-stop-test.py |
-| AC-3 | In both bounded and unbounded section schedulers, after a SpendingStop in one of 14 workers no new worker starts, running workers finish, and finished sections remain on disk. | Shell scheduler test project-plan-spending-stop-test.sh |
-| AC-4 | On spending stop the PROJECT_PLAN stage does not run the single-pass fallback, writes stop-reason beginning `spending_limit` with the host figures, prints the one-line Stopped message, and exits with code 75. | project-plan-spending-stop-test.sh asserts fallback not invoked, file content, output, exit code |
-| AC-5 | A resume after the stop with the server accepting calls runs only sections that had not finished. | Resume case in project-plan-spending-stop-test.sh counting worker invocations |
-| AC-6 | supervisor.external_capacity_failure is true for 'HTTP 402: {"code":"budget_reached"}' and for balance_exhausted, and remains false for ordinary validator failures. | supervisor-test.py additions |
-| AC-7 | With a remaining-task-budget header value, the number of concurrently started section workers is capped to remaining/typical-cost (minimum 1), and absent header leaves concurrency unchanged. | Python unit test of pure cap function plus scheduler test |
-| AC-8 | A non-spending worker failure still drains workers, returns failure and runs the single-pass fallback as before. | project-plan-spending-stop-test.sh preserve case; existing suites stay green |
-| AC-9 | The new tests are included in the verification commands and the full shell and Python runners show no regression against baseline. | Driver verification commands |
+| AC-1 | `plan_steps.paths` on an Owns line with backticked paths followed by a parenthetical containing a backticked `-- EOF-GUARD` returns only the real paths. | New case in a plan_steps parser test; existing plan-owns-comment-marker test still passes. |
+| AC-2 | Backticked Owns spans not matching the plain-token path shape are dropped from `paths()` with a warning that names the step; real paths/globs including `.gitignore` and `src/**` are kept. | New parser test asserts result and captured warning. |
+| AC-3 | The `owns` array on the JSON route drops non-path-shaped strings with a warning naming the step, and keeps valid ones. | New plan_model test. |
+| AC-4 | A project plan failing the plan check gets exactly one repair model turn given the saved plan and the validator's exact errors, is re-checked, and the build continues when the re-check passes. | Stage test with a stub agent: step 2 owns an invalid token; asserts one agent call and continuation. |
+| AC-5 | A plan still invalid after the repair exits 1 with a diagnostic naming the file, the step and the resume command, and no second repair runs (also on resume). | Stage test asserts exit 1, message content and agent-call count of 1 across a rerun. |
+| AC-6 | The updated-plan check has the same one-repair behavior. | Stage test for UPDATED_PLAN. |
+| AC-7 | A spending stop during the repair turn stops the stage cleanly with a spending_limit stop-reason and does not re-check or loop. | Stage test using the existing spending-stop harness. |
+| AC-8 | The repair works in a headless run with no TUI/supervisor. | Headless test (follow headless-run-test.py harness) of the AC-4 scenario. |
+| AC-9 | A valid plan triggers no repair turn; existing shell and Python suites show no new regressions versus baseline. | Driver verification commands compared with baseline; stage test asserts zero agent calls. |
 

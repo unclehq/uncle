@@ -1,176 +1,184 @@
-## AR-001: D-3 precedence contradicts itself: 'only when no non-spending failure occurred' then 'a mix returns 75 too'.
+## AR-001: Plan never says what happens when filtering leaves a step with zero owns tokens.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-3 vs CHANGE_SPEC AC-8, SB-10, SI-6.
-- Failure: D-3 precedence contradicts itself: 'only when no non-spending failure occurred' then 'a mix returns 75 too'. AC-8/SB-10 keep fallback on other failures. Say: 'If any worker exits 75 the scheduler returns 75 even if others failed otherwise; fallback is skipped and failed sections rerun on resume.'
+- References: CHANGE_PLAN D-1/D-2 drop tokens with no empty-result rule; AC-2/AC-3 cover only mixed valid and invalid tokens.
+- Failure: Plan never says what happens when filtering leaves a step with zero owns tokens. Settle it: 'If filtering empties a step's owns, the validator reports its normal missing-owns error, which triggers the single repair turn; the dropped-token warning prints first.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Plan never says how resume tells a complete section from a partial one; a killed or failed worker may leave a non-empty
+## AR-002: Marker lifecycle is inconsistent: D-3 removes it only on a pass, section 6 retains it on failure.
 
 - Severity: HIGH
-- References: D-5 skips on 'exists and is non-empty'; spec section 8 assumes a killed worker leaves its section missing.
-- Failure: Plan never says how resume tells a complete section from a partial one; a killed or failed worker may leave a non-empty file that D-5 skips. Say: 'A section is finished only if its worker exited 0 and wrote via temp file plus atomic rename; partial outputs are deleted at stage start.'
+- References: CHANGE_PLAN D-3 vs section 6 ('marker retained'); CHANGE_SPEC Assumptions.
+- Failure: Marker lifecycle is inconsistent: D-3 removes it only on a pass, section 6 retains it on failure. A human who fixes the plan by hand and resumes cannot get a fresh repair. Settle it: 'The marker stores the plan file hash; a different hash on resume gets one repair, the same hash exits 1.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Stopped message is undefined when the 402 body lacks figures.
+## AR-003: Marker state after a spending stop during repair is unspecified.
 
 - Severity: MEDIUM
-- References: SB-6 template needs $X and $Y; D-1 fields are optional; AC-1 says 'limit and suggested increase (or balance)'.
-- Failure: Stopped message is undefined when the 402 body lacks figures. SB-6 gives only the budget_reached template. Say: 'For balance_exhausted print the balance wording; omit any clause whose figure is missing and never print None or $0.'
+- References: CHANGE_PLAN D-3/D-4, section 6; CHANGE_SPEC AC-5 (no second repair on resume) vs AC-7.
+- Failure: Marker state after a spending stop during repair is unspecified. D-4 exits without re-check, leaving the marker set, so a resume after budget is raised skips repair and fails. Settle it: 'On a spending stop during repair the marker is removed so resume repairs again.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: budget_cap leaves rounding, remaining <= 0, typical <= 0, and running-versus-new workers unspecified.
+## AR-004: The shape test is specified for backticked spans only; mixed lines (ticks plus plain prose) and the no-ticks route are l
 
 - Severity: MEDIUM
-- References: D-6 and AC-7 say only 'remaining/typical-cost (minimum 1)'.
-- Failure: budget_cap leaves rounding, remaining <= 0, typical <= 0, and running-versus-new workers unspecified. Say: 'cap = max(1, floor(remaining/typical)); typical<=0 uses 400000; the cap bounds total concurrent workers and never exceeds configured concurrency.'
+- References: plan_steps.py lines 72-90 (shape test only in no-ticks branch); CHANGE_PLAN D-1.
+- Failure: The shape test is specified for backticked spans only; mixed lines (ticks plus plain prose) and the no-ticks route are left ambiguous. Settle it: 'The shape filter runs on every candidate token from either route; a line with any ticks ignores unticked text.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: D-6 says the budget header goes into 'the same marker/side file' as the stop marker, but section 8 lists two separate en
+## AR-005: Final-failure message leaves the step unspecified when the error has no step-N, several steps fail, or the plan is UPDAT
 
 - Severity: MEDIUM
-- References: D-2 UNCLE_SPENDING_STOP_FILE vs D-6 UNCLE_BUDGET_REMAINING_FILE vs section 8.
-- Failure: D-6 says the budget header goes into 'the same marker/side file' as the stop marker, but section 8 lists two separate env vars. Parallel workers can race on one file and stale files can persist. Say: 'Each worker writes its own file per name; the scheduler clears stale files at stage start and reads the minimum remaining value.'
+- References: CHANGE_PLAN D-5 (parsed from step-N); CHANGE_SPEC section 8 and AC-5.
+- Failure: Final-failure message leaves the step unspecified when the error has no step-N, several steps fail, or the plan is UPDATED_PLAN. Settle it: 'Print every distinct step-N in the errors, or "step: unknown" if none.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Plan does not say whether exit 75 is treated as a spending stop in stages other than PROJECT_PLAN that share the schedul
+## AR-006: Section 8 claims previously valid plans are unchanged, yet D-1 drops spaced backticked tokens the old parser kept.
 
 - Severity: LOW
-- References: D-3 and D-4 scope handling to schedulers and the PROJECT_PLAN case.
-- Failure: Plan does not say whether exit 75 is treated as a spending stop in stages other than PROJECT_PLAN that share the schedulers. Say: 'Only PROJECT_PLAN treats 75 as a spending stop; other stages treat it as an ordinary failure.'
+- References: CHANGE_PLAN section 8 vs D-1; CHANGE_SPEC section 7.
+- Failure: Section 8 claims previously valid plans are unchanged, yet D-1 drops spaced backticked tokens the old parser kept. Warning channel and repetition are also unspecified. Settle it: 'Warnings go to stderr once per parse; a previously valid plan yields an identical owns list.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Exit 75 is returned by the runner for all callers, but only PROJECT_PLAN handling is specified.
+## AR-007: Tick-span shape test is narrower than what validate accepts (e.g.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2/D-3 vs D-4; the change-impact table lists no other stagegate callers.
-- Failure: Exit 75 is returned by the runner for all callers, but only PROJECT_PLAN handling is specified. Plan should say: 'Only PROJECT_PLAN interprets 75; every other caller treats any nonzero exit, including 75, as an ordinary failure as before.'
+- References: plan_steps.py:73-80 applies shape regex only to untick'd tokens; CHANGE_SPEC s7 vs CHANGE_PLAN D-1.
+- Failure: Tick-span shape test is narrower than what validate accepts (e.g. `src/{a,b}.py`, `~`, `+`, `=`), so previously valid plans may lose owns. Say: 'The tick filter drops only spans with whitespace or a comment marker; any token that passed validate before is kept.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: D-3 contradicts itself on mixed failures: it says 75 is returned 'only when no non-spending failure occurred', then says
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-3 final sentence versus CHANGE_SPEC AC-8, SI-4 and SI-6.
-- Failure: D-3 contradicts itself on mixed failures: it says 75 is returned 'only when no non-spending failure occurred', then says a mix returns 75 too. Plan should say: 'If any worker hit a spending stop, return 75 regardless of other failures; the fallback never runs.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: D-5 skip-if-output-exists applies to every run, so a stale non-empty section from an old or failed run is silently reuse
+## AR-008: Plan does not say what happens when filtering drops every Owns token for a step (empty owns valid, or new validator fail
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5 has no condition; SB-10/AC-8 require unchanged non-spending behavior.
-- Failure: D-5 skip-if-output-exists applies to every run, so a stale non-empty section from an old or failed run is silently reused, breaking the baseline where reruns redo all sections. Plan should say: 'Skipping applies only when stop-reason is spending_limit; otherwise sections are removed as today.'
+- References: CHANGE_PLAN D-1/D-2 give no empty-result behavior; INV-1 covers only kept tokens.
+- Failure: Plan does not say what happens when filtering drops every Owns token for a step (empty owns valid, or new validator failure). Say: 'A step whose owns become empty is passed through as empty owns and the validator decides.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: A section partially written by a worker killed during the stop passes the 'non-empty' test and is reused on resume.
+## AR-009: Retained marker makes a resumed run exit 1 without clarity on re-check; a user-edited plan or a different later failure
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 8 assumes a killed worker's section is missing; CHANGE_PLAN D-5 tests only exists and non-empty.
-- Failure: A section partially written by a worker killed during the stop passes the 'non-empty' test and is reused on resume. Plan should say: 'Workers write to a temp name and rename on success; resume checks only the final name.'
+- References: CHANGE_PLAN s6 'resumed run goes straight to exit 1' vs D-3 marker removed only on passing check.
+- Failure: Retained marker makes a resumed run exit 1 without clarity on re-check; a user-edited plan or a different later failure gets no repair. Say: 'On resume the check always re-runs first; the marker only suppresses the repair turn and is cleared when the plan hash changes.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The shared UNCLE_BUDGET_REMAINING_FILE is written by up to 14 concurrent workers with no atomicity or ordering rule, and
+## AR-010: Marker lifetime across stage restart or plan regeneration is unspecified; a regenerated plan may never get its one repai
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-6 gives a single shared side file with no cleanup; AC-7 says an absent header leaves concurrency unchanged.
-- Failure: The shared UNCLE_BUDGET_REMAINING_FILE is written by up to 14 concurrent workers with no atomicity or ordering rule, and a stale file from a prior run could cap a resumed run. Plan should say: 'The file is removed at stage start, written atomically, and the most recent value wins.'
+- References: CHANGE_PLAN D-3 and s10 rollback 'harmless if left'.
+- Failure: Marker lifetime across stage restart or plan regeneration is unspecified; a regenerated plan may never get its one repair, and 'harmless if left' contradicts AC-5. Say: 'Markers are cleared when the stage regenerates its plan.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: The _EXTERNAL_CAPACITY patterns 'status\s*402' and 'http\s*402' can match unrelated validator output that mentions 402.
+## AR-011: Repair-turn outcomes besides spending stop (timeout, nonzero exit, deleted or empty plan file, error lacking step-N) are
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s9 and D-5 parse step from step-N only.
+- Failure: Repair-turn outcomes besides spending stop (timeout, nonzero exit, deleted or empty plan file, error lacking step-N) are unspecified for the final-failure message. Say: 'If no step-N is parsable, the message omits the step and still names file and resume command.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: New stderr warnings from three Owns call sites may break existing tests asserting clean stderr while existing tests may
 
 - Severity: LOW
-- References: CHANGE_PLAN D-7 versus AC-6, which requires false for ordinary validator failures.
-- Failure: The _EXTERNAL_CAPACITY patterns 'status\s*402' and 'http\s*402' can match unrelated validator output that mentions 402. Plan should say: 'The pattern is anchored to the client error prefix, e.g. HTTP 402:.'
+- References: CHANGE_PLAN D-1, R-3, s12.
+- Failure: New stderr warnings from three Owns call sites may break existing tests asserting clean stderr while existing tests may not be edited. Say: 'Warnings are emitted only when dropped is non-empty; existing suites are run against baseline after step 1.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: D-3 contradicts itself on mixed failures: it says 75 is returned only when no non-spending failure occurred, then says a
+## AR-013: Repair prompt embeds validator output and plan text (model-authored, possibly attacker-influenced) with no stated trust
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-3. AC-8 covers only the pure non-spending case.
-- Failure: D-3 contradicts itself on mixed failures: it says 75 is returned only when no non-spending failure occurred, then says a mix returns 75 too. Settle it: 'If any worker reports a spending stop, the scheduler returns 75 regardless of other failures, and the stop-reason also records the count of non-spending failures.'
+- References: CHANGE_PLAN D-3 passes plan path plus exact validator output to run_initial_planning_agent; INV-5 is enforced only by prompt wording (R-4).
+- Failure: Repair prompt embeds validator output and plan text (model-authored, possibly attacker-influenced) with no stated trust boundary, and the repair agent's write scope is unspecified. Plan should say: the prompt labels plan text and validator output as untrusted data, and the driver re-checks that only the plan file changed.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Exit 75 alone is trusted as the spending signal, and the plan never says who creates or protects the marker and budget s
-
-- Severity: HIGH
-- References: D-2, D-3, D-6 name the env vars without ownership; section 12 maps a missing marker to 'details unavailable' instead of ordinary failure.
-- Failure: Exit 75 alone is trusted as the spending signal, and the plan never says who creates or protects the marker and budget side files. Another child exiting 75 (EX_TEMPFAIL) would stop the stage. Settle it: 'Stagegate creates both files under a per-run 0700 dir and removes them at stage end; exit 75 counts as a spending stop only if its marker parses, else it is an ordinary failure.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: Marker fields come from the remote 402 body and flow unvalidated into stderr and stop-reason, so control characters or o
+## AR-014: Marker file name uses <label> and the step number is parsed from validator error text, but neither is constrained.
 
 - Severity: MEDIUM
-- References: D-1 lists the fields; spec section 10 says nothing about sanitizing host values.
-- Failure: Marker fields come from the remote 402 body and flow unvalidated into stderr and stop-reason, so control characters or oversized strings could be injected. Settle it: 'Only the two fixed codes and integer atomic fields are accepted; any other field type invalidates the SpendingStop, and scope is truncated to 64 printable ASCII characters.'
+- References: CHANGE_PLAN D-3 `$STATE_DIR/plan-check-repair-<label>`; D-5 parses `step-N` from error text.
+- Failure: Marker file name uses <label> and the step number is parsed from validator error text, but neither is constrained. Plan should state that label is a fixed literal (project-plan or updated-plan) and the parsed step is digits-only before being printed or used in a path.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: Resume skips any non-empty section file, so a truncated or stale section left by a killed worker would be reused as vali
+## AR-015: Dropped tokens are echoed to stderr verbatim in warnings.
 
 - Severity: MEDIUM
-- References: D-5 'exists and is non-empty'; spec section 8 assumes a killed worker leaves its section missing, which is not guaranteed.
-- Failure: Resume skips any non-empty section file, so a truncated or stale section left by a killed worker would be reused as valid. Settle it: 'Workers write to a temp file and rename atomically on success; resume skips only renamed finals and deletes leftover temp files.'
+- References: CHANGE_PLAN D-1 prints `warning: step N owns: dropped <token>`; tokens come from model-written backticked spans.
+- Failure: Dropped tokens are echoed to stderr verbatim in warnings. Plan should say the token is escaped or truncated (control characters and ANSI escapes stripped, max length) before printing.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: D-3 precedence contradicts itself: 75 only when no non-spending failure, then 'a mix returns 75 too'.
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-3 vs CHANGE_SPEC AC-8/SB-10.
-- Failure: D-3 precedence contradicts itself: 75 only when no non-spending failure, then 'a mix returns 75 too'. Settle: 'If any worker exits 75 the scheduler returns 75 regardless of other failures; fallback runs only when no worker exited 75.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: Mixed outcomes (75 plus other failures) are untested; tests cover only pure cases.
-
-- Severity: HIGH
-- References: CHANGE_PLAN section 16 test table; D-3 mix clause.
-- Failure: Mixed outcomes (75 plus other failures) are untested; tests cover only pure cases. Settle: 'The shell test includes a mixed case asserting exit 75, no fallback, finished sections kept.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-019: Budget cap is not testably defined: rounding, remaining=0, remaining<typical, no finished call yet, bad header.
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-6; AC-7 mentions a scheduler test but section 16 lists only the pure function test.
-- Failure: Budget cap is not testably defined: rounding, remaining=0, remaining<typical, no finished call yet, bad header. Settle: 'cap=max(1,floor(remaining/typical)); typical=400000 until a call finishes then integer mean; remaining<=0 gives 1; non-integer header ignored.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: D-5 skip rule is ambiguous for partial outputs (killed mid-write, .json without .md).
+## AR-016: The shared path-shape predicate accepts tokens like `../../etc/x`; the old code only rejects a leading `/`.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5 vs CHANGE_SPEC section 8 'killed before writing'.
-- Failure: D-5 skip rule is ambiguous for partial outputs (killed mid-write, .json without .md). Settle: 'Skip only if all output files exist and are non-empty; otherwise rerun and overwrite.'
+- References: D-1 pattern `[\w./*?\[\]@-]+` allows `../` segments; plan_steps.py:88 only rejects a leading `/`.
+- Failure: The shared path-shape predicate accepts tokens like `../../etc/x`; the old code only rejects a leading `/`. Plan should say whether `..` segments in an owned path are dropped, since owns drives which files a step may write.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: Marker file contract is undefined: JSON schema, stale marker from a prior run, concurrent writers, and the USD conversio
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-2, section 12; CHANGE_SPEC SB-6.
-- Failure: Marker file contract is undefined: JSON schema, stale marker from a prior run, concurrent writers, and the USD conversion/rounding for the Stopped line. Settle: 'Markers are per-worker paths cleared at stage start; USD=atomic/1e6 to 2 decimals rounded up; missing field renders unknown.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-022: 402 matching variants are unspecified: code casing or nesting, valid code with missing numeric fields.
+## AR-017: A stale marker from a prior run can suppress the one repair for a changed plan.
 
 - Severity: LOW
-- References: CHANGE_PLAN D-1; CHANGE_SPEC AC-1/AC-2.
-- Failure: 402 matching variants are unspecified: code casing or nesting, valid code with missing numeric fields. Settle: 'Match is exact, case-sensitive on top-level code; missing numeric fields yield a SpendingStop with those fields None.'
+- References: CHANGE_PLAN section 6: marker retained on failure; section 10: leftover marker 'harmless'.
+- Failure: A stale marker from a prior run can suppress the one repair for a changed plan. Plan should state the marker is cleared whenever the plan file's content hash changes or a new run begins.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: The plan does not say whether a later, different failure in the same run gets its own repair once the marker is cleared.
+
+- Severity: HIGH
+- References: CHANGE_PLAN D-3 ('Marker is removed when a check passes') against section 6 ('marker retained') and INV-2 'per plan check'.
+- Failure: The plan does not say whether a later, different failure in the same run gets its own repair once the marker is cleared. Settle with: 'The marker is removed when a check passes; a later failure is a new failure and gets one repair; a failure with the marker present exits 1 with no agent call.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-019: The plan leaves unspecified a repair agent that crashes, times out, makes no edit, or empties the plan file.
+
+- Severity: HIGH
+- References: CHANGE_PLAN section 9 says only that a crash is a 'failed repair' and the re-check runs. No AC covers a crashed or no-op repair.
+- Failure: The plan leaves unspecified a repair agent that crashes, times out, makes no edit, or empties the plan file. Settle with: 'A non-zero agent exit or an unchanged file skips the re-check and takes the final-failure path with the marker set.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: The dropped-token warning format is fixed loosely.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-1 and D-2 against CHANGE_SPEC AC-2 and AC-3.
+- Failure: The dropped-token warning format is fixed loosely. D-1 gives one text, AC-2/AC-3 say only 'names the step', and D-2 gives no JSON-route format. Settle with: 'Both routes emit exactly `warning: step <label> owns: dropped <token>` on stderr, one line per dropped token, in input order.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: The plan does not say what happens when every Owns span is dropped, or how a directory-like span such as `src/` is treat
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-1 regex `[\w./*?\[\]@-]+` admits a trailing slash; CHANGE_SPEC INV-1 (plan_model.py:474-482) says directories are invalid.
+- Failure: The plan does not say what happens when every Owns span is dropped, or how a directory-like span such as `src/` is treated. Settle with: 'All spans dropped gives an empty owns list and the validator's existing error applies; `src/` passes the shape test and the validator still rejects it.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: The final-failure diagnostic is untestable when the error names no step or several steps, and its stream and resume text
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-5 ('parsed from step-N in the error') and CHANGE_SPEC AC-5.
+- Failure: The final-failure diagnostic is untestable when the error names no step or several steps, and its stream and resume text are unspecified. Settle with: 'Print to stderr; with zero or several steps print them comma-separated or `step: n/a`; the resume command is the one the driver prints for other stage failures.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-023: The plan is ambiguous when `spending-stop` already exists before the repair starts, for example from a resumed run.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-4 and R-2 against AC-7 ('during the repair turn').
+- Failure: The plan is ambiguous when `spending-stop` already exists before the repair starts, for example from a resumed run. It checks the flag only after the repair. Settle with: 'The flag is checked before launching the repair (stop without calling the agent) and after it (stop without re-checking).'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

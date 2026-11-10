@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 81
+Issue 226
 
-Seeded from [unclehq/uncle#81](https://github.com/unclehq/uncle/issues/81).
+Seeded from [unclehq/uncle#226](https://github.com/unclehq/uncle/issues/226).
 
 ## Change Type
 
@@ -10,32 +10,33 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Add tooltips to each option in the Supervision configuration menu
+One unknown supervision key (e.g. supervision.base_url) turns off all supervision corrections for an unattended run
 
 ## Motivation
 
-## Summary
+## What happened
 
-Add tooltips to each option in the Supervision configuration menu (Configure → Supervision in `uncle_tui.py`) so every setting explains what it does without requiring the user to consult `.uncle/config.example` or the README.
+A hosted, unattended build's log began with:
 
-## Current state
+```
+[supervision] Supervision corrections disabled: unknown supervision key: supervision.base_url. Fix .uncle/config.
+```
 
-- The menu lists the 12 typed controls from `supervision_lib.CONTROLS` (`scripts/lib/supervisor.py:44`): `enabled`, `runner`, `model`, `effort`, `max_interventions`, `steering_timeout_seconds`, `stage_time_seconds`, `stage_tokens`, `call_timeout_seconds`, `max_calls_per_run`, `call_max_cost_usd`, `delegate_gates`.
-- Rows are rendered by `_supervision_items()` (`uncle_tui.py:3477`) as plain `key  value` text with no inline hint.
-- Per-option descriptions already exist in `SUPERVISION_DESC` (`uncle_tui.py:670`), but they are shown only for the **highlighted** option, in the side panel / bottom strip drawn by `_draw_config_desc()` (`uncle_tui.py:5450`).
-- The value pickers opened when editing an option (effort → low/medium/high/custom, runner, model, delegate_gates → none/routine) present bare choices with no explanation of what each choice implies (see `_picker_rows()`, `uncle_tui.py:1231`).
+The build script had written `supervision.base_url` into `.uncle/config`. Uncle doesn't recognize that key, so it turned off **all** supervision corrections for the whole run. Nobody saw the message: in an unattended hosted run there is no operator watching the log. The build went on, failed later, and had no supervisor to diagnose or correct the failing stage.
 
-## Proposal
+## Where (main `4c23afac10`)
 
-- Show a tooltip/hint for every option in the Supervision menu, not just the highlighted row — e.g. a short inline hint per row, or an expanded panel — so users can compare settings at a glance.
-- Extend tooltips into the value pickers so each choice (e.g. `delegate_gates` none vs routine, effort low/medium/high) explains its effect before it is selected.
-- Reuse/extend `SUPERVISION_DESC` as the single source of tooltip text so menu rows and picker choices stay consistent; keep text in sync with `.uncle/config.example` and README (AT-9 already checks the control key list against `CONTROLS`).
+- `scripts/lib/supervisor.py:108-111` `parse_value`: an unknown key raises `unknown supervision key: supervision.<key>`.
+- `scripts/lib/supervisor.py:203-212` `load_config` collects that into `errors`. `:192-196` `disabled_reason` then disables corrections whenever `errors` is non-empty.
+- `scripts/lib/supervisor.py:57-72` `CONTROLS`: the supported keys. There is no `base_url` or `api_key`.
+- `scripts/lib/supervisor.py:227-242` `_hosted_defaults`: in hosted mode (`UNCLE_HOSTED=1`), supervision already uses the self-hosted runner and the hosted model, with the address and key from `OPENAI_BASE_URL` / `OPENAI_API_KEY` (`scripts/lib/hosted.py:18-23`). So a hosted script never needs `supervision.base_url`.
 
-## Acceptance criteria
+## What's needed
 
-- [ ] Every option in the Supervision configuration menu has a visible tooltip/hint without needing to read external docs.
-- [ ] Each choice in the option value pickers carries a short explanation.
-- [ ] Tooltip text covers all keys in `supervision_lib.CONTROLS` and degrades gracefully on narrow terminals (existing `_draw_config_desc` fallback behavior).
+1. **One bad key shouldn't switch off the safety net.** Ignore an unknown `supervision.*` key with a warning, and keep supervision on with the remaining valid settings. Keep disabling only when a recognized key has an invalid value that makes supervision unsafe.
+2. **In unattended runs, make configuration errors visible before spending.** Either stop before the first paid stage with the message, or print it to stderr where the host's failure report will pick it up.
+3. **Say it in the docs.** `.uncle/config.example` and `README.md` should state that in hosted mode supervision reads `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `SEREN_MODEL`/`UNCLE_MODEL`, so no `supervision.base_url` is needed.
+4. **Build script:** stop writing `supervision.base_url` to `.uncle/config`, and rely on hosted mode.
 
 ## Observed Current Behavior
 

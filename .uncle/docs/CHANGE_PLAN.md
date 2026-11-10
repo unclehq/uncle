@@ -1,139 +1,133 @@
-# Change plan: Supervision tooltips
+# Change plan — Issue 226
 
-Issue 81
+Seeded from [unclehq/uncle#226](https://github.com/unclehq/uncle/issues/226).
 
-Seeded from [unclehq/uncle#81](https://github.com/unclehq/uncle/issues/81).
+Issue 226
 
-Omitted sections: Schema/persistence (none); Migration (none); Concurrency (single-threaded UI); Feature flag (none, UI-only)
+Omitted sections: Schema (none); Migration (none); Concurrency (none); Feature flag (none, behavior is the fix); Observability (covered by stderr warnings)
 
 ## 1. Selected technical approach
 
-All in `uncle_tui.py`, text next to `SUPERVISION_DESC`:
-
-- D-1: add `SUPERVISION_HINT` (one short phrase per CONTROLS key, <=40 chars excluding the `  - ` separator; authoring limit enforced by a test, never truncated at runtime) and `SUPERVISION_CHOICE_DESC` mapping `(key, value)` to a short explanation (effort none/low/medium/high; delegate_gates none/routine). Runner explanations: the runner value set is enumerated from the same list `_picker_rows` uses for the runner picker (tests iterate that list, not a hardcoded copy); each runner gets an entry where known, otherwise a fixed non-empty generic fallback string (a module constant). All hint and explanation text comes only from these static dict entries or the fixed fallback; user-supplied values (e.g. runner names) are never interpolated into them. Tests assert every runner in that list yields a non-empty explanation.
-- D-2: `_supervision_items()` appends `  - <hint>` after the value iff the full stdscr width `self.stdscr.getmaxyx()[1] >= 100` (not the menu-panel width). Hints are absent at width 99 and below, and absent if getmaxyx raises or returns a non-positive or non-integer width. Rows keep key prefix. Hints are authored at <=40 chars excluding the separator and are never truncated at runtime; a test asserts len(hint)<=40 for every hint. Key and value are never truncated by the hint logic (the window may clip the row at draw time). Rows beginning with `!` (invalid-config reason rows) and non-CONTROLS rows get no hint; every CONTROLS row has a non-empty hint at width >=100. At width >=100 hints are always rendered; if the side description panel does not fit, `_draw_config_desc` uses its existing bottom-strip fallback and the inline hints stay. No caller parses row text: selection, Enter and toggle act on the row index/key, so Enter/toggle on a hinted row must act on the correct key (asserted by a test).
-- D-3: add picker_kind `delegate` in `_picker_rows` returning `option` rows none/routine only (no Custom row, like `network`); extend `_picker_current` and `_title` for it. none and routine are the only selectable values. The current value is marked on the matching row; a stored delegate_gates value outside none/routine is shown as the current value via a fallback current row (no explanation, no none/routine row highlighted), is left unchanged unless the user selects none/routine, and Esc leaves it unchanged. The old free-text Custom entry is no longer reachable for delegate_gates; supervision_lib validation remains the only write gate. Verify the apply path by reading the Enter handler (step 3) so that selection calls the same `_set_field("!supervision", key, value)`.
-- D-4: `_supervision_enter` opens the `delegate` picker for `delegate_gates` regardless of the stored value, including an out-of-set one (other non-bool kinds unchanged). The picker lists only none/routine; free-text Custom entry for delegate_gates is intentionally replaced by it, and supervision_lib validation remains the only write gate. Test: with a stored value outside none/routine, the picker opens with no row marked current, Esc leaves the stored value unchanged, and selecting routine stores routine.
-- D-5: `_draw_picker` appends `  - <explanation>` only to option rows, and only when `picker_target == "!supervision"` and the row's (key, value) has an entry in `SUPERVISION_CHOICE_DESC` (or the fixed non-empty runner fallback for runner values). Custom, filter, model, current-fallback and empty-list rows, and rows with no entry, are never annotated. No width gate applies to pickers: explanations are drawn at every width and truncated only by the existing `addnstr` width limit; non-supervision pickers are unchanged. Explanation text comes only from static `SUPERVISION_CHOICE_DESC` entries or the fixed fallback (never interpolating user values), and any drawn user-supplied value (such as a runner name) has control characters stripped before `addnstr`.
-- D-6: hint eligibility — `_supervision_items()` appends a hint only to rows whose key is in CONTROLS and that have a SUPERVISION_HINT entry; invalid-config rows (beginning with "!"), non-CONTROLS rows, and rows with a missing hint get no hint, whatever the value (empty, bool or long).
+D-1 In `load_config`, test `key not in KINDS` before the `seen.add(key)` line: unknown keys are skipped, are NOT added to `seen`, and never affect the `runner`/`model` fallback or `_hosted_defaults` (which read `seen`). Each unknown key appends an `unknown supervision key` text to a new `warnings` list instead of `errors`; duplicate unknown keys warn once (tracked in a separate set of unknown keys, not `seen`). Leave `parse_value` raising for direct callers.
+D-2 `Config(values, errors, warnings)`; `warnings` attribute, default empty. Message omits the value.
+D-3 Add pure helper `config_notices(config, environ)` returning stderr lines: all warnings; plus `disabled_reason` when hosted (`hosted.is_hosted`) and errors exist. Called once at the supervised-run entry (`supervisor.py:~1816`) before the command runs, and the CLI `config` action prints warnings to stderr.
+D-4 Docs in README.md and docs/supervision.md. `.uncle/config.example` is untracked here and the build script is external: not changed (deviation recorded in IMPLEMENTATION_NOTES.md).
 
 ## 2. Alternatives
-(a) Separate tooltip popup on a key: more input handling, hidden until pressed. (b) Show all descriptions in an expanded panel: no room for 13 long entries. (c) Reuse long `SUPERVISION_DESC` inline: too long for one line.
+A: abort the run before the first paid stage on any config error. B: warn on stderr (chosen). A is a behavior change for interactive users and conflicts with 'keep supervision on'.
 
 ## 3. Why preferred
-Smallest change, no new state or keys, reuses existing draw fallbacks, hints visible at a glance.
+Smallest change, matches request options, preserves error semantics for recognized keys.
 
 ## 4. Components to modify
 See Change-impact table.
 
 ## 5. Not to modify
+`_hosted_defaults`, hosted.py, supervision.sh, uncle_tui.py, journal and worker logic.
 
-`scripts/lib/supervisor.py`, stage config menus' text, `CONFIG_DESC`, README, `.uncle/config.example` (unless a drift test fails), existing tests.
+## 6. Data flow
+config file -> load_config -> Config(values, errors, warnings) -> notices to stderr (hosted or CLI). Status/TUI continue to read `disabled_reason` only.
 
-Non-goal / invariant: hint and explanation text comes only from static dict entries or a fixed fallback constant; user-supplied values (e.g. runner names) are never interpolated into it, and drawn user values have control characters stripped.
+## 8. Interfaces
 
-## 6-8. Data flow / interfaces
-Pure-display additions. `items()` rows get a hint suffix (width-conditional); `_picker_rows` gains a `delegate` kind. No external API changes.
+`Config.warnings` added; CLI `config` stderr gains warning lines; exit code only 1 for errors. Unknown-key warning rule: `warnings` holds one entry per distinct unknown supervision key, in file order; a repeated unknown key gets no second warning (first wins, as for recognized keys). The key text is the part after `supervision.` verbatim, and a bare `supervision.` line (empty name) is treated as unknown and warned. Unknown keys never enter `seen` and never change `values`, runner/model fallback, or `_hosted_defaults`. Warning volume: `Config.warnings` holds at most 20 key warnings, followed when more exist by one line '... and N more' where N is the number of omitted distinct unknown keys.
 
 ## 10. Compatibility
 
-Row prefix, stored values and non-supervision pickers unchanged. MODIFY (declared): delegate_gates Enter changes from free-text Custom entry to a none/routine picker; an out-of-set stored value is shown unchanged with no row selected and Esc leaves it unchanged; supervision_lib validation remains the only write gate.
+All existing consumers read `errors`/`disabled_reason`; unchanged shape. The existing test case `('bogus','1')` in the roundtrip error loop expects an error and conflicts with the requirement; it is the one test change, authorized by the change request (item 1). It is removed from the error loop and asserted separately in the same test: a file containing only `supervision.bogus 1` loads with `errors == []`, `disabled_reason == ''`, `values` equal to `DEFAULTS`, and `warnings` containing one entry that names `supervision.bogus`.
 
 ## 12. Error and recovery
-Missing hint/description -> nothing appended. Width read failure -> no hints.
 
-## 14. Rollback plan
-Revert the commit; no persisted data or schema involved.
+Recognized-invalid values: unchanged disable. Unknown key: warning only. CLI `config` with both warnings and errors: stdout lines unchanged, then each warning on stderr, then disabled_reason on stderr, exit 1; with warnings only, exit 0. Notice printing failures (closed or broken stderr) are swallowed and never change the exit code or abort the run.
+
+## 14. Rollback
+Revert the commit; no state.
 
 ## 16. Automated-test strategy
 
-New `scripts/tests/supervision-tooltips-test.py` (hyphenated; leaves protected existing test files untouched). Builds `UncleTUI.__new__` as supervisor-test.py:1038 does, with a fake stdscr that records `addnstr` text. Cases: hint coverage per CONTROLS key (SI-1) and len(hint)<=40 for every hint; '!' reason rows get no hint; row prefix; Enter/toggle on a hinted row at width 120 acts on the correct key (same key and effect as with no hints); width cut-off; effort/delegate/runner picker explanations observed via the recording stdscr, drawn at width >= 120; picker Custom, filter and model rows, and rows without a dict entry, are asserted to have no explanation; delegate selection stores value; small-size draw without exception. Oracle for 'non-supervision picker rows unchanged': the pre-change `_picker_rows` output for each non-supervision picker kind is captured now as literal expected lists in the test (not recomputed from code), and the drawn picker text for a non-supervision target must contain no explanation. Defect injection (record all in IMPLEMENTATION_NOTES.md, each must make the suite fail, then be reverted): (1) blank one hint key; (2) add an explanation to a non-supervision picker row or draw it when picker_target != '!supervision'; (3) put a supervision hint in the wrong picker/key.
+In `scripts/tests/supervisor-test.py` (already in critical-suites): unknown key ignored (AC-1, AC-2); unknown plus invalid recognized still disabled (AC-3); CLI exit codes/stderr (AC-4): warnings-only exits 0 with warnings on stderr; errors-only exits 1 with disabled_reason on stderr; AC-4b with both warnings and errors the CLI prints stdout `lines` first, then each warning on stderr, then disabled_reason on stderr, exits 1, and warnings never appear on stdout; hosted run notice (AC-5), using temp configs and a subprocess with `UNCLE_HOSTED=1`: run-entry notices (warnings, then disabled_reason) are emitted by config_notices exactly once per process at run entry before the first stage starts, and the test asserts one occurrence in stderr; a non-hosted run with an unknown key asserts nothing is printed to stderr at entry (the CLI `config` action always prints warnings regardless of hosting); a reload test rewrites the config mid-run (calls reload_config with a changed file) and asserts reload_config prints nothing and no additional stderr output appears. No-value-echo (AC-2, R-3): a config with an unknown key whose value is a unique sentinel string (e.g. `supervision.bogus SENTINEL-7f3a91`) is loaded and run through the CLI `config` action and the hosted run entry; the test asserts the sentinel appears in none of captured stdout, captured stderr, or `Config.warnings`. Fixtures use no git signing.
 
-Additional required cases: Enter/toggle on each hinted row index at width 120 calls the handler with the matching CONTROLS key; a runner name containing control characters yields the static fallback explanation and drawn text has no control characters; delegate picker with out-of-set stored value highlights no row, offers only none/routine, and Esc leaves the value unchanged.
+AR-002 test: start a supervised run with an unknown key, then change the config file (new unknown key / new invalid value) and trigger reload_config; assert stderr contains the entry notice exactly once and reload adds no stderr output, while reload still updates status/disabled_reason as before. AR-012 sanitization test: a config line whose key contains an ESC/ANSI sequence and non-ASCII characters yields a warning containing only [A-Za-z0-9._-] characters plus '?' substitutes (every other character is replaced with '?'); a key longer than 64 characters is truncated to 64; a sentinel value appears in no output.
 
 ## 17. Regression-test strategy
-Baseline commands in BASELINE_REPORT (shell suites, python critical tier) plus explicit `supervisor`, `supervisor-default-runner`, `supervision-tooltips` and `py_compile`.
+Regression test that fails before fix: AC-1 test (unknown key currently yields errors). Existing roundtrip, hosted-mode and default-runner suites cover B-2..B-5. Run the baseline commands.
 
 ## 18. Manual verification
-Run `uncle` -> Configure -> Supervision at ~120 cols and ~60 cols: see per-row hints, highlight description, open effort/delegate_gates/runner pickers and read explanations; Esc backs out.
-
-## 20. Implementation sequence
-
-1. Text tables: add `SUPERVISION_HINT` and `SUPERVISION_CHOICE_DESC` beside `SUPERVISION_DESC`
-   Owns: `uncle_tui.py`
-2. Row hints in `_supervision_items` (D-2): hints at width >=100 only, no truncation of key/value, strip fallback for the side panel; tests cover widths 99, 100, 119 and 120; confirm by reading Enter/toggle handlers that no caller parses row text - builds on step 1's edits to uncle_tui.py (same file, text dependency)
-   Owns: `uncle_tui.py`
-   Depends on: 1
-3. Picker work: `delegate` kind in `_picker_rows`/`_picker_current`/`_title`, `_supervision_enter`, `_draw_picker` explanations (D-3..D-6). First read the picker Enter handler and `_picker_current`'s out-of-set fallback; these are named touched functions, and any change to either is recorded in IMPLEMENTATION_NOTES.md. Out-of-set stored delegate_gates highlights no row, only none/routine are selectable, Esc leaves the value unchanged — builds on same file
-   Owns: `uncle_tui.py`
-   Depends on: 1
-4. Tests: `scripts/tests/supervision-tooltips-test.py` written against the specified behavior. Deliverables: literal expected lists of pre-change non-supervision `_picker_rows` output; hint non-empty/len<=40/unmodified-in-row test; '!' and non-CONTROLS rows unhinted; width 99/100/raising getmaxyx; Enter/toggle on every hinted row index at width 120 targets the matching CONTROLS key; runner set enumerated from the list `_picker_rows` uses; runner name with control characters yields the static fallback and no control characters in drawn text; delegate out-of-set stored value case
-   Owns: `scripts/tests/supervision-tooltips-test.py`
-   Depends on: 2, 3
-5. Reconcile and run commands. Perform defect injection as temporary reversible edits to uncle_tui.py only (blank hint; explanation leaked into non-supervision picker; hint in wrong key), confirm the suite fails each time, revert, and record results in IMPLEMENTATION_NOTES.md. Record any invoked scope cut there; if the runner-explanation cut is invoked, amend AC-2 and remove the runner test from step 4's file in this same step.
-   Owns: `uncle_tui.py`, `.uncle/docs/IMPLEMENTATION_NOTES.md`
-   Depends on: 2, 3, 4
-
-## 21. Scope cuts under time pressure
-
-Cut first: runner-choice explanations (if invoked, AC-2 is amended in the plan and deviation notes to exclude the runner picker), then width-conditional hints (keep picker explanations for effort/delegate_gates), never cut SI-1 coverage test.
-
-## 22. Risks
-| Risk | Mitigation |
-|---|---|
-| Longer rows shrink the side panel | 40-char cap, width>=100 gate, existing strip fallback |
-| Shared `_draw_picker` regression | Gate on `picker_target == '!supervision'`; test non-supervision rows |
-| Unknown delegate selection path | Step 3 reads handler; no stop condition unless apply path cannot call `_set_field` |
-
-## Restrictions
-
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST.md Proposal | AC-5 | Single text source in SUPERVISION_* dicts | Dicts beside SUPERVISION_DESC (DESIGN: location revisable) | Keeps menu/picker consistent | CAP-python3 | CODING |
-| R-2 | REPOSITORY | supervisor-test.py:1214 | AC-1 | Rows start with key; no caller parses row text, so Enter/toggle on a hinted row act on the correct key; every CONTROLS row has a hint at width >=100; hint length <=40 asserted by test | Append hint after value; hints authored <=40 chars, never truncated at render; '!' rows get no hint; Enter/toggle test on hinted rows | Existing test | CAP-python3 | CODING |
-| R-3 | USER | CHANGE_REQUEST.md AC3 | AC-3 | Graceful narrow terminal; hints iff width >= 100 | Width gate (stdscr.getmaxyx()[1] >= 100; boundary tests at 99 and 100) + existing fallback | Spec | CAP-python3 | CODING |
-| R-4 | REPOSITORY | CLAUDE.md | AC-4 | Existing tests not edited; unchanged-picker baseline fixed as literals and tests proven to reject leaked explanations | New test file with literal expected non-supervision picker rows and multiple defect injections | Protected paths | CAP-python3 | CODING |
-
-Feasibility: symbols inspected at the lines in the baseline; python3 and bash runners exist (scripts/run-python-tests.sh). No live-authentication prerequisites; LIVE_VERIFICATION is the manual check above.
+Run `python3 scripts/lib/supervisor.py config --config <file with supervision.base_url x>` and `UNCLE_HOSTED=1` run wrapper; observe stderr warning and enabled supervision. Check README/doc text.
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `uncle_tui.py` | Add hint/choice dicts, row hints, `delegate` picker, picker explanations | Feature | Shared picker/draw code | supervision-tooltips-test, supervisor-test |
-| `scripts/tests/supervision-tooltips-test.py` | New suite | Cover AC-1..5 | None | Self + defect injection |
-| `.uncle/docs/IMPLEMENTATION_NOTES.md` | Record deviations/defect injection | Workflow | None | n/a |
+| `scripts/lib/supervisor.py` | warnings in Config/load_config, config_notices, entry and CLI printing | AC-1..AC-5 | Medium: gating on errors | supervisor-test.py, hosted-mode-test.py |
+| `scripts/tests/supervisor-test.py` | replace bogus-key error case; add new tests | AC-1..AC-5 | Low | itself |
+| `README.md` | hosted supervision env vars note; warn not to put credentials (api keys, base_url secrets) in .uncle/config | AC-7 | None | grep |
+| `docs/supervision.md` | same note plus unknown-key behavior (warning names the key only, value never printed); do not put credentials in .uncle/config | AC-7 | None | grep |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| At width >=100 every CONTROLS row shows a non-empty hint (<=40 chars, authored not truncated) after the value; '!' reason rows get no hint. | SB-1 | SI-1 | _supervision_items | tooltips-test row hints, tooltips-test hint len<=40 authored limit, no runtime truncation, tooltips-test: '!' reason rows and non-CONTROLS rows get no hint | Menu at 120 cols |
-| AC-2: effort, delegate_gates and runner pickers show a non-empty explanation for each option row, observed as addnstr text recorded by a fake stdscr at width >=120. delegate_gates offers only none/routine; an unrecognised stored value highlights no row and Esc leaves it unchanged. The runner set is the list `_picker_rows` uses, with a non-empty fixed fallback explanation for unlisted runners. Hints are authored <=40 chars and never truncated at render. Custom, filter, unmapped and '!' rows get no explanation. | SB-3, SB-4, SB-5 | SI-2 | _picker_rows, _draw_picker | tooltips-test pickers (fake stdscr recording addnstr text at width 120; explanation non-empty per option row with an entry), tooltips-test: Custom/filter rows unannotated; delegate out-of-set stored value shown as current and editable, tooltips-test delegate picker with out-of-set stored value: no row current, Esc leaves value unchanged | Open each picker |
-| AC-3 | SB-2, SB-7 | SI-3 | _supervision_items, _draw_config_desc | tooltips-test narrow draw at widths 30 and 60, tooltips-test width boundary: hints absent at 99, present at 100, present at 120, absent when getmaxyx raises or width <= 0 | Menu at 60 cols, Menu at 99 and 100 cols |
-| AC-4 | SB-6 | SI-2 | pickers | supervisor, shell suites, tooltips-test literal non-supervision picker rows + defect injection (explanation leaked into non-supervision picker) | Stage config picker |
-| AC-5 | SB-1 | SI-1, SI-4 | dicts | key-set test, DocsTests | n/a |
+| Request 1 | B-1, B-2 | I-1, I-2, I-5, I-6 | supervisor.py | AC-1..AC-3 tests, duplicate unknown key yields exactly one warning, bare `supervision.` yields one warning and no error, file with only unknown keys: values equal DEFAULTS, errors==[], unknown `supervision.runner`-adjacent key does not alter runner/model fallback | CLI config run |
+| Request 2: hosted visibility. config_notices runs once per process at run entry, before the first stage, and is gated on hosted.is_hosted: non-hosted supervised runs print nothing at entry; hosted runs print warnings (file order) then disabled_reason (if errors) to stderr. reload_config prints nothing. The CLI `config` action prints warnings independently of hosted mode. Warnings go only to stderr, never to stdout or Config.lines; exit 1 iff errors exist, else 0. | B-6, B-7 | I-6 | supervisor.py | AC-4 (warnings-only exit 0; errors-only exit 1), AC-4b (both: stdout lines, then warnings, then disabled_reason on stderr, exit 1), AC-5 tests, including hosted missing-model case: warnings first, then disabled_reason line, AC-5 non-hosted: no stderr notice at entry with warnings present, reload test: notice appears exactly once; reload_config emits no stderr (config changed mid-run to add unknown key or invalid value) | hosted run |
+| Request 3 | B-8 | none | README.md, docs/supervision.md | grep (AC-7), sentinel test: credential-like unknown key (e.g. supervision.api_key with a sentinel value) yields a key-only warning; the sentinel appears in none of stdout, stderr or warnings | read docs |
+| Request 4 | n/a (external build script) | none | none | none | deviation noted |
+
+## Restrictions
+
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
+|---|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST item 1 | AC-1, AC-3 | unknown ignored, invalid recognized still disables | skip KINDS-miss in load_config | minimal | CAP-py | supervisor.py:203-224 inspected | CODING |
+| R-2 | USER | item 2 | AC-5 | hosted: warnings then disabled_reason visible exactly once before paid stage; non-hosted: no entry output; mid-run reloads add no stderr notices | config_notices called once per process at run entry, before the first stage, on stderr, only when hosted.is_hosted(environ); non-hosted entry prints nothing; CLI config always prints warnings; reload_config never prints | host reads stderr | CAP-py | supervisor.py:1816-1822 inspected | CODING |
+| R-3 | DESIGN | spec section 10 | AC-2 | no value echoed: sentinel value appears in none of stdout, stderr or Config.warnings; key text bounded to 64 characters and redacted when it matches secret patterns | warning text contains the key name only, never the value; key name truncated to 64 characters, then the warning line passed through the existing redact() (with known_secret_values(environ)) so secret-matching key text prints as the redacted-line marker; test writes `supervision.<unknown> <sentinel>` and asserts the sentinel is absent | secrets safety: a key such as supervision.sk-... must not reach stderr verbatim, and key length is unbounded in the file; tests use a sentinel value plus a 200-character key and a secret-like key and assert the sentinel and full key appear nowhere in stdout, stderr or Config.warnings | CAP-py | message built from key | CODING |
+| R-4 | DESIGN | AR-012 | AC-2 | warning key text cannot inject control or ANSI characters into stderr | warning builder passes the key through a sanitizer: characters outside [A-Za-z0-9._-] become '?', result truncated to 64 characters | key is raw file text printed to hosted logs | CAP-py | supervisor.py:172-173 takes parts[0] unfiltered | CODING |
+
+## 20. Implementation sequence
+
+1. Supervisor core: add `warnings` to Config and load_config (D-1, D-2); add `config_notices` and wire entry and CLI `config` printing (D-3). Unknown-key rule in load_config: an unknown key (including the empty name from a bare `supervision.` line, warned like any other unknown key) is checked against KINDS BEFORE `seen.add`, so it is never added to `seen` and never affects the runner/model fallback or `_hosted_defaults`; distinct unknown keys are tracked in a separate set so N occurrences yield exactly one warning, in file order, duplicates silent; when every supervision key is unknown the result is defaults, errors==[] and one warning per distinct key. Warning text: key text sanitized (characters outside [A-Za-z0-9._-] replaced with '?', truncated to 64 characters, R-4), config value never included; warnings are capped at 20 lines plus a '... and N more' line. Warnings go only to stderr, never to Config.lines or stdout. `config_notices` passes every line it returns (warnings and disabled_reason) through `redact()` with `known_secret_values(environ, config_path)`. Run-entry rule: `config_notices` is called exactly once per process, at supervised-run entry before the first stage starts, and returns no lines when not hosted (non-hosted supervised runs print nothing at entry); when hosted it returns all warnings in file order, then `disabled_reason` if `errors` is non-empty (errors include the hosted missing-model error appended by `_hosted_defaults`, so that line follows any warnings), one stderr line each. `reload_config` (supervisor.py:991-1009) is left unchanged in this respect: it may update `self.config` and status as today but prints nothing to stderr and never calls `config_notices`, so a mid-run reload cannot re-emit warnings or the disabled reason. CLI `config` action (supervisor.py:1923-1929): print `lines` to stdout, then each warning to stderr (regardless of hosted mode), then `disabled_reason` to stderr if errors exist; exit 1 if any error exists, else 0, regardless of warnings. Reqs AC-1..AC-5.
+   Owns: `scripts/lib/supervisor.py`
+2. Tests: remove ('bogus','1') from the roundtrip error loop and assert it separately as warning-only for a file containing only `supervision.bogus 1`: errors == [], disabled_reason == '', warnings == ['ignoring unknown supervision key: supervision.bogus'], values equal DEFAULTS. Keep a direct assertion that parse_value('bogus','1') still raises ValueError('unknown supervision key: supervision.bogus'). Add tests for AC-1..AC-5. Builds on step 1 for API names; separate file.
+   Owns: `scripts/tests/supervisor-test.py`
+   Depends on: 1
+3. Docs: README.md and docs/supervision.md hosted note (D-4). Both files must state that credentials (api keys, secrets) must not be put in .uncle/config and that unknown-key warnings name only the key. Independent of 1-2.
+   Owns: `README.md`, `docs/supervision.md`
+4. Record deviation (config.example, build script) and run tests.
+   
+   Live-verification check IDs: none requiring credentials; verification commands are the baseline's two runners.
+   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
+   Depends on: 1, 2, 3
+
+AC-4 additional tests: (a) CLI `config` on a file with an unknown key plus an invalid recognized value emits stdout lines, then the warning, then disabled_reason on stderr, with exit 1; (b) with stderr closed (subprocess started with stderr closed), warnings-only exits 0 and errors exit 1, unchanged by the closed stream.
+
+## 21. Scope cuts
+Cut first: hosted stderr notice for disabled reasons (keep warnings), then docs in docs/supervision.md. Never cut the load_config change.
+
+## 22. Risks
+- Typos of recognized keys are silently demoted to warnings (accepted, requested).
+- `.uncle/config.example` and build script are not in this repo (recorded, not blocking).
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | Plan did not define how hinted rows coexist with the side panel or strip fallback. | D-2 (s1.2.i2) now states hints always render at width>=100 and the description uses the bottom strip when the panel does not fit. |
-| AR-002 | Accepted | The 40-char cap was ambiguous between truncation and authoring limit. | D-2 and AC-1 now say hints are authored <=40 chars excluding separator, never truncated at runtime, and a test asserts length. |
-| AR-003 | Accepted | Hint eligibility for invalid-config, non-CONTROLS and empty/long-value rows was unspecified. | Add D-6 to s1.2 and update AC-1 requirement/tests: only CONTROLS-key rows get hints; '!' rows and non-CONTROLS rows get none. |
-| AR-004 | Accepted | Explanation scope for Custom/filter/missing-entry rows and the delegate out-of-set stored value were unspecified. | Edit D-3 and D-5 in s1.2 and AC-2 tests: explanations only on option rows with an entry; delegate stored out-of-set value handled via fallback current row. |
-| AR-005 | Accepted | Picker width handling was ambiguous; stating that pickers have no width gate and are tested at width >=120 removes the ambiguity. | D-5 states explanations are shown at all widths with no width gate and truncated by addnstr; AC-2 test observes them at width 120. |
-| AR-006 | Accepted | The boundary was untested and the gate was not pinned to stdscr width. | D-2 now says hints appear iff stdscr.getmaxyx()[1] >= 100 (absent at 99, on exception or width <=0); AC-3 and R-3 add boundary tests at 99 and 100. |
-| AR-007 | Accepted | The delegate picker has no Custom row, so handling of out-of-set stored values must be explicit. | D-3 and D-4 state the picker lists only none/routine, shows an out-of-set value as current, and Esc leaves it unchanged. |
-| AR-008 | Accepted | Behavior at widths 100-119 versus the side panel needs a stated rule. | D-2 states hints always show at width >=100, the side panel falls back to the strip if it does not fit, and key/value are never truncated. |
-| AR-009 | Accepted | D-5 did not say which picker rows get explanations; limiting to dict-backed option rows protects Custom, filter and model rows (SB-6). | Edit D-5 (s1.2.i5) to annotate only option rows with a SUPERVISION_CHOICE_DESC entry, and add a test case in section 16. |
-| AR-010 | Accepted | Appending hints could break callers parsing row text; the plan must state none do and test Enter/toggle on hinted rows. | Edit D-2 (s1.2.i2) with a no-parse rule, add Enter/toggle test to section 16 and R-2, and extend step-2. |
-| AR-011 | Accepted | The cap meaning was ambiguous; authoring-time limit excluding separator, test-enforced, is simplest and avoids runtime truncation. | D-1 and D-2 (s1.2.i1, s1.2.i2) now state hints are <=40 chars excluding the '  - ' separator, enforced by test, never truncated at runtime. |
-| AR-012 | Accepted | Static-only text and control-character stripping of drawn values prevents injection of terminal escapes from user-supplied runner names. | D-1 and D-5 (s1.2.i1, s1.2.i5) now state text comes only from static dicts or a fixed non-empty fallback, no user value is interpolated, and drawn values have control characters stripped. |
-| AR-013 | Accepted | Real gap: delegate picker has no Custom row, so out-of-set stored values need a stated handling. | D-3 (s1.2.i3) states out-of-set values show unchanged with no current selection; validation in supervision_lib stays the only write gate. |
-| AR-014 | Accepted | Gate boundary and width source were ambiguous; pinning to stdscr width with 99/100 tests removes the split. | D-2 (s1.2.i2) states hints appear iff stdscr.getmaxyx()[1] >= 100; AC-3 and test rows cover widths 30, 60, 99, 100, 120. |
-| AR-015 | Accepted | Cap enforcement and treatment of '!' reason rows were unspecified; authoring-time limit plus a test resolves it. | D-2 now says hints are authored <=40 chars, never truncated at render, '!' rows get no hint; s10 and R-2 add a length test. |
-| AR-016 | Accepted | Observation method for picker explanations was undefined. | D-5 and s10 specify a fake stdscr recording addnstr text at width >=120; Custom, filter and unmapped rows get no explanation. |
-| AR-017 | Accepted | Runner set and fallback text must be pinned so tests can assert non-empty explanations; the cut-first item contradicted AC-2. | D-1 pins runner set to _picker_rows list and non-empty fallback; section 21 cut amends AC-2; AC-2 requirement updated. |
-| AR-018 | Accepted | Delegate picker behavior for current and out-of-set stored values needs a defined expected result. | D-3 and D-4 state none/routine are the only selectable values, unrecognised stored value highlights no row, Esc leaves it unchanged. |
-| AR-019 | Accepted | Fixed literal oracles for unchanged pickers and extra defect injections are cheap and prove the tests reject leaked explanations. | Section 16 test strategy and R-4/AC-4 now require literal expected non-supervision picker rows and a second defect injection. |
+| AR-001 | Accepted | Real gap: plan did not define dedup, seen/fallback handling, or empty-key behavior for unknown keys. | Edit step-1 and s7.1 to define: unknown keys not added to seen, one warning per distinct key, empty key treated as unknown; add traceability row note. |
+| AR-002 | Accepted | reload_config re-calls load_config mid-run and the plan was silent on printing; stating it prints nothing removes the ambiguity. | Step 1, R-2, traceability row for Request 2 and section 16 now state reload_config prints nothing; notices print once at entry, with a test. |
+| AR-003 | Accepted | B-7/AC-5 scope the entry notice to UNCLE_HOSTED=1, so D-3 printing warnings always was inconsistent; hosted-only for entry notices resolves it (matches AR-017). | R-2, step-1 and s11.1 now state: run-entry notices (warnings then disabled_reason) print only when hosted; non-hosted entry prints nothing; CLI config always prints warnings. |
+| AR-004 | Accepted | CLI config output with both errors and warnings was unspecified; the decision is stdout lines, then warnings, then disabled_reason on stderr, exit 1. | Added CLI output-order rule to s11.1 tests, step-1, and a new AC-4b test line in the s15.1.r2 traceability row. |
+| AR-005 | Accepted | Key text comes unvalidated from the config file, so it needs a length bound and secret redaction using the existing redact() machinery. | R-3 now requires keys truncated to 64 characters and passed through redact() before printing, with a test for a long and a secret-like key. |
+| AR-006 | Accepted | The replaced roundtrip assertion for a file containing only an unknown key must be stated explicitly; parse_value keeps raising for direct callers. | Step 2 text now specifies the bogus-key assertions (errors, disabled_reason, warnings, values equal DEFAULTS) and that parse_value still raises. |
+| AR-007 | Accepted | The plan named only run entry and CLI config as print sites and was silent on reload_config, which also calls load_config mid-run. | Step 1 and the Request 2 traceability row now state reload_config prints nothing; config_notices runs only at run entry and in the CLI config action, with a test. |
+| AR-008 | Accepted | The hosted missing-model error from _hosted_defaults lands in errors, so the notice order and that case must be stated. | Step 1 text and traceability row s15.1.r2 now fix the hosted notice order (warnings in file order, then disabled_reason) and cover the missing-model error. |
+| AR-009 | Accepted | load_config adds keys to `seen` before parse and _hosted_defaults/runner fallback read it, so the plan must say unknown keys stay out of `seen`. | D-1 in section 1 states unknown keys are not added to seen, do not affect runner/model fallback, and duplicates warn once; step-1 text updated to match. |
+| AR-010 | Accepted | Plan did not state that warnings stay off stdout and Config.lines, nor the exit code with mixed warnings and errors. | Edit step 1 and Request 1 traceability row to require warnings only on stderr, never in Config.lines or stdout, and exit 1 iff errors exist. |
+| AR-011 | Accepted | The plan only said the bogus case is replaced; the exact test change must be specified. | Section 10 (s8.1) now states the bogus case is removed from the error loop and asserted separately as warning-only with default values; step-2 matches. |
+| AR-012 | Accepted | The key comes raw from the config file and is printed to stderr, so control or ANSI characters could inject into hosted logs; sanitizing is cheap. | Add restriction R-4, step-1 text, and a section 16 test: key sanitized to [A-Za-z0-9._-], truncated to 64 chars, others replaced with '?'. |
+| AR-013 | Accepted | disabled_reason embeds error text and was unredacted; the existing redact()/known_secret_values machinery can cheaply cover every printed notice line. | Step 1 now requires config_notices to pass every line through redact() with known_secret_values(environ, config_path) and never include config values. |
+| AR-014 | Accepted | Credential-like unknown keys (supervision.api_key, base_url) are plausible; the warning must name only the key and docs must warn, with a test proving a sentinel value never reaches stderr. | Docs rows (README, supervision.md) gain a no-credentials-in-.uncle/config note; Request 3 traceability adds a sentinel-absent-from-stderr test. |
+| AR-015 | Accepted | Warning volume must be bounded and duplicate unknown keys must not multiply output. | Interfaces (s7.1) and step 1 now state one warning per distinct unknown key, capped at 20 lines plus a '... and N more' line. |
+| AR-016 | Accepted | The 'once' rule had no defined hook or count; fixing it to one run-entry call with no reload printing makes AC-5 testable. | Edit step-1, s11.1, R-2 and s15.1.r2: config_notices runs once per process at run entry before the first stage, reload_config never prints, tests assert one occurrence. |
+| AR-017 | Accepted | D-3 printed warnings unconditionally while B-7/AC-5 scope the notice to hosted runs; the rule must be single and explicit. | Traceability row Request 2 and step-1 now state non-hosted entry prints nothing; hosted prints warnings then disabled_reason; CLI config unaffected. |
+| AR-018 | Accepted | Duplicate and odd unknown keys were unspecified; first-wins with one warning per distinct key matches existing duplicate handling. | Section 8 (s7.1) and step-1 now state one warning per distinct unknown key in file order, duplicates silent, key text verbatim after 'supervision.'. |
+| AR-019 | Accepted | A no-value-echo rule needs a concrete observable assertion; a sentinel value checked across all outputs makes it testable. | Edit R-3 property/mechanism and s11.1 to require a sentinel-value test asserting absence from stdout, stderr and warnings. |
+| AR-020 | Accepted | load_config adds keys to seen before parse_value, so skipped unknown keys must be explicitly kept out of seen to avoid affecting runner/model fallback and _hosted_defaults. | D-1 in section 1 and step-1 now state unknown keys are skipped before seen.add and never affect runner/model fallback or _hosted_defaults. |
+| AR-021 | Accepted | CLI errors-plus-warnings output and closed-stderr handling are real gaps and need explicit rules and a test. | Section 12 (s9.1) states CLI ordering, exit code and closed-stderr rule; section 17 gains an AC-4 test for mixed output and closed stderr. |

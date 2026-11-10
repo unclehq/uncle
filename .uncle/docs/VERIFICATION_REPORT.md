@@ -2,167 +2,159 @@
 
 ## Findings
 
-### MC-102
+### MC-101
 
-- **Action:** Headless probe (.uncle/tests/mc102.py, Mock curses stdscr) of UncleTUI at widths 99, 100, 60, 30 with config_section='supervision': called _supervision_items() to count hinted rows, called _draw_config_desc for rows 0/3/12, and ran the full _draw_prompt with config_sel=3 and looked for the highlighted row's description text in the addnstr output. No real terminal resize was done (pyte unavailable, no human terminal).
-- **Expected result:** Inline hints absent at <=99 columns and present at 100; at 60 and 30 columns the highlighted row's description still appears (strip fallback); nothing crashes or truncates keys or values.
-- **Actual result:** Inline hints behave as expected: 0/13 rows hinted at 99, 13/13 at 100, 0/13 at 60 and 30. No exceptions at any width. Keys and values were intact in the sample rows. FAIL on the description fallback: in the full screen draw (_draw_prompt) the highlighted row's description ('Reasoning effort for the supervisor...') is NOT drawn at 99, 100, 60 or 30 columns. In uncle_tui.py the only caller of _draw_config_desc is at line 8528-8529, which is gated on config_section == 'stages', so the Supervision section never gets the description panel or the narrow strip. Calling _draw_config_desc directly does produce the strip at 60/30, but the screen never calls it for Supervision. With inline hints hidden at <=99, the user sees no description at all at those widths.
-- **Defects:** Supervision section never calls _draw_config_desc (uncle_tui.py:8528 gated on config_section == 'stages'), so the strip fallback for the highlighted row's description is missing at 60 and 30 columns. Proposed ID: DEF-MC102.
-
-### MC-103
-
-- **Action:** Ran a narrow temporary probe (/tmp/mc103.py) reusing the real UncleTUI _draw_picker via the project's test harness at width 120 with a Mock curses screen (not a real terminal). Opened the effort picker and the runner picker via _supervision_enter, captured drawn rows, then sent Esc (27) through handle_key and read the stored value and save_config.
-- **Expected result:** Each option row (none/low/medium/high; each runner) shows a '  - explanation'. Custom and filter rows have no explanation, and Esc backs out leaving the stored value unchanged.
-- **Actual result:** Effort picker: none/low/medium/high each show a distinct '  - ' explanation; the 'Custom… (type an effort)' row has none. Runner picker: claude, codex, kimi, Self hosted and AWS Bedrock each show a '  - ' explanation. Esc left the picker (state became 'stage'), supervision value stayed None before and after, and save_config was not called, for both pickers. No filter row was drawn in this capture, so the filter-row clause was not directly observed. It was not exercised with a typed filter.
+- **Action:** Created temp config with valid keys plus supervision.base_url SENTINEL-7f3a91; ran python3 scripts/lib/supervisor.py config --config <file> with stdout/stderr redirected separately.
+- **Expected result:** Exit 0; stdout lists supervision lines, no warnings; stderr has the unknown-key warning for supervision.base_url; sentinel in neither stream.
+- **Actual result:** Exit 0; stdout listed 13 supervision.* lines with no warning text; stderr was exactly 'ignoring unknown supervision key: supervision.base_url'; grep -c SENTINEL returned 0 for both streams.
 - **Defects:** None
 
-### MC-104
+### MC-102
 
-- **Action:** Ran a narrow temporary probe (/tmp/mc104/p.py) driving the real UncleTUI picker code (headless, mocked curses) for delegate_gates: opened the picker, captured drawn lines, confirmed 'routine', reopened, confirmed 'none', and read the menu row via _supervision_items(). Not a live terminal session; no real keypress in a running TUI was made.
-- **Expected result:** Picker lists only none and routine, each with an explanation, no Custom free-text row. Current value marked; each selection stored and shown in the menu row.
-- **Actual result:** Picker (value none) showed exactly: '> none  <current>  - Every gate waits for you.' and '  routine  - Supervisor answers routine dialogs; signing, publication and waivers still need you.' No custom row. Selecting routine stored 'routine' and returned to config state; reopening showed '<current>' on routine. Selecting none stored 'none'. Menu rows: 'delegate_gates routine  - standing delegation: none/routine' and 'delegate_gates none  - standing delegation: none/routine'. Also the driver-run test file's delegate tests (3) passed on a direct run.
+- **Action:** Ran the CLI config action on a file with supervision.bogus 1 and supervision.max_interventions -1, capturing stdout, stderr and exit code separately.
+- **Expected result:** Exit 1; stdout lines; stderr has unknown-key warning then 'Supervision corrections disabled' naming supervision.max_interventions; no warning on stdout.
+- **Actual result:** Exit 1; stdout had 13 supervision lines only (max_interventions shown as default 2) with no warning text; stderr line 1 'ignoring unknown supervision key: supervision.bogus', line 2 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.'
 - **Defects:** None
 
 ### MC-105
 
-- **Action:** No tmux/pty emulator exists here, so I drove the real UncleTUI class (uncle_tui.py) headlessly: a fake curses screen at 120 cols and a throwaway UNCLE_CONFIG temp file (the project's .uncle/config was not touched). Stored `supervision.delegate_gates bogus`, loaded config, ran _supervision_enter on delegate_gates, rendered _draw_picker, then ran the real _go_back (Esc).
-- **Expected result:** Picker opens with only none/routine selectable and no row marked current; stored value shown unchanged without an explanation; Esc leaves config unchanged.
-- **Actual result:** Picker rows were exactly '> none  - Every gate waits for you.' and '  routine  - Supervisor answers ...'. No row had <current>. The stored 'bogus' is shown in the menu row ('delegate_gates bogus  - standing delegation: none/routine'), not as a separate picker row. After Esc the config line was still 'supervision.delegate_gates bogus' and the in-memory value was still bogus. Selecting routine stored routine. Note: Esc from the !supervision picker sets state to 'stage', not 'config' (the same line exists in HEAD, so it is not part of this change). If the checklist meant a separate unannotated 'bogus' row inside the picker, that was not observed.
+- **Action:** Ran supervisor.supervised_lock_run (the headless run wrapper entry in scripts/lib/supervisor.py) in a temp checkout with .uncle/config containing 'supervision.base_url x', UNCLE_HOSTED=1, OPENAI_BASE_URL, OPENAI_API_KEY, SEREN_MODEL set, wrapping 'echo MARKER; echo ERRMARK >&2'; captured stdout and stderr separately. Did not use the full stagegate driver or a real model endpoint.
+- **Expected result:** Unknown-key warning exactly once on stderr before the wrapped command's output; supervision stays enabled (no disabled reason); value x not echoed.
+- **Actual result:** stderr: 'ignoring unknown supervision key: supervision.base_url' once, then 'ERRMARK' (wrapped command's stderr). stdout: MARKER. No 'Supervision corrections disabled' line. Value 'x' not echoed. rc=0. Warning precedes wrapped command output on stderr; marker is on stdout so cross-stream ordering was established via stderr ERRMARK ordering only.
 - **Defects:** None
 
 ### MC-106
 
-- **Action:** Headless drive of the real UncleTUI at 120 cols with a temp config: _supervision_enter on `enabled` twice, on `max_interventions`, then _set_field with 'abc', '-5' and '7'. Opened the effort, runner and model pickers, applied a filter 'o' and inspected the Custom rows.
-- **Expected result:** Bool toggles with no picker; numeric edit works; stage-config and model pickers show bare choices without explanations; filter and Custom still work.
-- **Actual result:** enabled went false, then true, with state staying 'config' (no picker). max_interventions opened the picker/edit state (picker_kind max_interventions). 'abc' and '-5' were rejected with 'must be a nonnegative integer' and nothing was stored; '7' was stored. Filter 'o' narrowed the effort, runner and model rows. The Custom rows are present for effort and model. Caveat: the effort, runner and model pickers opened with target !supervision DO show '  - explanations' for effort and runner (that is the intended Supervision behaviour per MC-103/202); the model rows show only labels, no explanations. The 'bare choices' part applies to non-Supervision stage pickers, covered under MC-304.
+- **Action:** Same harness with UNCLE_HOSTED=1 and no SEREN_MODEL/UNCLE_MODEL (config 'supervision.base_url x'), then a second run with SEREN_MODEL set and config 'supervision.max_interventions -1'; captured stderr of each.
+- **Expected result:** Warnings (if any) first, then one 'Supervision corrections disabled' line (once each case) before the wrapped command runs; run not aborted.
+- **Actual result:** Run not aborted (rc=0, MARKER printed) in both. Ordering correct (warning, then disabled, before ERRMARK). BUT the 'Supervision corrections disabled' message is printed TWICE in each run: once bare (from config_notices) and once prefixed '[supervision] ' (from the HeadlessHost transcript of controller.status). Run 1 stderr: warning; 'Supervision corrections disabled: Hosted mode has no model: set SEREN_MODEL or UNCLE_MODEL (or supervision.model). Fix .uncle/config.'; same line prefixed '[supervision] '; ERRMARK. Run 2 stderr: 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.' then the same line prefixed '[supervision] ', then ERRMARK.
+- **Defects:** Duplicate 'Supervision corrections disabled' stderr line (config_notices + host.transcript of controller.status) in supervised_lock_run; expected exactly once.
+
+### MC-107
+
+- **Action:** With UNCLE_HOSTED unset, called supervisor.supervised_lock_run (headless entry) with a config containing supervision.enabled true and supervision.bogus 1. During the run I appended supervision.bogus2 2 and supervision.max_interventions -1, then let the poll thread reload the config. Captured stdout and stderr.
+- **Expected result:** Non-hosted entry prints nothing to stderr; the mid-run reload emits no stderr notices, while status/disabled reason still updates as before.
+- **Actual result:** Entry printed nothing to stderr. No 'ignoring unknown supervision key' warning and no config-notice lines appeared, at entry or on reload. The only stderr output (199 bytes) was the host transcript line '[supervision] Supervision disabled: Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.. Pending diagnosis cancelled; counters retained.' This is the existing reload status/disabled-reason transcript. git diff HEAD for scripts/lib/supervisor.py contains no change to 'Supervision disabled' or 'transcript', so it is unchanged behavior. Exit 0.
 - **Defects:** None
-
-### MC-200
-
-- **Action:** Checked for tools to drive the real curses TUI at 120 columns (tmux); inspected prepared probe scripts/tests/supervision-tooltips-test.py and the driver green-check command list. Did not drive the live TUI.
-- **Expected result:** Every control row starts with its key, then value, then a short '  - hint' (<=40 chars, untruncated); Enter acts on the row's own key (bool toggles without picker, numeric opens edit); highlighted row's full description still shows in side panel/strip.
-- **Actual result:** Live interactive observation not performed: no terminal multiplexer/emulator (tmux not installed) is available to drive and capture the real TUI. Mocked-curses unit tests (test_every_control_has_a_short_hint_appended_unmodified, test_width_boundary, test_enter_and_toggle_on_each_hinted_row_target_matching_key) exist and are run by the driver green-check (supervision-tooltips), but they are not a live observation and were not re-run here.
-- **Defects:** None. Setup action: install tmux (or a pty/terminal emulator such as pyte) and rerun MC-200 at 120 cols, or a human performs the check.
-
-### MC-201
-
-- **Action:** Could not open a real resizable terminal/take screen captures. Instead drove the real UncleTUI code (via the project's test harness with a mocked curses screen) at widths 99, 100, 60, 30, 10, 5, 1 and heights 40/5/2: called _supervision_items(), _draw_picker() for effort/delegate_gates/runner/enabled pickers, and _draw_config_desc() for the highlighted row.
-- **Expected result:** Inline hints absent at 99 and below, present at 100; keys/values not truncated by hint logic; highlighted description still shows; tiny sizes never crash.
-- **Actual result:** Rows had no hint separator at 99, 60, 30, 10, 5, 1 and had hints at 100 (e.g. 'enabled   true  (default)  - turn supervision on or off'); base key/value text unchanged. No exceptions in any picker draw at any width/height combination. _draw_config_desc rendered the highlighted description ('!supervision — Opt in to event-triggered diagnosis') at 99/100/60 and truncated gracefully at 30/10/5 without error. Not observed in a live terminal: no screen captures and no actual terminal resize events.
-- **Defects:** None. Needs a person to visually confirm in a real terminal resized to 99/100/60/30 columns and capture screens; programmatic evidence above found no defect.
 
 ### MC-202
 
-- **Action:** Instantiated the real UncleTUI at width 120 (curses stdscr mocked, isolated temp config, via the project's test harness class), entered Supervision -> effort, runner, delegate_gates through _supervision_enter, captured every row drawn by the real _draw_picker, and returned to config state between pickers (non-interactive Esc equivalent; no live terminal was driven).
-- **Expected result:** Each option row in effort (none/low/medium/high), runner (every listed runner) and delegate_gates (none/routine) pickers shows a non-empty '  - explanation'; Custom, filter and model rows carry none; delegate_gates has no Custom row.
-- **Actual result:** effort: none/low/medium/high each had a distinct non-empty explanation; 'Custom… (type an effort)' had none. runner: claude, codex, kimi, Self hosted, AWS Bedrock all had non-empty explanations; no Custom row. delegate_gates: only none and routine, both explained, no Custom row. No filter or model rows appeared in these pickers.
+- **Action:** Ran `python3 scripts/lib/supervisor.py config --config F` on two files. File 1 contained 'supervision.bogus 1' then 'supervision.max_interventions -1'. File 2 contained only 'supervision.max_interventions -1'. Captured stdout, stderr and exit code separately.
+- **Expected result:** Both runs exit 1; the invalid recognized value still yields a 'Supervision corrections disabled' reason on stderr and no default substituted. In the mixed run stdout lines come first, then the warning on stderr, then the disabled reason; warnings never appear on stdout.
+- **Actual result:** Both runs exited 1. Mixed run: stdout held the config lines and no warning text. Stderr held 'ignoring unknown supervision key: supervision.bogus' first, then 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.' Only-invalid run: stdout held the config lines and stderr held only the disabled reason. Neither run substituted a default for the invalid value in the stderr reason. Note: stdout lists 'supervision.max_interventions 2' (the default) as a typed-config line in both runs. I did not treat that as a defect because the reason is still reported and exit is 1. The stdout/stderr streams were captured separately, so interleaving order is by stream (stdout printed before stderr in code), not a merged timeline.
 - **Defects:** None
 
 ### MC-203
 
-- **Action:** Headless drive of the real UncleTUI at 120 cols, temp config starting empty: opened delegate_gates, selected routine, reopened, pressed Esc via _go_back, then reopened and selected none, then reopened again.
-- **Expected result:** Current value marked on the matching row; selecting stores exactly routine/none and is shown in the menu row; Esc leaves the value unchanged.
-- **Actual result:** Fresh open marked '> none  <current>'. After selecting routine the config line was 'supervision.delegate_gates routine' and the menu row showed 'routine'. The reopened picker marked routine <current>. Esc left routine unchanged. Selecting none stored 'none' and the menu row showed none. The reopened picker marked none <current>.
+- **Action:** Ran `python3 scripts/lib/supervisor.py config --config <file>` on a temp config with: supervision.bogus twice, a bare `supervision. = val`, a key with ESC[31m and non-ASCII é, a 200-char key, and 25 distinct unknown keys (supervision.unk00..24). Captured stderr with cat -v and the exit code.
+- **Expected result:** Each distinct key warns once; keys only [A-Za-z0-9._-] with '?' substitutes, truncated to 64 chars; bare key warned, not an error; warnings capped at 20 lines plus '... and N more'; exit 0.
+- **Actual result:** Exit 0. stderr was 21 lines: 20 'ignoring unknown supervision key: ...' lines (bogus once, bare 'supervision.' warned, 'supervision.a??31mb?' with ESC/non-ASCII replaced by '?', the 200-char key cut to 64 chars total, unk00..unk15) then '... and 9 more' (29 distinct keys, 20 shown, 9 remaining). No config values echoed.
 - **Defects:** None
 
-### MC-204
+### MC-205
 
-- **Action:** Same headless drive as MC-105: stored the out-of-set value `bogus` in a temp config, opened the picker from the Supervision menu, pressed Esc, then selected routine.
-- **Expected result:** Picker lists only none/routine with no row highlighted as current; Esc leaves the stored value unchanged; selecting routine stores routine.
-- **Actual result:** Rows were none and routine only, with no <current> marker. After Esc the config still held 'bogus'. Selecting routine stored 'routine'. The checklist says 'stored value shown as an unannotated current row'; no separate row for the stored value exists in the picker (it appears only in the menu row). I took 'no row marked current' as the controlling statement.
+- **Action:** With UNCLE_HOSTED=1 and SEREN_MODEL/UNCLE_MODEL unset, called supervisor.supervised_lock_run (the supervised-run entry) with a stub run_once in a temp dir. Case 1: config with two unknown keys (zzz with value 'secretval1', yyy) and no runner key. Case 2: config with unknown key plus invalid `supervision.max_calls_per_run = notanumber`. Captured ordered stderr (2>&1).
+- **Expected result:** Stderr shows warnings first in file order, then one 'Supervision corrections disabled: ...' line (including the missing-model error in case 1), once each; the run still starts; no config values echoed.
+- **Actual result:** Ordering, content, run start and redaction are as expected: warnings in file order first, then the disabled line (case 1 includes 'Hosted mode has no model: set SEREN_MODEL or UNCLE_MODEL...'; case 2 lists the max_calls_per_run error plus the missing-model error), then 'RUN STARTED', rc 0, and 'secretval1'/'notanumber' never echoed. DEVIATION: the disabled message appears twice in stderr in each case: once bare from config_notices, and again prefixed '[supervision] ' from the headless host's transcript (host.controller.status), so it is not emitted exactly once.
+- **Defects:** Duplicate 'Supervision corrections disabled' stderr line in supervised_lock_run (config_notices + host transcript); expected once. Not yet filed in DEFECTS.md (worker may not edit).
+
+### MC-206
+
+- **Action:** Used a temporary probe (/tmp/mc206/probe.py) calling supervisor.supervised_lock_run with a stub run_once and a config containing unknown key supervision.bogus0. Run A: UNCLE_HOSTED unset. Run B: UNCLE_HOSTED=1; during the run the config was rewritten to add two unknown keys plus supervision.max_interventions notanumber, with the 0.5s observer poll triggering reload. Captured stdout/stderr separately.
+- **Expected result:** Non-hosted entry prints no notice to stderr; in the hosted run the entry notice appears once and the reload adds no stderr output, though status reflects the new disabled reason.
+- **Actual result:** Non-hosted: stderr contained only the stub's own markers, with no config notice (matches). Hosted: the entry notice 'ignoring unknown supervision key: supervision.bogus0' appeared once. But after the rewrite, the reload wrote a new stderr line: '[supervision] Supervision disabled: Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer; Hosted mode has no model: ... Fix .uncle/config.. Pending diagnosis cancelled; counters retained.' So the reload DID add stderr output, contrary to the expectation. The reload line also has a doubled period ('config..') and repeats the disabled reason. Caveat: my hosted config had no model, so the entry also printed a disabled-reason line and a '[supervision] ...' transcript line, but the reload-time stderr line is independent of that. The new disabled reason did appear in the reload message.
+- **Defects:** Reload-time 'Supervision disabled' transcript line is written to stderr in a hosted run (supervisor.py reload_config via HeadlessHost.transcript); expected no stderr output on reload. No DEFECTS.md entry written by this worker.
+
+### MC-207
+
+- **Action:** Ran `python3 scripts/lib/supervisor.py config --config <file> 2>&- >out` for a warnings-only file (supervision.bogus x) and an errors file (supervision.max_interventions abc), then checked the exit code and stdout.
+- **Expected result:** Warnings-only exits 0 and errors-only exits 1; no crash or traceback despite the closed stderr.
+- **Actual result:** Warnings-only exited 0 and the errors file exited 1. Stderr was closed with 2>&-, and neither run crashed or printed a traceback. Each run wrote the typed configuration to stdout (the files also included the warning line / disabled reason as shown in o_w.out and o_e.out).
 - **Defects:** None
 
 ### MC-301
 
-- **Action:** A real terminal resize was not possible in this worker. I ran a temporary probe in /tmp/mc301/probe.py that builds the UncleTUI object with curses mocked, as the prepared supervision-tooltips test does. For widths 99, 100, 60 and 30 it called _supervision_items() and then _draw_prompt(40, w) with state=config and config_section=supervision. It recorded the hinted rows, the drawn lines and any description text. I repeated the draw at widths 160 and 60 to check where the description appears. I also read uncle_tui.py around lines 8385-8530.
-- **Expected result:** Inline hints are absent at 99 columns and below and present at 100. At 60 and 30 columns the highlighted-option description still shows through the strip fallback. No crash or garbled screen appears, and keys and values are not truncated by the hint logic.
-- **Actual result:** The hint boundary and no-crash parts match. Width 99 had 0 of 13 rows hinted, width 100 had 13 of 13 (e.g. 'enabled   true  (default)  - turn supervision on or off'), width 60 had 0 and width 30 had 0. _draw_prompt drew all four widths without an exception. At 60 and 30 columns only the title and the 13 option rows were drawn (14 lines), and no highlighted-option description or strip appeared. The same was true at width 160, where there is no side panel either. In the code, _draw_config_desc, which contains the strip fallback, is called only when config_section == 'stages' (uncle_tui.py:8528-8529). Supervision-section descriptions (_supervision_desc) are therefore never drawn on the Configure screen at any width. At width 30 the rows are cut by the existing addnstr(w-1) clipping, so the value is cut, not by hint logic. This is pre-existing behaviour, since no hint is appended below 100.
-- **Defects:** New defect: the highlighted-option description never renders in Configure -> Supervision (no side panel and no narrow-width strip), because _draw_config_desc is only invoked for the 'stages' section. Observed: no description at 60 or 30 columns. Expected: the strip description shows.
+- **Action:** Created temp config with supervision.base_url SENTINEL-7f3a91 and supervision.max_interventions 3; ran python3 scripts/lib/supervisor.py config --config <file>, capturing stdout/stderr/exit separately.
+- **Expected result:** Exit 0; stdout lists supervision lines with max_interventions 3, no warning; stderr exactly one line 'ignoring unknown supervision key: supervision.base_url'; SENTINEL absent.
+- **Actual result:** Exit 0; stdout had 13 supervision lines with max_interventions 3 and no warning; stderr was exactly 'ignoring unknown supervision key: supervision.base_url'; grep for SENTINEL in stdout and stderr found nothing.
+- **Defects:** None
 
 ### MC-302
 
-- **Action:** Rendered the real UncleTUI._draw_picker at width 120 (curses stdscr mocked, via the project's own supervision-tooltips test harness) after opening the effort, delegate_gates and runner pickers through _supervision_enter on the supervision config section, and captured the drawn lines. This was not an interactive terminal session; Esc was not pressed.
-- **Expected result:** Each option row (effort none/low/medium/high; delegate_gates none/routine; each runner) shows a short non-empty explanation. Custom rows get none. The delegate_gates picker lists only none and routine.
-- **Actual result:** effort: none/low/medium/high each have a distinct non-empty explanation; the 'Custom… (type an effort)' row has none. delegate_gates: only none and routine, both explained, no custom row. runner: claude, codex, kimi, self-hosted, aws-bedrock all have non-empty explanations.
+- **Action:** Created temp config with supervision.bogus x and supervision.max_interventions -1; ran the CLI config action capturing stdout/stderr/exit.
+- **Expected result:** Exit 1; stdout lines only; stderr bogus warning first then 'Supervision corrections disabled' naming supervision.max_interventions; no warning on stdout.
+- **Actual result:** Exit 1; stdout had only the 13 supervision lines (max_interventions 2 default); stderr line 1 'ignoring unknown supervision key: supervision.bogus', line 2 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.'; no warnings on stdout.
 - **Defects:** None
 
 ### MC-303
 
-- **Action:** Headless drive of the real UncleTUI, temp config: opened delegate_gates, selected routine, reopened the menu and picker, pressed Esc without selecting, then selected none.
-- **Expected result:** routine stored and shown; Esc leaves it unchanged; none stored; current value marked each time.
-- **Actual result:** routine was stored ('supervision.delegate_gates routine') and the menu row showed routine. Esc left it unchanged. none was stored ('supervision.delegate_gates none'). The picker marked the current value (<current>) on each reopen.
+- **Action:** Called supervisor.supervised_lock_run (the supervised-run entry used by the headless wrapper) via a temp driver script with UNCLE_HOSTED=1, OPENAI_BASE_URL/OPENAI_API_KEY/SEREN_MODEL set, and a config containing `supervision.enabled true` and `supervision.base_url SENTINEL-7f3a91`. The wrapped command printed MARKER to stdout and STDERR-MARKER to stderr. stdout and stderr were captured separately.
+- **Expected result:** Unknown-key warning appears on stderr exactly once before the wrapped command output, supervision stays enabled, sentinel value absent from all output.
+- **Actual result:** stderr was `ignoring unknown supervision key: supervision.base_url` followed by STDERR-MARKER, so the warning came once and before the wrapped command ran. stdout was `MARKER` and `rc 0`. No disabled reason was printed. grep -c SENTINEL returned 0 for both stdout and stderr.
 - **Defects:** None
 
 ### MC-304
 
-- **Action:** Headless drive: opened _open_picker for effort, network, runner and model against the stage 'requirements' (outside Supervision) at 120 cols. Separately toggled `enabled` in Supervision, and in the Supervision effort/model pickers typed a filter and used Custom entry (model custom stored 'my-model').
-- **Expected result:** Non-supervision pickers show no explanations; bool toggles without a picker; filtering and Custom entry work as before.
-- **Actual result:** The stage effort/network/runner/model pickers showed bare rows ('none', 'low <current>', 'medium', 'high'; 'false <current>', 'true'; claude, codex, kimi, Self hosted; model names with labels only) and no ' - ' explanation text. The bool toggled with no picker. Filter 'o' narrowed rows. Custom for model entered config_edit and stored the typed value.
-- **Defects:** None
+- **Action:** Same entry-point driver. Run A: UNCLE_HOSTED=1 with model env set and a config containing `supervision.bogus 1` and `supervision.effort max`. Run A2: the same config with UNCLE_HOSTED=1 and no model env. Run B: UNCLE_HOSTED unset and a config with only `supervision.bogus 1`.
+- **Expected result:** Hosted run prints the warning then the disabled reason once on stderr; the non-hosted run prints nothing about the unknown key at entry.
+- **Actual result:** Hosted run A stderr, in order: (1) `ignoring unknown supervision key: supervision.bogus`, (2) `Supervision corrections disabled: supervision.effort must be one of none, low, medium, high. Fix .uncle/config.`, (3) `[supervision] Supervision corrections disabled: supervision.effort must be one of none, low, medium, high. Fix .uncle/config.`, then STDERR-MARKER. The run was not aborted (rc 0). Line (3) is a second echo of the reason. HeadlessHost writes it via host.transcript(host.controller.status). That call is in the HEAD version of supervisor.py (line 1833), so it predates this change. The entry notice from config_notices (line 2) was emitted once, and the warning once and first. A2 produced identical output; the model env var had no effect on it. Non-hosted run B: stderr contained only STDERR-MARKER, with no unknown-key notice.
+- **Defects:** None (observation: pre-existing duplicate echo of the disabled reason via the headless transcript)
 
 ### MC-401
 
-- **Action:** Headless drive of the real UncleTUI at 120 cols, temp config: pressed Enter on `enabled`, then on `max_interventions`, then ran _set_field with an invalid value ('abc', '-5') and a valid one ('7').
-- **Expected result:** Bool toggles with no picker; numeric edit opens free-text entry, rejects invalid values and stores valid ones; hinted rows act on the correct key.
-- **Actual result:** enabled toggled false and then true with no picker. The numeric row opened the free-text edit flow for its own key (picker_kind max_interventions). Invalid values were rejected with 'must be a nonnegative integer' and not stored; 7 was stored. The 120-col menu rows carried hints, and Enter on each acted on its own key (also covered by the project test file).
+- **Action:** Created temp config with `supervision.max_interventions 3` only; ran `python3 scripts/lib/supervisor.py config --config <file>` with stdout/stderr captured separately.
+- **Expected result:** Exit 0, 13 supervision.* lines with configured values, nothing on stderr.
+- **Actual result:** Exit 0; stdout had 13 lines (wc -l = 13) including supervision.max_interventions 3; stderr empty.
 - **Defects:** None
 
 ### MC-402
 
-- **Action:** Rendered UncleTUI.draw() in state=config, section=supervision with a mocked curses screen (temp probe /tmp/probe402.py, isolated UNCLE_CONFIG) at widths 60, 99 and 100, with the highlight on rows 0 (enabled), 3 (effort) and 6 (stage_time_seconds), and captured every addnstr call. A real terminal was not driven, so no screen captures exist.
-- **Expected result:** At 60 and 99 columns: no inline hints, rows not garbled, and the highlighted row's description still shows in the strip or side panel. At 100 columns: hints appear and the description still shows. No crash at any width.
-- **Actual result:** Partly met. Hints: none at 60 or 99, and appended as '  - <hint>' on every row at 100 (for example 'effort  low  (default)  - supervisor reasoning effort'). Rows are intact and the highlight marker moves correctly. Nothing raised at any width. The description does not show: at 60, 99 and 100 no side panel or strip text was drawn for the highlighted row. The only draw calls were the title, the rows (plus the logo at 99 and 100) and nothing else. Cause: uncle_tui.py:8528 calls _draw_config_desc only when config_section == 'stages', so _supervision_desc() (uncle_tui.py:5128) is never rendered on the Supervision config screen. The same gate applies at every width, and the git diff shows no change to that line. The description is only reachable through the picker, which this check did not cover.
-- **Defects:** Highlighted-row description is not drawn on the Supervision config screen at any width (uncle_tui.py:8528 only draws it for the 'stages' section). Needs a DEFECTS entry.
+- **Action:** Created temp config with `supervision.max_interventions -1` and `supervision.bogus x`; ran the CLI config action capturing stdout/stderr separately.
+- **Expected result:** Exit 1; stdout shows lines with default values (no substituted limit); stderr shows bogus warning then 'Supervision corrections disabled' reason naming supervision.max_interventions.
+- **Actual result:** Exit 1; stdout listed 13 lines with supervision.max_interventions 2 (the default); stderr: 'ignoring unknown supervision key: supervision.bogus' then 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.'
+- **Defects:** None
 
 ### MC-403
 
-- **Action:** Drove the real UncleTUI picker code headlessly (mocked curses screen, temp config) for the model, effort, runner and network pickers on the 'plan' stage: opened the picker, drew it, typed filter 'o', typed non-matching filter 'zzz', selected Custom... where present, then pressed Esc (_go_back). Ran the identical script against the HEAD version of uncle_tui.py (git show HEAD) and the working-tree version, and diffed the outputs.
-- **Expected result:** The picker rows, labels, ordering, filtering and Custom entry behave as before, and no explanation text appears next to any row.
-- **Actual result:** Baseline and modified outputs were byte-identical (rows, drawn lines, filtered rows, Custom transitions). Model and effort pickers: Custom... selection moved to config_edit with the typed filter 'zzz' prefilled, and Esc returned to the stage screen. Runner and network pickers have no Custom row, as before. The separator '  - ' (explanation text) appears in none of the drawn lines.
+- **Action:** Ran `python3 scripts/lib/supervisor.py config --config <tmp>/a.conf` (config with only supervision.enabled true) with UNCLE_HOSTED=1 and SEREN_MODEL/UNCLE_MODEL unset; then again with SEREN_MODEL=test-model.
+- **Expected result:** Without model: exit 1 with 'Hosted mode has no model' reason on stderr. With model: exit 0, runner self-hosted, model test-model, no warnings.
+- **Actual result:** Without model: exit 1, output 'Supervision corrections disabled: Hosted mode has no model: set SEREN_MODEL or UNCLE_MODEL (or supervision.model). Fix .uncle/config.' With SEREN_MODEL=test-model: exit 0, 'supervision.runner self-hosted', 'supervision.model test-model', no warning lines.
 - **Defects:** None
 
 ### MC-404
 
-- **Action:** Headless drive of the real UncleTUI: in Supervision opened the model picker, inspected rows, filtered, chose Custom and entered 'my-model'. Opened the effort picker, selected high, then restored low.
-- **Expected result:** Model rows show no explanations; filter and Custom work as before; effort selection stores the chosen value.
-- **Actual result:** Model rows showed ids and labels only, no ' - ' explanation. Filter 'o' narrowed them. Custom opened the edit state and stored 'supervision.model my-model'. The effort pick stored 'supervision.effort high', then 'low' after restoring. The temp config was used, so the project's config needed no restore.
+- **Action:** Created config with 'runner codex' and 'supervision.bogus 1' (no supervision.runner); ran `python3 scripts/lib/supervisor.py config --config <tmp>/b.conf` with UNCLE_HOSTED unset.
+- **Expected result:** supervision.runner shows codex, exit 0, one warning on stderr.
+- **Actual result:** Exit 0; one warning line 'ignoring unknown supervision key: supervision.bogus'; 'supervision.runner codex' and 'supervision.model sonnet' in output; supervision.enabled true.
 - **Defects:** None
 
 ### MC-405
 
-- **Action:** Headless drive: opened delegate_gates in a temp config, selected routine, reopened and pressed Esc. Then stored the out-of-set value `bogus`, reopened and pressed Esc, and checked the config.
-- **Expected result:** Picker lists only none/routine, each with an explanation; routine stores 'routine'; Esc leaves the value unchanged, including an out-of-set value with no row highlighted.
-- **Actual result:** Picker listed none and routine, each with a non-empty explanation. routine was stored. Esc left both routine and bogus unchanged. With bogus stored, no row carried <current>.
-- **Defects:** None
-
-### MC-406
-
-- **Action:** Headless drive at 120 cols: wrote `supervision.max_interventions notanumber` to a temp config, called _supervision_items(), then restored the temp config to empty.
-- **Expected result:** The '! reason' row appears unchanged with no hint; all other rows still start with their key; nothing crashes.
-- **Actual result:** 14 rows were returned: the 13 control rows plus a final '! Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.' row. That row had no ' - ' hint. No other row failed to start with its key. No exception was raised.
-- **Defects:** None
+- **Action:** Did not perform the specified real supervised run through the Uncle wrapper (needs an interactive TUI session with a live runner). Instead ran a narrow temporary probe: load_config on a config with an unknown key, construct supervisor.Controller with a stub host (stderr captured), append another unknown key plus an invalid recognized value (supervision.max_interventions notanumber), and call reload_config().
+- **Expected result:** Interactive run starts normally with no stderr notice at entry; the mid-run reload prints nothing to stderr but status/TUI reflects the disabled reason after the invalid value is added.
+- **Actual result:** At the library level the behavior matches: entry stderr '' and status '' (enabled True); after the edit, reload stderr '' and status 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.' (enabled False), with one transcript line. The real wrapper/TUI run was not exercised, so the check is not confirmed end to end.
+- **Defects:** None. To finish the check, a person must run a real non-hosted supervised run in an interactive terminal with a configured runner, edit .uncle/config mid-run, and watch stderr and the TUI status.
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-102 | YES | FAIL | Probe output: '99 hinted rows: 0 / 13', '100 hinted rows: 13 / 13', '60 ... 0 / 13', '30 ... 0 / 13'. Full draw: '99 drawn 37 desc shown: False', '100 ... False', '60 drawn 14 desc shown: False', '30 drawn 14 desc shown: False'. Code: uncle_tui.py:8528 `if self.state == "config" and getattr(self, "config_section", "") == "stages": self._draw_config_desc(...)`; grep shows _draw_config_desc has no other caller. Probe script: .uncle/tests/mc102.py. Note: the driver green-check passes, but its test_draw_at_small_sizes only exercises the picker draw, not this config screen. |
-| MC-103 | YES | PASS | Effort rows: '  none  - No extended reasoning; fastest and cheapest.' / '> low  <current>  - Light reasoning for simple diagnoses.' / '  medium  - Balanced reasoning depth and cost.' / '  high  - Deepest reasoning; slowest and costliest.' / '  Custom… (type an effort)'. Runner rows: '> claude  <current>  - Claude CLI; confirms steering answers.' / '  codex  - Codex CLI as the supervisor runner.' / '  kimi  - Runs supervisor diagnoses with this CLI.' / '  Self hosted  - Self-hosted runner; confirms steering answers.' / '  AWS Bedrock  - Runs supervisor diagnoses with this CLI.' Post-Esc: value None (before None), save called False. The repo test scripts/tests/supervision-tooltips-test.py covers the same assertions; the probe passed (Ran 1 test, OK). |
-| MC-104 | YES | PASS | Probe output lines A/B/stored/row as quoted above; unittest -k delegate: Ran 3 tests OK. |
-| MC-105 | YES | PASS | Script output from the headless drive: 'current marked: False', 'esc -> stage [supervision.delegate_gates bogus] bogus', 'select routine -> config [supervision.delegate_gates routine]'. Not a real terminal session. |
-| MC-106 | YES | PASS | Script output: 'enabled -> config [supervision.enabled false]', 'enabled -> config [... true]', 'numeric -> picker picker_kind max_interventions', 'invalid abc -> ... []', 'valid 7 -> [supervision.max_interventions 7]', 'filter o -> [...]', 'custom row [...]'. Headless, not a real terminal. |
-| MC-200 | YES | BLOCKED-SETUP | `which tmux` returned 'tmux not found'; .uncle/launch.json absent; green-check.md lists 'bash scripts/run-python-tests.sh -- supervisor supervisor-default-runner supervision-tooltips' as driver command. |
-| MC-201 | YES | BLOCKED-HUMAN | Ad-hoc python run importing scripts/tests/supervision-tooltips-test.py Base harness; output table showed 'none' for widths <=99 and 'hints' for 100, all draws 'ok'. Driver green-check covers the unit tests (test_width_boundary, test_draw_at_small_sizes_does_not_raise). |
-| MC-202 | YES | PASS | Drawn rows: effort: '  none  - No extended reasoning; fastest and cheapest.' / '> low  <current>  - Light reasoning for simple diagnoses.' / '  medium  - Balanced reasoning depth and cost.' / '  high  - Deepest reasoning; slowest and costliest.' / '  Custom… (type an effort)'. runner: five rows each with '  - ...'. delegate_gates: '> none  <current>  - Every gate waits for you.' / '  routine  - Supervisor answers routine dialogs; signing, publication and waivers still need you.'. Picker kinds: effort [option x4, custom]; runner [option x5]; delegate_gates [option x2]. Text capture used instead of screen captures, and Esc was simulated by resetting state rather than pressing a key. |
-| MC-203 | YES | PASS | Script output lines 'routine -> [supervision.delegate_gates routine] [delegate_gates routine  - standing delegation: none/routine]', 'esc -> stage [supervision.delegate_gates routine]', 'none -> [supervision.delegate_gates none]'. Headless drive. |
-| MC-204 | YES | PASS | 'current marked: False'; 'esc -> stage [supervision.delegate_gates bogus] bogus'; 'select routine -> config [supervision.delegate_gates routine]'. I edited a temp config, not a hand-edited project .uncle/config in a launched TUI. |
-| MC-301 | YES | FAIL | Probe output: width 99 'hinted rows 0 / 13'; width 100 'hinted rows 13 / 13'; widths 60 and 30 'hinted rows 0 / 13', 'draw ok; lines 14'. The drawn lines at 60 and 30 were the 'Configure' title plus the 13 rows, with no description line. The _draw_config_desc call is guarded by the 'stages' section check at uncle_tui.py:8528. Not verified in a real terminal. |
-| MC-302 | YES | PASS | Captured lines: '  none  - No extended reasoning; fastest and cheapest.' / '> low  <current>  - Light reasoning for simple diagnoses.' / '  medium  - Balanced reasoning depth and cost.' / '  high  - Deepest reasoning; slowest and costliest.' / '  Custom… (type an effort)'. delegate_gates: '> none  <current>  - Every gate waits for you.' / '  routine  - Supervisor answers routine dialogs; signing, publication and waivers still need you.' Runner: claude, codex, kimi, 'Self hosted', 'AWS Bedrock' each with '  - <text>'. Temporary script /tmp/mc302/p.py. |
-| MC-303 | YES | PASS | Same script output as MC-203, including the config lines read back from the temp file. |
-| MC-304 | YES | PASS | Script output 'effort [...] expl False', 'network ... expl False', 'runner ... expl False', 'model ... expl False', 'custom -> config_edit', 'custom stored config [supervision.model my-model]'. Headless drive, not a real terminal. |
-| MC-401 | YES | PASS | Script output as listed under MC-106. Headless; the real keypress loop was not run. |
-| MC-402 | YES | FAIL | Probe output: no description text in any draw call for any width or selection. The 100-column output shows the hint suffixes. At 60 the rows have no hints. Gate at uncle_tui.py:8527-8529 (section == 'stages'). Driver green-check already covers hint width boundaries in unit tests (supervision-tooltips-test.py test_width_boundary), which do not exercise the description panel on the config screen. |
-| MC-403 | YES | PASS | /tmp/mc403/run.py output diff of /tmp/mc403/b.json (HEAD) vs /tmp/mc403/n.json (working tree): IDENTICAL; grep -c '  - ' on n.json = 0. Limitation: this was a headless harness of the real draw/key-handling methods, not a screen capture in a real terminal. |
-| MC-404 | YES | PASS | Script output 'effort -> [supervision.effort high]', 'effort back -> [supervision.effort low]', 'custom stored config [supervision.model my-model]'. |
-| MC-405 | YES | PASS | Script output from the MC-105 and MC-203 sections: 'current marked: False', 'esc -> stage [supervision.delegate_gates bogus] bogus', 'routine -> [supervision.delegate_gates routine]'. |
-| MC-406 | YES | PASS | Script output: '14 ! Supervision corrections disabled: ... [] False' (the empty list means no non-key rows; False means no hint on the reason row). |
+| MC-101 | YES | PASS | rc=0; stderr: 'ignoring unknown supervision key: supervision.base_url'; SENTINEL count 0 in stdout and stderr. |
+| MC-102 | YES | PASS | rc=1; stderr order: bogus warning then disabled reason naming supervision.max_interventions. Stdout and stderr were captured to separate files, so cross-stream ordering was not observed. |
+| MC-105 | YES | PASS | stderr file lines: 1) ignoring unknown supervision key: supervision.base_url 2) ERRMARK; stdout: MARKER; exit 0. |
+| MC-106 | YES | FAIL | Observed stderr of both runs as above; duplicate emission arises from supervised_lock_run in scripts/lib/supervisor.py: config_notices() writes notice, then because config.enabled is still true HeadlessHost is built and 'if host.controller.status: host.transcript(host.controller.status)' prints the disabled reason again. |
+| MC-107 | YES | PASS | Ad-hoc script in a temp dir. Stdout was 'rc 0'. Stderr was the single transcript line above. config_notices() returns [] when not hosted (supervisor.py:211-225). Caveat: stderr was not literally empty on reload, because the pre-existing disabled-transcript still goes to stderr. No new warning or notice was emitted. |
+| MC-202 | YES | PASS | Observed output: c1 exit 1 and c2 exit 1. The stderr text above came from main() 'config' action (supervisor.py:1958-1966), which prints lines to stdout, then warnings to stderr, then disabled_reason to stderr. |
+| MC-203 | YES | PASS | stderr via cat -v: 'ignoring unknown supervision key: supervision.a??31mb?'; last line '... and 9 more'; wc -l = 21; `exit 0` printed. |
+| MC-205 | YES | FAIL | Case 1 stderr: 'ignoring unknown supervision key: supervision.zzz' / '...yyy' / 'Supervision corrections disabled: Hosted mode has no model: ... Fix .uncle/config.' / '[supervision] Supervision corrections disabled: Hosted mode has no model: ... Fix .uncle/config.' / 'RUN STARTED'. Same duplication in case 2. Source: scripts/lib/supervisor.py:1850 (config_notices write) and the `host.transcript(host.controller.status)` call after HeadlessHost creation. Note: the first attempt without exporting UNCLE_HOSTED to the process env (only to the env dict) showed no disabled line; that was a harness setup mistake, corrected, not counted. |
+| MC-206 | YES | FAIL | /tmp/mc206/o0.err: '--- run started / --- run done'. /tmp/mc206/o1.err: entry 'ignoring unknown supervision key: supervision.bogus0', then '--- run started', '--- config rewritten', then '[supervision] Supervision disabled: ... Pending diagnosis cancelled; counters retained.', then '--- run done'. Cause: HeadlessHost.transcript writes to sys.stderr (supervisor.py:1721) and reload_config (supervisor.py:1024-1058) calls host.transcript. |
+| MC-207 | YES | PASS | Output: 'w rc=0' and 'e rc=1'. See /tmp/mc206/o_w.out and /tmp/mc206/o_e.out. No traceback in either. |
+| MC-301 | YES | PASS | Observed captured output: exit 0, stderr single line as expected, grep SENTINEL empty. |
+| MC-302 | YES | PASS | Observed captured output with exit 1 and ordered stderr lines as described. |
+| MC-303 | YES | PASS | /tmp/mc3/o1 and /tmp/mc3/e1; driver script /tmp/mc3/drv.py. Run exit code 0. The wrapper was invoked through its Python entry point rather than a shell wrapper script. |
+| MC-304 | YES | PASS | /tmp/mc3/e2, /tmp/mc3/e3, /tmp/mc3/e4. Under a strict reading of 'once', the reason text appears on two stderr lines in the hosted run. The second is the pre-existing transcript status echo, not a duplicate entry notice, so the check is judged PASS with this caveat recorded for the human reviewer. |
+| MC-401 | YES | PASS | exit 0; stdout 13 lines starting supervision.enabled true ... supervision.files_allowlist package.json,package-lock.json,vite.config.js; stderr empty. |
+| MC-402 | YES | PASS | exit 1; stdout max_interventions 2 (default, not -1); stderr two lines in the expected order. |
+| MC-403 | YES | PASS | Observed terminal output of both invocations (stdout and stderr shown interleaved in one terminal capture, so the reason's stream was not separately isolated); exit codes 1 and 0 captured via $?. |
+| MC-404 | YES | PASS | Terminal output and exit code 0 observed; stream separation of the warning not isolated in the capture. |
+| MC-405 | YES | BLOCKED-SETUP | Probe output: 'entry stderr: '' status: '' enabled True' and 'reload stderr: '' status: 'Supervision corrections disabled: supervision.max_interventions must be a nonnegative integer. Fix .uncle/config.' enabled False'. The probe is in a temp directory and only exercises supervisor.py's load_config, Controller and reload_config. |

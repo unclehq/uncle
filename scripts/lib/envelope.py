@@ -75,6 +75,7 @@ ARTIFACT_EXCLUDES = (
 VOCABULARY = frozenset((
     'artifact', 'producer', 'verifier', 'release', 'digest', 'approvals', 'findings',
     'dispositions', 'evidence', 'inputs', 'result', 'reason', 'source', 'authentication',
+    'procedure', 'outcomes', 'verdict',
 ))
 STRUCTURE = frozenset((
     'schema_version', 'stage', 'attempt', 'role', 'runner', 'model', 'uncle_version',
@@ -494,6 +495,34 @@ def filter_strings(value, root='.', known=()):
 
 # --- Statement and signing ---------------------------------------------------
 
+# The stages a build must have run for its procedure to count as followed. `fail` is a stage that ran and found problems; only
+# `unavailable` (or a missing envelope) is a stage that did not run.
+PROCEDURE_STAGES = ('review', 'plan', 'implementation', 'verification', 'audit')
+
+
+def procedure_reason(envelopes, approvals, artifact):
+    """'' when the build's procedure was followed, else the first way it was not. Says nothing about whether the build is correct."""
+    for stage in PROCEDURE_STAGES:
+        env = envelopes.get(stage)
+        if env is None or env.get('result') == 'unavailable':
+            why = (env or {}).get('reason') or 'envelope missing'
+            return '%s did not run: %s' % (stage, why)
+    implementation = envelopes.get('implementation') or {}
+    recorded = {
+        'implementation.artifact': ((implementation.get('artifact') or {}).get('digest') or {}).get('gitTree', ''),
+        'verification.inputs.artifact': (((envelopes.get('verification') or {}).get('inputs') or {}).get('artifact') or {}).get('digest', {}).get('gitTree', ''),
+        'audit.inputs.artifact': (((envelopes.get('audit') or {}).get('inputs') or {}).get('artifact') or {}).get('digest', {}).get('gitTree', ''),
+    }
+    for name, value in recorded.items():
+        if value != artifact:
+            return 'artifact mismatch: %s %s != attested tree %s' % (name, value or 'missing', artifact)
+    for entry in approvals:
+        # A person's approval, or a delegation the driver recorded (an unattended run, a supervisor); neither is a gate that was skipped.
+        if entry.get('required') and not (entry.get('approved_by') or entry.get('delegated_by')):
+            return 'required gate %s has no recorded approval or delegation' % entry.get('gate')
+    return ''
+
+
 def blocking_reason(envelopes, artifact, waived=()):
     """The first reason release is refused, or ''. Policy is BLOCKING plus the
     artifact identity (I-3); nothing else is consulted.
@@ -526,7 +555,7 @@ def load_envelopes(state):
     return {stage: read_envelope(state, stage) for stage in STAGES if stage != 'release'}
 
 
-def statement(subject_name, artifact, envelopes, approvals, source, authentication, version, run_id):
+def statement(subject_name, artifact, envelopes, approvals, source, authentication, version, run_id, procedure=None, outcomes=None):
     predicate = {
         'schema_version': SCHEMA_VERSION,
         'uncle_version': version or 'unavailable',
@@ -537,6 +566,12 @@ def statement(subject_name, artifact, envelopes, approvals, source, authenticati
         'release': {'artifact': {'digest': {'gitTree': artifact}}},
         'authentication': authentication,
     }
+    # A new-application attestation says whether the build's procedure was followed (`procedure`) and, separately and only as a record,
+    # how it came out (`outcomes`). Older statements (and the change workflow's) carry neither and keep the original reading.
+    if procedure is not None:
+        predicate['procedure'] = procedure
+    if outcomes is not None:
+        predicate['outcomes'] = outcomes
     body = {
         '_type': STATEMENT_TYPE,
         'subject': [{'name': subject_name, 'digest': {'gitTree': artifact}}],

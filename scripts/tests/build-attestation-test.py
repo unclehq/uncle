@@ -49,11 +49,12 @@ class BuildAttestationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         return result.stdout.strip()
 
-    def finish(self, green='PASS\tcmd\n', verdict='READY', extra=()):
+    def finish(self, green='PASS\tcmd\n', verdict='READY', extra=(), drop=()):
         docs = self.repo / '.uncle/docs'
         for name in ('REQUIREMENTS_INTERPRETATION', 'ADVERSARIAL_REVIEW', 'UPDATED_PROJECT_PLAN',
                      'IMPLEMENTATION_NOTES', 'FINAL_AUDIT'):
-            (docs / (name + '.md')).write_text('# ' + name + '\n')
+            if name not in drop:
+                (docs / (name + '.md')).write_text('# ' + name + '\n')
         (self.repo / '.uncle/workflow/green-check.tsv').write_text(green)
         approvals = self.repo / '.uncle/workflow/approvals'
         (approvals / 'UPDATED_PROJECT_PLAN.sha256').write_text('abc\n')
@@ -75,24 +76,70 @@ class BuildAttestationTests(unittest.TestCase):
         self.assertIn('head tree matches release artifact', verify.stdout)
         self.assertIn(verify.returncode, (0, 3), verify.stdout)
 
-    def test_regressed_verification_writes_no_attestation(self):
-        result = self.finish(green='REGRESSION\tcmd\n')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('verification result fail', result.stdout)
-        self.assertFalse((self.repo / '.uncle/attestation.json').exists())
+    def predicate(self):
+        import json
+        return json.loads((self.repo / '.uncle/attestation.json').read_text())['predicate']
 
-    def test_not_ready_audit_writes_no_attestation(self):
+    def test_a_not_ready_build_is_attested_as_procedure_followed_with_the_verdict_recorded(self):
         result = self.finish(verdict='NOT_READY')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertFalse((self.repo / '.uncle/attestation.json').exists())
+        self.assertEqual(result.returncode, 0, result.stdout)
+        predicate = self.predicate()
+        self.assertEqual(predicate['procedure']['result'], 'pass')
+        self.assertEqual(predicate['outcomes']['verdict'], 'NOT_READY')
+        self.assertEqual(predicate['outcomes']['audit'], 'fail')
+        self.assertEqual(predicate['envelopes']['release']['result'], 'pass')
 
-    def test_overridden_build_is_attested_but_release_fails(self):
+    def test_a_regressed_green_check_is_a_recorded_outcome_not_a_procedure_failure(self):
+        result = self.finish(green='REGRESSION\tcmd\n')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        predicate = self.predicate()
+        self.assertEqual(predicate['procedure']['result'], 'pass')
+        self.assertEqual(predicate['outcomes']['verification'], 'fail')
+
+    def test_a_stage_that_did_not_run_breaks_the_procedure_and_is_recorded_as_such(self):
+        result = self.finish(drop=('FINAL_AUDIT',))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        predicate = self.predicate()
+        self.assertEqual(predicate['procedure']['result'], 'fail')
+        self.assertIn('audit did not run', predicate['procedure']['reason'])
+        self.assertEqual(predicate['envelopes']['release']['result'], 'fail')
+
+    def test_a_verifier_prints_the_verdict_and_exits_zero_for_a_not_ready_build_that_followed_procedure(self):
+        self.assertEqual(self.finish(verdict='NOT_READY').returncode, 0)
+        verify = run(sys.executable, str(VERIFY), cwd=self.repo, env=self.env)
+        self.assertIn('build verdict recorded: NOT_READY', verify.stdout)
+        self.assertIn('procedure followed', verify.stdout)
+        self.assertNotIn('✗', verify.stdout.replace('✗ no required human gate', '').replace('✗ required gate', ''), verify.stdout)
+
+    def test_a_verifier_refuses_a_build_whose_procedure_was_not_followed(self):
+        self.assertEqual(self.finish(drop=('FINAL_AUDIT',)).returncode, 0)
+        verify = run(sys.executable, str(VERIFY), cwd=self.repo, env=self.env)
+        self.assertIn('✗ audit did not run', verify.stdout)
+        self.assertNotEqual(verify.returncode, 0)
+
+    def test_a_gate_with_a_recorded_delegation_counts_but_one_with_nothing_recorded_does_not(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('envelope', LIB / 'envelope.py')
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        ran = {s: {'result': 'pass', 'artifact': {'digest': {'gitTree': 'T'}}, 'inputs': {'artifact': {'digest': {'gitTree': 'T'}}}}
+               for s in mod.PROCEDURE_STAGES}
+        delegated = [{'gate': 'PROJECT_PLAN', 'required': True, 'approved_by': '', 'delegated_by': 'unattended'}]
+        nothing = [{'gate': 'PROJECT_PLAN', 'required': True, 'approved_by': '', 'delegated_by': ''}]
+        self.assertEqual(mod.procedure_reason(ran, delegated, 'T'), '')
+        self.assertIn('no recorded approval or delegation', mod.procedure_reason(ran, nothing, 'T'))
+
+    def test_every_build_refreshes_the_attestation(self):
+        self.assertEqual(self.finish().returncode, 0)
+        first = (self.repo / '.uncle/attestation.json').read_text()
+        self.assertEqual(self.finish(verdict='NOT_READY').returncode, 0)
+        self.assertNotEqual(first, (self.repo / '.uncle/attestation.json').read_text())
+        self.assertEqual(self.predicate()['outcomes']['verdict'], 'NOT_READY')
+
+    def test_an_overridden_build_discloses_the_override_as_an_outcome(self):
         result = self.finish(green='REGRESSION\tcmd\n', verdict='NOT_READY', extra=('--overridden', '1'))
         self.assertEqual(result.returncode, 0, result.stdout)
-        text = (self.repo / '.uncle/attestation.json').read_text()
-        self.assertIn('completed over an override', text)
-        self.assertIn('NOT_READY', text)
-
+        self.assertTrue(self.predicate()['outcomes']['override'])
+        self.assertEqual(self.predicate()['outcomes']['verdict'], 'NOT_READY')
 
 if __name__ == '__main__':
     unittest.main()

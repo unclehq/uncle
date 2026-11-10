@@ -13,8 +13,8 @@ approves anything: gate approvals are copied from the driver's approval records.
 
 Usage: build_attestation.py --state DIR --artifact TREE --verdict CLASS
            [--green-enabled 0|1] [--overridden 0|1] [--run-id ID] [--subject NAME]
-Exit: 0 attestation written; 1 refused (the reason is printed and nothing is
-written to .uncle/attestation.*).
+Exit: 0 attestation written, for every build. It attests that the procedure was followed (`procedure`) and records the
+verdict and stage results as `outcomes`; it does not attest that the build is correct or ready.
 """
 import argparse
 from pathlib import Path
@@ -82,13 +82,19 @@ def write_stages(state, artifact, verdict, green_enabled):
     result, reason = green_result(state, green_enabled)
     env.write_envelope(state, 'verification', result, reason=reason, inputs={'artifact': artifact},
                        evidence=present(Path(state) / 'green-check.tsv', DOCS / 'AUTOMATED_TEST_REPORT.md'))
-    audit = 'pass' if verdict in READY else 'fail'
-    env.write_envelope(state, 'audit', audit, reason=verdict or 'no verdict', inputs={'artifact': artifact},
+    # An audit that left no document, or no verdict, did not run; one that ran and said NOT_READY ran and found problems.
+    ran = exists(DOCS / 'FINAL_AUDIT.md') and bool(verdict)
+    audit = ('pass' if verdict in READY else 'fail') if ran else 'unavailable'
+    env.write_envelope(state, 'audit', audit, reason=(verdict or 'no verdict') if ran else 'no final audit document or verdict',
+                       inputs={'artifact': artifact},
                        evidence=present(DOCS / 'FINAL_AUDIT.md', DOCS / 'VERIFICATION_REPORT.md'),
                        producer_stage='final-audit', producer_kind='reviewer')
 
 
 def attest(state, artifact, verdict, green_enabled, run_id, subject, overridden=False):
+    # Refreshed on every build: a previous build's attestation must never stand in for this one, even if this one is refused.
+    for stale in ('.uncle/attestation.json', '.uncle/attestation.sig'):
+        Path(stale).unlink(missing_ok=True)
     write_stages(state, artifact, verdict, green_enabled)
     envelopes = env.load_envelopes(state)
 
@@ -100,17 +106,20 @@ def attest(state, artifact, verdict, green_enabled, run_id, subject, overridden=
         return entry
 
     approvals = [gate_entry(name) for name in gate_names(state)]
-    reason = env.blocking_reason(envelopes, artifact)
-    if overridden:
-        # Written anyway, but never as a pass: the release says it was over an override.
-        reason = 'completed over an override' + ('; ' + reason if reason else '')
-    release = env.write_envelope(state, 'release', 'fail' if reason else 'pass', reason=reason, artifact=artifact,
+    # What is attested is procedure: every stage ran, every required gate carries a recorded approval, the stages saw the tree being
+    # attested. How the build came out (the audit verdict, the green check) is recorded beside it and never decides it, so every
+    # build is attested, ready or not, and a failing outcome is a fact in the record, not a refusal to write one.
+    reason = env.procedure_reason(envelopes, approvals, artifact)
+    procedure = {'result': 'fail' if reason else 'pass'}
+    if reason:
+        procedure['reason'] = reason
+    outcomes = {'verdict': verdict or 'unavailable', 'override': bool(overridden)}
+    for stage in ('review', 'verification', 'audit'):
+        outcomes[stage] = (envelopes.get(stage) or {}).get('result', 'unavailable')
+    release = env.write_envelope(state, 'release', procedure['result'], reason=reason, artifact=artifact,
                                  inputs={'artifact': artifact}, evidence=['.uncle/docs/FINAL_AUDIT.md'],
                                  extra={'approvals': approvals})
     print('Envelope: release ' + release['result'])
-    if reason and not overridden:
-        print('Attestation not written: ' + reason)
-        return 1
     envelopes['release'] = release
     method, detail = env.select_signer()
     import supervisor
@@ -118,7 +127,8 @@ def attest(state, artifact, verdict, green_enabled, run_id, subject, overridden=
 
     def build(authentication):
         stmt = env.statement(subject, artifact, envelopes, approvals, {'repository': '', 'issue': ''},
-                             authentication, __import__('os').environ.get('UNCLE_VERSION', ''), run_id)
+                             authentication, __import__('os').environ.get('UNCLE_VERSION', ''), run_id,
+                             procedure=procedure, outcomes=outcomes)
         return env.filter_strings(stmt, '.', known=known)
 
     stmt = build(method)
@@ -139,7 +149,7 @@ def attest(state, artifact, verdict, green_enabled, run_id, subject, overridden=
             sig_path.unlink()
     else:
         sig_path.write_bytes(env.canonical(sig))
-    print('Attestation: %s %s' % (method, artifact[:12]))
+    print('Attestation: %s %s; procedure %s; verdict %s recorded' % (method, artifact[:12], procedure['result'], outcomes['verdict']))
     return 0
 
 

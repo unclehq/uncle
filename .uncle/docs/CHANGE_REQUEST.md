@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 236
+Issue 231
 
-Seeded from [unclehq/uncle#236](https://github.com/unclehq/uncle/issues/236).
+Seeded from [unclehq/uncle#231](https://github.com/unclehq/uncle/issues/231).
 
 ## Change Type
 
@@ -10,72 +10,65 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Release must allow Daytona's signed preview-link call: the host offers it now, but #209 was closed before it did
+A project plan that fails its check ends a headless build (exit 1) with no repair turn; a code span on an Owns: line becomes an owned file
 
 ## Motivation
 
 ## Summary
 
-A hosted build can only make the publisher calls its release lists. To print a preview link (#207), the release must list Daytona's signed-link call. #209 asked for that and was closed with no change, because the host's Daytona publisher didn't offer the call yet. A release that listed it was refused with `Template grant 'daytona GET …' must match one publisher operation.`
+A project plan that fails its check ends the build with exit 1. The error says `Correct the saved document and resume.`, but in a headless hosted run nothing does: the supervisor that reacts to validation failures runs only inside the TUI. Other stages already give the model one repair attempt; the project plan doesn't.
 
-The host's Daytona publisher offers the call now. Until a release lists it, every hosted build's link request is refused and no `Preview:` line is printed. This is step 1 of #235.
+In this run, the token that failed the check was not a file the model meant to own. It was most likely a code span on the step's `Owns:` line that Uncle's parser took as a path.
 
-## What the host offers now
+## What happened (2026-11-10, UTC)
 
-Read from the host's Daytona publisher on 2026-11-10:
+Headless self-hosted run on a host (no terminal in the sandbox) for a small Haskell app. After the parallel plan was discarded (#230), the single-pass plan was written, converted and checked. It failed:
 
-| Method and path | What it does | Limits |
+```
+.uncle/docs/PROJECT_PLAN.md: step-2 owns: replace '-- EOF-GUARD' with a file or glob (directory/**). Correct the saved document and resume.
+```
+
+Uncle exited 1 at 08:13:30, and the build ended with no code written. A one-line correction of that step's file list would have let it continue.
+
+**Where `-- EOF-GUARD` most likely came from.** `plan_steps.paths()` (`scripts/lib/plan_steps.py:69-85`) takes **every** backticked span on an `Owns:` line as a path, with no check (`:70-71`). Without backticks it accepts only tokens matching `[\w./*?\[\]@-]+` (`:74-77`), which `-- EOF-GUARD` (it contains a space) does not. So the plan most likely had a line like ``Owns: `app/Tutorial.hs` (ends with a `-- EOF-GUARD` comment)``. The saved plan was deleted with the sandbox, so this is inferred from the code.
+
+## Code paths (main `5a5cd30`)
+
+Blame is `git blame -w`.
+
+| Where | What it does | Last changed by |
 |---|---|---|
-| `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url` | A link to the port with its token inside, so it opens with a click. | `expiresInSeconds` at most 3600. Daytona's default is 60. |
-| `POST /sandbox/{sandboxId}/ports/{port}/signed-preview-url/{token}/expire` | Ends a signed link early. | Needed only if the script ends links early. |
-| `GET /sandbox/{sandboxId}/ports/{port}/preview-url` | The plain link. Its token goes in a request header, which a click can't send. | Not needed. |
-
-The host classes the signed-link call as a change (a "mutation"), even though it is a GET.
-
-## How the host checks the release's list
-
-- Each entry is matched by method and path to exactly one publisher operation. The signed-link path differs from the plain-link path, so the entry matches one operation and needs no `operation_id`.
-- A script entry for a call that makes a change is allowed without approval on each call. On the script surface the host supports per-call approval only for sending mail, so set `require_approval` to false or leave it out.
-- Daytona runs on the host's own key, not on an account the person signed in with. Adding this entry doesn't make anyone approve the update before it installs.
-- The release already declares Daytona for its script, since the script creates and deletes sandboxes through it.
+| `scripts/stagegate.sh:4571-4594` | Single-pass plan: copies the investigation to `PROJECT_PLAN.md`, runs the shape-only repair (`repair_document_format.py`, `:4586-4588`), then `export-project-plan` and `render-project-plan` (`:4589-4592`), each `\|\| exit 1`. | `ed8609fb9` 2026-09-23, `82fbc92a9` 2026-10-27, `b3ef425f0` 2026-10-28 |
+| `scripts/stagegate.sh:4602-4607` | `plan-unprotected` check: on failure it prints the error, calls `supervision_validation_failed`, and runs `exit 1`. No repair. | `ebe265a9a` 2026-09-23, `78d391a49` 2026-09-24 |
+| `scripts/lib/plan_model.py:474-482` (in `validate`) | Rejects an `owns` token that isn't a valid path or is a directory. The check is right; the plan reached it with a bad token. | `1c89bbad9` 2026-10-31 |
+| `scripts/lib/plan_context.py:358-361` | Prints `{path}: {error}. Correct the saved document and resume.` and exits 1. | `31bfe97b1` 2026-09-23, `ebe265a9a` 2026-09-23 |
+| `scripts/lib/plan_steps.py:69-85` (`paths`) | Backticked spans on an `Owns:` line are taken as paths without the path-shape test that plain tokens get. All three `Owns:` routes use it (`:179`, `:224`, `:228`). | `a3a507e28` 2026-10-31, `e0a548e83` 2026-10-31 |
+| `scripts/lib/plan_model.py:738-749` (`split_list`) | The JSON route: any string in an `owns` array is kept after stripping backticks. | `70af75017` 2026-10-28, `8c5257472` 2026-10-28 |
+| `scripts/lib/supervision.sh:43-49` (`supervision_validation_failed`) | Only writes a status event. Its comment: "the outcome of that handling is unchanged". | `32b16e627` 2026-09-14 |
+| `scripts/lib/supervisor.py:1204-1225` (`_validation_failed`) | Reacts to that event with a diagnosis and correction note. The supervisor runs inside the TUI (`uncle_tui.py:113`). | |
+| `uncle:484-498` and `scripts/lib/uncle_headless.py` | With no terminal (a cloud sandbox, CI), a startup action runs headlessly through `uncle_headless.py`. That file never starts the supervisor or retries, so in hosted runs nothing reads the event. | |
+| `scripts/stagegate.sh:6612-6627` | For comparison: the checklist acceptance report gets one retry with the format error as instructions before it exits 1. | `fbda706d8` 2026-10-30 |
 
 ## Fix
 
-1. Add to the release's script publisher grants: publisher `daytona`, method `GET`, path `/sandbox/{sandboxId}/ports/{port}/signed-preview-url`, `require_approval` false.
-2. Only if the script ends links early, add `POST /sandbox/{sandboxId}/ports/{port}/signed-preview-url/{token}/expire` the same way.
-3. Have the script ask for an `expiresInSeconds` of at most 3600.
-4. Publish a new release.
+1. **Parser.** In `paths()`, apply the same path-shape test to backticked spans as to plain tokens, and drop spans that fail it, with a warning naming the step. Apply the same filter in `split_list` for `owns`.
+2. **Repair once.** When the project-plan check fails (`stagegate.sh:4586-4607`, and the updated-plan check at `:5662-5666`):
+   - Run one repair turn. Give the model the saved plan and the validator's exact errors, and ask it to fix only those.
+   - Re-check, and exit 1 only if it still fails.
+   - Use a one-time marker, as the checklist retry does, so it can't loop.
+   - The repair turn is a model call, so it must also stop cleanly on a host spending stop (#230).
+3. **Message.** In headless runs the "Correct the saved document and resume" message has no one to act on it. After a failed repair, say which file and step to fix and the command to resume.
 
-## Code paths (main `09a832b`)
+## Tests to add
 
-Blame is `git blame`.
-
-| Where | What it does | Last changed in |
-|---|---|---|
-| The release definition (not in this repository) | Lists the script's publisher grants. This is where the change goes. | |
-| The build script (not in this repository) | Asks for the signed link to the port Uncle reports (#207). | |
-| `scripts/lib/host_preview.py:281-292` | Prints `UNCLE_PREVIEW_PORT=<n>`, the port the script asks a link for. | `bd3cde00` 2026-11-09 (#206, committed without a PR) |
-| `skills/uncle-build/SKILL.md:8-16` | Chat rules for the `Preview:` line the script prints. | `274a636e` 2026-11-09 (#210, PR #220) |
-
-## History
-
-- #207 (closed 2026-11-09): the build script asks for the signed link. It was written while the host still refused the call with 403.
-- #209 (closed 2026-11-09, no change): closed because the grant couldn't be published until the host's publisher offered the call. The closing comment asked for it to be reopened once it could be. It can't be reopened, so this issue replaces it.
-- #235: the end-to-end fix this unblocks.
-
-## Tests
-
-None in this repository: the change is in the release definition. The checks below run against the host.
-
-## Checks after the fix
-
-1. The release publishes without the "must match one publisher operation" refusal.
-2. In a hosted build of a small web app, the signed-link call returns a link instead of being refused as not granted, and the output has a `Preview:` line.
-3. An existing hire installs the new release without being asked to approve a Daytona write.
+- `plan_steps` test: ``Owns: `app/Main.hs`, `test/Spec.hs` (ends with a `-- EOF-GUARD` comment)`` gives `owns == ['app/Main.hs', 'test/Spec.hs']`.
+- Stage test: a single-pass plan whose step 2 owns `-- EOF-GUARD` gets one repair turn and continues. A plan still invalid after the repair exits 1 with the diagnostic, and no second repair runs.
+- Headless run of the same, with no TUI.
 
 ## Related
 
-#206, #207, #208, #209, #210, #235.
+- #230: the refused call that led to the single-pass plan.
+- #226: a supervision setting that turned off corrections for unattended runs. This issue is about headless runs, which never start the supervisor.
 
 ## Observed Current Behavior
 

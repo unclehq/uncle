@@ -1,176 +1,184 @@
-## AR-001: Blocking decision (a) external release repo vs (b) hand-off only is unresolved, so AC-1..AC-6 cannot be verified in-repo
+## AR-001: Plan never says what happens when filtering leaves a step with zero owns tokens.
 
 - Severity: HIGH
-- References: CHANGE_PLAN intro 'BLOCKING PLANNING DECISION'; Restrictions feasibility says CAP-RELEASE-EDIT unavailable.
-- Failure: Blocking decision (a) external release repo vs (b) hand-off only is unresolved, so AC-1..AC-6 cannot be verified in-repo. Say: 'Approval selects (b): the deliverable is IMPLEMENTATION_NOTES.md only, and AC-1..AC-6 are recorded BLOCKED-SETUP, not PASS, until the release repo is supplied.'
+- References: CHANGE_PLAN D-1/D-2 drop tokens with no empty-result rule; AC-2/AC-3 cover only mixed valid and invalid tokens.
+- Failure: Plan never says what happens when filtering leaves a step with zero owns tokens. Settle it: 'If filtering empties a step's owns, the validator reports its normal missing-owns error, which triggers the single repair turn; the dropped-token warning prints first.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: The plan does not say what steps 2 and 3 do when access is absent; its status vocabulary is only PASS/BLOCKED-SETUP, and
+## AR-002: Marker lifecycle is inconsistent: D-3 removes it only on a pass, section 6 retains it on failure.
 
 - Severity: HIGH
-- References: Implementation sequence steps 2-3; 'Missing live access does not block step 1'; CLAUDE.md completion rule.
-- Failure: The plan does not say what steps 2 and 3 do when access is absent; its status vocabulary is only PASS/BLOCKED-SETUP, and absent host access may be BLOCKED-IMPOSSIBLE. Say: 'Without release repo or host access, steps 2 and 3 record BLOCKED-SETUP naming the access needed, and the change is not declared complete.'
+- References: CHANGE_PLAN D-3 vs section 6 ('marker retained'); CHANGE_SPEC Assumptions.
+- Failure: Marker lifecycle is inconsistent: D-3 removes it only on a pass, section 6 retains it on failure. A human who fixes the plan by hand and resumes cannot get a fresh repair. Settle it: 'The marker stores the plan file hash; a different hash on resume gets one repair, the same hash exits 1.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: The expire POST grant has no decision rule for 'script ends links early'.
+## AR-003: Marker state after a spending stop during repair is unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 15 'unknown'; plan step 1 and scope cuts; AC-6.
-- Failure: The expire POST grant has no decision rule for 'script ends links early'. Step 1 writes it into the notes while it is also conditional. Say: 'Add the expire POST grant only if the script calls the Daytona expire endpoint; otherwise record it as not added.'
+- References: CHANGE_PLAN D-3/D-4, section 6; CHANGE_SPEC AC-5 (no second repair on resume) vs AC-7.
+- Failure: Marker state after a spending stop during repair is unspecified. D-4 exits without re-check, leaving the marker set, so a resume after budget is raised skips repair and fails. Settle it: 'On a spending stop during repair the marker is removed so resume repairs again.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: The expiresInSeconds action is unspecified when the value is missing, exactly 3600, or above 3600.
+## AR-004: The shape test is specified for backticked spans only; mixed lines (ticks plus plain prose) and the no-ticks route are l
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 4 'missing or > 3600'; SI-2; AC-6.
-- Failure: The expiresInSeconds action is unspecified when the value is missing, exactly 3600, or above 3600. Say: 'If absent set 3600; if above 3600 lower to 3600; if 3600 or less leave unchanged.'
+- References: plan_steps.py lines 72-90 (shape test only in no-ticks branch); CHANGE_PLAN D-1.
+- Failure: The shape test is specified for backticked spans only; mixed lines (ticks plus plain prose) and the no-ticks route are left ambiguous. Settle it: 'The shape filter runs on every candidate token from either route; a line with any ticks ignores unticked text.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: LV-3 has no procedure or pass criterion, and the spec's 'require_approval false or omitted' conflicts with the plan's ex
+## AR-005: Final-failure message leaves the step unspecified when the error has no step-N, several steps fail, or the plan is UPDAT
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-1 'false or omitted' vs plan entry; Manual verification LV-3; AC-4.
-- Failure: LV-3 has no procedure or pass criterion, and the spec's 'require_approval false or omitted' conflicts with the plan's explicit false. Say: 'The entry sets require_approval explicitly to false; LV-3 passes only if a pre-existing hire installs with zero approval prompts.'
+- References: CHANGE_PLAN D-5 (parsed from step-N); CHANGE_SPEC section 8 and AC-5.
+- Failure: Final-failure message leaves the step unspecified when the error has no step-N, several steps fail, or the plan is UPDATED_PLAN. Settle it: 'Print every distinct step-N in the errors, or "step: unknown" if none.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: AC-5 'no existing grant removed or altered' has no stated baseline, and the diff is in an external repo that the in-repo
+## AR-006: Section 8 claims previously valid plans are unchanged, yet D-1 drops spaced backticked tokens the old parser kept.
 
 - Severity: LOW
-- References: Traceability AC-5 'Diff review'; plan section 5.
-- Failure: AC-5 'no existing grant removed or altered' has no stated baseline, and the diff is in an external repo that the in-repo notes cannot prove. Say: 'The notes record the pre-change and post-change grant lists from the release repo.'
+- References: CHANGE_PLAN section 8 vs D-1; CHANGE_SPEC section 7.
+- Failure: Section 8 claims previously valid plans are unchanged, yet D-1 drops spaced backticked tokens the old parser kept. Warning channel and repetition are also unspecified. Settle it: 'Warnings go to stderr once per parse; a previously valid plan yields an identical owns list.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan has no defined regression check for existing Daytona grants (SB-4/AC-5) since the release definition is external an
+## AR-007: Tick-span shape test is narrower than what validate accepts (e.g.
 
 - Severity: HIGH
-- References: CHANGE_PLAN traceability AC-5 -> 'Diff review' with automated test None; no artifact path is named for the diff.
-- Failure: Plan has no defined regression check for existing Daytona grants (SB-4/AC-5) since the release definition is external and in-repo suites cannot see it. Decision: AC-5 is verified by a recorded before/after diff of the full grant list saved under .uncle/docs/, and a missing diff means AC-5 is NOT RUN, not PASS.
+- References: plan_steps.py:73-80 applies shape regex only to untick'd tokens; CHANGE_SPEC s7 vs CHANGE_PLAN D-1.
+- Failure: Tick-span shape test is narrower than what validate accepts (e.g. `src/{a,b}.py`, `~`, `+`, `=`), so previously valid plans may lose owns. Say: 'The tick filter drops only spans with whitespace or a comment marker; any token that passed validate before is kept.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Plan says 'in-repo suites must match baseline' as the regression check, yet also says a green in-repo suite is not evide
-
-- Severity: HIGH
-- References: CHANGE_PLAN sections 16-17 vs Risks 'A green in-repo suite is not evidence for this change'.
-- Failure: Plan says 'in-repo suites must match baseline' as the regression check, yet also says a green in-repo suite is not evidence. The two statements make the regression gate vacuous. Decision: in-repo suite parity is only a no-source-change guard and never counts toward AC-1..AC-6.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: Step 3 allows recording LV-1..LV-3 as BLOCKED-SETUP, but the checks have no stated classification when host access is mi
+## AR-008: Plan does not say what happens when filtering drops every Owns token for a step (empty owns valid, or new validator fail
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN step 3 'PASS/BLOCKED-SETUP'; section 18 classification LIVE_VERIFICATION; CHANGE_SPEC SB-3.
-- Failure: Step 3 allows recording LV-1..LV-3 as BLOCKED-SETUP, but the checks have no stated classification when host access is missing. LV-3 (existing hire installs without approval) is the main compatibility regression guard. Decision: if host access is missing, LV-1..LV-3 are BLOCKED-SETUP, naming the action required, and the change is not complete.
+- References: CHANGE_PLAN D-1/D-2 give no empty-result behavior; INV-1 covers only kept tokens.
+- Failure: Plan does not say what happens when filtering drops every Owns token for a step (empty owns valid, or new validator failure). Say: 'A step whose owns become empty is passed through as empty owns and the validator decides.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: The conditional expire POST has no decision rule.
+## AR-009: Retained marker makes a resumed run exit 1 without clarity on re-check; a user-edited plan or a different later failure
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-6 and section 15 'unknown'; CHANGE_PLAN R-2 'Conditional entry'.
-- Failure: The conditional expire POST has no decision rule. 'If and only if the script ends links early' is unresolved, so AC-6 passes or fails depending on how it is read, and a missing grant would regress link expiry. Decision: step 2 must grep the script for the expire call and record the finding. The expire entry is added if the call exists and omitted otherwise.
+- References: CHANGE_PLAN s6 'resumed run goes straight to exit 1' vs D-3 marker removed only on passing check.
+- Failure: Retained marker makes a resumed run exit 1 without clarity on re-check; a user-edited plan or a different later failure gets no repair. Say: 'On resume the check always re-runs first; the marker only suppresses the repair turn and is cleared when the plan hash changes.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The plan does not state the outcome when a script's expiresInSeconds is absent or above 3600.
+## AR-010: Marker lifetime across stage restart or plan regeneration is unspecified; a regenerated plan may never get its one repai
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 4 'build script only if expiresInSeconds is missing or > 3600'; R-3 CAP-SCRIPT-EDIT.
-- Failure: The plan does not state the outcome when a script's expiresInSeconds is absent or above 3600. Both the script edit and the 3600 limit are listed as 'Never cut', but the script change is not in scope for any in-repo owner. Decision: a missing or over-limit value is edited to 3600 in the external script, and if that edit is not permitted, AC-6 is reported FAIL.
+- References: CHANGE_PLAN D-3 and s10 rollback 'harmless if left'.
+- Failure: Marker lifetime across stage restart or plan regeneration is unspecified; a regenerated plan may never get its one repair, and 'harmless if left' contradicts AC-5. Say: 'Markers are cleared when the stage regenerates its plan.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Steps 2 and 3 both Own IMPLEMENTATION_NOTES.md with Depends on, but step 2 is 'if access is granted' with no defined beh
+## AR-011: Repair-turn outcomes besides spending stop (timeout, nonzero exit, deleted or empty plan file, error lacking step-N) are
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s9 and D-5 parse step from step-N only.
+- Failure: Repair-turn outcomes besides spending stop (timeout, nonzero exit, deleted or empty plan file, error lacking step-N) are unspecified for the final-failure message. Say: 'If no step-N is parsable, the message omits the step and still names file and resume command.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: New stderr warnings from three Owns call sites may break existing tests asserting clean stderr while existing tests may
 
 - Severity: LOW
-- References: CHANGE_PLAN Implementation sequence steps 2-3.
-- Failure: Steps 2 and 3 both Own IMPLEMENTATION_NOTES.md with Depends on, but step 2 is 'if access is granted' with no defined behavior when it is skipped. Decision: when step 2 is skipped, the notes record 'step 2 not performed: no release repo access', and step 3 is BLOCKED-SETUP.
+- References: CHANGE_PLAN D-1, R-3, s12.
+- Failure: New stderr warnings from three Owns call sites may break existing tests asserting clean stderr while existing tests may not be edited. Say: 'Warnings are emitted only when dropped is non-empty; existing suites are run against baseline after step 1.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: The grant path uses unconstrained {sandboxId}/{port} placeholders, so it covers every sandbox and port the host key reac
+## AR-013: Repair prompt embeds validator output and plan text (model-authored, possibly attacker-influenced) with no stated trust
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1.2 path '/sandbox/{sandboxId}/ports/{port}/signed-preview-url'; CHANGE_SPEC AC-1 has no sandbox or port restriction.
-- Failure: The grant path uses unconstrained {sandboxId}/{port} placeholders, so it covers every sandbox and port the host key reaches. Plan should say: the grant stays a templated path, the script requests links only for its own sandbox, and diff review confirms no wider wildcard.
+- References: CHANGE_PLAN D-3 passes plan path plus exact validator output to run_initial_planning_agent; INV-5 is enforced only by prompt wording (R-4).
+- Failure: Repair prompt embeds validator output and plan text (model-authored, possibly attacker-influenced) with no stated trust boundary, and the repair agent's write scope is unspecified. Plan should say: the prompt labels plan text and validator output as untrusted data, and the driver re-checks that only the plan file changed.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: SI-2 (expiresInSeconds <= 3600) is enforced only by the external, unverified build script.
+## AR-014: Marker file name uses <label> and the step number is parsed from validator error text, but neither is constrained.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-3 `$STATE_DIR/plan-check-repair-<label>`; D-5 parses `step-N` from error text.
+- Failure: Marker file name uses <label> and the step number is parsed from validator error text, but neither is constrained. Plan should state that label is a fixed literal (project-plan or updated-plan) and the parsed step is digits-only before being printed or used in a path.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-015: Dropped tokens are echoed to stderr verbatim in warnings.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-1 prints `warning: step N owns: dropped <token>`; tokens come from model-written backticked spans.
+- Failure: Dropped tokens are echoed to stderr verbatim in warnings. Plan should say the token is escaped or truncated (control characters and ANSI escapes stripped, max length) before printing.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: The shared path-shape predicate accepts tokens like `../../etc/x`; the old code only rejects a leading `/`.
+
+- Severity: MEDIUM
+- References: D-1 pattern `[\w./*?\[\]@-]+` allows `../` segments; plan_steps.py:88 only rejects a leading `/`.
+- Failure: The shared path-shape predicate accepts tokens like `../../etc/x`; the old code only rejects a leading `/`. Plan should say whether `..` segments in an owned path are dropped, since owns drives which files a step may write.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: A stale marker from a prior run can suppress the one repair for a changed plan.
+
+- Severity: LOW
+- References: CHANGE_PLAN section 6: marker retained on failure; section 10: leftover marker 'harmless'.
+- Failure: A stale marker from a prior run can suppress the one repair for a changed plan. Plan should state the marker is cleared whenever the plan file's content hash changes or a new run begins.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: The plan does not say whether a later, different failure in the same run gets its own repair once the marker is cleared.
 
 - Severity: HIGH
-- References: CHANGE_PLAN R-3 'Inspect script' (CAP-SCRIPT-EDIT); CHANGE_SPEC SI-2 enforcement point is Script.
-- Failure: SI-2 (expiresInSeconds <= 3600) is enforced only by the external, unverified build script. The plan does not say what happens if the field is omitted. Plan should say: expiresInSeconds must be set explicitly in the call; a script that omits it fails AC-6.
+- References: CHANGE_PLAN D-3 ('Marker is removed when a check passes') against section 6 ('marker retained') and INV-2 'per plan check'.
+- Failure: The plan does not say whether a later, different failure in the same run gets its own repair once the marker is cleared. Settle with: 'The marker is removed when a check passes; a later failure is a new failure and gets one repair; a failure with the marker present exits 1 with no agent call.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: The signed link is a bearer credential, and with require_approval false no human sees it before it is printed.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s11 saves 'publish output saved under .uncle/docs/'; AC-3 requires a Preview: line; no redaction rule.
-- Failure: The signed link is a bearer credential, and with require_approval false no human sees it before it is printed. The plan sets no rules for where it may be recorded. Plan should say: the URL appears only in build output, is never written to .uncle/docs or notes, and live-check evidence redacts the token.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: The conditional expire-POST grant is a state-changing write with require_approval false, and its trigger 'script ends li
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-6 and s15 'Whether the script ends links early is unknown'; CHANGE_PLAN R-2.
-- Failure: The conditional expire-POST grant is a state-changing write with require_approval false, and its trigger 'script ends links early' is undefined. Plan should say: add it only if the script source contains an explicit expire call, scoped to the same path template, with the grep result recorded in the notes.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: AC-4 (no approval prompt) sits beside the spec's note that the host supports approval only for mail on the script surfac
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC s10 'host supports approval only for mail on script surface' versus AC-4 and SB-3.
-- Failure: AC-4 (no approval prompt) sits beside the spec's note that the host supports approval only for mail on the script surface, so the new grant cannot be gated. Plan should say: the grant is accepted as ungated, and reviewer sign-off on the diff stands in for the host approval gate.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: The plan has no pass/fail evidence for AC-1 and AC-5 when the release repo is inaccessible, because the only diff to ins
+## AR-019: The plan leaves unspecified a repair agent that crashes, times out, makes no edit, or empties the plan file.
 
 - Severity: HIGH
-- References: CHANGE_PLAN Traceability lists 'Diff review'/'Script review' for AC-1/5/6; Restrictions says CAP-RELEASE-EDIT is unavailable in this checkout.
-- Failure: The plan has no pass/fail evidence for AC-1 and AC-5 when the release repo is inaccessible, because the only diff to inspect is external. Plan should say: 'If the release definition is not accessible, AC-1, AC-5 and AC-6 are recorded BLOCKED-SETUP (not PASS), and IMPLEMENTATION_NOTES.md is not evidence for them.'
+- References: CHANGE_PLAN section 9 says only that a crash is a 'failed repair' and the re-check runs. No AC covers a crashed or no-op repair.
+- Failure: The plan leaves unspecified a repair agent that crashes, times out, makes no edit, or empties the plan file. Settle with: 'A non-zero agent exit or an unchanged file skips the re-check and takes the final-failure path with the marker set.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: The plan says it is 'executable only as (b)' but also keeps steps 2 and 3 that require external access.
-
-- Severity: HIGH
-- References: CHANGE_PLAN intro BLOCKING PLANNING DECISION versus Implementation sequence steps 2-3 and Restrictions feasibility note.
-- Failure: The plan says it is 'executable only as (b)' but also keeps steps 2 and 3 that require external access. Plan should say: 'Steps 2 and 3 are BLOCKED-SETUP unless the operator supplies the release repo path; the in-repo deliverable is complete when step 1 exists.' The condition for step 1 alone being sufficient is undefined.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: The expire-POST condition 'if and only if the script ends links early' has no objective test.
+## AR-020: The dropped-token warning format is fixed loosely.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-6, SB-5 and Assumptions ('whether the script ends links early is unknown'); CHANGE_PLAN R-2.
-- Failure: The expire-POST condition 'if and only if the script ends links early' has no objective test. Plan should say: 'The script ends links early iff it contains a call to the Daytona signed-preview-url expire endpoint; grep for that call decides it.'
+- References: CHANGE_PLAN D-1 and D-2 against CHANGE_SPEC AC-2 and AC-3.
+- Failure: The dropped-token warning format is fixed loosely. D-1 gives one text, AC-2/AC-3 say only 'names the step', and D-2 gives no JSON-route format. Settle with: 'Both routes emit exactly `warning: step <label> owns: dropped <token>` on stderr, one line per dropped token, in input order.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: AC-3's 'small web app' and AC-4's 'existing hire' are unspecified, so the live checks cannot be repeated or compared.
+## AR-021: The plan does not say what happens when every Owns span is dropped, or how a directory-like span such as `src/` is treat
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-3 and AC-4; CHANGE_PLAN section 18 LV-2 and LV-3.
-- Failure: AC-3's 'small web app' and AC-4's 'existing hire' are unspecified, so the live checks cannot be repeated or compared. Plan should say which app and hire to use, or that the executor records which it picked.
+- References: CHANGE_PLAN D-1 regex `[\w./*?\[\]@-]+` admits a trailing slash; CHANGE_SPEC INV-1 (plan_model.py:474-482) says directories are invalid.
+- Failure: The plan does not say what happens when every Owns span is dropped, or how a directory-like span such as `src/` is treated. Settle with: 'All spans dropped gives an empty owns list and the validator's existing error applies; `src/` passes the shape test and the validator still rejects it.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: The scripts' behavior is unspecified when the signed link is returned with expiresInSeconds above 3600 or is refused, so
+## AR-022: The final-failure diagnostic is untestable when the error names no step or several steps, and its stream and resume text
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC SI-2 and Failure behavior cover only the publish refusal; CHANGE_PLAN Error and recovery.
-- Failure: The scripts' behavior is unspecified when the signed link is returned with expiresInSeconds above 3600 or is refused, so SI-2's failure path has no expected output. Plan should say: 'If the host refuses or returns no link, the build prints no Preview: line and exits normally.'
+- References: CHANGE_PLAN D-5 ('parsed from step-N in the error') and CHANGE_SPEC AC-5.
+- Failure: The final-failure diagnostic is untestable when the error names no step or several steps, and its stream and resume text are unspecified. Settle with: 'Print to stderr; with zero or several steps print them comma-separated or `step: n/a`; the resume command is the one the driver prints for other stage failures.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-023: The plan is ambiguous when `spending-stop` already exists before the repair starts, for example from a resumed run.
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN D-4 and R-2 against AC-7 ('during the repair turn').
+- Failure: The plan is ambiguous when `spending-stop` already exists before the repair starts, for example from a resumed run. It checks the flag only after the repair. Settle with: 'The flag is checked before launching the repair (stop without calling the agent) and after it (stop without re-checking).'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

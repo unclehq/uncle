@@ -1,50 +1,43 @@
 # Defects
 
-## D-1
+## D-2
 
 - **Status:** BLOCKED-SETUP
-- **Evidence:** No release repo or host access. Action: supply both.
-- **Expected result:** Publish succeeds with no "must match one publisher operation" refusal.
-- **Actual result:** Not performed. Declared `Depends on: MC-100`, which is not in the checklist.
-
-## D-1
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Depends on MC-102 publish; no hire available.
-- **Expected result:** Zero approval prompts on install.
+- **Evidence:** Needs a real model agent and a scratch project. Action: provide both.
+- **Expected result:** One repair turn, then continue, or exit 1 naming the file, step and resume command.
 - **Actual result:** Not performed.
 
-## D-1
+## D-2
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** No hosted build environment.
-- **Expected result:** No `Preview:` line, exit status 0, refusal reported.
+- **Status:** NOT RUN
+- **Evidence:** The end-to-end scratch scenario was not executed.
+- **Expected result:** One repair call, a warning line on stderr, re-check passes; a valid-plan rerun makes zero calls.
+- **Actual result:** The scratch-project scenario was not run, so the combined outcome is unobserved.
+
+## D-2
+
+- **Status:** NOT RUN
+- **Evidence:** Depends on MC-202, which is absent from the checklist.
+- **Expected result:** One fresh repair call for a changed plan hash; identical behaviour for UPDATED_PLAN.
 - **Actual result:** Not performed.
 
-## D-1
+## D-2
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Depends on MC-201 (undefined) and a publish.
-- **Expected result:** Zero approval prompts on reinstall of a pre-existing hire.
+- **Status:** NOT RUN
+- **Evidence:** The five failure modes were not run individually.
+- **Expected result:** One agent call, exit 1 and the marker retained, in every case.
 - **Actual result:** Not performed.
 
-## D-1
+## D-3
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** No release repo or host access.
-- **Expected result:** Publish succeeds without the match refusal; otherwise BLOCKED-SETUP naming the access.
-- **Actual result:** Not performed.
+- **Status:** FAIL
+- **Evidence:** `/abs` is silently dropped on the Markdown route and kept on the JSON route. See D-3.
+- **Expected result:** `../x`, `a/../../b` and `/abs` dropped with warnings; the other tokens kept.
+- **Actual result:** `../x` and `a/../../b` were dropped with a warning on both routes. `a..b.py`, `src/{a,b}.py`, `~` and `src/` were kept. `/abs` was dropped silently on the Markdown route (no warning) and kept on the JSON route.
 
-## D-1
+## MC-303
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Depends on MC-301.
-- **Expected result:** Zero Daytona-write approval prompts; install succeeds.
-- **Actual result:** Not performed.
-
-## D-1
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** Depends on MC-403 (undefined) and a publish.
-- **Expected result:** Zero Daytona-write approval prompts on reinstall.
-- **Actual result:** Not performed.
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** The user must view the warning lines in a real terminal.
+- **Expected result:** One warning line per token; no escape effects in a terminal; truncation at 80 characters.
+- **Actual result:** The program output matches. Terminal rendering was not observed.

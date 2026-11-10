@@ -41,7 +41,7 @@ In an existing repository:
 
 ```sh
 cd my-project
-uncle
+uncle --attended
 ```
 
 Give Uncle a `REQUIREMENTS.md`, a `CHANGE_REQUEST.md`, or a GitHub issue. You can also pipe a request in with `cat request.md | uncle --change-request`. Treat piped text as untrusted input to tool-using agents.
@@ -77,7 +77,7 @@ Limits worth knowing: the core drivers and `uncle_tui.py` are large, so changing
 
 Most coding tools focus on the agent doing the work. Uncle focuses on the **change**.
 
-The coding agent is untrusted and swappable. A broken or careless agent cannot declare itself verified: the driver, not the agent, records the evidence. Defending against a hostile agent is harder. An unsigned attestation protects against mistakes, not against an agent that can write to the same filesystem, so that case requires a signing key the agent cannot reach (see [docs/verify.md](docs/verify.md)). Run agents in a sandbox if that matters to you.
+The coding agent is untrusted and swappable. A broken or careless agent cannot declare itself verified: the driver, not the agent, records the evidence. Defending against a hostile agent is harder. An unsigned attestation protects against mistakes, not against an agent that can write to the same filesystem, so that case requires a signing key the agent cannot reach (see [docs/verify.md](docs/verify.md)). An ordinary SSH key loaded in `ssh-agent` does not qualify: an unsandboxed agent can run `ssh-keygen -Y sign` just as the driver does. What puts a key out of reach is a hardware key that needs a physical touch (a FIDO `sk-` key) or Sigstore's interactive OIDC login. Run agents in a sandbox if that matters to you.
 
 For a change to be verified, the artifact that was reviewed, verified, approved and published must be the same artifact.
 
@@ -148,7 +148,7 @@ You    "Have it use the existing parser instead."
 Uncle  steers the active worker
 ```
 
-The supervisor can observe, explain, diagnose and steer work. It cannot silently grant itself the authority to waive integrity requirements or publish a change. See [docs/supervision.md](docs/supervision.md).
+The supervisor can observe, explain, diagnose and steer work. It is not given the authority to waive integrity requirements or publish a change. See [docs/supervision.md](docs/supervision.md).
 
 ## How Uncle works
 

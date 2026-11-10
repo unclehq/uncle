@@ -1,72 +1,78 @@
-# Baseline: branch and worktree policy
+# Baseline: Supervision menu tooltips
 
-Omitted sections: Reproduction result (not a bug); Baseline test results beyond section 9 (driver supplies); Areas outside the change folded into section 14.
+Omitted sections: Reproduction (feature, not a bug); Flaky behavior (none documented in repo)
 
 ## 1. Change-request summary
-See `.uncle/docs/CHANGE_REQUEST.md` (Behavior change). Change runs go on a newly created branch; new application builds run in `main` of the current checkout with no worktree and no branch; refuse an app build off `main` or with uncommitted changes; keep opt-in issue worktrees.
+See .uncle/docs/CHANGE_REQUEST.md (Issue 81): show a hint for every Supervision option, not only the highlighted one, and explain each value-picker choice; reuse `SUPERVISION_DESC` as single text source.
 
 ## 2. Repository architecture
-Bash drivers (`scripts/stagegate.sh` = app, `scripts/change-workflow.sh` = change, `scripts/from-issue.sh` = issue) launched by `uncle` (bash), `uncle_tui.py`, `scripts/lib/uncle_headless.py`, `scripts/lib/repl_actions.py`, all via `scripts/lib/run_duties.py`. Git plumbing: `scripts/lib/worktrees.sh`, `worktree-merge.sh`, `change-pr.sh` (embedded Python engine), `project-git.sh`. Home-agent actions: `scripts/lib/home_actions.py`, `prompts/home-agent.md`.
+Single-file curses TUI `uncle_tui.py` (class `UncleTUI`); supervision config schema in `scripts/lib/supervisor.py` (imported as `supervision_lib`). Python suites in `scripts/tests/*-test.py`, shell suites `*-test.sh`.
 
 ## 3. Relevant code paths
-- `scripts/lib/worktrees.sh:292` `worktree_auto`: gives EVERY non-issue run (app and change) its own worktree + new branch unless `WORKFLOW_WORKTREE=0`, already inside a worktree, or marker `.uncle/workflow/worktree-owned`; writes that marker (:319).
-- Callers of `worktree_auto`: `uncle:724-748` (`run_workflow`; skips when `${1##*/}` is `from-issue.sh`), `uncle_tui.py:2381-2414` (`_enter_run_worktree`, skips `workflow_idx==1`; idx 0=app, 2=change; called :9187), `scripts/lib/run_duties.py:169-192` (`prepare_worktree(issue=...)`), `scripts/lib/uncle_headless.py:408-418` (skips `UNCLE_STARTUP_ACTION=github_issue`).
-- `scripts/stagegate.sh:173` sources `worktree-merge.sh`; `:5373` area calls `uncle_ensure_project_git` (`scripts/lib/project-git.sh:3`, does `git init` when no repo); `:6818-6842` merges a finished app build from an owned worktree into the source branch (`worktree_merge_owned`, `worktree_merge_finish_all`).
-- `scripts/change-workflow.sh:3834-3837`: `uncle_ensure_project_git`, then `change_pr_engine start`. Engine `start_build` (`scripts/lib/change-pr.sh:1342-1401`) creates and switches to a PR-head branch ONLY when HEAD is born, a branch is checked out, a remote exists and a default branch is known; otherwise it silently stays on the current branch (no-remote/unborn/detached = today's path). Branch name: `change_pr_engine run-branch-name` (:1900). On a non-default current branch it adopts that branch as head.
-- `scripts/from-issue.sh:492-536`: `WORKTREE=1` default (comment says off), `--no-worktree`, `--worktree-dir`, `--branch`; `--new` forces `WORKTREE=0` unless explicit; explicit `--worktree` with `--new` exits 1 (:543).
-- `scripts/README.md:184-196,245-322` and `docs/worktrees.md` document worktree behavior; `prompts/home-agent.md` has no branch/worktree policy (only mentions branches under cleanup rules, lines 15-16; clear/resume lines 49-56 mention issue worktrees in `home_actions.py` prompt).
+| Symbol | Location |
+|---|---|
+| `supervision_lib.CONTROLS` (13 tuples incl. `files_allowlist`), `DELEGATIONS`, `KINDS`, `DEFAULTS` | scripts/lib/supervisor.py:55-74 |
+| `SUPERVISION_DESC` (13 keys) | uncle_tui.py:772-786 |
+| `_picker_rows` | uncle_tui.py:1739-1778 |
+| `_picker_current` | uncle_tui.py:1794 |
+| `_open_picker` | uncle_tui.py:1814 |
+| `items()` -> `_supervision_items` | uncle_tui.py:1361, 1660, 5070 |
+| `_supervision_desc`, `_supervision_enter` | uncle_tui.py:5081, 5087 |
+| `_draw_config_desc` | uncle_tui.py:8336 |
+| `_title` (picker titles) | uncle_tui.py:8269 |
+| `_draw_picker` | uncle_tui.py:8377 |
+| Existing TUI test (`TuiHostTests`) | scripts/tests/supervisor-test.py:1016, asserts `_supervision_items()[0].startswith('enabled')` at :1214 |
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Non-issue run (app or change) via `uncle`/TUI/headless, git repo, `WORKFLOW_WORKTREE` unset | Sibling worktree `<project>-<branch>` on new branch; run happens there | worktrees.sh:292-355; worktree-auto-seed-test.sh | MODIFY for app; keep for change |
-| B-2 | `WORKFLOW_WORKTREE=0` or no git | Run in place; no branch created by launcher | worktrees.sh:295-296 | Change: gain branch guard |
-| B-3 | Change run, remote + default branch known, HEAD on default | Engine creates/switches to new branch before first stage | change-pr.sh:1374-1401; early-branch-test.py T1 | PRESERVE |
-| B-4 | Change run with no remote / unborn / detached | No branch created; edits land on current branch | change-pr.sh:1346-1351; early-branch-test.py T5 | MODIFY (gap) |
-| B-5 | Change run already on non-default branch | Branch adopted as PR head | change-pr.sh:1376; early-branch-test.py T3 | PRESERVE for resume |
-| B-6 | Finished app build in owned worktree | Committed and merged into source branch, worktree removed | stagegate.sh:6818-6842; README:192-196 | PRESERVE code for in-flight legacy runs |
-| B-7 | `from-issue.sh N --worktree[-dir]` | Worktree on new branch, copy of `.uncle/config` | from-issue.sh:507-518; worktree-run-test.sh | PRESERVE |
-| B-8 | `from-issue.sh --new --worktree` | Exit 1: `--worktree and --worktree-dir require --change` | from-issue.sh:543 | PRESERVE |
-| B-9 | App build on non-main branch / dirty tree | Runs; no check | stagegate.sh (no check found) | MODIFY |
+| B-1 | Open Configure -> Supervision | One row per CONTROLS key: `key(ljust 26)  value` or `value  (default)`; extra `! reason` row when config invalid | uncle_tui.py:5070-5079; test :1214 | Yes (row prefix `key`) |
+| B-2 | Highlight a row | Full `SUPERVISION_DESC` + "Enter edits..." shown in right panel (>=18 cols free) else strip below list | :5081, :8336-8375 | Yes |
+| B-3 | Enter on bool (`enabled`) | Toggles true/false, no picker | :5092 | Yes |
+| B-4 | Enter on `effort`/`runner`/`model` | Picker lists bare values (effort: EFFORTS none/low/medium/high + Custom; runner: installed supported runners; model: catalog) | :1744-1778 | Yes (values/order) |
+| B-5 | Enter on `delegate_gates` and numeric keys | `_open_picker` -> picker_kind unrecognised -> only `Custom...` free-text row; no none/routine choices | :1778, :1814 | Choice list is MODIFIED; free-text validation preserved |
+| B-6 | Picker row render | `> value  <label>  <current>`; label only for models | :8388-8402 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Branches are never deleted by worktree removal | worktrees.sh `worktree_create` rollback; README | worktree-run-test.sh | Medium |
-| I-2 | Engine never overwrites a divergent candidate ref | change-pr.sh claim_ref | early-branch-test.py T4 | High |
-| I-3 | Engine start uses only reads and one ref update; signer never invoked | change-pr.sh start_build | early-branch-test.py T6,T7 | High |
-| I-4 | worktree_auto declines (returns 0, prints nothing) when unwanted/impossible | worktrees.sh:295-304 | worktree-auto-seed-test.sh | Medium |
+| I-1 | Documented control key list equals `CONTROLS` (AT-9) | DocsTests | supervisor-test.py:1750 | High |
+| I-2 | Values are validated by supervision_lib before use; invalid disables corrections | `load_config` | ConfigTests :903 | High |
+| I-3 | Drawing never raises on tiny terminals (curses.error swallowed) | try/except in draw funcs | none found | Medium |
 
 ## 6. Interface contracts
-`worktree_auto <root>` prints the worktree path or nothing. `run_duties.prepare_worktree(root_dir, project_root, environ, issue, runner)` returns dir or None. Env `WORKFLOW_WORKTREE` (0 disables). `.uncle/workflow/worktree-owned` marker. No schema/API persistence changes.
+No external API/schema. Internal: `items()` returns list[str] consumed for selection/width; `_picker_rows()` returns (kind,text) with kind in header/option/model/custom; `.uncle/config` keys unchanged.
 
 ## 7. Existing automated-test coverage
-Shell suites via `scripts/run-shell-tests.sh`; Python (`scripts/tests/*-test.py`) via `scripts/run-python-tests.sh`. Relevant: worktree-auto-seed-test.sh, worktree-run-test.sh, worktree-branch-test.py, worktree-runs-test.py, early-branch-test.py, project-git-test.py, home-actions-test.py. ~27 suites drive `change-workflow.sh` and ~23 drive `stagegate.sh`; several create git repos (audit-command, change-workflow-exit-status, gates, worktree-run). The two runners use separate temp dirs and share no ports (per the task contract), so they run as one parallel group.
+supervisor-test.py covers config, docs and TUI host wiring but nothing on `SUPERVISION_DESC` content, `_draw_config_desc`, or `_picker_rows` (grep found only :1214). No test draws a picker. Parallel commands use separate temp dirs (shell and python runners per CLAUDE.md guidance).
 
 ## 9. Baseline test results
-Commands come from the task contract and runner scripts present in `scripts/`. No results were produced here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites are documented as already failing on a clean checkout.
+Not run by the analyst. Commands are from scripts/run-shell-tests.sh and scripts/run-python-tests.sh. Command 3 names a suite (`supervision-tooltips`) that does not exist at baseline; it is expected to fail/not-found pre-change and is added by the change. Driver baseline is authoritative.
 
 ## 12. Likely change surface
-`scripts/lib/worktrees.sh`, new `scripts/lib/run-policy.sh`, `scripts/stagegate.sh`, `scripts/change-workflow.sh`, `uncle`, `uncle_tui.py`, `scripts/lib/run_duties.py`, `scripts/lib/uncle_headless.py`, docs, prompt, new tests.
+uncle_tui.py (SUPERVISION_DESC area, `_picker_rows`, `_picker_current`, `_title`, `_draw_picker`, `_supervision_items`, `_draw_config_desc`); new test file scripts/tests/supervision-tooltips-test.py; possibly README/.uncle/config.example only if wording drift is found.
 
 ## 13. Regression-sensitive components
-The ~50 driver-driven suites that run git fixtures (a new branch guard or app preflight can change branch/exit behavior); worktree_auto callers; engine `start_build`; `worktree-merge.sh` legacy path.
+Model/runner/effort pickers of stage config (same `_picker_rows`/`_draw_picker` shared); `items()` width drives side-panel vs strip layout; `_picker_filtered` typing filter; custom-entry flow.
 
 ## 14. Outside the change
-Review/plan/verification stages, approval gates, `from-issue.sh` worktree creation, `worktree-merge.sh` removal, PR push/open logic, `home_actions.py` validation.
+Supervisor engine, CONTROLS semantics/defaults, config parsing, stage (non-supervision) config menus' text, gate logic.
 
 ## 15. Unknowns and assumptions
-- `main` meaning: assumed `main`, or `master` when the repo has no `main` branch (stock `git init`).
-- Whether existing driver fixtures are on a non-main branch or dirty with a born HEAD: UNRESOLVED until the suite runs; handled as a plan risk.
+- `files_allowlist` has a description but is a 13th CONTROLS key (issue says 12); all 13 get hints.
+- Picker choice rendering for non-supervision targets must stay unchanged.
+- Picker-apply path for a `delegate` kind not yet read; plan step 3 reads it.
 
-## 16. Initial risk
-Medium: many driver tests exercise git fixtures; launcher behavior change for app runs is user-visible.
+## 16. Initial risk assessment
+Medium-low: UI-only, but shared picker code and curses width handling. Main risk is changing `items()` width and degrading the side panel.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
+bash scripts/run-python-tests.sh -- supervisor supervisor-default-runner supervision-tooltips
+python3 -B -m py_compile uncle_tui.py
 ```
 
 ## Parallel verification groups

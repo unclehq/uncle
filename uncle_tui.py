@@ -785,6 +785,39 @@ SUPERVISION_DESC = {
     "files_allowlist": "Comma-separated repository-relative paths (default package.json,package-lock.json,vite.config.js) that a parallel implementation step may write without declaring ownership. A merge normally refuses a whole group when any step touches a file the plan didn't assign it -- these paths are exempt because tooling like `npm install` legitimately rewrites them from a step the plan never named as their owner.",
 }
 
+# One short phrase per supervision control, <=40 chars (authoring limit; never truncated at runtime).
+SUPERVISION_HINT = {
+    "enabled": "turn supervision on or off",
+    "runner": "CLI that answers a diagnosis",
+    "model": "model the supervisor runs",
+    "effort": "supervisor reasoning effort",
+    "max_interventions": "corrections per stage per run",
+    "steering_timeout_seconds": "unanswered steering limit (s)",
+    "stage_time_seconds": "active stage time limit (s)",
+    "stage_tokens": "stage token limit (0 = off)",
+    "call_timeout_seconds": "deadline for one supervisor call (s)",
+    "max_calls_per_run": "supervisor calls allowed per run",
+    "call_max_cost_usd": "dollar cap per supervisor call",
+    "delegate_gates": "standing delegation: none/routine",
+    "files_allowlist": "files steps may write unowned",
+}
+
+# Fixed fallback for a runner with no entry in SUPERVISION_CHOICE_DESC.
+SUPERVISION_RUNNER_FALLBACK_DESC = "Runs supervisor diagnoses with this CLI."
+
+# (key, value) -> short explanation shown beside a picker option.
+SUPERVISION_CHOICE_DESC = {
+    ("effort", "none"): "No extended reasoning; fastest and cheapest.",
+    ("effort", "low"): "Light reasoning for simple diagnoses.",
+    ("effort", "medium"): "Balanced reasoning depth and cost.",
+    ("effort", "high"): "Deepest reasoning; slowest and costliest.",
+    ("delegate_gates", "none"): "Every gate waits for you.",
+    ("delegate_gates", "routine"): "Supervisor answers routine dialogs; signing, publication and waivers still need you.",
+    ("runner", "claude"): "Claude CLI; confirms steering answers.",
+    ("runner", "codex"): "Codex CLI as the supervisor runner.",
+    ("runner", "self-hosted"): "Self-hosted runner; confirms steering answers.",
+}
+
 
 class TuiSupervisionHost:
     """The controller's view of this screen: clocks, transcript, delivery, retry."""
@@ -1754,6 +1787,9 @@ class UncleTUI:
             # is not, and a typed value here would read as a setting while
             # meaning nothing to the flag it becomes.
             return [("option", v) for v in NETWORK_CHOICES]
+        if self.picker_kind in ("delegate", "delegate_gates"):
+            # Only the two values the supervisor accepts; no Custom row.
+            return [("option", "none"), ("option", "routine")]
         runner = (self.supervision.get("runner", supervision_lib.DEFAULTS["runner"])
                   if self.picker_target == "!supervision" else self.stage_runner(self.picker_target))
         if self.picker_kind == "model" and runner in HTTP_RUNNERS:
@@ -1795,8 +1831,9 @@ class UncleTUI:
         """The effective value the active picker is choosing on behalf of."""
         stage = self.picker_target
         if stage == "!supervision":
-            return self._field_value(stage, self.picker_kind) or supervision_lib.format_value(
-                self.picker_kind, supervision_lib.DEFAULTS.get(self.picker_kind, ""))
+            key = "delegate_gates" if self.picker_kind == "delegate" else self.picker_kind
+            return self._field_value(stage, key) or supervision_lib.format_value(
+                key, supervision_lib.DEFAULTS.get(key, ""))
         if self.picker_kind == "runner":
             return self.stage_runner(stage)
         if self.picker_kind == "effort":
@@ -1878,7 +1915,8 @@ class UncleTUI:
             self.input_buf = (self.pick_filter if self.picker_kind == "markdown_viewer"
                               else self.pick_filter.strip()) or self._picker_current()
             return
-        self._set_field(self.picker_target, self.picker_kind, text)
+        self._set_field(self.picker_target,
+                        "delegate_gates" if self.picker_kind == "delegate" else self.picker_kind, text)
         # Choosing a runner may add or drop the model row in the popup.
         if self.picker_target in ("!misc", "!supervision"):
             self.state = "config"
@@ -5070,10 +5108,19 @@ class UncleTUI:
     def _supervision_items(self):
         config = supervision_lib.load_config(CONFIG_PATH)
         rows = []
+        try:
+            hint_width = int(self.stdscr.getmaxyx()[1])
+        except Exception:
+            hint_width = 0
+        show_hints = hint_width >= 100
         for key, _kind, default in supervision_lib.CONTROLS:
             stored = self.supervision.get(key, "")
             shown = stored if stored else "%s  (default)" % supervision_lib.format_value(key, default)
-            rows.append("%s  %s" % (key.ljust(26), shown))
+            row = "%s  %s" % (key.ljust(26), shown)
+            hint = SUPERVISION_HINT.get(key, "") if show_hints else ""
+            if hint:
+                row += "  - " + hint
+            rows.append(row)
         if config.errors:
             rows.append("! " + config.disabled_reason)
         return rows
@@ -8274,6 +8321,8 @@ class UncleTUI:
                 return "Pick a runner (type to filter, Enter select, Esc back)"
             if self.picker_kind == "network":
                 return "Network access in the sandbox (Enter select, Esc back)"
+            if self.picker_kind in ("delegate", "delegate_gates"):
+                return "Standing delegation for routine dialogs (Enter select, Esc back)"
             return "Pick a model (type to filter, Enter select, Esc back)"
         if self.state == "config_edit":
             if getattr(self, "notice", ""):
@@ -8400,6 +8449,14 @@ class UncleTUI:
                 label = MODEL_LABELS.get(text, "") if kind == "model" else ""
                 display_text = runner_display(text) if self.picker_kind == "runner" else text
                 disp = prefix + display_text + ("  %s" % label if label else "") + marker
+                if kind == "option" and self.picker_target == "!supervision":
+                    pkey = "delegate_gates" if self.picker_kind == "delegate" else self.picker_kind
+                    expl = SUPERVISION_CHOICE_DESC.get((pkey, text))
+                    if expl is None and pkey == "runner":
+                        expl = SUPERVISION_RUNNER_FALLBACK_DESC
+                    if expl:
+                        disp += "  - " + expl
+                disp = "".join(ch for ch in disp if ch.isprintable())
             try:
                 self.stdscr.addnstr(top + i, cx, disp, w - 1 - cx, attr)
             except curses.error:

@@ -388,19 +388,32 @@ def check_6(statement):
 
 
 def check_7(statement):
-    approved = []
+    """(line, unattended): a required gate approved by a person passes; one
+    delegated by an unattended run is reported, not refused (nobody was there
+    to approve it); supervisor and disabled gates are still refused."""
+    approved, unattended = [], []
     for entry in statement['predicate'].get('approvals') or []:
         if not entry.get('required'):
             continue
         by = entry.get('approved_by') or ''
-        if not by or DELEGATED.match(by):
+        delegated = entry.get('delegated_by') or ''
+        name = str(entry.get('gate')).lower().replace('_', ' ')
+        if by == 'unattended' or (not by and delegated == 'unattended'):
+            unattended.append(name)
+        elif not by or DELEGATED.match(by):
             raise Refused(['required gate %s has no human approval' % entry.get('gate'),
                            '  approved_by:  ' + (by or 'empty'),
-                           '  delegated_by: ' + (entry.get('delegated_by') or 'empty')])
-        approved.append(str(entry.get('gate')).lower().replace('_', ' '))
-    if not approved:
+                           '  delegated_by: ' + (delegated or 'empty')])
+        else:
+            approved.append(name)
+    if not approved and not unattended:
         raise Refused(['no required human gate is recorded'])
-    return 'human approvals: ' + ', '.join(approved)
+    parts = []
+    if approved:
+        parts.append('human approvals: ' + ', '.join(approved))
+    if unattended:
+        parts.append('made unattended, no human approval: ' + ', '.join(unattended))
+    return '; '.join(parts), bool(unattended)
 
 
 def check_8(statement, tree, release):
@@ -483,7 +496,7 @@ def print_not_verified(reasons):
     for reason in reasons:
         print('  - ' + reason)
     print()
-    print('Fix the failed checks listed above (re-run the workflow, or get the missing human approval),')
+    print('Fix the failed checks listed above (for example, re-run the workflow after the tree changed),')
     print('then run uncle verify again.')
 
 
@@ -565,13 +578,20 @@ def main(argv):
             print('✓ ' + check(statement, *extra))
         return go
 
+    def approvals_check():
+        nonlocal verdict
+        line, unattended = check_7(statement)
+        print(('○ ' if unattended else '✓ ') + line)
+        if unattended and verdict == 'VERIFIED':
+            verdict = 'NOT HUMAN VERIFIED'
+
     try:
         run('signature', signature)
         run('approvals', approved)
         run('artifact', artifact)
         run('results', results)
         run('check 6', single(check_6))
-        run('check 7', single(check_7))
+        run('check 7', approvals_check)
         if 'release' in state:
             run('check 8', single(check_8, tree, state['release']))
         else:

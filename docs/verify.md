@@ -53,7 +53,7 @@ In order, and stopping at the first failure:
 | 4 | The implementation, verification input and audit input all name the same Git tree as the release artifact. |
 | 5 | The review, verification and audit stages each recorded `pass`. |
 | 6 | Every blocking review finding has a recorded disposition. |
-| 7 | Every required gate was approved by a person. A gate approved by `unattended`, `supervisor:*` or `disabled:*` is refused. |
+| 7 | Every required gate was approved by a person, or was deliberately left to an unattended run. An `unattended` gate is reported (`○`, exit 3, not human verified) rather than refused; a gate approved by `supervisor:*` or `disabled:*` is refused. |
 | 8 | The head tree, minus Uncle's own working files, equals the release artifact and the attestation subject. |
 
 ## Exit codes
@@ -76,5 +76,5 @@ These are different guarantees:
 
 ## Limits
 
-* A change built in the default unattended mode records its gates as delegated, so check 7 refuses it. Use `--attended` when you want a change that passes.
+* A change built in the default unattended mode records its gates as delegated. Check 7 reports them as made unattended, and the result is `NOT HUMAN VERIFIED` (exit 3) instead of a failure. Use `--attended` when you want human approvals recorded.
 * The attestation currently committed to this repository has no `.sig` file and the repository has no `allowed_signers` trust root, so verifying it can give at best exit 3.

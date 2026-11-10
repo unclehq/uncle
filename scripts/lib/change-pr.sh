@@ -205,7 +205,7 @@ change_pr_complete_route() {
     # Hand-off publish mode (UNCLE_PUBLISH_MODE=handoff): a workspace that cannot push or call gh writes the audited change
     # for its host to publish. No remote, gh or journal write is involved, and the hand-off is a success (exit 0).
     if [[ "${UNCLE_PUBLISH_MODE:-}" == handoff ]]; then
-        if python3 "$(dirname "${BASH_SOURCE[0]}")/handoff_export.py"; then
+        if change_pr_engine attest-handoff && python3 "$(dirname "${BASH_SOURCE[0]}")/handoff_export.py"; then
             CHANGE_PR_EXTRAS_REASON=handoff
             return 0
         fi
@@ -566,6 +566,11 @@ def consent_entry(artifact):
     # The consent just given: a person at the terminal, or a supervisor
     # receipt relayed for one. Only the former counts as human.
     env = envelope()
+    if os.environ.get('UNCLE_PUBLISH_MODE') == 'handoff':
+        # Hand-off: the host publishes, so no one at this host consented. The marker is a delegation, never an approver:
+        # uncle-verify's check_7 reads an empty approved_by as 'no human approval', and envelope.py accepts the delegation.
+        return {'gate': 'publication', 'required': True, 'approved_by': '', 'delegated_by': 'handoff',
+                'digest': artifact, 'timestamp': env.utc_now()}
     if auto_publish():
         return {'gate': 'publication', 'required': True, 'approved_by': 'unattended (no human)',
                 'delegated_by': '', 'digest': artifact, 'timestamp': env.utc_now()}
@@ -680,6 +685,55 @@ def attest(j):
     j['audited_tree'] = j['commit_tree']
     j['commit_tree'] = snapshot(True, attestation=True)
     print('Attestation: ' + method + ' ' + artifact[:12], flush=True)
+
+
+HANDOFF_GATE_TEXT = 'handoff (published by the host)'
+
+
+def handoff_banners(j):
+    # The same PR-body prefix the normal publish path builds (override line above the waiver note), kept for the exporter.
+    out = ''
+    waived = unattended_audit_waiver(j)
+    if waived:
+        out = ('> [!NOTE]\n'
+               '> **Built unattended: %d blocking audit finding%s waived without human review.** '
+               'The auditor said NOT READY. Human review is this PR; the findings are in '
+               '`.uncle/docs/FINAL_AUDIT.md`.\n\n' % (waived, '' if waived == 1 else 's')) + out
+    record = override_record()
+    if len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash']:
+        out = ('> Published over a **' + record[1]
+               + '** audit verdict. The PR reviewer decides whether it merges.\n\n') + out
+    return out
+
+
+def attest_handoff(j):
+    if j.get('phase') in ('prepared', 'published', 'creating', 'unknown', 'created'):
+        raise ValueError('normal publish already began (phase ' + j['phase'] + '); rerun the final audit')
+    if not envelopes_enabled():
+        return
+    for name in ATTESTATION_FILES:
+        if Path(name).is_symlink():       # also true for a dangling link; nothing is written through it
+            raise attestation().AttestationError(name + ' is a symlink')
+    prior = {name: (Path(name).read_bytes() if Path(name).is_file() else None) for name in ATTESTATION_FILES}
+    if j.get('audited_tree'):
+        j['commit_tree'] = j['audited_tree']      # a rerun never promotes an attested tree to audited_tree
+    try:
+        attest(j)
+        sealed = sealed_attestation(j)
+        sealed['gate_publication'] = HANDOFF_GATE_TEXT
+        j['attestation'] = sealed
+        j['body_banners'] = handoff_banners(j)
+        j['phase'] = 'handoff-attested'
+        save(j)
+    except BaseException:
+        for name, data in prior.items():
+            path = Path(name)
+            if data is None:
+                if path.exists() or path.is_symlink():
+                    path.unlink()
+            else:
+                path.write_bytes(data)
+        raise
 
 
 def write_attestation_files(payload, sig):
@@ -924,7 +978,7 @@ def load():
     required = {'version', 'owner', 'origin', 'audit_hash', 'reviewed_tree', 'commit_tree',
                 'original_head', 'intended_head', 'original_branch', 'head_branch',
                 'base_repo', 'head_repo', 'base_branch', 'phase', 'url', 'number', 'verdict_run'}
-    phases = ('auditing', 'bound', 'prepared', 'published', 'creating', 'created', 'unknown')
+    phases = ('auditing', 'bound', 'prepared', 'published', 'creating', 'created', 'unknown', 'handoff-attested')
     if isinstance(j, dict) and j.get('version') == 2:
         # Version 2 (Issue 60): the journal may begin at `start`, before any
         # stage, and records whether the head ref was claimed then.
@@ -1639,6 +1693,8 @@ def record_pr(j, row):
 
 
 def handoff(j):
+    if j.get('phase') == 'handoff-attested':
+        raise ValueError('this change was handed off to the host; rerun the final audit to publish normally')
     # Recover an exact commit that completed immediately before its journal
     # update. This check must precede validate(), whose job is to reject any
     # other unexpected HEAD movement.
@@ -1962,6 +2018,8 @@ def main():
         if j.get('manual_signing'):
             manual_signed_commit(j)
         validate(j)
+    elif action == 'attest-handoff':
+        attest_handoff(load())
     elif action == 'commit-tree':
         print(load()['commit_tree'])
     elif action == 'verdict-override':

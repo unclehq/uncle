@@ -79,6 +79,22 @@ def vocab_of(ctl):
     return ctl.descriptions()
 
 
+class ExternalCapacity402Tests(unittest.TestCase):
+    def test_anchored_402_and_codes_match(self):
+        for text in ('HTTP 402: payment required', 'log\n  HTTP 402: x',
+                     'error budget_reached', 'code=balance_exhausted'):
+            self.assertTrue(sv.external_capacity_failure(text), text)
+
+    def test_unanchored_402_mentions_do_not_match(self):
+        for text in ('validator failed at line 402', 'status 402 in output',
+                     'saw http 402 mentioned', 'amount $402', 'x HTTP 402: mid-line',
+                     'budget_reached_extra', ''):
+            self.assertFalse(sv.external_capacity_failure(text), text)
+
+    def test_existing_429_still_matches(self):
+        self.assertTrue(sv.external_capacity_failure('HTTP 429 too many requests'))
+
+
 class FakeWorker:
     def __init__(self, result, meta):
         self._result = result

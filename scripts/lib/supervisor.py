@@ -405,7 +405,8 @@ def failure_signature(stage, exit_status, diagnostic, known=()):
 # and validator failures must retain their normal recovery path.
 _EXTERNAL_CAPACITY = re.compile(
     r'\b(session limit|rate limit|too many requests|quota|credit(?:s)?(?:\s+(?:is|are))?\s+(?:exhausted|depleted)|'
-    r'billing limit|weekly .*limit|resets?\s+(?:at|in)|http\s*429|status\s*429)\b', re.I)
+    r'billing limit|weekly .*limit|resets?\s+(?:at|in)|http\s*429|status\s*429)\b|'
+    r'(?m:^\s*HTTP\s+402:)|\b(?:budget_reached|balance_exhausted)\b', re.I)
 
 
 def external_capacity_failure(diagnostic):

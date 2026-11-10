@@ -147,8 +147,83 @@ def merge_request_options(body, options):
 
 def _error_detail(error):
     if not hasattr(error, '_uncle_detail'):
-        error._uncle_detail = error.read().decode('utf-8', errors='replace').lower()
+        error._uncle_raw = error.read().decode('utf-8', errors='replace')
+        error._uncle_detail = error._uncle_raw.lower()
     return error._uncle_detail
+
+
+SPENDING_CODES = ('budget_reached', 'balance_exhausted')
+SPENDING_ATOMIC_FIELDS = ('limit_atomic', 'used_atomic', 'suggested_increase_atomic', 'balance_atomic')
+BUDGET_HEADER = 'x-seren-budget-task-remaining-atomic'
+
+
+class SpendingStop(Exception):
+    """The gateway refused a request (HTTP 402) because a spending limit or the balance was reached."""
+
+    def __init__(self, code, scope=None, limit_atomic=None, used_atomic=None, suggested_increase_atomic=None,
+                 balance_atomic=None):
+        super().__init__(code)
+        self.code, self.scope = code, scope
+        self.limit_atomic, self.used_atomic = limit_atomic, used_atomic
+        self.suggested_increase_atomic, self.balance_atomic = suggested_increase_atomic, balance_atomic
+
+    def as_marker(self):
+        return {'code': self.code, 'scope': self.scope, 'limit_atomic': self.limit_atomic,
+                'used_atomic': self.used_atomic, 'suggested_increase_atomic': self.suggested_increase_atomic,
+                'balance_atomic': self.balance_atomic}
+
+
+def parse_spending_stop(code, body):
+    """A SpendingStop for HTTP 402 with a JSON object body whose top-level `code` is exactly a spending code, else None.
+
+    Atomic fields must be absent (None) or JSON integers; any other type invalidates the whole stop (None, so the
+    existing error path runs). `scope` must be a string; it is cut to printable ASCII and 64 characters."""
+    if code != 402:
+        return None
+    try:
+        data = json.loads(body.decode('utf-8', errors='replace') if isinstance(body, (bytes, bytearray)) else body)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(data, dict) or data.get('code') not in SPENDING_CODES:
+        return None
+    fields = {}
+    for name in SPENDING_ATOMIC_FIELDS:
+        value = data.get(name)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            return None
+        fields[name] = value
+    scope = data.get('scope')
+    if scope is not None:
+        if not isinstance(scope, str):
+            return None
+        scope = ''.join(c for c in scope if 0x20 <= ord(c) <= 0x7E)[:64]
+    return SpendingStop(data['code'], scope, **fields)
+
+
+def _spending_stop(error):
+    """SpendingStop for an HTTPError, or None. Reads the body once (shared with _error_detail)."""
+    try:
+        _error_detail(error)
+        return parse_spending_stop(error.code, error._uncle_raw)
+    except Exception:
+        return None
+
+
+def _record_budget_header(headers):
+    """Write the remaining-budget header (non-negative base-10 integer only) atomically to UNCLE_BUDGET_REMAINING_FILE."""
+    path = os.environ.get('UNCLE_BUDGET_REMAINING_FILE')
+    if not path:
+        return
+    try:
+        value = headers.get(BUDGET_HEADER)
+        if value is None or not re.fullmatch(r'[0-9]+', value.strip()):
+            return
+        temporary = '%s.tmp.%d' % (path, os.getpid())
+        with open(temporary, 'w') as handle:
+            handle.write(value.strip())
+        os.replace(temporary, path)
+    except (OSError, AttributeError, TypeError):
+        pass
 
 
 def _names_option(detail, options):
@@ -1164,6 +1239,7 @@ def _request(url, api_key, body=None, timeout=30, headers=None):
     method = 'POST' if data is not None else 'GET'
     transport = _via_http2 if wants_http2(urlsplit(url).scheme) else _via_http1
     status, reason, response_headers, raw = transport(method, url, data, headers, timeout)
+    _record_budget_header(response_headers)
     if not 200 <= status < 300:
         if api_key and not isinstance(raw, dict):
             # An upstream body or reason may echo the Authorization value; scrub it and bound what is kept.
@@ -1333,6 +1409,9 @@ def constrained_completion(values, messages, schema, name, limit, effort=None, t
             return text, reason, usage, mode
         except HTTPError as error:
             if error.code not in REJECTED:
+                stop = _spending_stop(error)
+                if stop is not None:
+                    raise stop from None
                 raise ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model'
                                  % (error.code, _server_reason(error))) from None
             caps['rejected'].add(mode)
@@ -1431,6 +1510,9 @@ def chat(values, messages, tools, limit, effort=None, timeout=3600):
         return data
     except HTTPError as error:
         if error.code not in REJECTED:
+            stop = _spending_stop(error)
+            if stop is not None:
+                raise stop from None
             raise ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model'
                              % (error.code, _server_reason(error))) from None
         global last_rejection

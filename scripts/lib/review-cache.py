@@ -27,6 +27,7 @@ def key(output, prompt, runner, model, effort):
         'WORKFLOW_KIMI_CMD', 'WORKFLOW_KIMI_MODEL', 'WORKFLOW_CLAUDE_CMD',
         'WORKFLOW_CODEX_CMD', 'WORKFLOW_OPENCODE_CMD', 'UNCLE_SELF_HOSTED_BASE_URL',
         'UNCLE_SELF_HOSTED_MODEL', 'UNCLE_SELF_HOSTED_API_KEY',
+        'UNCLE_HOSTED', 'OPENAI_BASE_URL', 'OPENAI_API_KEY', 'SEREN_MODEL', 'UNCLE_MODEL',
         'WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS', 'WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS')}
     result = hashlib.sha256(json.dumps([str(root), str(excluded), text, runner, model, effort, settings]).encode())
     executable = shutil.which(runner)

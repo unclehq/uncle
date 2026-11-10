@@ -1,0 +1,22 @@
+name: linux-tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  named-suites:
+    runs-on: ubuntu-latest
+    # Non-blocking: unbaselined Linux suites must not gate unrelated work.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Run named suites
+        run: bash scripts/run-python-tests.sh -- reviewer-prompt-file

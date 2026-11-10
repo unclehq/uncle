@@ -42,6 +42,15 @@ UNCLE_REVIEWER_STAGES=" adversarial-review test-review manual-checklist final-au
 UNCLE_DEFAULT_RUNNER="claude"
 UNCLE_DEFAULT_EFFORT="low"
 
+# Hosted mode (UNCLE_HOSTED exactly 1, mirrors scripts/lib/hosted.py): the model is self-hosted
+# unless config names a runner, and publish/preview take their hosted defaults only when unset or empty.
+uncle_is_hosted() { [[ "${UNCLE_HOSTED:-}" == 1 ]]; }
+if uncle_is_hosted; then
+    UNCLE_DEFAULT_RUNNER="self-hosted"
+    [[ -n "${UNCLE_PUBLISH_MODE:-}" ]] || export UNCLE_PUBLISH_MODE=handoff
+    [[ -n "${UNCLE_PREVIEW_MODE:-}" ]] || export UNCLE_PREVIEW_MODE=host
+fi
+
 uncle_config_file() {
     printf '%s' "${UNCLE_CONFIG:-${PROJECT_ROOT:-$PWD}/.uncle/config}"
 }
@@ -354,6 +363,10 @@ uncle_stage_model() {
     if [[ "$runner" == "self-hosted" ]]; then
         v="${UNCLE_SELF_HOSTED_MODEL:-$(uncle_stage_key "$stage" model)}"
         [[ -n "$v" ]] || v="$(uncle_config_get self-hosted.model)"
+        if [[ -z "$v" ]] && uncle_is_hosted; then  # standard names last: SEREN_MODEL, then UNCLE_MODEL; blank is unset
+            v="$(printf '%s' "${SEREN_MODEL:-}" | tr -d '[:space:]')"
+            [[ -n "$v" ]] || v="$(printf '%s' "${UNCLE_MODEL:-}" | tr -d '[:space:]')"
+        fi
         printf '%s' "$v"
         return 0
     fi

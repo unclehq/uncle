@@ -57,6 +57,9 @@ def build_command(config, root, environ=None, config_path=None, stage=''):
         env = worker_env(environ, home)
         env['UNCLE_CONFIG'] = str(config_path)
         env['UNCLE_STATUS_STAGE'] = str(stage)
+        for name in ('UNCLE_HOSTED', 'OPENAI_BASE_URL', 'OPENAI_API_KEY', 'SEREN_MODEL', 'UNCLE_MODEL'):
+            if environ.get('UNCLE_HOSTED') == '1' and environ.get(name):  # hosted fallback is read by self_hosted.py
+                env[name] = environ[name]
         return [python3_executable(), str(Path(root) / 'scripts' / 'lib' / 'self_hosted.py'),
                 'agent', '-p', '--effort', config.effort], env, home
     if config.runner == 'kimi':

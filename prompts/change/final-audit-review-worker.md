@@ -15,7 +15,8 @@ is there to sign, and the reviewer will. Say that the requirement is unverified,
 A waiver does not excuse a check a machine could have performed, and a row with no waiver stays High.
 
 Report at most 6 findings, most severe first, one per distinct issue. `summary` is one or two
-sentences; `evidence` is a file, row ID or command output in at most two sentences. A separate final auditor owns the verdict.
+sentences and at most 400 characters; `evidence` is a file, row ID or command output in at most two
+sentences and at most 700 characters. A packet with a longer field is rejected whole, so shorten rather than quote. A separate final auditor owns the verdict.
 
 ## Mutation checks are informational
 

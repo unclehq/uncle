@@ -88,7 +88,9 @@ function copyProject(dest) {
 const CONFIGS = ['playwright.config.js', 'playwright.config.mjs', 'playwright.config.cjs', 'playwright.config.ts',
   'vite.config.js', 'vite.config.mjs', 'vite.config.ts', 'package.json'];
 
-function basePort() {
+// Every port the project's own config declares, most common first. A project commonly declares two (dev and preview); a
+// copy that keeps either one collides with the real project, or with a sibling copy, on that port.
+function basePorts() {
   const counts = new Map();
   for (const name of CONFIGS) {
     const file = path.join(ROOT, name);
@@ -98,12 +100,12 @@ function basePort() {
       if (port >= 1024 && port <= 65535) counts.set(port, (counts.get(port) || 0) + 1);
     }
   }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([port]) => port);
 }
 
-function rewritePort(dir, from, to) {
-  if (!from) return;
-  const pattern = new RegExp(`\\b${from}\\b`, 'g');
+function rewritePort(dir, map) {
+  if (!map.size) return;
+  const pattern = new RegExp(`\\b(${[...map.keys()].join('|')})\\b`, 'g');
   const visit = (current) => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       if (SKIP.has(entry.name) || entry.isSymbolicLink()) continue;
@@ -113,7 +115,7 @@ function rewritePort(dir, from, to) {
       const rel = path.relative(dir, file);
       if (!CONFIGS.includes(rel) && !rel.startsWith(`tests${path.sep}`) && !rel.startsWith(`e2e${path.sep}`)) continue;
       const text = read(file);
-      if (pattern.test(text)) { pattern.lastIndex = 0; fs.writeFileSync(file, text.replace(pattern, String(to))); }
+      if (pattern.test(text)) { pattern.lastIndex = 0; fs.writeFileSync(file, text.replace(pattern, (m) => String(map.get(Number(m))))); }
     }
   };
   visit(dir);
@@ -139,6 +141,21 @@ function commandFor(entry) {
   const prefix = root === ROOT ? '' : `cd ${quote(path.relative(ROOT, root))} && `;
   const title = entry.expected ? ' --grep ' + quote(String(entry.expected).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) : '';
   if (e2e) return `${prefix}${pkg.scripts?.build ? 'npm run build && ' : ''}npx playwright test ${list}${title}`;
+  // What the spec itself imports decides the runner. A project can list vitest for some tests and write others for
+  // node:test; `vitest run` on a node:test file reports "No test suite found" and fails the control.
+  const imports = (spec) => {
+    let head = '';
+    try { head = read(path.resolve(ROOT, spec)).slice(0, 4000); } catch {}
+    if (/(?:from|require\()\s*['"]node:test['"]/.test(head)) return 'node';
+    if (/(?:from|require\()\s*['"]vitest['"]/.test(head)) return 'vitest';
+    if (/(?:from|require\()\s*['"]@jest\/globals['"]/.test(head)) return 'jest';
+    return '';
+  };
+  const declared = new Set(entry.specs.map(imports));
+  const framework = declared.size === 1 ? [...declared][0] : '';
+  if (framework === 'node') return `${prefix}node --test ${list}`;
+  if (framework === 'vitest') return `${prefix}npx vitest run ${list}`;
+  if (framework === 'jest') return `${prefix}npx jest ${list}`;
   if (deps.vitest) return `${prefix}npx vitest run ${list}`;
   if (deps.jest) return `${prefix}npx jest ${list}`;
   return `${prefix}node --test ${list}`;
@@ -189,7 +206,7 @@ async function pool(items, worker) {
 const log = (line) => console.log(line);
 let { entries, file: listFile } = await loadList();
 if (only) entries = entries.filter((e) => e.id === only);
-const base = basePort();
+const bases = basePorts();
 const results = [];
 
 // Controls first: the unmutated project must pass each command, or a "caught" mutant proves nothing.
@@ -199,11 +216,18 @@ for (const e of entries) {
   try { e.cmd = commandFor(e); } catch (error) { invalid.set(e.id, String(error.message)); continue; }
   if (!commands.includes(e.cmd)) commands.push(e.cmd);
 }
+// A distinct port for each port the config declares; the first (the most common) is the one handed to the tests by env.
+async function rewritePorts(dir) {
+  const map = new Map();
+  for (const from of bases) map.set(from, await availablePort());
+  rewritePort(dir, map);
+  return map.size ? [...map.values()][0] : await availablePort();
+}
+
 const controls = await pool(commands, async (command, i) => {
   const dir = path.join(SCRATCH, `control-${i}`);
   copyProject(dir);
-  const port = await availablePort();
-  rewritePort(dir, base, port);
+  const port = await rewritePorts(dir);
   const r = await run(command, dir, port);
   log(`${r.code === 0 ? 'CONTROL OK  ' : 'CONTROL FAIL'}  ${command}  (${r.seconds.toFixed(1)}s)`);
   if (r.code !== 0) log(r.output.split('\n').slice(-12).join('\n'));
@@ -229,8 +253,7 @@ await pool(entries, async (e, i) => {
   const count = e.find instanceof RegExp ? (text.match(new RegExp(e.find.source, `${e.find.flags.replace('g', '')}g`)) || []).length : text.split(e.find).length - 1;
   if (count !== 1) return finish('INVALID', `find occurs ${count} times in ${e.file}, not once`);
   fs.writeFileSync(target, e.find instanceof RegExp ? text.replace(e.find, e.replace) : text.replace(e.find, () => e.replace));
-  const port = await availablePort();
-  rewritePort(dir, base, port);
+  const port = await rewritePorts(dir);
   const r = await run(e.cmd, dir, port);
   const named = e.expected === undefined || r.output.includes(String(e.expected));
   if (r.code === 0) return finish('SURVIVED', 'the tests still pass with this defect in', r.seconds);

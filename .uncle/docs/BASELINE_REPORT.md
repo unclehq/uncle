@@ -1,66 +1,76 @@
-# Baseline report — Issue 236
+# Baseline report (Issue 230)
 
-Omitted sections: Reproduction (needs live host, not available here); Existing failures (none documented in repo; driver baseline is authority)
+Omitted sections: Reproduction (not run; the 402 is reproduced by a new fake-server test); Areas outside change folded into section 14.
 
 ## 1. Change-request summary
-See `.uncle/docs/CHANGE_REQUEST.md`. The hosted-build release must list Daytona's signed preview-link call (`GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, `require_approval` false) in its script publisher grants. The release definition and build script are NOT in this repository.
+See .uncle/docs/CHANGE_REQUEST.md. HTTP 402 `budget_reached`/`balance_exhausted` from the host is reported as a Base URL/key problem; the parallel project-plan section schedulers treat it as any failure, discard the sections, and the single-pass fallback runs into the same limit. No code reads the host's budget headers (#213).
 
 ## 2. Repository architecture
-Uncle workflow driver: shell scripts (`scripts/*.sh`, `scripts/lib/`), Python helpers (`scripts/lib/*.py`, `uncle_tui.py`), skills (`skills/`), tests (`scripts/tests/`). A repo-wide grep (excluding `.uncle`, `docs`) for `signed-preview-url`, `publisher_grants` and a Daytona publisher entry found nothing; no release-definition file exists here.
+Shell driver `scripts/stagegate.sh` runs stages; Python helpers in `scripts/lib/`. Self-hosted model client: `scripts/lib/self_hosted_http.py` (HTTP) and `scripts/lib/self_hosted.py` (runner `main`, exit codes). Supervisor diagnosis: `scripts/lib/supervisor.py`. Concurrency: `scripts/lib/unit_scheduler.py`, `scripts/lib/model-jobs.sh`.
 
 ## 3. Relevant code paths
-- `scripts/lib/host_preview.py:281-292` prints `UNCLE_PREVIEW_PORT=<n>` (the port the external script asks a link for).
-- `skills/uncle-build/SKILL.md:8-16` chat rules for the `Preview:` line.
-Neither needs to change.
+| Path | Role |
+|---|---|
+| scripts/lib/self_hosted_http.py:30 | `REJECTED` tuple; 163 `_server_reason`; 930 `RETRYABLE_STATUS`; 1330-1332 and 1428-1430 raise `ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model')` |
+| scripts/lib/self_hosted.py:2224 `main`, 2208-2210 | catches `ValueError`, returns 1 |
+| scripts/stagegate.sh:4281 `project_plan_section_run`, 4310 `_finish`, 4327 `_settle` | worker run/recovery/one retry |
+| scripts/stagegate.sh:4342-4396 | bounded scheduler; failure drains workers and returns 1 |
+| scripts/stagegate.sh:4398-4462 | unbounded scheduler; failure returns 1 |
+| scripts/stagegate.sh:4557-4570 | PROJECT_PLAN stage: any failure removes investigation and runs single pass |
+| scripts/stagegate.sh:2886, 4490 | `stop-reason` writes/reads |
+| scripts/lib/supervisor.py:406-412 | `_EXTERNAL_CAPACITY` regex; used at :1241 |
+| scripts/lib/unit_scheduler.py:65 | `capacity` (24 for self-hosted when unset) |
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Hosted build serves an app | `UNCLE_PREVIEW_PORT=<n>` printed | host_preview.py:288-291 | Yes |
-| B-2 | Script requests signed link | Refused (not granted); no `Preview:` line | CHANGE_REQUEST.md (external, not reproducible here) | No (target of change) |
-| B-3 | Script creates/deletes sandboxes via Daytona | Allowed by existing grants | CHANGE_REQUEST.md | Yes |
+| B-1 | HTTP 402 from model API | ValueError 'check the Base URL, API key and model'; exit 1 | self_hosted_http.py:1330 | No (modified) |
+| B-2 | One section worker fails | other workers drained, return 1, sections discarded, single pass runs | stagegate.sh:4374-4378, 4557-4570 | Yes for non-spending failures |
+| B-3 | 429/5xx | retried per RETRYABLE_STATUS | self_hosted_http.py:930 | Yes |
+| B-4 | 400/404/405/415/422/501 | treated as option rejection, next mode tried | self_hosted_http.py:30,1332 | Yes |
+| B-5 | supervisor sees 429/quota/rate text | external capacity, no recurrence consumed | supervisor.py:406 | Yes |
+| B-6 | `--max-budget-usd` cap (#212) | Uncle's own cap in scripts/lib/budget.py | commit 3a20810 | Yes, separate |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Release lists only calls matching exactly one publisher operation | Host publisher (external) | None in repo | Medium |
-| I-2 | Existing Daytona grants unchanged | Release definition (external) | None in repo | Medium |
+| I-1 | 402 is never retried | RETRYABLE_STATUS excludes it | self-hosted-retry-test.py | Medium |
+| I-2 | On section failure no worker keeps writing into fallback | drain before return 1 (stagegate.sh:4374) | none found | Low |
+| I-3 | Ordinary agent/validator failures keep supervisor recovery path | narrow regex | supervisor-test.py | Medium |
 
-## 6. Contracts
-Release grant entry: publisher, method, path, optional `operation_id`, `require_approval`. External.
+## 6. Interface contracts
+Model client raises ValueError for HTTP errors; runner exit 1 on error. `stop-reason` is a one-line text file in `$STATE_DIR`. No schema involved.
 
-## 7. Test coverage
-No tests in this repo cover the release definition (CHANGE_REQUEST.md "Tests": none). Shell and Python suites use separate temp dirs and no shared ports, so they run as one parallel group.
+## 7. Existing automated-test coverage
+Python suites under scripts/tests/*-test.py (self-hosted-retry, self-hosted-flavor, supervisor-test, etc.); shell suites scripts/tests/*-test.sh. No test covers section-scheduler failure semantics or 402 handling. The Python and shell runners use separate temp dirs and bind no shared ports, so they form one parallel group.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (Uncle's documented runners). No results run here; the driver's baseline is authoritative. No documented pre-existing failures beyond those the driver records.
+Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (present in repo). Not run here; the driver's baseline (.uncle/workflow/green-check.baseline.tsv) is authoritative. Some Python suites are known to fail on a clean checkout.
+
+## 10. Existing failures
+None established by this stage.
 
 ## 12. Likely change surface
-Outside this repository (release definition, build script). In-repo: none required.
+self_hosted_http.py, self_hosted.py, stagegate.sh (two schedulers + PROJECT_PLAN case), supervisor.py, unit_scheduler.py/model-jobs.sh (budget-aware concurrency), new tests.
 
 ## 13. Regression-sensitive components
-None in-repo. External: the release's other Daytona grants.
+Stage failure semantics in stagegate.sh; retry classification; supervisor recurrence logic.
 
 ## 14. Outside the change
-`host_preview.py`, `SKILL.md`, all Uncle driver code and tests.
+Uncle's own `--max-budget-usd` cap; #231 plan check; host-side budget accounting; hosted-mode concurrency default.
 
 ## 15. Unknowns and assumptions
-- UNRESOLVED: where the release definition lives and whether this workflow can modify it.
-- Assumed the host's Daytona publisher offers the call as the issue states (read 2026-11-10); not verifiable here.
+- Exact header names beyond `x-seren-budget-task-remaining-atomic` are unknown; only that one is relied on.
+- Resume mechanism for finished sections: assumed existing section files in the investigation directory can be reused (verify in plan step).
+- Exit code value for spending stop is a design choice.
 
-## 16. Initial risk assessment
-Low code risk; high delivery risk: no in-repo artifact can carry the fix, so completion depends on an external repository and live-host checks.
+## 16. Initial risk
+Medium: shell scheduler edits are in a hot path with little test coverage; mitigated by new scheduler tests.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-```
-
-## Parallel verification groups
-
-```text
-1 2
 ```
 

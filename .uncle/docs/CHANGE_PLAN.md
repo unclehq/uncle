@@ -1,145 +1,152 @@
-# Change plan — Issue 236
+# Change plan (Issue 230)
 
-Seeded from [unclehq/uncle#236](https://github.com/unclehq/uncle/issues/236).
+Seeded from [unclehq/uncle#230](https://github.com/unclehq/uncle/issues/230).
 
-Issue 236
+Omitted sections: Schema/persistence (only a new stop-reason string); Migration (none); Concurrency beyond scheduler (none); Feature flag (none, behavior only triggers on a 402 spending body).
 
-Omitted sections: Schema/persistence (none); Migration (none); Concurrency (none); Feature flag (none); Observability (none); State transitions (none)
-
-> **BLOCKING PLANNING DECISION.** The release definition and build script are not in this repository (grep for `signed-preview-url`, publisher grants, Daytona entries found none). Nothing in-repo can deliver AC-1..AC-6. Either (a) the operator supplies/points the workflow at the release repository, or (b) the in-repo deliverable is limited to a hand-off record (below) and live verification is performed externally. This plan is executable only as (b); (a) needs new authority. Please state which on approval.
+Issue 230
 
 ## 1. Selected technical approach
 
-Add one grant entry to the external release definition, normalize script `expiresInSeconds` (absent -> set 3600; above 3600 -> lower to 3600; 3600 or less -> unchanged), publish. In this repo, write `IMPLEMENTATION_NOTES.md` carrying the exact entry and the external-change checklist.
+- D-1: `SpendingStop(Exception)` in `self_hosted_http.py` with fields code, scope, limit_atomic, used_atomic, suggested_increase_atomic, balance_atomic; helper `parse_spending_stop(code, body)` returns it only for HTTP 402 + JSON body whose top-level `code` equals exactly (case-sensitive, not nested) `budget_reached` or `balance_exhausted`. Any other casing, nesting or code returns None and the existing ValueError path is unchanged. Both ValueError sites (1330, 1428) call it first. Sanitizing: each atomic field must be absent or a JSON integer (bool, float, string, or any other type invalidates the SpendingStop, so the existing ValueError path runs); an absent atomic field yields a SpendingStop with that field set to None. `scope` must be a string, is reduced to printable ASCII (0x20-0x7E, other characters dropped) and truncated to 64 characters before reaching stderr, the marker, or stop-reason. Stopped-line rendering: budget_reached prints the limit/suggested-increase wording; balance_exhausted prints the balance wording; any clause whose figure is None is omitted entirely, and the line never prints `None`, `$0` (unless the figure is genuinely 0), or an empty placeholder.
+- D-2: `self_hosted.py main` catches SpendingStop, prints the Stopped line to stderr, writes a JSON marker, and returns 75. Marker contract: stagegate.sh (not the runner) creates a per-run directory with mode 0700 and passes each worker its own distinct marker path inside it via env `UNCLE_SPENDING_STOP_FILE`, never shared between workers; the runner only writes to the path it is given (temp file plus atomic rename) and never creates the directory. stagegate.sh deletes all marker paths at stage start so a stale marker from a prior run is never read, and removes the directory and its files at stage end. Schema: one JSON object `{"code": str, "scope": str|null, "limit_atomic": int|null, "used_atomic": int|null, "suggested_increase_atomic": int|null, "balance_atomic": int|null}`; a missing field is null. Stopped-line rendering: USD = atomic/1e6 rounded up to 2 decimals (e.g. 1500001 atomic -> $1.51); a null figure renders as `unknown`. The runner emits 75 for every caller; only the PROJECT_PLAN stage interprets it (D-4), and only when a parsing marker is present; otherwise, and for every other caller, any nonzero exit including 75 is an ordinary failure exactly as before.
+- D-3: Spending-stop handling applies only when the scheduler is invoked by the PROJECT_PLAN stage (caller passes an explicit opt-in); in every other stage that shares the schedulers, exit 75 is an ordinary nonzero failure exactly as before. When opted in, a worker subshell records exit 75 as a spending stop ONLY if that worker's marker file (in the stagegate-owned 0700 per-run directory) exists and parses as a valid SpendingStop JSON marker; exit 75 with a missing or unparseable marker (e.g. another child returning EX_TEMPFAIL) is an ordinary failure. On a validated spending stop: set flag `stopped`, start no new workers, drain running, keep finished sections, return 75. Precedence: if any worker has a validated spending stop, the scheduler returns 75 regardless of other worker failures; the fallback never runs; sections of non-spending failures and killed sections are not kept as finished and are redone on resume; the stop-reason also records the count of non-spending failures (e.g. `spending_limit: <figures>; other_failures=N`). Only when no worker has a validated spending stop do non-spending failures behave as today (ordinary failure status, fallback runs; AC-8, SB-10 unchanged). The shell test includes a mixed case (75 plus another failure) asserting exit 75, no fallback, finished sections kept.
+- D-4: PROJECT_PLAN case only (the only place 75 is interpreted as a spending stop): if scheduler returns 75, do not delete investigation/sections, write `spending_limit: <figures>` to `$STATE_DIR/stop-reason`, exit 75. Other failure: unchanged. Every other stage and caller treats any nonzero exit, including 75, as an ordinary failure with unchanged behavior.
+- D-5: Resume is conditional and crash-safe. (1) Skip gate: sections are skipped only when the prior stop-reason in `$STATE_DIR/stop-reason` begins with `spending_limit`; for any other state (no stop-reason, other failure, stale directory) the sections directory is removed at stage start exactly as today, so every section is redone. A spending stop must not remove the sections directory or finished final files, and the `spending_limit` stop-reason is consumed (cleared) once the resumed run starts. (2) Atomic publish: each section worker writes its output(s) to temp names (`$name.md.tmp.$$`, and `$name.json.tmp.$$` for json+md sections) and renames them atomically to the final names only after the worker exits 0 (json before md, so the final `.md` marks completion). (3) Resume check: a section is skipped only when every final output file (`$name.md`, or both `$name.json` and `$name.md`) exists and is non-empty; temp names are never treated as finished. At the start of a resumed run all leftover `*.tmp.*` files in the sections directory are deleted, and any section with a missing, empty or partial final set (e.g. `.json` without `.md`) is rerun and its outputs overwritten.
+- D-6: Budget-aware cap: pure function `budget_cap(remaining_atomic, typical_call_atomic, configured_concurrency)` in `unit_scheduler.py` returns `min(configured_concurrency, max(1, floor(remaining_atomic / typical)))`, where typical is `typical_call_atomic` if it is a positive integer, else 400000 (integer floor division; remaining_atomic <= 0 gives cap 1). Typical cost is 400000 atomic until at least one call has finished, then the integer mean (floor, minimum 1) spend per finished call. The cap bounds total concurrent workers (running plus newly launched) and never exceeds configured concurrency; running workers are never killed, new workers wait until the running count is below the cap. The client writes the remaining-budget header value atomically (temp file plus rename) to the per-worker path in env `UNCLE_BUDGET_REMAINING_FILE`, a file separate from the stop marker (`UNCLE_SPENDING_STOP_FILE`). Each worker gets its own distinct path for each of the two names, so parallel workers never write the same file; the paths live in the stagegate-created 0700 per-run directory. The scheduler removes all such files at stage start, so a stale file from a prior run never caps a resumed run, and re-reads them before launching each worker, using the minimum remaining value across the valid per-worker files. A header value that is not a non-negative base-10 integer is ignored (treated as absent). Absent or unparseable file/header: no cap.
+- D-7: `_EXTERNAL_CAPACITY` gains patterns anchored to the client error prefix: `^\s*HTTP\s+402:` (multiline) and the exact tokens `\b(budget_reached|balance_exhausted)\b`. Unanchored `status\s*402` / `http\s*402` are not added, so validator output that merely mentions 402 (e.g. a line number or amount) stays False.
 
-Entry:
+## 2. Alternatives
+A) Parse in shell from logs (fragile, rejected). B) Retry the fallback with lower concurrency (still hits the limit, rejected).
 
-```
-{"publisher":"daytona","method":"GET","path":"/sandbox/{sandboxId}/ports/{port}/signed-preview-url","require_approval":false}
-```
-
-Scope limit: the grant path stays the templated form above (host grants cannot constrain `{sandboxId}`/`{port}` per sandbox). The build script must request signed links only for its own sandbox and the port it serves. Diff review must confirm the entry uses exactly these two placeholders and no wider wildcard (no `*`, no truncated path prefix).
-
-## 2-3. Alternatives and rationale
-| Alternative | Verdict |
-|---|---|
-| Add plain `preview-url` grant | Rejected: token in header, unusable by click |
-| Set `operation_id` | Rejected: path matches one operation |
-| Edit `host_preview.py`/SKILL.md | Rejected: not the cause |
-| Add expire POST always | Rejected: only if script ends links early |
+## 3. Why preferred
+Typed exception at the source, status propagated by exit code, existing files reused; smallest surface.
 
 ## 4. Components to modify
-
-External: release definition grants; build script `expiresInSeconds` handling in the signed-link call: if absent, set it explicitly to 3600; if above 3600, lower it to 3600; if 3600 or less, leave it unchanged. A script that still omits an explicit value or exceeds 3600 fails AC-6; if the external script edit is not permitted, AC-6 is reported FAIL, never PASS. Failure behavior (SI-2): if the host refuses the signed-link request, returns no link, or returns a link whose expiry exceeds 3600 seconds, the build script prints no `Preview:` line (never an over-limit or partial link) and exits normally; the refusal is reported in build output without failing the build. In-repo: `.uncle/docs/IMPLEMENTATION_NOTES.md` only.
+See change-impact table.
 
 ## 5. Not to modify
 
-`scripts/`, `skills/`, `uncle_tui.py`, tests, existing grants. AC-5 baseline: IMPLEMENTATION_NOTES.md records the full pre-change and post-change grant lists from the release repo; the only permitted difference is the added entries. Without both lists AC-5 is NOT RUN, not PASS.
+`scripts/lib/budget.py`, hosted-mode defaults, plan validators (#231), existing tests.
+
+Non-goal: spending-stop behavior is limited to the PROJECT_PLAN stage; all other stages and callers sharing the schedulers or the runner keep existing failure handling, treating exit 75 as an ordinary nonzero failure.
 
 ## 6. Data flow
-Script -> host Daytona publisher: signed-link GET now allowed -> link returned -> `Preview:` line.
+402 -> SpendingStop -> runner exit 75 + marker -> worker subshell exit 75 -> scheduler return 75 -> stage stop-reason + exit 75.
 
-## 8. Interface changes
-One added grant entry. No API change.
+## 8. Interfaces
+
+New exit code 75; new internal env vars `UNCLE_SPENDING_STOP_FILE` and `UNCLE_BUDGET_REMAINING_FILE`, two separate files whose paths are set per worker by the scheduler (each worker writes its own per-worker file per name; stagegate clears them at stage start; the scheduler reads the minimum remaining value across workers); new stop-reason value `spending_limit`; section outputs are written under temp names `<final>.tmp.<pid>` and renamed to the final name only on worker success (leftover temp files are deleted at stage start).
+
+File-path contract (owned by step 1, consumed by step 3, which depends on step 1): stagegate.sh supplies each worker its own distinct path for UNCLE_SPENDING_STOP_FILE and UNCLE_BUDGET_REMAINING_FILE inside a per-run 0700 directory; the runner only writes to the paths given.
 
 ## 10. Compatibility
-Existing hires unaffected (host key; no approval). `require_approval` false.
+
+All other statuses and messages unchanged (AC-2, AC-8). Section reuse on resume applies only after a `spending_limit` stop; every other rerun removes sections and redoes all of them as before.
 
 ## 12. Error and recovery
-Publish refusal -> stop, report the error; do not guess `operation_id`.
 
-## 14. Rollback
-Remove the entry; republish.
+Unparseable 402 body -> existing ValueError. Exit 75 whose marker is missing or does not parse -> ordinary failure (existing behavior, fallback may run); it is never a spending stop, so no `spending_limit` stop-reason is produced and no `unknown` figures are rendered. Stale markers are prevented by clearing per-worker marker paths at stage start, inside the stagegate-owned 0700 per-run directory. Recovery: operator raises limit and reruns; finished sections reused.
 
-## 16-17. Automated and regression tests
+## 14. Rollback plan
+Revert the change; no data migration. Leftover `spending_limit` stop-reason is plain text.
 
-None applicable in-repo (change request). Driver regression check: `bash scripts/run-shell-tests.sh` and `bash scripts/run-python-tests.sh` must match baseline (no source changes expected, so unchanged).
+## 16. Automated-test strategy
 
-Approval gating: the host supports approval only for mail on the script surface, so the new signed-preview-url grant cannot be gated by a host approval prompt. The grant is accepted as ungated (`require_approval` false, per AC-4), and reviewer sign-off on the release-definition diff stands in for the host approval gate.
+| Test | Covers |
+|---|---|
+| scripts/tests/self-hosted-spending-stop-test.py | AC-1, AC-2, AC-7 (cap function) |
+| scripts/tests/project-plan-spending-stop-test.sh | AC-3, AC-4, AC-5, AC-8 (stubbed workers via exit codes, bounded and unbounded) |
+| scripts/tests/supervisor-test.py additions | AC-6 |
+
+- Stale-sections case (AC-8): project-plan-spending-stop-test.sh includes a case with non-empty section files present but no `spending_limit` stop-reason; it asserts the stale sections are removed and all sections are redone.
+- Mixed-outcome case (AR-013, AR-017): project-plan-spending-stop-test.sh runs one stubbed worker exiting 75 alongside another worker with an ordinary failure; it asserts the scheduler exits 75, the fallback does not run, finished sections are kept, and the non-spending failure count is recorded in stop-reason.
+- AC-7 coverage detail: self-hosted-spending-stop-test.py tests budget_cap boundaries (remaining 0 and negative, remaining below typical, exact multiple, floor rounding, typical <= 0, result never above configured concurrency). project-plan-spending-stop-test.sh additionally runs the scheduler with stubbed workers and a budget side file: a low remaining value limits total concurrent workers, while an absent or non-integer value leaves concurrency unchanged.
+
+Regression tests that fail before the fix: all new SB tests. Cap tests pin exact values (configured concurrency 14, typical 400000): remaining 10000000 gives 14 (floor 25, clamped); 1000000 gives 2 (floor of 2.5); 399999 gives 1; 0 gives 1; -5 gives 1; typical 0 or negative falls back to 400000; a non-integer header leaves concurrency unchanged. The shell test project-plan-spending-stop-test.sh includes a mixed case (one stubbed worker exits 75 while another fails with an ordinary nonzero exit, in both bounded and unbounded schedulers) asserting scheduler exit 75, no fallback run, and finished sections kept. Verification commands are those of the baseline plus explicit runs of the new suites: `bash scripts/run-python-tests.sh -- self-hosted-spending-stop`, `bash scripts/run-shell-tests.sh -- project-plan-spending-stop` (step 1 confirms the exact runner argument form).
 
 ## 18. Manual verification
+None required; optional hosted run with a low task limit.
 
-Live checks LV-1 publish release; LV-2 hosted build shows `Preview:`; LV-3 existing hire installs without prompt (the main compatibility regression guard). Classification: LIVE_VERIFICATION, require host access and the release repo; non-secret prerequisite evidence: release repo path and publish output saved under `.uncle/docs/`. Repeatability: before running, the executor records in the verification report which web app LV-2 builds (name, source path or commit, and the port it serves on; any minimal single-page app that serves on one port qualifies) and which pre-existing hire LV-3 uses (hire name/id and the date it was created, which must predate the release publish). A run that does not record them is NOT RUN, not PASS. LV-3 procedure: using that pre-existing hire, reinstall or update it on the hosted host after LV-1 and count approval prompts. LV-3 passes only if the hire installs with zero approval prompts. The grant entry sets `require_approval` explicitly to `false` (never omitted). Credential handling: the signed preview URL is a bearer credential. It appears only in the live build output, and is never written to `.uncle/docs/`, `IMPLEMENTATION_NOTES.md`, or any saved publish output. LV-2 evidence records only that a `Preview:` line was present and its host/path shape, with the token (query string or token segment) redacted, e.g. `Preview: https://<host>/<redacted>`. Any saved output is checked for the token before it is kept. Missing access: if host access or the release repo is missing, LV-1, LV-2 and LV-3 are each recorded BLOCKED-SETUP, naming the action required (for example: operator supplies the release repo path, or grants host access to publish and run a hosted build). They are never recorded PASS, and while any of them is BLOCKED-SETUP the change is not declared complete.
-
-Additional live checks. LV-4 (refusal path): with the host refusing or returning no signed link, the hosted build prints no `Preview:` line and exits normally; record the exit status and absence of the line. Token scan: after LV-2 and LV-4, scan .uncle/docs/ (and any saved publish output) for the signed-URL token or query string; any hit fails the check and the file must be redacted before the run is accepted. Both are LIVE_VERIFICATION and are BLOCKED-SETUP, never PASS, without host access.
+## 19. Observability
+One Stopped line; stop-reason carries figures.
 
 ## Restrictions
 
-Selected option: (b). Approval of this plan selects hand-off only. The in-repo deliverable is .uncle/docs/IMPLEMENTATION_NOTES.md. AC-1..AC-6 are recorded BLOCKED-SETUP, not PASS, until the operator supplies the release repository path; IMPLEMENTATION_NOTES.md is not evidence that any of them is met.
+| ID | Source | Property | Mechanism | Rationale | CAP | Phase | Requirement |
+|---|---|---|---|---|---|---|---|
+| R-1 | USER CHANGE_REQUEST Fix 2 | keep finished work, no fallback | exit 75 propagation (D-3, D-4), accepted only with a valid marker in the stagegate-owned 0700 per-run dir | simplest cross-process signal | CAP-shell | CODING | AC-3..5 |
+| R-2 | USER Fix 4 | cap total concurrent workers by remaining budget: max(1, floor(remaining/typical)), never above configured concurrency | D-6 budget_cap: each worker writes its own per-worker budget-remaining file; stagegate clears them at stage start; scheduler reads the minimum remaining value; cap = min(configured, max(1, floor(remaining/typical))), typical<=0 uses 400000; non-integer header ignored | only header named in request is used | CAP-python | CODING | AC-7 |
+| R-3 | DESIGN | existing errors unchanged | parse only exact codes | avoid false positives | CAP-python | CODING | AC-2 |
 
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST Fix 1 | AC-1 | Grant is GET signed-preview-url, `require_approval` explicitly false (never omitted), no wildcard wider than the templated sandboxId/port path | Single entry above, templated path only; script requests links only for its own sandbox/port; diff review confirms no wider wildcard | Matches one operation | CAP-RELEASE-EDIT | CODING (external) |
-| R-2 | USER | Fix 2 | AC-6 | The script ends links early iff it contains a call to the Daytona signed-preview-url expire endpoint; that grep alone decides whether the expire POST grant is added, and it uses the same path template as the GET grant | Step 2 greps the external build script source for an explicit call to the Daytona signed-preview-url expire endpoint and records the grep command and result in IMPLEMENTATION_NOTES.md. Add the expire POST grant, scoped to the same sandbox/port path template as the GET grant, only if the grep finds such a call; otherwise record 'expire grant not added'. | Least privilege | CAP-RELEASE-EDIT | CODING (external) |
-| R-3 | USER | Fix 3 | AC-6 | The signed-link call sets expiresInSeconds explicitly and the value is <= 3600; an omitted field is a violation (absent -> set 3600; above 3600 -> lower to 3600; 3600 or less -> unchanged) | Inspect the script: the signed-preview-url call must pass an explicit expiresInSeconds <= 3600. If absent, edit it to 3600 in the external script; if above 3600, lower to 3600; if 3600 or less, leave unchanged. If the external edit is not permitted, report AC-6 FAIL. | Host limit | CAP-SCRIPT-EDIT | CODING (external) |
-| R-4 | USER | Fix 4, Checks | AC-2..4 | Publish and verify; without release repo or host access AC-1..AC-6 are BLOCKED-SETUP (not PASS), naming the access needed | LV-1..3 | Real-host evidence | CAP-HOST-LIVE | LIVE_VERIFICATION |
-
-Regression-gate rule (resolves the sections 16-17 vs Risks conflict): `bash scripts/run-shell-tests.sh` and `bash scripts/run-python-tests.sh` matching baseline is solely a no-source-change guard. It proves only that this change touched no in-repo source. It never counts as evidence toward AC-1..AC-6, and no AC may be recorded PASS on the strength of it. AC-1..AC-6 are satisfied only by the external grant diff, the script check and the LV-1..LV-3 live checks; without those, they are not PASS.
-
-Feasibility: CAP-RELEASE-EDIT unavailable in this checkout (repo grep, no file found); CAP-HOST-LIVE unverified here. Missing live access does not block step 1, and step 1 alone completes the in-repo hand-off deliverable, not AC-1..AC-6. Steps 2 and 3 are BLOCKED-SETUP unless the operator supplies the release repo path. Without that access, AC-1..AC-6 (including AC-1, AC-5 and AC-6) are recorded BLOCKED-SETUP, never PASS, naming the action needed (operator supplies the release repo path); IMPLEMENTATION_NOTES.md is not evidence for them, and the change is not declared complete.
-
-Notes ownership: step 1 is the sole in-repo owner of .uncle/docs/IMPLEMENTATION_NOTES.md and creates it with fixed sections: (1) grant entry, (2) step 2 status, (3) step 3 status. Steps 2 and 3 are external operator steps with no in-repo Owns; their outcomes are recorded in sections 2 and 3 of that file. A skipped step 2 is recorded there as 'not performed: no release repo access', and step 3 is then BLOCKED-SETUP.
+Feasibility: stagegate.sh:4342-4462 and self_hosted.py:2224 inspected; runners are local bash/python3, no live credentials needed (tests use fake server and stub workers).
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `.uncle/docs/IMPLEMENTATION_NOTES.md` | Record entry, external edit checklist, live-check status | Only in-repo artifact | None | Driver suites unchanged |
-| Release definition (external) | Add signed-link grant | AC-1 | Low | LV-1 |
-| Build script (external) | If expiresInSeconds is absent or > 3600, edit it to 3600; otherwise leave unchanged. If the edit is not permitted, AC-6 is FAIL | AC-6 | Low | LV-2 (app and port recorded by executor) |
+| scripts/lib/self_hosted_http.py | SpendingStop, parser, header capture | SB-1, SB-9 | Medium | self-hosted-spending-stop-test.py |
+| scripts/lib/self_hosted.py | catch SpendingStop, exit 75, write per-worker JSON marker atomically (null for missing fields); render Stopped line per code (budget_reached vs balance_exhausted wording), omitting clauses with missing figures, never printing None or $0 for absent values; render USD rounded up to 2 decimals / `unknown` | SB-3, SB-6 | Low | spending-stop tests |
+| scripts/lib/unit_scheduler.py | budget_cap function | SB-9 | Low | spending-stop-test.py |
+| scripts/stagegate.sh | both schedulers, section skip, PROJECT_PLAN case; 75 interpreted only in the PROJECT_PLAN stage, other callers treat 75 as ordinary failure | SB-3..5, SB-7 | High | project-plan-spending-stop-test.sh |
+| scripts/lib/supervisor.py | regex extension | SB-8 | Low | supervisor-test.py |
+| scripts/tests/supervisor-test.py | new cases: anchored 'HTTP 402:' / budget_reached text is external capacity (true); ordinary validator failure text mentioning 402 elsewhere (e.g. 'line 402', 'status 402 items') is false | AC-6 | Low | itself |
+| scripts/tests/self-hosted-spending-stop-test.py | new | AC-1,2,7 | None | itself; includes Stopped-line rendering cases: budget_reached with all figures, balance_exhausted with balance, and bodies missing figures (no None/$0 in output) |
+| scripts/tests/project-plan-spending-stop-test.sh | new | AC-3,4,5,8 | None | itself |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1 (the grant entry sets `require_approval` explicitly to `false`; omission is not accepted) | SB-1 | SI-1 | Release definition | None | LV-1, Release-definition diff (BLOCKED-SETUP if release repo inaccessible; notes are not evidence) |
-| AC-2 | SB-1 | SI-1 | Release definition | None | LV-1 |
-| AC-3: a hosted build of a named, recorded minimal web app (name/source and port noted by the executor) prints a `Preview:` line with a signed link in build output. The signed URL is never persisted to .uncle/docs or notes, and LV-2 evidence redacts the token. If the host refuses, returns no link, or reports expiry above 3600, no `Preview:` line is printed and the build exits normally. | SB-2 | SI-2 | Release + script | None | LV-2 |
-| AC-4: a named, recorded pre-existing hire (identifier and creation date noted by the executor, created before the publish) installs the new release with zero approval prompts (LV-3 passes only if no approval prompt appears). | SB-3 | SI-3 | Release definition | None | LV-3, Reviewer sign-off on the grant diff stands in for the host approval gate (host cannot gate this surface) |
-| AC-5 | SB-4 | SI-3 | Release definition | None | Before/after diff of the full release-definition grant list, with pre-change and post-change lists captured from the release repo and saved at .uncle/docs/GRANT_DIFF.md; only the new signed-preview-url entry (and the conditional expire entry, if added) may differ. If the release repo is inaccessible, AC-5 is BLOCKED-SETUP (name the action: grant access to the release repo). If the diff file is missing, AC-5 is NOT RUN, not PASS. IMPLEMENTATION_NOTES.md is not evidence for this check. |
-| AC-6: the script sets expiresInSeconds explicitly in the signed-link call, with a value <= 3600; a script that omits the field fails AC-6 (absent -> 3600; above 3600 -> lowered to 3600; 3600 or less -> unchanged). If the host refuses, returns no link, or the returned link reports expiry above 3600, the script prints no `Preview:` line and exits normally. The expire POST grant is added if and only if the script contains a call to the Daytona signed-preview-url expire endpoint (decided by grep, result recorded); otherwise it is recorded as not added. | SB-5 | SI-2 | Script | None | Script review of external build script (BLOCKED-SETUP if inaccessible; notes are not evidence) |
+| AC-1, AC-2 | SB-1, SB-2 | SI-1, SI-5 | self_hosted_http.py | self-hosted-spending-stop-test.py (incl. Stopped-line rendering for both codes and missing-figure bodies) | none |
+| AC-3, AC-4 | SB-3..6 | SI-2, SI-3, SI-4 | stagegate.sh, self_hosted.py | project-plan-spending-stop-test.sh | none |
+| AC-5 | SB-7 | SI-3 | stagegate.sh | project-plan-spending-stop-test.sh | none |
+| AC-6: external-capacity detection matches only the anchored client error prefix 'HTTP 402:' or the exact codes budget_reached/balance_exhausted; ordinary validator failures, including text that mentions 402 elsewhere, return false. | SB-8 | SI-6 | supervisor.py | supervisor-test.py | none |
+| AC-7: with a known remaining budget, total concurrent workers are limited to min(configured concurrency, max(1, floor(remaining/typical))); typical = 400000 until a call finishes (and whenever typical<=0), then the integer mean of finished calls; remaining<=0 gives 1; an absent or non-integer header leaves concurrency unchanged; verified by both a pure-function boundary test and a scheduler-level cap test. | SB-9 | SI-7 | unit_scheduler.py | self-hosted-spending-stop-test.py | none |
+| AC-8 | SB-10 | SI-6 | stagegate.sh | project-plan-spending-stop-test.sh | none |
 
 ## Implementation sequence
 
-1. Write `IMPLEMENTATION_NOTES.md` with the exact signed-link GET grant entry, the conditional expire POST entry template, and an external-change checklist (S-1; R-1..R-3). The expire POST grant is not written as an unconditional entry: the notes state the rule 'add the expire POST grant only if the script source has an explicit call to the Daytona expire endpoint (found by step 2's grep, scoped to the same path template); otherwise record it as not added', and the outcome is recorded after the script is inspected.
-   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
-2. Apply the grant and script check in the external release repo only if the operator supplies its path and write access (S-2; CAP-RELEASE-EDIT; outside this repo, no in-repo Owns). Grep the script source for an explicit call to the Daytona signed-preview-url expire endpoint and record the command and result in the notes. Add the expire POST grant, scoped to the same path template, only if the call exists; otherwise record 'expire grant not added: no expire call found'. If no release repo path or edit access is supplied, edit nothing: append 'step 2 not performed: no release repo access' to the notes and record AC-1..AC-6 as BLOCKED-SETUP (never PASS), naming the action needed (operator supplies the release repo path and write access). The change is not declared complete in that case.
+1. Client and runner: SpendingStop, parser (with D-1 field validation: integer-only atomic fields, scope sanitized to 64 printable ASCII chars), header capture, exit 75, per-worker atomic JSON marker with USD round-up rendering and `unknown` for missing figures, budget_cap, plus their Python test (marker schema, rounding, null fields, non-integer atomic fields, control characters, oversized scope); runner writes only to marker/budget paths it is given; confirm runner argument form for `-- suite`. IDs: D-1, D-2, D-6.
+   Owns: `scripts/lib/self_hosted_http.py`, `scripts/lib/self_hosted.py`, `scripts/lib/unit_scheduler.py`, `scripts/tests/self-hosted-spending-stop-test.py`
+2. Supervisor regex and test (independent of step 1). D-7.
+   Owns: `scripts/lib/supervisor.py`, `scripts/tests/supervisor-test.py`
+3. Schedulers, section skip-on-resume, PROJECT_PLAN case, and shell test; stagegate creates the per-run 0700 marker/budget dir, passes per-worker paths, treats exit 75 as a spending stop only if the marker parses (else ordinary failure; shell test covers 75 with no/garbage marker), removes the dir at stage end; builds on step 1's exit code contract. D-3, D-4, D-5.
+   Owns: `scripts/stagegate.sh`, `scripts/tests/project-plan-spending-stop-test.sh`
    Depends on: 1
-3. Run LV-1..LV-3 only when step 2 was performed and host access exists; record each as PASS or FAIL with evidence in notes (S-3; R-4). If step 2 was not performed (no release repo access), or host access is missing, record LV-1..LV-3 as BLOCKED-SETUP naming the action required (supply the release repo path, a published release, or host access); never PASS, and do not declare the change complete.
-   Steps 2 and 3 share the notes file because each appends its own status section. The in-repo deliverable is complete when step 1 exists; that completes only the hand-off record and is not evidence for AC-1..AC-6, which stay BLOCKED-SETUP until steps 2 and 3 are performed.
-   Depends on: 2
 
 ## Scope cuts under time pressure
-Cut first: conditional expire POST entry. Never cut: the signed-link grant and the 3600 limit.
+
+First cut SB-9 budget-aware cap (D-6, AC-7: cap=max(1,floor(remaining/typical)) bounded by configured concurrency), then SB-8; the stop/keep/resume core (SB-1, 3-7) is retained.
 
 ## Risks and unresolved questions
-- Blocking decision above (release repo access).
-- Host publisher state unverifiable here; if the entry is refused, report rather than adjust.
-- A green in-repo suite is not evidence for this change.
+- stagegate.sh scheduler edits are in a hot path; mitigated by preserve test AC-8.
+- Host header set beyond one name is unverified; cap is skipped when absent.
+- #213 reopen/note is a human follow-up outside the code change.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | Option (b) is the only one executable in this checkout, so the plan states it as selected and records AC-1..AC-6 as BLOCKED-SETUP until the release repo is supplied. | Added a decision block to section 12 and updated R-4, s12.2, and steps 1-3 so AC-1..AC-6 are BLOCKED-SETUP, never PASS, absent the release repo. |
-| AR-002 | Accepted | Steps 2 and 3 had no defined behavior without access; absent access is a one-action setup gap, so BLOCKED-SETUP applies and the change must not be declared complete. | Implementation sequence steps 2 and 3 now record BLOCKED-SETUP naming the missing access when absent, never PASS, and the change is not declared complete. |
-| AR-003 | Accepted | The expire POST grant needs an objective trigger; step 1 must not write it unconditionally while it is conditional. | R-2, AC-6 and step-1 now say the expire grant is added only if the script calls the Daytona expire endpoint, else recorded as not added. |
-| AR-004 | Accepted | The plan left the missing, exactly-3600 and over-3600 cases of expiresInSeconds undefined; a three-way rule removes the ambiguity. | Sections 4 (s3.1) and 1 (s1.1) and rows R-3, AC-6 now state: absent -> set 3600; above 3600 -> lower to 3600; 3600 or less -> unchanged. |
-| AR-005 | Accepted | The spec's 'false or omitted' conflicts with the plan's explicit false, and LV-3 lacked a procedure and pass criterion. | Pin require_approval to explicit false in R-1, AC-1 and AC-4; give LV-3 a procedure and a zero-approval-prompt pass criterion in s11.1. |
-| AR-006 | Accepted | AC-5 needs a stated baseline; the notes can carry recorded pre- and post-change grant lists even though the diff lives in the external repo. | Section 5 and AC-5 traceability row now require pre-change and post-change grant lists recorded in IMPLEMENTATION_NOTES.md. |
-| AR-007 | Accepted | The release definition is external, so AC-5 needs a concrete artifact: a before/after grant-list diff; without it nothing evidences preservation. | Traceability AC-5 now requires a recorded before/after grant diff under .uncle/docs/; a missing diff means NOT RUN, not PASS. |
-| AR-008 | Accepted | The regression gate and the 'green suite is not evidence' risk conflict; defining suite parity as a no-source-change guard only removes the contradiction. | Insert a Restrictions block stating suite parity is only a no-source-change guard and never counts toward AC-1..AC-6. |
-| AR-009 | Accepted | Live checks LV-1..LV-3 need a stated status when host access is missing; LV-3 is the main compatibility guard and must not be silently skipped or passed. | Section 18 text and step 3 now classify LV-1..LV-3 as BLOCKED-SETUP naming the needed action when host access is missing, and the change is not complete. |
-| AR-010 | Accepted | The expire POST trigger lacked an objective test; a grep of the script for the expire call gives a decidable rule. | R-2, AC-6, s13.1.r3 and step-2 now require grepping the script for the expire call, recording the result, and adding the entry only if the call exists. |
-| AR-011 | Accepted | The plan left the missing and over-limit expiresInSeconds outcomes undefined; the finding's decision of edit to 3600, else FAIL, is sound. | Sections 4 and R-3, plus the change-impact row, now specify: absent or above 3600 is edited to 3600 in the external script; if the edit is not permitted, AC-6 is FAIL. |
-| AR-012 | Accepted | Step 2 was conditional on access with no defined skipped behavior, leaving step 3's status undefined. | Steps 2 and 3 text now record 'step 2 not performed: no release repo access' when skipped and make step 3 BLOCKED-SETUP. |
-| AR-013 | Accepted | The templated path covers every sandbox/port the host key reaches; the host grant syntax cannot constrain placeholders, so scoping is enforced by the script and diff review. | Added scope-limit note to s1 and R-1 mechanism: path stays templated, script requests links only for its own sandbox/port, diff review confirms no wider wildcard. |
-| AR-014 | Accepted | SI-2 is enforced only by the external script, so an omitted expiresInSeconds would silently use a host default; requiring an explicit value closes that gap. | Edit R-3, AC-6 and s3.1 so the script call must set expiresInSeconds explicitly (<= 3600) and a script that omits it fails AC-6. |
-| AR-015 | Accepted | The signed link is a bearer credential printed without human approval, so the plan must forbid persisting it and require redacted evidence. | Section 18 (s11.1) now says the URL appears only in build output, is never written to .uncle/docs or notes, and live-check evidence redacts the token; AC-3 traceability row updated to match. |
-| AR-016 | Accepted | The expire POST is an ungated state-changing write, so it needs an objective trigger, same path scoping and a recorded grep result. | R-2 mechanism and step-2 now add the expire grant only if the script source has an explicit expire call, scoped to the same path template, with the grep result recorded in the notes. |
-| AR-017 | Accepted | The host supports approval only for mail on the script surface, so the grant cannot be gated; AC-4 requires no prompt, so the plan must state this explicitly. | Added section 10 text and AC-4 requirement/manual fields: grant accepted as ungated; reviewer sign-off on the diff stands in for the host approval gate. |
-| AR-018 | Accepted | With the release definition external and inaccessible, no in-repo artifact can evidence AC-1, AC-5 or AC-6, so they must be BLOCKED-SETUP rather than PASS. | Edited s12.2 and the AC-1, AC-5, AC-6 traceability rows to record BLOCKED-SETUP without release-repo access, with IMPLEMENTATION_NOTES.md not counting as evidence. |
-| AR-019 | Accepted | Steps 2-3 need external access that the plan itself says is absent, so step 1's sufficiency condition must be explicit. | Edit step-2, step-3, s12.2: BLOCKED-SETUP unless operator supplies release repo path; in-repo deliverable complete when step 1 exists, without claiming AC pass. |
-| AR-020 | Accepted | The 'ends links early' condition needs an objective test; a grep for the expire call is checkable and removes ambiguity. | R-2 and AC-6 now state the test: script ends links early iff it contains a call to the Daytona signed-preview-url expire endpoint, decided by grep. |
-| AR-021 | Accepted | 'Small web app' and 'existing hire' are unspecified, so live checks are not repeatable; the executor must record exactly what it picked. | Edit s11.1 to require recording the chosen app and hire, and update AC-3, AC-4 and s13.1.r3 to match. |
-| AR-022 | Accepted | The refused or no-link path and the over-limit expiry path had no expected output; stating both makes SI-2's failure behavior testable. | Section 4 and AC-3/AC-6 traceability rows state the no-Preview-line, normal-exit outcome when the host refuses, returns no link, or reports expiry above 3600. |
+| AR-001 | Accepted | D-3 contradicted itself on mixed failures; the spending stop must win so the fallback never discards kept work. | Rewrote D-3 (s1.1.i3): any worker exit 75 makes the scheduler return 75, fallback skipped, failed sections rerun on resume. |
+| AR-002 | Accepted | A non-empty file does not prove a section is complete; killed workers can leave partial output, so completeness must be tied to exit 0 plus an atomic rename. | D-5 (s1.1.i5) now requires temp-file plus atomic rename on exit 0, skips only final names, and deletes leftover temp/partial outputs at stage start. |
+| AR-003 | Accepted | The Stopped message was undefined for balance_exhausted and for 402 bodies missing figures; a rendering rule is needed. | D-1 gains rendering rule (balance wording, omit missing clauses, never None/$0); runner row and test row updated to match. |
+| AR-004 | Accepted | budget_cap rounding, floor value, bad typical and running-vs-new semantics were unspecified and untestable. | D-6 (s1.1.i6) defines cap=max(1,floor(remaining/typical)), typical<=0 uses 400000, bounds total workers; R-2, AC-7 and scope-cut text aligned. |
+| AR-005 | Accepted | D-6 said one shared file while section 8 lists two env vars; parallel workers would race and stale files could cap a resumed run. | Edit D-2, D-6, section 8 (s7.1) and R-2 so each worker writes its own per-worker file per name, stagegate clears them at stage start, and the scheduler reads the minimum remaining value. |
+| AR-006 | Accepted | Real gap: the plan scoped 75 handling to PROJECT_PLAN without saying other stages sharing the schedulers treat 75 as an ordinary failure. | Edit D-3 and D-4 to state that only PROJECT_PLAN interprets 75 as a spending stop; other stages treat it as ordinary failure. |
+| AR-007 | Accepted | Exit 75 leaves the runner for every caller, so the plan must say only PROJECT_PLAN interprets it. | D-2, D-3 and D-4 now scope 75 handling to PROJECT_PLAN; other callers treat 75 as an ordinary failure. |
+| AR-008 | Accepted | D-3 contradicted itself on mixed failures; the spending stop must win so work is kept and the fallback never runs. | Rewrote D-3 (s1.1.i3) so any worker exit 75 makes the scheduler return 75 regardless of other failures, with no fallback. |
+| AR-009 | Accepted | Unconditional skip-if-exists could reuse stale sections and break the baseline where non-spending reruns redo everything. | D-5 now limits skipping to runs resuming after a spending_limit stop-reason; compatibility text and shell test coverage updated. |
+| AR-010 | Accepted | A non-empty final name can be a partial write from a killed worker, so existence alone cannot prove completion. | D-5 now requires workers to write temp names and atomically rename on success; resume checks only final names and deletes leftover temps. |
+| AR-011 | Accepted | A shared budget file written by concurrent workers could race or carry stale values into a resumed run; the file contract needs to be explicit. | Rewrote D-6 (s1.1.i6) so each worker writes its own budget file atomically, stagegate clears stale files at stage start, and the most recent value wins. |
+| AR-012 | Accepted | Unanchored 402 patterns could match unrelated validator output and wrongly flag external capacity, violating AC-6. | D-7 now anchors to the client error prefix (HTTP 402:) plus exact codes; supervisor test row and AC-6 add a negative case. |
+| AR-013 | Accepted | D-3 contradicted itself on mixed failures; AC-8 covers only the pure non-spending case, so the mixed rule must be explicit and tested. | Rewrote D-3 precedence (75 if any worker hit a spending stop; stop-reason records non-spending failure count) and added a mixed-case test note in section 16. |
+| AR-014 | Accepted | Exit 75 alone is ambiguous (EX_TEMPFAIL); trusting it requires a stagegate-owned, protected, parseable marker. | Edit D-2, D-3, D-6, section 9 recovery, R-1, steps 1 and 3: stagegate-owned 0700 per-run dir; 75 counts only with a parsing marker, else ordinary failure. |
+| AR-015 | Accepted | Marker fields come from a remote 402 body and reach stderr and stop-reason, so strict type validation and scope sanitizing are needed. | D-1 now accepts only the two codes and integer atomic fields, rejects other types, and truncates scope to 64 printable ASCII characters; step 1 test coverage updated. |
+| AR-016 | Accepted | A killed worker can leave a truncated non-empty section, so existence alone is not proof of completion; atomic rename makes the final name mean 'finished'. | D-5 now requires temp-file write plus atomic rename on exit 0, skip only on final names, and deletion of leftover temp files; interface section notes the temp naming. |
+| AR-017 | Accepted | D-3 contradicted itself on mixed outcomes; any worker exit 75 must return 75 and skip the fallback, matching AC-8 for pure non-spending failures. | Rewrote D-3 precedence in s1.1.i3 and added a mixed-case test note to section 16. |
+| AR-018 | Accepted | Mixed outcomes (a worker exiting 75 plus other failures) are real behavior of D-3 and were untested; a mixed case is cheap to add. | Section 16 test strategy text now requires a mixed shell-test case asserting exit 75, no fallback, finished sections kept. |
+| AR-019 | Accepted | The budget cap needs a precise testable definition and a scheduler-level test, not just a pure-function test. | D-6 (s1.1.i6), AC-7, R-2 fix the formula, rounding, defaults and bad-header handling; s11 adds boundary and scheduler cap tests. |
+| AR-020 | Accepted | D-5's non-empty test was ambiguous for partial outputs such as a .json without its .md; requiring all outputs to exist and be non-empty removes the ambiguity. | Rewrote D-5 (s1.1.i5) to skip only when every output file exists and is non-empty, otherwise rerun and overwrite. |
+| AR-021 | Accepted | The marker contract (location, schema, staleness, concurrency, USD rendering) was undefined and is needed for a testable Stopped line. | D-2 now defines per-worker marker paths cleared at stage start, a JSON schema, and USD rounding; section 12 and step 1 agree. |
+| AR-022 | Accepted | 402 matching variants were unspecified; an exact, case-sensitive top-level match avoids false positives and missing figures should not defeat detection. | D-1 (s1.1.i1) now states exact case-sensitive top-level code match and None for missing numeric fields. |

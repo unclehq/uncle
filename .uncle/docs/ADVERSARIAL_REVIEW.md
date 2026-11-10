@@ -1,176 +1,176 @@
-## AR-001: Blocking decision (a) external release repo vs (b) hand-off only is unresolved, so AC-1..AC-6 cannot be verified in-repo
+## AR-001: D-3 precedence contradicts itself: 'only when no non-spending failure occurred' then 'a mix returns 75 too'.
 
 - Severity: HIGH
-- References: CHANGE_PLAN intro 'BLOCKING PLANNING DECISION'; Restrictions feasibility says CAP-RELEASE-EDIT unavailable.
-- Failure: Blocking decision (a) external release repo vs (b) hand-off only is unresolved, so AC-1..AC-6 cannot be verified in-repo. Say: 'Approval selects (b): the deliverable is IMPLEMENTATION_NOTES.md only, and AC-1..AC-6 are recorded BLOCKED-SETUP, not PASS, until the release repo is supplied.'
+- References: CHANGE_PLAN D-3 vs CHANGE_SPEC AC-8, SB-10, SI-6.
+- Failure: D-3 precedence contradicts itself: 'only when no non-spending failure occurred' then 'a mix returns 75 too'. AC-8/SB-10 keep fallback on other failures. Say: 'If any worker exits 75 the scheduler returns 75 even if others failed otherwise; fallback is skipped and failed sections rerun on resume.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: The plan does not say what steps 2 and 3 do when access is absent; its status vocabulary is only PASS/BLOCKED-SETUP, and
+## AR-002: Plan never says how resume tells a complete section from a partial one; a killed or failed worker may leave a non-empty
 
 - Severity: HIGH
-- References: Implementation sequence steps 2-3; 'Missing live access does not block step 1'; CLAUDE.md completion rule.
-- Failure: The plan does not say what steps 2 and 3 do when access is absent; its status vocabulary is only PASS/BLOCKED-SETUP, and absent host access may be BLOCKED-IMPOSSIBLE. Say: 'Without release repo or host access, steps 2 and 3 record BLOCKED-SETUP naming the access needed, and the change is not declared complete.'
+- References: D-5 skips on 'exists and is non-empty'; spec section 8 assumes a killed worker leaves its section missing.
+- Failure: Plan never says how resume tells a complete section from a partial one; a killed or failed worker may leave a non-empty file that D-5 skips. Say: 'A section is finished only if its worker exited 0 and wrote via temp file plus atomic rename; partial outputs are deleted at stage start.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: The expire POST grant has no decision rule for 'script ends links early'.
+## AR-003: Stopped message is undefined when the 402 body lacks figures.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 15 'unknown'; plan step 1 and scope cuts; AC-6.
-- Failure: The expire POST grant has no decision rule for 'script ends links early'. Step 1 writes it into the notes while it is also conditional. Say: 'Add the expire POST grant only if the script calls the Daytona expire endpoint; otherwise record it as not added.'
+- References: SB-6 template needs $X and $Y; D-1 fields are optional; AC-1 says 'limit and suggested increase (or balance)'.
+- Failure: Stopped message is undefined when the 402 body lacks figures. SB-6 gives only the budget_reached template. Say: 'For balance_exhausted print the balance wording; omit any clause whose figure is missing and never print None or $0.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: The expiresInSeconds action is unspecified when the value is missing, exactly 3600, or above 3600.
+## AR-004: budget_cap leaves rounding, remaining <= 0, typical <= 0, and running-versus-new workers unspecified.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 4 'missing or > 3600'; SI-2; AC-6.
-- Failure: The expiresInSeconds action is unspecified when the value is missing, exactly 3600, or above 3600. Say: 'If absent set 3600; if above 3600 lower to 3600; if 3600 or less leave unchanged.'
+- References: D-6 and AC-7 say only 'remaining/typical-cost (minimum 1)'.
+- Failure: budget_cap leaves rounding, remaining <= 0, typical <= 0, and running-versus-new workers unspecified. Say: 'cap = max(1, floor(remaining/typical)); typical<=0 uses 400000; the cap bounds total concurrent workers and never exceeds configured concurrency.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: LV-3 has no procedure or pass criterion, and the spec's 'require_approval false or omitted' conflicts with the plan's ex
+## AR-005: D-6 says the budget header goes into 'the same marker/side file' as the stop marker, but section 8 lists two separate en
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-1 'false or omitted' vs plan entry; Manual verification LV-3; AC-4.
-- Failure: LV-3 has no procedure or pass criterion, and the spec's 'require_approval false or omitted' conflicts with the plan's explicit false. Say: 'The entry sets require_approval explicitly to false; LV-3 passes only if a pre-existing hire installs with zero approval prompts.'
+- References: D-2 UNCLE_SPENDING_STOP_FILE vs D-6 UNCLE_BUDGET_REMAINING_FILE vs section 8.
+- Failure: D-6 says the budget header goes into 'the same marker/side file' as the stop marker, but section 8 lists two separate env vars. Parallel workers can race on one file and stale files can persist. Say: 'Each worker writes its own file per name; the scheduler clears stale files at stage start and reads the minimum remaining value.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: AC-5 'no existing grant removed or altered' has no stated baseline, and the diff is in an external repo that the in-repo
+## AR-006: Plan does not say whether exit 75 is treated as a spending stop in stages other than PROJECT_PLAN that share the schedul
 
 - Severity: LOW
-- References: Traceability AC-5 'Diff review'; plan section 5.
-- Failure: AC-5 'no existing grant removed or altered' has no stated baseline, and the diff is in an external repo that the in-repo notes cannot prove. Say: 'The notes record the pre-change and post-change grant lists from the release repo.'
+- References: D-3 and D-4 scope handling to schedulers and the PROJECT_PLAN case.
+- Failure: Plan does not say whether exit 75 is treated as a spending stop in stages other than PROJECT_PLAN that share the schedulers. Say: 'Only PROJECT_PLAN treats 75 as a spending stop; other stages treat it as an ordinary failure.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan has no defined regression check for existing Daytona grants (SB-4/AC-5) since the release definition is external an
+## AR-007: Exit 75 is returned by the runner for all callers, but only PROJECT_PLAN handling is specified.
 
 - Severity: HIGH
-- References: CHANGE_PLAN traceability AC-5 -> 'Diff review' with automated test None; no artifact path is named for the diff.
-- Failure: Plan has no defined regression check for existing Daytona grants (SB-4/AC-5) since the release definition is external and in-repo suites cannot see it. Decision: AC-5 is verified by a recorded before/after diff of the full grant list saved under .uncle/docs/, and a missing diff means AC-5 is NOT RUN, not PASS.
+- References: CHANGE_PLAN D-2/D-3 vs D-4; the change-impact table lists no other stagegate callers.
+- Failure: Exit 75 is returned by the runner for all callers, but only PROJECT_PLAN handling is specified. Plan should say: 'Only PROJECT_PLAN interprets 75; every other caller treats any nonzero exit, including 75, as an ordinary failure as before.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Plan says 'in-repo suites must match baseline' as the regression check, yet also says a green in-repo suite is not evide
+## AR-008: D-3 contradicts itself on mixed failures: it says 75 is returned 'only when no non-spending failure occurred', then says
 
 - Severity: HIGH
-- References: CHANGE_PLAN sections 16-17 vs Risks 'A green in-repo suite is not evidence for this change'.
-- Failure: Plan says 'in-repo suites must match baseline' as the regression check, yet also says a green in-repo suite is not evidence. The two statements make the regression gate vacuous. Decision: in-repo suite parity is only a no-source-change guard and never counts toward AC-1..AC-6.
+- References: CHANGE_PLAN D-3 final sentence versus CHANGE_SPEC AC-8, SI-4 and SI-6.
+- Failure: D-3 contradicts itself on mixed failures: it says 75 is returned 'only when no non-spending failure occurred', then says a mix returns 75 too. Plan should say: 'If any worker hit a spending stop, return 75 regardless of other failures; the fallback never runs.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: Step 3 allows recording LV-1..LV-3 as BLOCKED-SETUP, but the checks have no stated classification when host access is mi
+## AR-009: D-5 skip-if-output-exists applies to every run, so a stale non-empty section from an old or failed run is silently reuse
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN step 3 'PASS/BLOCKED-SETUP'; section 18 classification LIVE_VERIFICATION; CHANGE_SPEC SB-3.
-- Failure: Step 3 allows recording LV-1..LV-3 as BLOCKED-SETUP, but the checks have no stated classification when host access is missing. LV-3 (existing hire installs without approval) is the main compatibility regression guard. Decision: if host access is missing, LV-1..LV-3 are BLOCKED-SETUP, naming the action required, and the change is not complete.
+- References: CHANGE_PLAN D-5 has no condition; SB-10/AC-8 require unchanged non-spending behavior.
+- Failure: D-5 skip-if-output-exists applies to every run, so a stale non-empty section from an old or failed run is silently reused, breaking the baseline where reruns redo all sections. Plan should say: 'Skipping applies only when stop-reason is spending_limit; otherwise sections are removed as today.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: The conditional expire POST has no decision rule.
+## AR-010: A section partially written by a worker killed during the stop passes the 'non-empty' test and is reused on resume.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-6 and section 15 'unknown'; CHANGE_PLAN R-2 'Conditional entry'.
-- Failure: The conditional expire POST has no decision rule. 'If and only if the script ends links early' is unresolved, so AC-6 passes or fails depending on how it is read, and a missing grant would regress link expiry. Decision: step 2 must grep the script for the expire call and record the finding. The expire entry is added if the call exists and omitted otherwise.
+- References: CHANGE_SPEC section 8 assumes a killed worker's section is missing; CHANGE_PLAN D-5 tests only exists and non-empty.
+- Failure: A section partially written by a worker killed during the stop passes the 'non-empty' test and is reused on resume. Plan should say: 'Workers write to a temp name and rename on success; resume checks only the final name.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The plan does not state the outcome when a script's expiresInSeconds is absent or above 3600.
+## AR-011: The shared UNCLE_BUDGET_REMAINING_FILE is written by up to 14 concurrent workers with no atomicity or ordering rule, and
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 4 'build script only if expiresInSeconds is missing or > 3600'; R-3 CAP-SCRIPT-EDIT.
-- Failure: The plan does not state the outcome when a script's expiresInSeconds is absent or above 3600. Both the script edit and the 3600 limit are listed as 'Never cut', but the script change is not in scope for any in-repo owner. Decision: a missing or over-limit value is edited to 3600 in the external script, and if that edit is not permitted, AC-6 is reported FAIL.
+- References: CHANGE_PLAN D-6 gives a single shared side file with no cleanup; AC-7 says an absent header leaves concurrency unchanged.
+- Failure: The shared UNCLE_BUDGET_REMAINING_FILE is written by up to 14 concurrent workers with no atomicity or ordering rule, and a stale file from a prior run could cap a resumed run. Plan should say: 'The file is removed at stage start, written atomically, and the most recent value wins.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Steps 2 and 3 both Own IMPLEMENTATION_NOTES.md with Depends on, but step 2 is 'if access is granted' with no defined beh
+## AR-012: The _EXTERNAL_CAPACITY patterns 'status\s*402' and 'http\s*402' can match unrelated validator output that mentions 402.
 
 - Severity: LOW
-- References: CHANGE_PLAN Implementation sequence steps 2-3.
-- Failure: Steps 2 and 3 both Own IMPLEMENTATION_NOTES.md with Depends on, but step 2 is 'if access is granted' with no defined behavior when it is skipped. Decision: when step 2 is skipped, the notes record 'step 2 not performed: no release repo access', and step 3 is BLOCKED-SETUP.
+- References: CHANGE_PLAN D-7 versus AC-6, which requires false for ordinary validator failures.
+- Failure: The _EXTERNAL_CAPACITY patterns 'status\s*402' and 'http\s*402' can match unrelated validator output that mentions 402. Plan should say: 'The pattern is anchored to the client error prefix, e.g. HTTP 402:.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: The grant path uses unconstrained {sandboxId}/{port} placeholders, so it covers every sandbox and port the host key reac
+## AR-013: D-3 contradicts itself on mixed failures: it says 75 is returned only when no non-spending failure occurred, then says a
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1.2 path '/sandbox/{sandboxId}/ports/{port}/signed-preview-url'; CHANGE_SPEC AC-1 has no sandbox or port restriction.
-- Failure: The grant path uses unconstrained {sandboxId}/{port} placeholders, so it covers every sandbox and port the host key reaches. Plan should say: the grant stays a templated path, the script requests links only for its own sandbox, and diff review confirms no wider wildcard.
+- References: CHANGE_PLAN D-3. AC-8 covers only the pure non-spending case.
+- Failure: D-3 contradicts itself on mixed failures: it says 75 is returned only when no non-spending failure occurred, then says a mix returns 75 too. Settle it: 'If any worker reports a spending stop, the scheduler returns 75 regardless of other failures, and the stop-reason also records the count of non-spending failures.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: SI-2 (expiresInSeconds <= 3600) is enforced only by the external, unverified build script.
+## AR-014: Exit 75 alone is trusted as the spending signal, and the plan never says who creates or protects the marker and budget s
 
 - Severity: HIGH
-- References: CHANGE_PLAN R-3 'Inspect script' (CAP-SCRIPT-EDIT); CHANGE_SPEC SI-2 enforcement point is Script.
-- Failure: SI-2 (expiresInSeconds <= 3600) is enforced only by the external, unverified build script. The plan does not say what happens if the field is omitted. Plan should say: expiresInSeconds must be set explicitly in the call; a script that omits it fails AC-6.
+- References: D-2, D-3, D-6 name the env vars without ownership; section 12 maps a missing marker to 'details unavailable' instead of ordinary failure.
+- Failure: Exit 75 alone is trusted as the spending signal, and the plan never says who creates or protects the marker and budget side files. Another child exiting 75 (EX_TEMPFAIL) would stop the stage. Settle it: 'Stagegate creates both files under a per-run 0700 dir and removes them at stage end; exit 75 counts as a spending stop only if its marker parses, else it is an ordinary failure.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: The signed link is a bearer credential, and with require_approval false no human sees it before it is printed.
+## AR-015: Marker fields come from the remote 402 body and flow unvalidated into stderr and stop-reason, so control characters or o
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s11 saves 'publish output saved under .uncle/docs/'; AC-3 requires a Preview: line; no redaction rule.
-- Failure: The signed link is a bearer credential, and with require_approval false no human sees it before it is printed. The plan sets no rules for where it may be recorded. Plan should say: the URL appears only in build output, is never written to .uncle/docs or notes, and live-check evidence redacts the token.
+- References: D-1 lists the fields; spec section 10 says nothing about sanitizing host values.
+- Failure: Marker fields come from the remote 402 body and flow unvalidated into stderr and stop-reason, so control characters or oversized strings could be injected. Settle it: 'Only the two fixed codes and integer atomic fields are accepted; any other field type invalidates the SpendingStop, and scope is truncated to 64 printable ASCII characters.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: The conditional expire-POST grant is a state-changing write with require_approval false, and its trigger 'script ends li
+## AR-016: Resume skips any non-empty section file, so a truncated or stale section left by a killed worker would be reused as vali
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-6 and s15 'Whether the script ends links early is unknown'; CHANGE_PLAN R-2.
-- Failure: The conditional expire-POST grant is a state-changing write with require_approval false, and its trigger 'script ends links early' is undefined. Plan should say: add it only if the script source contains an explicit expire call, scoped to the same path template, with the grep result recorded in the notes.
+- References: D-5 'exists and is non-empty'; spec section 8 assumes a killed worker leaves its section missing, which is not guaranteed.
+- Failure: Resume skips any non-empty section file, so a truncated or stale section left by a killed worker would be reused as valid. Settle it: 'Workers write to a temp file and rename atomically on success; resume skips only renamed finals and deletes leftover temp files.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: AC-4 (no approval prompt) sits beside the spec's note that the host supports approval only for mail on the script surfac
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC s10 'host supports approval only for mail on script surface' versus AC-4 and SB-3.
-- Failure: AC-4 (no approval prompt) sits beside the spec's note that the host supports approval only for mail on the script surface, so the new grant cannot be gated. Plan should say: the grant is accepted as ungated, and reviewer sign-off on the diff stands in for the host approval gate.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-018: The plan has no pass/fail evidence for AC-1 and AC-5 when the release repo is inaccessible, because the only diff to ins
+## AR-017: D-3 precedence contradicts itself: 75 only when no non-spending failure, then 'a mix returns 75 too'.
 
 - Severity: HIGH
-- References: CHANGE_PLAN Traceability lists 'Diff review'/'Script review' for AC-1/5/6; Restrictions says CAP-RELEASE-EDIT is unavailable in this checkout.
-- Failure: The plan has no pass/fail evidence for AC-1 and AC-5 when the release repo is inaccessible, because the only diff to inspect is external. Plan should say: 'If the release definition is not accessible, AC-1, AC-5 and AC-6 are recorded BLOCKED-SETUP (not PASS), and IMPLEMENTATION_NOTES.md is not evidence for them.'
+- References: CHANGE_PLAN D-3 vs CHANGE_SPEC AC-8/SB-10.
+- Failure: D-3 precedence contradicts itself: 75 only when no non-spending failure, then 'a mix returns 75 too'. Settle: 'If any worker exits 75 the scheduler returns 75 regardless of other failures; fallback runs only when no worker exited 75.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: The plan says it is 'executable only as (b)' but also keeps steps 2 and 3 that require external access.
+## AR-018: Mixed outcomes (75 plus other failures) are untested; tests cover only pure cases.
 
 - Severity: HIGH
-- References: CHANGE_PLAN intro BLOCKING PLANNING DECISION versus Implementation sequence steps 2-3 and Restrictions feasibility note.
-- Failure: The plan says it is 'executable only as (b)' but also keeps steps 2 and 3 that require external access. Plan should say: 'Steps 2 and 3 are BLOCKED-SETUP unless the operator supplies the release repo path; the in-repo deliverable is complete when step 1 exists.' The condition for step 1 alone being sufficient is undefined.
+- References: CHANGE_PLAN section 16 test table; D-3 mix clause.
+- Failure: Mixed outcomes (75 plus other failures) are untested; tests cover only pure cases. Settle: 'The shell test includes a mixed case asserting exit 75, no fallback, finished sections kept.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-020: The expire-POST condition 'if and only if the script ends links early' has no objective test.
+## AR-019: Budget cap is not testably defined: rounding, remaining=0, remaining<typical, no finished call yet, bad header.
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-6, SB-5 and Assumptions ('whether the script ends links early is unknown'); CHANGE_PLAN R-2.
-- Failure: The expire-POST condition 'if and only if the script ends links early' has no objective test. Plan should say: 'The script ends links early iff it contains a call to the Daytona signed-preview-url expire endpoint; grep for that call decides it.'
+- Severity: HIGH
+- References: CHANGE_PLAN D-6; AC-7 mentions a scheduler test but section 16 lists only the pure function test.
+- Failure: Budget cap is not testably defined: rounding, remaining=0, remaining<typical, no finished call yet, bad header. Settle: 'cap=max(1,floor(remaining/typical)); typical=400000 until a call finishes then integer mean; remaining<=0 gives 1; non-integer header ignored.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: AC-3's 'small web app' and AC-4's 'existing hire' are unspecified, so the live checks cannot be repeated or compared.
+## AR-020: D-5 skip rule is ambiguous for partial outputs (killed mid-write, .json without .md).
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-3 and AC-4; CHANGE_PLAN section 18 LV-2 and LV-3.
-- Failure: AC-3's 'small web app' and AC-4's 'existing hire' are unspecified, so the live checks cannot be repeated or compared. Plan should say which app and hire to use, or that the executor records which it picked.
+- References: CHANGE_PLAN D-5 vs CHANGE_SPEC section 8 'killed before writing'.
+- Failure: D-5 skip rule is ambiguous for partial outputs (killed mid-write, .json without .md). Settle: 'Skip only if all output files exist and are non-empty; otherwise rerun and overwrite.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: The scripts' behavior is unspecified when the signed link is returned with expiresInSeconds above 3600 or is refused, so
+## AR-021: Marker file contract is undefined: JSON schema, stale marker from a prior run, concurrent writers, and the USD conversio
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC SI-2 and Failure behavior cover only the publish refusal; CHANGE_PLAN Error and recovery.
-- Failure: The scripts' behavior is unspecified when the signed link is returned with expiresInSeconds above 3600 or is refused, so SI-2's failure path has no expected output. Plan should say: 'If the host refuses or returns no link, the build prints no Preview: line and exits normally.'
+- References: CHANGE_PLAN D-2, section 12; CHANGE_SPEC SB-6.
+- Failure: Marker file contract is undefined: JSON schema, stale marker from a prior run, concurrent writers, and the USD conversion/rounding for the Stopped line. Settle: 'Markers are per-worker paths cleared at stage start; USD=atomic/1e6 to 2 decimals rounded up; missing field renders unknown.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-022: 402 matching variants are unspecified: code casing or nesting, valid code with missing numeric fields.
+
+- Severity: LOW
+- References: CHANGE_PLAN D-1; CHANGE_SPEC AC-1/AC-2.
+- Failure: 402 matching variants are unspecified: code casing or nesting, valid code with missing numeric fields. Settle: 'Match is exact, case-sensitive on top-level code; missing numeric fields yield a SpendingStop with those fields None.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

@@ -4278,8 +4278,82 @@ project_plan_section_budget() {
     esac
 }
 
+# Spending-stop plumbing (PROJECT_PLAN only).  PP_SPEND_DIR is a per-run 0700 directory created by
+# run_project_plan_sections; each worker gets its own marker and budget paths inside it.  Exit 75 is a spending stop
+# only when the worker's marker parses; otherwise it is an ordinary failure like any other nonzero exit.
+project_plan_spend_marker_valid() {
+    [[ "${PP_SPENDING_OPT_IN:-0}" == 1 && -n "${PP_SPEND_DIR:-}" && -s "$PP_SPEND_DIR/$1.stop" ]] || return 1
+    python3 -I -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+sys.exit(0 if isinstance(d,dict) and d.get("code") in ("budget_reached","balance_exhausted") else 1)' "$PP_SPEND_DIR/$1.stop" 2>/dev/null
+}
+
+# 0 (and a stopped.NAME file) when exit code $2 of worker $1 is a validated spending stop; 1 otherwise.
+project_plan_spend_worker_status() {
+    [[ "$2" == 75 ]] && project_plan_spend_marker_valid "$1" || return 1
+    : > "$PP_SPEND_DIR/stopped.$1"
+}
+
+project_plan_spend_any() {
+    local f
+    for f in "$PP_SPEND_DIR"/stopped.*; do [[ -e "$f" ]] && return 0; done
+    return 1
+}
+
+# Writes the spending_limit stop-reason from the first validated marker; 0 when a spending stop happened.
+project_plan_spend_finish() {
+    local f name figures
+    project_plan_spend_any || return 1
+    for f in "$PP_SPEND_DIR"/stopped.*; do name="${f##*/stopped.}"; break; done
+    figures="$(python3 -I -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+out=["code=%s" % d.get("code")]
+scope=d.get("scope")
+if isinstance(scope,str):
+    out.append("scope=" + "".join(c for c in scope if 0x20 <= ord(c) <= 0x7e)[:64])
+for k in ("limit_atomic","used_atomic","suggested_increase_atomic","balance_atomic"):
+    v=d.get(k)
+    if isinstance(v,int) and not isinstance(v,bool):
+        out.append("%s=%d" % (k,v))
+print(" ".join(out))' "$PP_SPEND_DIR/$name.stop" 2>/dev/null)" || figures=""
+    mkdir -p "$STATE_DIR"
+    printf 'spending_limit: %s; other_failures=%s\n' "$figures" "${PP_OTHER_FAILURES:-0}" > "$STATE_DIR/stop-reason"
+    echo "Project plan stopped on a spending limit (${figures}); finished sections are kept for the next run." >&2
+}
+
+# Remaining budget side files cap concurrent workers: min(configured, max(1, floor(remaining / 400000))).
+# Absent or non-integer values leave the configured concurrency unchanged.
+project_plan_budget_cap() {
+    local jobs="$1" f v min="" cap
+    if [[ -n "${PP_SPEND_DIR:-}" ]]; then
+        for f in "$PP_SPEND_DIR"/*.budget; do
+            [[ -f "$f" ]] || continue
+            v="$(head -c 32 "$f" 2>/dev/null | tr -d '[:space:]')"
+            [[ "$v" =~ ^-?[0-9]+$ ]] || continue
+            if [[ -z "$min" ]] || (( v < min )); then min="$v"; fi
+        done
+    fi
+    if [[ -z "$min" ]]; then echo "$jobs"; return; fi
+    cap=$(( min <= 0 ? 1 : min / 400000 ))
+    (( cap >= 1 )) || cap=1
+    (( cap <= jobs )) || cap="$jobs"
+    echo "$cap"
+}
+
+# A section already finished by a run that stopped on a spending limit: every output exists, is non-empty, and the
+# completion marker (written only after the section settled) is present.
+project_plan_section_resumable() {
+    local name="$1" directory="$2" delivery="$3"
+    [[ "${PP_RESUME:-0}" == 1 && -e "$directory/$name.done" && -s "$directory/$name.md" ]] || return 1
+    [[ "$delivery" == file || -s "$directory/$name.json" ]]
+}
+
 project_plan_section_run() {
     local name="$1" directory="$2" helper="$ROOT/scripts/lib/project_plan_sections.py" delivery="$3" prompt
+    if [[ -n "${PP_SPEND_DIR:-}" ]]; then
+        rm -f "$PP_SPEND_DIR/$name.stop" "$PP_SPEND_DIR/$name.budget"
+        export UNCLE_SPENDING_STOP_FILE="$PP_SPEND_DIR/$name.stop" UNCLE_BUDGET_REMAINING_FILE="$PP_SPEND_DIR/$name.budget"
+    fi
     prompt="$directory/prompts/$name.md"
     if [[ "$delivery" == file ]]; then
         python3 -B "$helper" prompt "$name" "$directory" "$ROOT/prompts/project-plan-investigate.md" "$prompt" || return 1
@@ -4326,16 +4400,23 @@ project_plan_section_finish() {
 # Take a completed section (optionally waiting for its PID); an unusable delivery gets one retry.
 project_plan_section_settle() {
     local name="$1" directory="$2" delivery="$3" pid="${4:-}"
-    [[ -z "$pid" ]] || wait "$pid" || { echo "Project plan section $name did not complete." >&2; return 1; }
-    project_plan_section_finish "$name" "$directory" "$delivery" && return 0
-    # A refused-for-spending worker would be refused again: rerunning it only spends the limit's last cents.
-    [[ ! -e "$STATE_DIR/spending-stop" ]] || { echo "Project plan section $name stopped at the spending limit." >&2; return 1; }
+    if [[ -n "$pid" ]]; then
+        local wait_rc=0
+        wait "$pid" || wait_rc=$?
+        if [[ "$wait_rc" != 0 ]]; then
+            project_plan_spend_worker_status "$name" "$wait_rc" || true
+            echo "Project plan section $name did not complete." >&2
+            return 1
+        fi
+    fi
+    project_plan_section_finish "$name" "$directory" "$delivery" && { : > "$directory/$name.done"; return 0; }
     echo "Project plan section $name delivered nothing usable; running that worker once more."
     # Keep the failed attempt's logs: the rerun overwrites them, and why it failed is the evidence.
     cp "$LOG_DIR/project-plan-section-$name.jsonl" "$LOG_DIR/project-plan-section-$name.attempt1.jsonl" 2>/dev/null || true
     cp "$LOG_DIR/project-plan-section-$name.log" "$LOG_DIR/project-plan-section-$name.attempt1.log" 2>/dev/null || true
     project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || true
     project_plan_section_finish "$name" "$directory" "$delivery" || { echo "Project plan section $name wrote nothing." >&2; return 1; }
+    : > "$directory/$name.done"
 }
 
 # Self-hosted sections form a small dependency graph: only outline gates the
@@ -4343,6 +4424,7 @@ project_plan_section_settle() {
 # so a slow or malformed sibling never holds an otherwise ready section back.
 run_project_plan_sections_bounded() {
     local directory="$1" delivery="$2" jobs="$3" phase name index active failed=0 gate=0 next=0 gate_left
+    local stopped=0 rc effective
     local -a pending=() dependent=() pids=() names=() gate_names=()
     read -r -a gate_names < <(python3 -B "$ROOT/scripts/lib/project_plan_sections.py" gate)
     gate_left=${#gate_names[@]}
@@ -4353,23 +4435,7 @@ run_project_plan_sections_bounded() {
             for name in $phase; do dependent+=("$name"); done
         fi
     done < <(python3 -B "$ROOT/scripts/lib/project_plan_sections.py" phases)
-    if [[ "${UNCLE_PLAN_SECTIONS_RESUME:-0}" == 1 ]]; then
-        # Resuming after a spending stop: sections already on disk are kept, only the missing ones run.
-        local -a todo=(); local kept=0
-        for name in ${pending[@]+"${pending[@]}"}; do
-            if [[ -s "$directory/$name.md" ]]; then
-                kept=$((kept + 1))
-                case " ${gate_names[*]} " in *" $name "*) gate_left=$((gate_left - 1)) ;; esac
-            else todo+=("$name"); fi
-        done
-        pending=(${todo[@]+"${todo[@]}"}); todo=()
-        for name in ${dependent[@]+"${dependent[@]}"}; do [[ -s "$directory/$name.md" ]] && kept=$((kept + 1)) || todo+=("$name"); done
-        dependent=(${todo[@]+"${todo[@]}"})
-        [[ "$gate_left" -gt 0 ]] || gate=1
-        echo "Project plan sections: resuming with $kept finished section(s) kept."
-    else
-        [[ "${#pending[@]}" -gt 0 ]] || return 1
-    fi
+    [[ "${#pending[@]}" -gt 0 ]] || return 1
     while :; do
         active=0
         for index in "${!pids[@]}"; do
@@ -4381,7 +4447,12 @@ run_project_plan_sections_bounded() {
                         *" ${names[$index]} "*) gate_left=$((gate_left - 1)); [[ "$gate_left" -gt 0 ]] || gate=1 ;;
                     esac
                 else
-                    failed=1
+                    rc=$?
+                    if [[ "$rc" == 75 && -e "$PP_SPEND_DIR/stopped.${names[$index]}" ]]; then
+                        stopped=1
+                    else
+                        failed=1; PP_OTHER_FAILURES=$(( ${PP_OTHER_FAILURES:-0} + 1 ))
+                    fi
                 fi
                 unset "pids[$index]" "names[$index]"
             fi
@@ -4391,16 +4462,30 @@ run_project_plan_sections_bounded() {
         fi
         # On failure, drain only our workers before allowing the single-pass
         # fallback to start. No worker may keep writing into its fallback.
-        if [[ "$failed" == 1 ]]; then
-            for index in "${!pids[@]}"; do wait "${pids[$index]}" || true; done
+        # A validated spending stop wins over ordinary failures: nothing new starts, running workers drain, finished
+        # sections stay, and the scheduler returns 75 so the single-pass fallback never runs.
+        if [[ "$failed" == 1 || "$stopped" == 1 ]]; then
+            for index in "${!pids[@]}"; do
+                rc=0; wait "${pids[$index]}" || rc=$?
+                if [[ "$rc" == 75 && -e "$PP_SPEND_DIR/stopped.${names[$index]}" ]]; then :
+                elif [[ "$rc" != 0 ]]; then PP_OTHER_FAILURES=$(( ${PP_OTHER_FAILURES:-0} + 1 )); fi
+            done
+            if project_plan_spend_finish; then return 75; fi
             return 1
         fi
-        while (( active < jobs && next < ${#pending[@]} )); do
+        effective="$(project_plan_budget_cap "$jobs")"
+        while (( active < effective && next < ${#pending[@]} )); do
             name="${pending[$next]}"
             echo "Project plan section worker: $name"
             (
                 . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter project-plan || exit 1
-                project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || exit 1
+                project_plan_section_resumable "$name" "$directory" "$delivery" && exit 0
+                section_rc=0
+                project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || section_rc=$?
+                if [[ "$section_rc" != 0 ]]; then
+                    project_plan_spend_worker_status "$name" "$section_rc" && exit 75
+                    exit 1
+                fi
                 project_plan_section_settle "$name" "$directory" "$delivery"
             ) &
             pids+=("$!"); names+=("$name")
@@ -4413,10 +4498,26 @@ run_project_plan_sections_bounded() {
     done
 }
 
+# PROJECT_PLAN is the only caller that opts in to spending-stop handling: a per-run 0700 directory holds each worker's
+# marker/budget path, and a prior `spending_limit` stop-reason makes this run reuse the sections that finished.
 run_project_plan_sections() {
+    local status=0 reason=""
+    PP_SPEND_DIR="$(mktemp -d "${TMPDIR:-/tmp}/uncle-spend.XXXXXX")" || return 1
+    chmod 700 "$PP_SPEND_DIR"
+    PP_SPENDING_OPT_IN=1; PP_OTHER_FAILURES=0; PP_RESUME=0
+    [[ -r "$STATE_DIR/stop-reason" ]] && reason="$(head -c 64 "$STATE_DIR/stop-reason" 2>/dev/null || true)"
+    if [[ "$reason" == spending_limit* ]]; then PP_RESUME=1; rm -f "$STATE_DIR/stop-reason"; fi
+    run_project_plan_sections_impl "$@" || status=$?
+    rm -rf "$PP_SPEND_DIR"
+    unset PP_SPEND_DIR PP_SPENDING_OPT_IN PP_RESUME
+    return "$status"
+}
+
+run_project_plan_sections_impl() {
     local output="$1" directory="$STATE_DIR/project-plan-sections"
     local helper="$ROOT/scripts/lib/project_plan_sections.py" phase name failed delivery=file index gate=1 gated
     local -a pids=() names=()
+    local rc
     gated=" $(python3 -B "$helper" gate) "
     . "$ROOT/scripts/lib/model-jobs.sh"
     local jobs
@@ -4427,27 +4528,25 @@ run_project_plan_sections() {
     elif stage_uses_self_hosted project-plan AGENT; then
         delivery=local
     fi
-    local resume=0
-    if [[ -e "$STATE_DIR/spending-stop" ]]; then
-        # The previous run stopped at a spending limit and kept its finished sections; the limit may have been raised.
-        rm -f "$STATE_DIR/spending-stop"
-        grep -q '^spending_limit' "$STATE_DIR/stop-reason" 2>/dev/null && rm -f "$STATE_DIR/stop-reason"
-        [[ -d "$directory" ]] && resume=1
+    if [[ "${PP_RESUME:-0}" == 1 && -d "$directory" ]]; then
+        find "$directory" -name '*.tmp.*' -delete 2>/dev/null || true
+    else
+        PP_RESUME=0
+        rm -rf "$directory"
     fi
-    [[ "$resume" == 1 ]] || rm -rf "$directory"
     mkdir -p "$directory/prompts"
     if [[ "$jobs" != 0 ]]; then
-        export UNCLE_PLAN_SECTIONS_RESUME="$resume"
-        run_project_plan_sections_bounded "$directory" "$delivery" "$jobs" || return 1
+        run_project_plan_sections_bounded "$directory" "$delivery" "$jobs" || return $?
     else
         # The first phase holds the outline and the workers that need only the requirements. The next phase starts when the
         # outline and the decision record (the gate) are done, whether or not the rest are; everything still running is
         # collected at the end.
         while IFS= read -r phase; do
             for name in $phase; do
-                [[ "$resume" == 1 && -s "$directory/$name.md" ]] && continue
                 echo "Project plan section worker: $name"
-                ( workflow_model_enter project-plan AGENT "$jobs" || exit 1; project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
+                ( workflow_model_enter project-plan AGENT "$jobs" || exit 1
+                  project_plan_section_resumable "$name" "$directory" "$delivery" && exit 0
+                  project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
                 pids+=("$!"); names+=("$name")
             done
             if [[ "$gate" == 1 ]]; then
@@ -4455,6 +4554,13 @@ run_project_plan_sections() {
                 for index in "${!names[@]}"; do
                     [[ "$gated" == *" ${names[$index]} "* ]] || continue
                     if ! project_plan_section_settle "${names[$index]}" "$directory" "$delivery" "${pids[$index]}"; then
+                        if project_plan_spend_any; then
+                            for index in "${!pids[@]}"; do
+                                rc=0; wait "${pids[$index]}" || rc=$?
+                                project_plan_spend_worker_status "${names[$index]}" "$rc" || true
+                            done
+                            project_plan_spend_finish && return 75
+                        fi
                         kill "${pids[@]}" 2>/dev/null || true
                         wait 2>/dev/null || true
                         return 1
@@ -4465,8 +4571,12 @@ run_project_plan_sections() {
         done < <(python3 -B "$helper" phases)
         failed=0
         for index in "${!pids[@]}"; do
-            project_plan_section_settle "${names[$index]}" "$directory" "$delivery" "${pids[$index]}" || failed=1
+            project_plan_section_settle "${names[$index]}" "$directory" "$delivery" "${pids[$index]}" || {
+                failed=1
+                [[ -e "$PP_SPEND_DIR/stopped.${names[$index]}" ]] || PP_OTHER_FAILURES=$(( ${PP_OTHER_FAILURES:-0} + 1 ))
+            }
         done
+        if project_plan_spend_any; then project_plan_spend_finish; return 75; fi
         [[ "$failed" == 0 ]] || return 1
     fi
     # The traceability table is built here from the workers' own mapping lines.  Only a plan whose workers
@@ -4590,18 +4700,22 @@ run_stage() {
             # of its lane, an assembled plan the validators refuse -- leaves no investigation behind and
             # the single-pass plan runs as it always did.
             project_plan_sectioned=0
-            if project_plan_sections_enabled && run_project_plan_sections "$project_plan_investigation"; then
+            project_plan_sections_status=1
+            if project_plan_sections_enabled; then
+                project_plan_sections_status=0
+                run_project_plan_sections "$project_plan_investigation" || project_plan_sections_status=$?
+            fi
+            if [[ "$project_plan_sections_status" == 0 ]]; then
                 project_plan_sectioned=1
                 echo 'Project plan written in parallel sections and assembled by the driver.'
+            elif [[ "$project_plan_sections_status" == 75 && -r "$STATE_DIR/stop-reason" ]] \
+                    && [[ "$(head -c 14 "$STATE_DIR/stop-reason")" == spending_limit ]]; then
+                # Spending limit: keep the finished sections, skip the single-pass fallback, stop for the operator.
+                rm -f "$project_plan_investigation"
+                echo 'Project plan stopped on a spending limit; raise the limit and rerun to resume.' >&2
+                exit 75
             else
                 rm -f "$project_plan_investigation"
-                if [[ -e "$STATE_DIR/spending-stop" ]]; then
-                    # The single pass would run into the same limit and spend more doing it. Keep the finished sections.
-                    { printf 'spending_limit: '; cat "$STATE_DIR/spending-stop"; } > "$STATE_DIR/stop-reason"
-                    cat "$STATE_DIR/spending-stop" >&2
-                    echo 'Finished project-plan sections were kept; raise the limit and run again to resume them.' >&2
-                    exit 1
-                fi
             fi
             if [[ "$project_plan_sectioned" == 1 ]] || stage_uses_self_hosted project-plan AGENT; then
                 [[ "$project_plan_sectioned" == 1 ]] || run_initial_planning_agent prompts/project-plan-investigate.md project-plan-investigate

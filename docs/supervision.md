@@ -10,6 +10,15 @@ Supervision is configured with `supervision.enabled`, `supervision.runner`,
 `supervision.delegate_gates`, and `supervision.files_allowlist` in
 `.uncle/config`.
 
+In hosted mode (`UNCLE_HOSTED=1`) supervision reads `OPENAI_BASE_URL`,
+`OPENAI_API_KEY` and `SEREN_MODEL`/`UNCLE_MODEL` from the environment and needs
+no `supervision.base_url`. Unknown `supervision.*` keys are ignored with a
+warning, and supervision stays enabled.
+
+Do not put credentials (API keys, secrets, tokens) in `.uncle/config`; supply
+them through the environment or your runner's own authentication. Warnings about
+unknown keys in `.uncle/config` name only the key, never its value.
+
 The defaults are:
 
 ```text

@@ -1,152 +1,168 @@
-## AR-001: Width gate vs.
+## AR-001: Plan does not say how unknown-key detection treats the 'runner'/'model' fallback and the case when ALL supervision keys
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2 and Risks table; CHANGE_SPEC SB-2/SB-7. Settle with: 'At width>=100 hints are always rendered; if the side panel does not fit, the description uses the bottom strip and hints stay.'
-- Failure: Width gate vs. hint cap vs. side panel collide: hints appear at width>=100 but the plan doesn't say how rows with hints coexist with the side description panel, or whether the strip fallback hides inline hints. 'Existing strip fallback' is not defined for the hinted-row case.
+- References: CHANGE_SPEC B-1/section 8 'Duplicate keys: first wins'; supervisor.py load_config adds key to `seen` before parse. Decision needed: 'An unknown key appearing N times yields exactly one warning; an empty key name `supervision.` is treated as unknown and warned.'
+- Failure: Plan does not say how unknown-key detection treats the 'runner'/'model' fallback and the case when ALL supervision keys are unknown or the key is bare (e.g. 'supervision.' with empty name) or a duplicate unknown key. Warning count/dedup is unspecified.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: AC-1 says every row has a hint after the value at 120 cols, but D-2 says hint is capped at 40 chars and rows may be trun
+## AR-002: B-7/AC-5 say the notice prints 'once' at supervised-run start, but config reload (reload_config) re-reads the file mid-r
 
 - Severity: HIGH
-- References: CHANGE_SPEC AC-1/SB-1 vs CHANGE_PLAN D-2 ('capped at 40 chars'). State: 'Hints are authored at <=40 chars, never truncated at runtime; a test asserts len<=40.'
-- Failure: AC-1 says every row has a hint after the value at 120 cols, but D-2 says hint is capped at 40 chars and rows may be truncated by the window; the plan doesn't say whether row text (key+value+hint) is itself truncated, or whether 'cap' means truncation with ellipsis or a authoring limit.
+- References: supervisor.py:991-1009 reload_config calls load_config; plan D-3 only calls config_notices at entry (~1816). State: 'reload_config emits no stderr notices; only the entry call prints, exactly once per process start.'
+- Failure: B-7/AC-5 say the notice prints 'once' at supervised-run start, but config reload (reload_config) re-reads the file mid-run and can newly produce warnings or errors; plan is silent on whether reloads print warnings/disabled reasons, and how 'once' is defined across reloads and resumed runs.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Invalid-config rows ('!
+## AR-003: Non-hosted (interactive) supervised runs with warnings are unspecified: D-3 prints warnings at entry (all warnings) but
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 8 vs SB-1 ('each row'). State: 'Rows beginning with "!" and non-CONTROLS rows get no hint.'
-- Failure: Invalid-config rows ('! reason'), bool rows and rows whose value is empty/very long are not specified for hint rendering; spec says '! reason unchanged' but not whether a hint is appended to them.
+- References: CHANGE_PLAN D-3 'returning stderr lines: all warnings; plus disabled_reason when hosted' vs CHANGE_SPEC B-7 trigger 'with UNCLE_HOSTED=1'. Decide: 'Warnings print at run entry in both hosted and non-hosted modes; disabled_reason prints only when hosted.' (or hosted-only for both).
+- Failure: Non-hosted (interactive) supervised runs with warnings are unspecified: D-3 prints warnings at entry (all warnings) but B-7 and AC-5 scope the stderr print to UNCLE_HOSTED=1 only, and the 'hosted' disabled_reason is gated while warnings are not.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Picker explanation behavior is unspecified for the Custom row, the current-value marker, filtered/empty picker lists, an
+## AR-004: CLI `config` with errors AND warnings: ordering/streams and whether warnings are printed when exit is 1 are unspecified;
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-3/D-5 ('option rows only'), SB-4 vs 'Custom' behaviors in SB-6. State: 'Custom and non-option rows get no explanation; a stored delegate_gates value outside none/routine is shown as current via a fallback row and Enter keeps it editable.'
-- Failure: Picker explanation behavior is unspecified for the Custom row, the current-value marker, filtered/empty picker lists, and for runner values with no entry; also the delegate picker has no Custom row so a previously stored custom delegate_gates value has no stated handling.
+- References: supervisor.py:1923-1929 prints lines then disabled_reason; AC-4 covers only warnings-only and errors-only. State: 'With both, stdout lines, then each warning, then disabled_reason on stderr, exit 1.'
+- Failure: CLI `config` with errors AND warnings: ordering/streams and whether warnings are printed when exit is 1 are unspecified; also `lines` output on stdout when disabled.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Picker explanation width handling is ambiguous: truncation by addnstr is stated for D-5, yet AC-2 requires a non-empty e
+## AR-005: Warning text embeds the key name verbatim from the config file; key names may contain control characters/newlines-free b
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5 vs CHANGE_SPEC AC-2/AC-3. State: 'Picker explanations are shown at all widths and truncated by window width; no width gate applies to pickers.'
-- Failure: Picker explanation width handling is ambiguous: truncation by addnstr is stated for D-5, yet AC-2 requires a non-empty explanation per choice, and on narrow terminals the explanation could be cut to nothing; AC-3 covers only the menu hints.
+- References: CHANGE_SPEC section 10 and R-3 'message key only'; read_config_lines takes parts[0] unvalidated. Decide: 'Key names are truncated to 64 characters and redacted via the existing redact() when matching secret patterns.'
+- Failure: Warning text embeds the key name verbatim from the config file; key names may contain control characters/newlines-free but arbitrary long or secret-like tokens (e.g. 'supervision.sk-...'), contradicting the 'never echo secrets' rationale and unbounded length is unspecified.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Width read failure rule: getmaxyx exceptions yield no hints, but behavior for a fake/zero width or exactly 100 is only p
+## AR-006: Existing parse_value still raises 'unknown supervision key', and the retained roundtrip test/other consumers (e.g.
 
 - Severity: LOW
-- References: CHANGE_PLAN D-2 (>=100) vs AC-3 widths 30/60/120. State: 'Hints show at width 100 and above and are absent at 99; add boundary test at 99 and 100.'
-- Failure: Width read failure rule: getmaxyx exceptions yield no hints, but behavior for a fake/zero width or exactly 100 is only partly stated, and the test widths (30, 60, 120) don't cover the boundary.
+- References: supervisor-test.py:925,930-932 loops assert errors, disabled_reason and values default. State: 'For bogus key: errors==[], disabled_reason=="", warnings==["ignoring unknown supervision key: supervision.bogus"], values equal DEFAULTS.'
+- Failure: Existing parse_value still raises 'unknown supervision key', and the retained roundtrip test/other consumers (e.g. TUI writing keys, status) may rely on that; plan says test expectation of ('bogus','1') changes but doesn't say what the replaced assertion checks for values/disabled_reason when the file contains only an unknown key.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: delegate_gates Enter changes from free-text Custom to a none/routine picker with no Custom row; the plan doesn't say how
+## AR-007: reload_config also calls load_config mid-run, but the plan never says whether warnings or errors print on reload.
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-3/D-4 'no Custom row, like network'; CHANGE_SPEC SB-4 currently 'Free-text Custom row only'.
-- Failure: delegate_gates Enter changes from free-text Custom to a none/routine picker with no Custom row; the plan doesn't say how out-of-set stored values are shown or re-entered. Settle: 'The delegate picker lists only none and routine; a stored value outside that set shows as current, and Esc leaves it unchanged.'
+- References: supervisor.py:991-1009 reload_config; plan D-3 names only run entry (~1816) and CLI config. B-7 says 'printed once'.
+- Failure: reload_config also calls load_config mid-run, but the plan never says whether warnings or errors print on reload. Add: 'reload_config prints nothing to stderr; config_notices runs only at run entry and in the CLI config action.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The width gate (>=100 total cols) is in tension with side-panel room, and behavior at 100-119 is unspecified.
+## AR-008: The hosted notice is unspecified for errors from _hosted_defaults (missing model) and for ordering relative to warnings.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-2 vs SB-7; AC-1 tests only width 120.
-- Failure: The width gate (>=100 total cols) is in tension with side-panel room, and behavior at 100-119 is unspecified. Settle: 'At width >=100 hints show; the side panel falls back to the strip when it doesn't fit; key and value are never truncated.'
+- References: supervisor.py:242 appends the hosted missing-model error; D-3 and B-7 don't specify ordering or this case.
+- Failure: The hosted notice is unspecified for errors from _hosted_defaults (missing model) and for ordering relative to warnings. Add: 'Hosted notices are warnings in file order, then disabled_reason if errors is non-empty, one stderr line each, including the missing-model error.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: Picker explanations are gated on picker_target=='!supervision', but it's unstated which rows get them (Custom, model, fi
+## AR-009: The plan doesn't say whether unknown keys enter `seen`, which drives runner/model fallback and _hosted_defaults.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5; CHANGE_SPEC SB-6 requires filter and Custom entry unchanged.
-- Failure: Picker explanations are gated on picker_target=='!supervision', but it's unstated which rows get them (Custom, model, filtered, rows without a description). Settle: 'Explanations are appended only to option rows with an entry in SUPERVISION_CHOICE_DESC; Custom, filter and model rows are never annotated.'
+- References: supervisor.py:205-212 adds key to seen before parse_value; _hosted_defaults reads seen at line 231. D-1 says only 'skip keys not in KINDS'.
+- Failure: The plan doesn't say whether unknown keys enter `seen`, which drives runner/model fallback and _hosted_defaults. Add: 'Unknown keys are not added to seen and do not affect runner or model fallback; duplicate unknown keys warn once.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Appending hints to _supervision_items rows could break any caller that parses row text (selection, Enter, toggle).
+## AR-010: The plan doesn't say warnings stay out of stdout and Config.lines, nor the exit code for mixed warnings and errors.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-2/R-2 cite only supervisor-test.py:1214; section 16 has no test for Enter/toggle on hinted rows.
-- Failure: Appending hints to _supervision_items rows could break any caller that parses row text (selection, Enter, toggle). The plan checks only the key prefix. Settle: 'No caller parses row text; Enter/toggle on a hinted row acts on the correct key, and a test asserts this.'
+- References: supervisor.py:1925-1929 prints lines to stdout and the reason to stderr; the plan says 'lines output unchanged' only in the B-6 row.
+- Failure: The plan doesn't say warnings stay out of stdout and Config.lines, nor the exit code for mixed warnings and errors. Add: 'Warnings go only to stderr, never to Config.lines or stdout; exit is 1 if any error exists, else 0.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The 40-char hint cap is ambiguous: it's unclear whether it includes the '  - ' separator or whether overlong hints get t
+## AR-011: The plan doesn't say how the roundtrip test changes beyond 'replaced by a warning assertion'.
 
 - Severity: LOW
-- References: CHANGE_PLAN D-1/D-2 vs CHANGE_SPEC SB-1.
-- Failure: The 40-char hint cap is ambiguous: it's unclear whether it includes the '  - ' separator or whether overlong hints get truncated. Settle: 'Each hint is <=40 chars excluding the separator, enforced by test, with no runtime truncation.'
+- References: supervisor-test.py:923-932 asserts loaded.errors for ('bogus','1'); plan section 10 is the only mention.
+- Failure: The plan doesn't say how the roundtrip test changes beyond 'replaced by a warning assertion'. Add: 'The bogus case is removed from the error loop and asserted separately as warning-only with values equal to the defaults.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Runner explanations use a generic fallback, but the plan doesn't say whether user-supplied runner names are interpolated
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-1 'runner values with a generic fallback string'; D-5 appends explanations to option rows.
-- Failure: Runner explanations use a generic fallback, but the plan doesn't say whether user-supplied runner names are interpolated or sanitized before addnstr. Settle with: 'Hint and explanation text comes only from static dict entries or the fixed fallback; user values are never interpolated, and drawn values have control characters stripped.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-013: The delegate picker has no Custom row, but delegate_gates took free text before (SB-4).
-
-- Severity: LOW
-- References: CHANGE_PLAN D-3 'no Custom row'; CHANGE_SPEC SB-4, SI-2.
-- Failure: The delegate picker has no Custom row, but delegate_gates took free text before (SB-4). A stored out-of-set value is unspecified. Settle with: 'Delegate picker offers only none/routine; an out-of-set stored value shows unchanged in the row with no current selection; supervision_lib validation stays the only write gate.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-014: The hint width gate is ambiguous at the boundary.
+## AR-012: Plan says warnings omit the value but not whether the key text is sanitized; the key comes raw from the file and is prin
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-2 (width >= 100 via stdscr.getmaxyx()); CHANGE_SPEC AC-3 tests widths 30, 60 and 120 only. Settle it with: 'Hints appear iff stdscr.getmaxyx()[1] >= 100; the tests must cover widths 99 and 100.'
-- Failure: The hint width gate is ambiguous at the boundary. The plan says terminal width >= 100 but never says whether this is the full terminal width or the menu panel width. It also does not say what happens at widths 61-99, which AC-3 never tests (it tests 30, 60 and 120). Tests and code could split on exactly 99/100 and on whether the width is stdscr's.
+- References: CHANGE_SPEC AC-2 and section 10 say 'key only'; supervisor.py:172-173 takes parts[0] unfiltered from the file.
+- Failure: Plan says warnings omit the value but not whether the key text is sanitized; the key comes raw from the file and is printed to stderr, so control or ANSI characters could inject into hosted logs. Decision: warnings print the key only after restricting it to [A-Za-z0-9._-], truncated to 64 chars, other characters replaced with '?'.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: AC-1 says every row has a non-empty hint at width 120, but the plan also says a missing hint renders nothing, and it cap
-
-- Severity: HIGH
-- References: CHANGE_SPEC AC-1 vs section 8 ('Missing hint renders no hint'; 'Invalid config row ! reason unchanged'); CHANGE_PLAN D-2 (<=40 chars). Settle it with: 'Hint length <= 40 is asserted by the test, not truncated at render time; ! reason rows get no hint.'
-- Failure: AC-1 says every row has a non-empty hint at width 120, but the plan also says a missing hint renders nothing, and it caps hints at 40 chars without saying who enforces the cap. Truncation versus rejection is unspecified. A row with a long value, or an invalid '! reason' row, may or may not get a hint.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-016: The plan does not define how picker explanations are observed in tests.
+## AR-013: The hosted notice prints disabled_reason, which embeds error text.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5 and section 16 ('picker explanations'); CHANGE_SPEC AC-2 ('non-empty explanation for every choice'). Settle it with: 'The test asserts via a fake stdscr recording addnstr text at width >= 120; Custom rows get no explanation.'
-- Failure: The plan does not define how picker explanations are observed in tests. D-5 says they are appended in _draw_picker and truncated by addnstr, so a fake stdscr's captured text depends on the width and on whether the Custom row and filter rows get explanations. Whether a Custom row or a filtered-out choice keeps its explanation is unspecified.
+- References: CHANGE_PLAN D-3 prints disabled_reason; supervisor.py:195 joins errors; secrets machinery at supervisor.py:247-270 is not referenced in the plan.
+- Failure: The hosted notice prints disabled_reason, which embeds error text. The secret-safety rule covers values only, so the plan never says printed text is redacted. Decision: config_notices passes every line through redact() with known_secret_values(environ), and no message contains a config value.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: Runner explanations use a generic fallback, but the plan never defines the runner value set or the fallback text.
+## AR-014: The plan does not say how credential-like unknown keys such as supervision.api_key or supervision.base_url are treated;
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1 ('runner values with a generic fallback string') and section 21 (cut runner explanations first); CHANGE_SPEC AC-2/SB-5. Settle it with: 'The runner set is enumerated from the same list that _picker_rows uses; the fallback string is non-empty; if the cut is invoked, AC-2 is amended to exclude the runner picker.'
-- Failure: Runner explanations use a generic fallback, but the plan never defines the runner value set or the fallback text. Tests can't assert 'non-empty for every runner' unless the set of runners is pinned to a source. The cut-first item 'runner-choice explanations' also contradicts AC-2, which requires them.
+- References: CHANGE_SPEC non-goal 'Supporting base_url/api_key keys' and AC-7 docs; no test requirement that a secret-like value is absent from stderr.
+- Failure: The plan does not say how credential-like unknown keys such as supervision.api_key or supervision.base_url are treated; users may put real secrets there and the plan only warns. Decision: the warning names only the key, and the docs tell users not to put credentials in .uncle/config. A test must show a secret-like value never appears on stderr.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: The plan does not say how the delegate picker's current value is shown, or what happens when the stored delegate_gates v
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN D-3 ('no Custom row, like network'), D-4; CHANGE_SPEC SB-4 ('Free-text Custom row only' before). Settle it with: 'An unrecognised stored value highlights no row, and none/routine are the only selectable values.'
-- Failure: The plan does not say how the delegate picker's current value is shown, or what happens when the stored delegate_gates value is neither none nor routine. It also does not say whether a previous free-text Custom entry is still reachable. Tests have no defined expected result.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-019: The defect-injection method is underspecified.
+## AR-015: Unspecified duplicate unknown keys and warning volume: it is unclear whether a repeated or numerous unknown key emits on
 
 - Severity: LOW
-- References: CHANGE_PLAN section 16 (defect injection: blank one hint key only); CHANGE_SPEC AC-4 ('equals prior values'). Settle it with: 'Prior non-supervision _picker_rows output is captured as literal expected lists in the test, and defect injection also adds an explanation to a non-supervision picker to confirm failure.'
-- Failure: The defect-injection method is underspecified. The plan has no way to prove that tests reject a hint-in-the-wrong-picker defect or a leaked explanation in non-supervision pickers, only a single blanked hint. Required test oracles for the 'unchanged' baseline are not fixed.
+- References: CHANGE_SPEC section 8 'Duplicate keys: first wins'; load_config seen-set at supervisor.py:206-208 skips duplicates before parse.
+- Failure: Unspecified duplicate unknown keys and warning volume: it is unclear whether a repeated or numerous unknown key emits one warning or many. Decision: emit one warning per distinct unknown key and cap the list at 20 lines with a '... and N more' line.
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-016: Hosted notice 'once before the command' has no defined hook or count rule.
+
+- Severity: HIGH
+- References: CHANGE_PLAN D-3, AC-5; supervisor.py:991-1009 reload_config reloads config and could re-warn.
+- Failure: Hosted notice 'once before the command' has no defined hook or count rule. Settle: 'config_notices prints exactly once per process at run entry before the first stage starts; reload_config never reprints; tests assert one stderr occurrence.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-017: Non-hosted runs with warnings/errors unspecified: D-3 prints warnings always but B-7 is hosted-only.
+
+- Severity: HIGH
+- References: CHANGE_PLAN D-3 vs CHANGE_SPEC B-7 trigger.
+- Failure: Non-hosted runs with warnings/errors unspecified: D-3 prints warnings always but B-7 is hosted-only. Settle: 'Non-hosted supervised runs print nothing at entry; hosted runs print warnings then disabled_reason.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: Duplicate or odd unknown keys unspecified.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC section 8 duplicates first-wins; supervisor.py:203-211.
+- Failure: Duplicate or odd unknown keys unspecified. Settle: 'One warning per distinct unknown key in file order; duplicates get no second warning; key text is the part after supervision. verbatim.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-019: No-value-echo is untestable as written.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC AC-2, section 10; CHANGE_PLAN R-3.
+- Failure: No-value-echo is untestable as written. Settle: 'Test uses a sentinel value and asserts it appears in none of stdout, stderr or warnings.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-020: Unclear whether skipped unknown keys enter `seen`, affecting runner fallback and ordering vs hosted errors.
+
+- Severity: MEDIUM
+- References: supervisor.py:204-224 seen.add precedes parse_value; CHANGE_PLAN D-1.
+- Failure: Unclear whether skipped unknown keys enter `seen`, affecting runner fallback and ordering vs hosted errors. Settle: 'Unknown keys are not added to seen and never affect runner/model fallback.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-021: CLI output with errors plus warnings, and closed-stderr swallowing, have no AC.
+
+- Severity: LOW
+- References: supervisor.py:1923-1929; CHANGE_PLAN section 12.
+- Failure: CLI output with errors plus warnings, and closed-stderr swallowing, have no AC. Settle: 'Warnings print first then disabled_reason to stderr, exit 1; closed stderr never changes the exit code.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

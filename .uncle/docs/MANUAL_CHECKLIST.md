@@ -1,201 +1,172 @@
 # Manual checklist
 
-## Coverage
+### MC-101
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Create a temp config containing valid supervision keys plus `supervision.base_url SENTINEL-7f3a91`, then run `python3 scripts/lib/supervisor.py config --config <file>` capturing stdout, stderr and exit code separately.
+- Expected result: Exit 0; stdout lists the supervision lines (enabled true, defaults/valid values) with no warning text; stderr contains `ignoring unknown supervision key: supervision.base_url` and the string SENTINEL-7f3a91 appears in neither stream.
+- Evidence to capture: Command, exit code, stdout and stderr text.
+- Actual result: 
+- Status: NOT RUN
 
 ### MC-102
-- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Resize the terminal to 99, 100, 60 and 30 columns in turn while viewing Configure -> Supervision, moving the highlight between rows.
-- Expected result: Inline hints are absent at 99 columns and below, present at 100; at 60 and 30 columns the highlighted row's description still appears (strip fallback) and nothing crashes or truncates keys or values.
-- Evidence to capture: Captures at each width plus a note of any exception or garbled output.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-103
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: At ~120 columns, press Enter on `effort`, then Esc; press Enter on `runner`, then Esc.
-- Expected result: Each option row (none/low/medium/high; each runner) shows a '  - explanation'. The Custom and filter rows have no explanation, and Esc backs out leaving the stored value unchanged.
-- Evidence to capture: Captures of the effort and runner pickers and the value before and after Esc.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-104
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Press Enter on `delegate_gates`, observe the picker, select `routine`, then reopen it and select `none`.
-- Expected result: The picker lists only `none` and `routine`, each with an explanation, and has no Custom free-text row. The current value is marked, and each selection is stored and shown in the menu row.
-- Evidence to capture: Picker capture and menu row value after each selection.
+- Exact action: Run the CLI `config` action on a file with `supervision.bogus 1` and `supervision.max_interventions -1`, capturing stdout, stderr and exit code.
+- Expected result: Exit 1; stdout shows the lines first; stderr shows the unknown-key warning then the 'Supervision corrections disabled' reason naming supervision.max_interventions; no warning text on stdout.
+- Evidence to capture: Command, exit code, stdout and stderr in order.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-105
-- Required for acceptance: YES
-- Exclusive resources: file:.uncle/config
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Set `delegate_gates` in the `.uncle/config` file to an out-of-set value such as `bogus`, open Configure -> Supervision, press Enter on `delegate_gates`, then Esc.
-- Expected result: The picker opens with only none/routine selectable and no row marked current; the stored value is shown unchanged as current without an explanation. Esc leaves the config value unchanged.
-- Evidence to capture: Picker capture and the config value after Esc.
+- Exact action: With UNCLE_HOSTED=1 and OPENAI_BASE_URL, OPENAI_API_KEY and SEREN_MODEL set, start a supervised run through the normal run wrapper using a config containing `supervision.base_url x` and a trivial wrapped command that prints a marker to stdout; capture stderr and the marker ordering.
+- Expected result: The unknown-key warning appears exactly once on stderr before the wrapped command's marker; supervision stays enabled (no disabled reason); the value x is not echoed.
+- Evidence to capture: Combined output with timestamps or ordering, count of warning occurrences.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-106
-- Required for acceptance: YES
-- Exclusive resources: file:.uncle/config
+- Exclusive resources: none
 - Depends on: none
-- Exact action: On the Supervision menu, press Enter on the `enabled` boolean row and on a numeric row, then open a stage-config effort/runner/network picker and a model picker.
-- Expected result: The bool toggles true/false without a picker and the numeric edit works. Stage-config and model pickers show bare choices with no explanations, and filter typing and Custom entry work as before.
-- Evidence to capture: Captures of the toggle result, the numeric edit and the stage pickers.
+- Exact action: Repeat the hosted supervised run with UNCLE_HOSTED=1 and no SEREN_MODEL/UNCLE_MODEL, plus a second run with a recognized invalid value (`supervision.max_interventions -1`); capture stderr.
+- Expected result: Warnings (if any) print first, then one 'Supervision corrections disabled' line naming the missing-model error or invalid key, once each, before the wrapped command runs; the run is not aborted.
+- Evidence to capture: stderr from both runs.
 - Actual result: 
 - Status: NOT RUN
 
-## Invariants
-
-### MC-200
-- Required for acceptance: YES
+### MC-107
 - Exclusive resources: none
 - Depends on: none
-- Exact action: In the real TUI at 120 columns, open Configure -> Supervision, then move the highlight through every row and press Enter on `enabled` (bool), then Enter on a hinted numeric row and Esc.
-- Expected result: Every control row starts with its key, followed by its value and a short `  - hint` (<=40 chars, not truncated); Enter on each row acts on that row's own key (bool toggles without a picker, numeric opens edit), and the highlighted row's full description still appears in the side panel or strip.
-- Evidence to capture: Terminal screenshot or captured screen text of the menu at 120 cols plus a note of the behavior of each Enter tried.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-201
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Open Configure -> Supervision at terminal widths 99, 100, 60 and 30 columns (resize between observations) and look at the rows and the highlighted-row description.
-- Expected result: Inline hints are absent at 99 and below and present at 100; keys and values are never truncated by the hint logic; the highlighted description still shows (side panel or bottom strip); resizing to tiny sizes never crashes the TUI.
-- Evidence to capture: Screen captures at each width and a note that the TUI stayed running.
+- Exact action: Run a supervised run WITHOUT UNCLE_HOSTED set, using a config with an unknown key; then edit the config mid-run (add another unknown key and an invalid value) and let a reload occur while observing stderr.
+- Expected result: Non-hosted entry prints nothing to stderr; the mid-run reload emits no stderr notices, while status/disabled reason still updates in the TUI/status as before.
+- Evidence to capture: Captured stderr (empty) and status text after reload.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-202
-- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: At width >=120 in Configure -> Supervision, press Enter on `effort`, then `runner`, then `delegate_gates`, reading each picker and pressing Esc between them.
-- Expected result: Each option row in the effort (none/low/medium/high), runner (every listed runner) and delegate_gates (none/routine only) pickers shows a non-empty `  - explanation`; Custom, filter and model rows carry no explanation; delegate_gates has no Custom row.
-- Evidence to capture: Screen captures of each of the three pickers.
+- Exact action: Run the CLI `config` on a file with `supervision.bogus 1` and `supervision.max_interventions -1`, capturing stdout/stderr/exit code; then rerun with only `supervision.max_interventions -1`.
+- Expected result: Both runs exit 1; the invalid recognized value still yields a 'Supervision corrections disabled' reason on stderr and no default substituted. In the mixed run stdout lines come first, then the warning on stderr, then the disabled reason; warnings never appear on stdout.
+- Evidence to capture: Captured stdout, stderr (ordered) and exit codes for both runs.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-203
-- Required for acceptance: YES
-- Exclusive resources: file:.uncle/config
-- Depends on: none
-- Exact action: Open the delegate_gates picker, select `routine`, then reopen and select `none`; afterwards re-view the Supervision menu row and press Esc from a freshly opened picker.
-- Expected result: The current value is marked on the matching row; selecting stores exactly `routine` or `none` as shown in the menu row; Esc leaves the stored value unchanged.
-- Evidence to capture: Screen captures of the menu row after each selection and after Esc.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-204
-- Required for acceptance: YES
-- Exclusive resources: file:.uncle/config
-- Depends on: none
-- Exact action: Set `delegate_gates` to an out-of-set value in the project config by hand-editing the config file, launch the TUI, open Configure -> Supervision, press Enter on `delegate_gates`, observe, then press Esc.
-- Expected result: The picker opens listing only none/routine with no row highlighted as current (stored value shown as an unannotated current row), and Esc leaves the stored value unchanged; selecting routine stores routine.
-- Evidence to capture: Screen capture of the picker and the config file value before and after Esc.
-- Actual result: 
-- Status: NOT RUN
-
-## resources
-
-### MC-301
-- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Resize the terminal to 99, 100, 60 and 30 columns in turn while viewing Configure -> Supervision.
-- Expected result: Inline hints are absent at 99 columns and below and present at 100. At 60 and 30 columns the highlighted-option description still shows through the strip fallback. No crash or garbled screen appears, and keys and values are not truncated by the hint logic.
-- Evidence to capture: Captures at each width, plus a note of whether hints appeared.
+- Exact action: Run the CLI `config` on a file with duplicate `supervision.bogus` lines, a bare `supervision.` line with a value, a key with ANSI escape/non-ASCII characters, a 200-character key, and 25 distinct unknown keys, capturing stderr.
+- Expected result: Each distinct key warns once; keys contain only [A-Za-z0-9._-] with '?' substitutes and are truncated to 64 characters; the bare key is warned and not an error; warnings cap at 20 lines plus '... and N more'; exit 0.
+- Evidence to capture: Stderr capture (viewed with cat -v) and exit code.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-205
+- Exclusive resources: none
+- Depends on: none
+- Exact action: With UNCLE_HOSTED=1 and no SEREN_MODEL/UNCLE_MODEL, start a supervised run with a config containing an unknown key and no runner key; separately start one with a recognized invalid value.
+- Expected result: Stderr shows warnings first (file order), then one 'Supervision corrections disabled: ...' line (including the missing-model error in the first case), once each; the run still starts and no config values are echoed.
+- Evidence to capture: Ordered stderr captures for both runs.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-206
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Without UNCLE_HOSTED set, start a supervised run with a config containing an unknown key and observe stderr; then in a hosted run, rewrite the config mid-run to add a new unknown key and an invalid value, triggering a reload.
+- Expected result: Non-hosted entry prints no notice to stderr; in the hosted run the entry notice appears once and the reload adds no stderr output, though status reflects the new disabled reason.
+- Evidence to capture: Stderr captures before and after the reload, and status text.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-207
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Run the CLI `config` with stderr closed (`2>&-`) for a warnings-only file and for an errors file.
+- Expected result: Warnings-only exits 0 and errors-only exits 1; no crash or traceback despite the closed stderr.
+- Evidence to capture: Exit codes and stdout from both runs.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-301
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Create a temp config with `supervision.base_url SENTINEL-7f3a91` plus `supervision.max_interventions 3`, then run `python3 scripts/lib/supervisor.py config --config <file>` capturing stdout, stderr and exit code separately.
+- Expected result: Exit 0; stdout lists the supervision lines with max_interventions 3 and no warning; stderr has exactly one line `ignoring unknown supervision key: supervision.base_url`; SENTINEL-7f3a91 appears nowhere.
+- Evidence to capture: Captured stdout, stderr and exit code.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-302
-- Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: At about 120 columns, press Enter on the effort, delegate_gates and runner rows in turn to open each picker. Read each choice, then press Esc.
-- Expected result: Each option row (effort none/low/medium/high; delegate_gates none/routine; each runner) shows a short non-empty explanation. Custom rows get none. The delegate_gates picker lists only none and routine.
-- Evidence to capture: A capture of each of the three pickers.
+- Exact action: Run the CLI `config` action on a temp file containing an unknown key `supervision.bogus x` plus an invalid recognized line `supervision.max_interventions -1`; capture stdout, stderr and exit code.
+- Expected result: Exit 1; stdout has the lines only; stderr shows the bogus warning first, then the 'Supervision corrections disabled' reason naming supervision.max_interventions; no warning on stdout.
+- Evidence to capture: Captured stdout, stderr and exit code.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-303
-- Required for acceptance: YES
-- Exclusive resources: file:.uncle/config
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Open the delegate_gates picker, select routine, and re-open Configure -> Supervision. Then open it again and press Esc without selecting. Finally select none.
-- Expected result: Selecting routine stores routine and the row shows routine. Esc leaves the value unchanged. Selecting none stores none. The current value is marked in the picker each time.
-- Evidence to capture: Row text after each step, and the `delegate_gates` line in `.uncle/config` if it is visible.
+- Exact action: Start a supervised run with `UNCLE_HOSTED=1` and a config containing `supervision.base_url SENTINEL-7f3a91`, using a trivial wrapped command; capture stderr.
+- Expected result: The unknown-key warning appears on stderr exactly once before the wrapped command output, supervision stays enabled, and the sentinel value is absent from all output.
+- Evidence to capture: Captured stderr and stdout with ordering relative to the command output.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-304
-- Required for acceptance: YES
-- Exclusive resources: file:.uncle/config
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Open a stage-config picker (effort, runner, network, or model) from outside Supervision at about 120 columns. Also press Enter on the `enabled` row in Supervision, and in a picker type a filter and use Custom entry.
-- Expected result: Non-supervision pickers show no explanations and look as before. The bool row toggles without opening a picker. Filtering and Custom entry work as before.
-- Evidence to capture: A capture of a stage-config picker, and notes on the toggle, filter and Custom entry behavior.
+- Exact action: Repeat the supervised run with `UNCLE_HOSTED=1` and a config with an unknown key plus `supervision.effort max`; then repeat with UNCLE_HOSTED unset and only an unknown key.
+- Expected result: Hosted run prints the warning then the disabled reason once on stderr; the non-hosted run prints nothing about the unknown key at entry.
+- Evidence to capture: Captured stderr of both runs.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-401
-- Exclusive resources: file:.uncle/config
+- Exclusive resources: none
 - Depends on: none
-- Exact action: In the TUI at ~120 columns open Configure -> Supervision, highlight the 'enabled' row and press Enter; then highlight a numeric row and press Enter, type an invalid value, then a valid value, and confirm.
-- Expected result: Enter on the bool row toggles true/false with no picker. Numeric edit still opens free-text entry, rejects invalid values as before and stores valid ones. Hinted rows act on the correct key.
-- Evidence to capture: Screen captures before and after the toggle and numeric edit, plus the resulting config values.
+- Exact action: Create a temp config containing valid supervision keys (e.g. supervision.max_interventions 3) and no unknown keys; run `python3 scripts/lib/supervisor.py config --config <file>` and note stdout, stderr and exit code.
+- Expected result: Exit 0, the 13 supervision.* lines on stdout with the configured values, and nothing on stderr (no warnings).
+- Evidence to capture: Command, exit code, captured stdout and stderr.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-402
 - Exclusive resources: none
 - Depends on: none
-- Exact action: At ~60 columns open Configure -> Supervision and move the highlight through several rows. Then resize to 99 columns and to 100 columns and look at the rows again.
-- Expected result: At 60 and 99 columns there are no inline hints, rows are not garbled, and the highlighted row's description still shows in the strip or side panel. At 100 columns hints appear and the description still shows. Nothing crashes at any width.
-- Evidence to capture: Screen captures at 60, 99 and 100 columns.
+- Exact action: Create a temp config with `supervision.max_interventions -1` (recognized key, invalid value) and also `supervision.bogus x`; run `python3 scripts/lib/supervisor.py config --config <file>` capturing stdout and stderr separately.
+- Expected result: Exit 1; stdout shows the lines with default values (no substituted limit); stderr shows the warning for supervision.bogus then the 'Supervision corrections disabled' reason naming supervision.max_interventions.
+- Evidence to capture: Exit code, stdout, stderr with ordering.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-403
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Open a stage-config picker (model, effort, runner or network) outside Supervision. Type to filter, choose Custom..., then press Esc.
-- Expected result: The picker rows, labels, ordering, filtering and Custom entry behave as before, and no explanation text appears next to any row.
-- Evidence to capture: Screen captures of each stage-config picker and the filter and Custom entry flow.
+- Exact action: With UNCLE_HOSTED=1 and no SEREN_MODEL/UNCLE_MODEL set, and a config with no runner key, run `python3 scripts/lib/supervisor.py config --config <file>`; then repeat with SEREN_MODEL=test-model set.
+- Expected result: Without a model: exit 1 with the 'Hosted mode has no model' disabled reason on stderr. With the model: exit 0, runner self-hosted and model test-model in the stdout lines, no warnings.
+- Evidence to capture: Both invocations' exit codes, stdout and stderr.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-404
-- Exclusive resources: file:.uncle/config
+- Exclusive resources: none
 - Depends on: none
-- Exact action: In Supervision, open the model picker, then type to filter and choose Custom... Separately, open the effort picker, select a value and confirm. Set the value back afterwards.
-- Expected result: Model rows show no explanations. Filtering and Custom entry work as before. The effort selection stores the chosen value.
-- Evidence to capture: Screen captures of the model and effort pickers and the stored config values.
+- Exact action: Create a config with `supervision.runner` unset, top-level `runner codex`, and an unknown `supervision.bogus 1`; run the CLI config action.
+- Expected result: The unknown key does not disturb runner/model fallback: supervision.runner shows codex (global runner followed), exit 0, one warning on stderr.
+- Evidence to capture: stdout lines, stderr, exit code.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-405
-- Exclusive resources: file:.uncle/config
+- Exclusive resources: none
 - Depends on: none
-- Exact action: In Supervision, press Enter on delegate_gates, select 'routine', then reopen it and press Esc. If a stored value outside none/routine can be set in .uncle/config, reopen the picker with that value, press Esc, and check the config.
-- Expected result: The picker lists only none and routine, each with an explanation. Selecting routine stores 'routine'. Esc leaves the value unchanged, including an out-of-set stored value, which has no row highlighted.
-- Evidence to capture: Screen captures of the picker and the config value after each step.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-406
-- Exclusive resources: file:.uncle/config
-- Depends on: none
-- Exact action: Use an invalid supervision config, for example a bad numeric value in .uncle/config, and open Configure -> Supervision at ~120 columns. Then restore the config.
-- Expected result: The '! reason' row appears unchanged and has no hint. All other rows still start with their key, and nothing crashes.
-- Evidence to capture: Screen capture of the menu with the invalid-config row.
+- Exact action: Start a real supervised run through the normal Uncle wrapper in non-hosted mode with a config containing an unknown supervision key, then edit the config mid-run to add another unknown key and an invalid recognized value.
+- Expected result: Interactive run starts normally with no stderr notice at entry; the mid-run reload prints nothing to stderr but status/TUI reflects the disabled reason after the invalid value is added.
+- Evidence to capture: Captured stderr of the run and the status text before and after the edit.
 - Actual result: 
 - Status: NOT RUN

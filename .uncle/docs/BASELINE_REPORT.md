@@ -1,78 +1,72 @@
-# Baseline: Supervision menu tooltips
+# Baseline report — Issue 226
 
-Omitted sections: Reproduction (feature, not a bug); Flaky behavior (none documented in repo)
+Omitted sections: Reproduction result (not executed; static reading shows the path, see 4); Existing failures (none documented; the driver baseline is authoritative)
 
 ## 1. Change-request summary
-See .uncle/docs/CHANGE_REQUEST.md (Issue 81): show a hint for every Supervision option, not only the highlighted one, and explain each value-picker choice; reuse `SUPERVISION_DESC` as single text source.
+See CHANGE_REQUEST.md (Issue 226). One unrecognized `supervision.*` key disables all supervision corrections; unattended hosted runs never see the message.
 
 ## 2. Repository architecture
-Single-file curses TUI `uncle_tui.py` (class `UncleTUI`); supervision config schema in `scripts/lib/supervisor.py` (imported as `supervision_lib`). Python suites in `scripts/tests/*-test.py`, shell suites `*-test.sh`.
+Python supervisor library `scripts/lib/supervisor.py` (config, journal, worker), bash glue `scripts/lib/supervision.sh`, hosted-mode helpers `scripts/lib/hosted.py`, TUI `uncle_tui.py` (calls `load_config` at many sites, shows `disabled_reason` at ~5125). Docs: README.md, docs/supervision.md.
 
 ## 3. Relevant code paths
-| Symbol | Location |
-|---|---|
-| `supervision_lib.CONTROLS` (13 tuples incl. `files_allowlist`), `DELEGATIONS`, `KINDS`, `DEFAULTS` | scripts/lib/supervisor.py:55-74 |
-| `SUPERVISION_DESC` (13 keys) | uncle_tui.py:772-786 |
-| `_picker_rows` | uncle_tui.py:1739-1778 |
-| `_picker_current` | uncle_tui.py:1794 |
-| `_open_picker` | uncle_tui.py:1814 |
-| `items()` -> `_supervision_items` | uncle_tui.py:1361, 1660, 5070 |
-| `_supervision_desc`, `_supervision_enter` | uncle_tui.py:5081, 5087 |
-| `_draw_config_desc` | uncle_tui.py:8336 |
-| `_title` (picker titles) | uncle_tui.py:8269 |
-| `_draw_picker` | uncle_tui.py:8377 |
-| Existing TUI test (`TuiHostTests`) | scripts/tests/supervisor-test.py:1016, asserts `_supervision_items()[0].startswith('enabled')` at :1214 |
+- `scripts/lib/supervisor.py:58-75` CONTROLS/KINDS/DEFAULTS.
+- `:107-111` parse_value raises ValueError for unknown key.
+- `:179-196` Config(values, errors), `disabled_reason` non-empty iff errors.
+- `:203-224` load_config appends every ValueError to errors; first occurrence of a key wins.
+- `:227-242` _hosted_defaults (runner self-hosted, model from SEREN_MODEL/UNCLE_MODEL; missing model appends an error).
+- `:615` note_prompt, `:974-975` Supervisor init status, `:1002-1009` reload_config: all gate on `config.errors`.
+- `:1816-1822` supervised-run entry (loads config, decides to supervise); `:1923-1929` CLI `config` action prints disabled_reason to stderr, exit 1 on errors.
+- `scripts/lib/hosted.py:4-23` is_hosted (UNCLE_HOSTED==1), OPENAI_BASE_URL/OPENAI_API_KEY/model.
+- `scripts/lib/supervision.sh:150` calls note-prompt with stderr discarded.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Open Configure -> Supervision | One row per CONTROLS key: `key(ljust 26)  value` or `value  (default)`; extra `! reason` row when config invalid | uncle_tui.py:5070-5079; test :1214 | Yes (row prefix `key`) |
-| B-2 | Highlight a row | Full `SUPERVISION_DESC` + "Enter edits..." shown in right panel (>=18 cols free) else strip below list | :5081, :8336-8375 | Yes |
-| B-3 | Enter on bool (`enabled`) | Toggles true/false, no picker | :5092 | Yes |
-| B-4 | Enter on `effort`/`runner`/`model` | Picker lists bare values (effort: EFFORTS none/low/medium/high + Custom; runner: installed supported runners; model: catalog) | :1744-1778 | Yes (values/order) |
-| B-5 | Enter on `delegate_gates` and numeric keys | `_open_picker` -> picker_kind unrecognised -> only `Custom...` free-text row; no none/routine choices | :1778, :1814 | Choice list is MODIFIED; free-text validation preserved |
-| B-6 | Picker row render | `> value  <label>  <current>`; label only for models | :8388-8402 | Yes |
+| B-1 | config has `supervision.<unknown> v` | ValueError -> errors -> corrections disabled with message `unknown supervision key: supervision.X` | supervisor.py:110, 212, 195 | No (MODIFY) |
+| B-2 | recognized key, invalid value | errors -> disabled | supervisor.py:112-149; supervisor-test.py:923-932 | Yes |
+| B-3 | valid config | no errors, enabled | supervisor-test.py:914-922 | Yes |
+| B-4 | hosted, no runner key | runner self-hosted, hosted model | supervisor.py:227-242; hosted-mode-test.py | Yes |
+| B-5 | hosted, no model env | error appended, disabled | supervisor.py:242 | Yes |
+| B-6 | CLI `config` with errors | lines on stdout, reason on stderr, exit 1 | supervisor.py:1923-1929 | Yes |
+| B-7 | supervised run start with errors | disabled reason only in status/TUI; no stderr line from run entry | supervisor.py:974, 1816 | No (MODIFY for hosted) |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Documented control key list equals `CONTROLS` (AT-9) | DocsTests | supervisor-test.py:1750 | High |
-| I-2 | Values are validated by supervision_lib before use; invalid disables corrections | `load_config` | ConfigTests :903 | High |
-| I-3 | Drawing never raises on tiny terminals (curses.error swallowed) | try/except in draw funcs | none found | Medium |
+| I-1 | Invalid recognized value never substituted with a default limit | load_config leaves value out, errors set | supervisor-test.py:932 | High |
+| I-2 | Any config error disables corrections | disabled_reason / `config.errors` gates | supervisor-test.py:934+ | High |
+| I-3 | CONTROLS list equals documented keys (AT-9) | CONTROLS comment | supervisor-test.py (AT-9) | Medium |
 
 ## 6. Interface contracts
-No external API/schema. Internal: `items()` returns list[str] consumed for selection/width; `_picker_rows()` returns (kind,text) with kind in header/option/model/custom; `.uncle/config` keys unchanged.
+`Config.errors` (list of str), `Config.disabled_reason` (str), `Config.lines`, CLI `supervisor.py config --config PATH`. No schema/persistence.
 
 ## 7. Existing automated-test coverage
-supervisor-test.py covers config, docs and TUI host wiring but nothing on `SUPERVISION_DESC` content, `_draw_config_desc`, or `_picker_rows` (grep found only :1214). No test draws a picker. Parallel commands use separate temp dirs (shell and python runners per CLAUDE.md guidance).
+`scripts/tests/supervisor-test.py` (config roundtrip incl. `('bogus','1')` expecting an error at line 925, 930-932), `hosted-mode-test.py` (:112 load_config in hosted), `supervisor-default-runner-test.py`. `supervisor` is in `scripts/tests/critical-suites.txt`. Shell and Python runners use separate temp dirs and share no ports, so they are one parallel group.
 
 ## 9. Baseline test results
-Not run by the analyst. Commands are from scripts/run-shell-tests.sh and scripts/run-python-tests.sh. Command 3 names a suite (`supervision-tooltips`) that does not exist at baseline; it is expected to fail/not-found pre-change and is added by the change. Driver baseline is authoritative.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (CLAUDE-documented Uncle runners). No results produced here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout.
 
 ## 12. Likely change surface
-uncle_tui.py (SUPERVISION_DESC area, `_picker_rows`, `_picker_current`, `_title`, `_draw_picker`, `_supervision_items`, `_draw_config_desc`); new test file scripts/tests/supervision-tooltips-test.py; possibly README/.uncle/config.example only if wording drift is found.
+`scripts/lib/supervisor.py` (load_config, Config, run entry, CLI config), `scripts/tests/supervisor-test.py`, README.md, docs/supervision.md.
 
 ## 13. Regression-sensitive components
-Model/runner/effort pickers of stage config (same `_picker_rows`/`_draw_picker` shared); `items()` width drives side-panel vs strip layout; `_picker_filtered` typing filter; custom-entry flow.
+TUI uses of `load_config`/`disabled_reason` (uncle_tui.py:5109-5125); `parallel-implement.sh:112` reads `files_allowlist`; reload_config.
 
 ## 14. Outside the change
-Supervisor engine, CONTROLS semantics/defaults, config parsing, stage (non-supervision) config menus' text, gate logic.
+Hosted-mode defaults logic, runner selection, the journal, TUI rendering.
 
 ## 15. Unknowns and assumptions
-- `files_allowlist` has a description but is a 13th CONTROLS key (issue says 12); all 13 get hints.
-- Picker choice rendering for non-supervision targets must stay unchanged.
-- Picker-apply path for a `delegate` kind not yet read; plan step 3 reads it.
+- `.uncle/config.example` is not tracked in this tree (git ls-files empty); the build script writing `supervision.base_url` is not in this repository. Assumption: those two items cannot be changed here.
+- Warnings are emitted via stderr; the host failure report reads stderr (per request).
 
 ## 16. Initial risk assessment
-Medium-low: UI-only, but shared picker code and curses width handling. Main risk is changing `items()` width and degrading the side panel.
+Low-medium: loosening validation must not hide invalid values of recognized keys; stderr noise must not break callers that parse stdout.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- supervisor supervisor-default-runner supervision-tooltips
-python3 -B -m py_compile uncle_tui.py
 ```
 
 ## Parallel verification groups

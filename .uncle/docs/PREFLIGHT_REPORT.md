@@ -2,7 +2,7 @@ Deterministic runtime probes completed with no application acceptance claims. Ap
 
 Dependency installation and application-specific browser, service, credential, and human checks remain subject to implementation and checklist verification.
 
-Findings: bash --version exited 0; python3 --version exited 0
+Findings: bash --version exited 0
 
 ## Acceptance gate
 

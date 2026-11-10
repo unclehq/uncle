@@ -1,70 +1,82 @@
-# Baseline Report (Issue 228)
+# Baseline report (Issue 233)
 
-Omitted sections: Reproduction of a single bug (multi-suite test-health issue; per-suite findings in section 11 instead)
+Omitted sections: Reproduction result (reproduced by reading code, not by a run; see 11 note); Areas outside change merged into 14.
 
 ## 1. Change-request summary
-See `.uncle/docs/CHANGE_REQUEST.md`. `./scripts/run-all-tests.sh` reports 96 passed / 11 failed on main 4c23afa. Goal: 0 failed, 0 skipped, no weakened tests; classify each failure product-vs-test-vs-environment.
+Hand-off mode (`UNCLE_PUBLISH_MODE=handoff`) never writes `.uncle/attestation.json`/`.sig`, so `handoff.json` omits them and `uncle verify <pr>` has nothing to read. See `.uncle/docs/CHANGE_REQUEST.md`.
 
 ## 2. Repository architecture
-Bash drivers (`scripts/stagegate.sh` 6918 lines, `scripts/change-workflow.sh`, `scripts/workflow.sh`), shell libs in `scripts/lib/` (`run-policy.sh`, `mode.sh`, `worktree_runs.py`, `all_suites.py`), Python TUI `uncle_tui.py`, suites in `scripts/tests/` (`*-test.sh`, `*-test.py`). `scripts/run-all-tests.sh` execs `scripts/lib/all_suites.py` (all Python+shell suites in one pool).
+Bash driver `scripts/lib/change-pr.sh` embeds a Python program (`pr_code` heredoc, line 367 on) invoked per action (`main()` at ~1860). `scripts/lib/handoff_export.py` is a separate script run by the hand-off branch. `scripts/lib/attestation.py` seals the PR-body summary; `scripts/lib/envelope.py` builds/signs the Statement. `scripts/uncle-verify.py` verifies.
 
 ## 3. Relevant code paths
-- `scripts/stagegate.sh:51-86` version/usage/arg parse; but `:29-38` runs `run_policy_app_preflight` (from `scripts/lib/run-policy.sh`) BEFORE arg parsing, so `--version`/`--help` are refused when the tree is dirty or not on clean main (observed: `Refusing app build: the working tree on 'main' has uncommitted changes`, empty stdout). Same ordering in `scripts/change-workflow.sh` (version at :51, args at :84).
-- `scripts/tests/unattended-test.sh:39,46` sg-version-flag / `--help` documents `--unattended`.
-- `scripts/lib/worktree_runs.py:55-62` raises `WorktreeListError` when `git worktree list` fails; reached from `uncle_tui.py:5750-5762` (`_resume_build`/`_latest_resumable_run`); `scripts/tests/home-actions-test.py:192,204`.
-- `scripts/tests/early-branch-test.py:280-302` (t5) and t1/t3/t4; `scripts/tests/supervisor-test.py:~1785` signing audit; `scripts/tests/attestation-statement-test.py:392,447,473`.
+- change-pr.sh:207-213 hand-off branch (runs handoff_export.py, returns; never calls attest).
+- change-pr.sh:615-682 `attest(j)`: release envelope, Statement, signature, `write_attestation_files`, `audited_tree=commit_tree`, `commit_tree=snapshot(True, attestation=True)`; raises AttestationError when `blocking_reason` and no `release_skipped`.
+- change-pr.sh:565-576 `consent_entry`; :420-432 `sealed_attestation`; :450 `envelopes_enabled`; :727 `save`; :919 `load`.
+- change-pr.sh:1753-1766 normal publish call site; :2012-2019 AttestationError -> `PR pending: Attestation blocked: ...`, exit 3.
+- handoff_export.py:60-80 `changes`; :83-122 `main` (tree from `commit_tree` :89, sealed summary :94-97, handoff dict :113-116).
+- uncle-verify.py:424-426 reads attestation from PR head.
+- GITHUB_INTEGRATION.md:75-83 hand-off docs.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `stagegate.sh --version` in dirty tree | Run-policy refusal, no version printed | ran it | No (defect) |
-| B-2 | `stagegate.sh --help` | Same preflight refusal in dirty tree; usage text itself mentions `--unattended` | usage at :54-72 | Help text yes |
-| B-3 | Run policy on dirty/non-main app build | Refuses build | run-policy.sh | Yes |
-| B-4 | `attestation-statement-test.py` here | 3 failures; output shows `approved artifact is ignored: .gitignore:36:.uncle` -> fixture inherits this worktree's UNCOMMITTED `.gitignore` line `.uncle`, causing tree-mismatch | ran suite; `git diff .gitignore` | Attestation ignore-boundary yes |
-| B-5 | `home-actions-test.py` resume tests | `WorktreeListError: fatal: not a git repository` from `git worktree list` | ran suite | Error on real git failure: yes |
-| B-6 | `early-branch-test.py` t5 | Unexpected `refs/heads/uncle/early-branch-demo` created in a case that must create no ref | ran suite | Yes |
-| B-7 | `supervisor-test.py` signing audit | Lists fixture commits without explicit no-sign flags, e.g. `tree-attested-final-audit-test.sh:10`, `build-attestation-test.py:34,62` (+1) | ran suite | Policy yes |
-| B-8 | `worktree-run-test.sh` | Did NOT reproduce exit 127 locally (no FAIL lines) | ran suite | Yes |
+| B-1 | Hand-off with envelopes | `handoff.json` `changes` lacks attestation files; `tree` = bind-time tree | handoff_export.py:89,112 | No (modify) |
+| B-2 | Hand-off, run predating envelopes | Hand-off with summary only, exit 0 | handoff_export.py:94-97; test `test_applying_handoff_gives_the_audited_tree` | Yes |
+| B-3 | Hand-off, missing journal | exit 1 `Hand-off failed` | handoff-export-test.py:78 | Yes |
+| B-4 | Normal publish with envelopes | attest(j), attestation files in commit | change-pr.sh:1753 | Yes |
+| B-5 | Hand-off, tracked `.uncle/allowed_signers` | in tree, not deleted | change-pr.sh:780-782 | Yes |
+| B-6 | Hand-off success | exit 0, `CHANGE_PR_EXTRAS_REASON=handoff` | change-pr.sh:208-210 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | App builds start only from clean main | `run-policy.sh` preflight | run-policy tests | High |
-| I-2 | Every fixture git commit/tag disables signing | convention + audit test | `supervisor-test.py` signing audit | High |
-| I-3 | `.uncle`-ignored artifacts never enter attested tree boundary | attestation code | `attestation-statement-test.py` | Medium |
-| I-4 | Early-branch skips (no remote/detached/unborn) create no ref/journal | early-branch code | `early-branch-test.py` | Medium |
+| I-1 | Applying `changes` to `base_commit` yields exactly `tree` | `changes()` is a full diff-tree | handoff-export-test.py:56 | High |
+| I-2 | Bind-time snapshot excludes attestation files; they enter only via `snapshot(attestation=True)` | change-pr.sh:827-832,884-890 | attestation tests (unverified which) | Medium |
+| I-3 | Blocking policy refuses before any git write unless `release_skipped` | change-pr.sh:652-653 | unverified | Medium |
+| I-4 | Hand-off never pushes or calls gh/remote | hand-off branch returns early | handoff-export-test.py | Medium |
 
 ## 6. Interface contracts
-`stagegate.sh --version` prints `0.1.0`, exit 0; `--help` exits 0 and documents `--unattended`; same for `change-workflow.sh`. `run-all-tests.sh` exit 0 only if all suites pass.
+`handoff.json` schema (`SCHEMA` in handoff_export.py): base_commit, head_branch, base_repo, commit_message, pr_title, pr_body, draft, audit_verdict, tree, attestation, changes[]. Journal keys `commit_tree`, `audited_tree`, `statement`, `signature`, `attestation`. Driver exit codes: 0 ok, 1 failure, 3 attestation blocked. Schema consumers: `scripts/tests/implementation-handoff-schema-test.sh` (unclear whether it covers handoff.json; verify).
 
 ## 7. Existing automated-test coverage
-Suites run in a shared pool by `all_suites.py`; shell and Python suites use separate temp dirs, so they are grouped. Critical-tier default runners skip non-critical suites; full coverage needs `run-all-tests.sh`.
+`scripts/tests/handoff-export-test.py` (fixture has no `envelopes` dir, so exercises the summary-only path). `attestation-test.py`, `attestation-statement-test.py`, `build-attestation-test.py`, `tree-attested-final-audit-test.sh`. No test covers hand-off with envelopes. Shell and Python runners are independent (separate temp dirs), so grouped.
 
 ## 9. Baseline test results
-Commands come from `scripts/README.md`/runners. Not run here (driver baseline is authority). Issue documents 96 passed / 11 failed; the failing list is in CHANGE_REQUEST. Failures may differ by environment: this worktree has an uncommitted `.gitignore` line `.uncle` and branch `uncle/fix-...`, which plausibly explain B-1, B-4 (not main-clean).
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (CLAUDE.md/stage instructions). Not run here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout (documented by the stage instructions); not enumerated.
 
-## 10. Existing failures, warnings, flakiness
-See section 4 rows B-1..B-8. Not reproduced locally: worktree-run exit 127 (likely PATH/tool assumption in CI/sandbox), gates-verification-integrity* (IMPLEMENT vs REPAIR/COMPLETE; possibly a consequence of the same dirty-tree/run-policy or git-signing behavior). UNRESOLVED until driver baseline logs.
+## 10. Existing failures
+None documented in repo beyond the note above. UNRESOLVED until driver baseline lands.
+
+## 11. Reproduction
+Static: hand-off branch returns before any `attest` call, and `changes()` diffs bind-time `commit_tree`. Not executed.
 
 ## 12. Likely change surface
-`scripts/stagegate.sh`, `scripts/change-workflow.sh` (arg parsing before preflight); `scripts/lib/worktree_runs.py` or `uncle_tui.py` caller / test fixtures (home-actions); early-branch implementation or fixture; fixture git calls in `tree-attested-final-audit-test.sh`, `build-attestation-test.py` and others flagged by the signing audit; attestation fixture `.gitignore` isolation; gates-verification-integrity suites.
+change-pr.sh (new action + hand-off branch + consent_entry), handoff_export.py, tests, GITHUB_INTEGRATION.md.
 
 ## 13. Regression-sensitive components
-Run policy (I-1), attestation boundary (I-3), early-branch ref mutation (I-4), signing hygiene (I-2).
+normal publish `attest()`; `consent_entry`; the `attestation` journal field consumed by publish resume; handoff.json consumers (hosts).
 
 ## 14. Outside the change
-No weakening/deleting/skipping tests; no unrelated cleanup; no change to run-policy semantics for real builds.
+Normal publish flow, stagegate.sh new-project path, uncle-verify.py logic, `.gitignore` handling, envelope.py format.
 
 ## 15. Unknowns and assumptions
-- Which failures are caused by this worktree's state vs. real on clean main is unknown; plan requires reproducing in a clean checkout (`git worktree` of main HEAD) first.
-- Exit 127 cause and gates-verification-integrity cause are unknown.
+- Whether envelope.py/uncle-verify accept a non-human `approved_by` on the publication approval for hand-off (assumed: free-form string; implementer verifies by symbol read).
+- Whether implementation-handoff-schema test constrains handoff.json keys (assumed no).
 
-## 16. Initial risk
-Medium: many independent root causes; changing preflight ordering must not let real builds bypass I-1.
+## 16. Risk
+Medium: edits shared `attest()` call context and consent entry; mitigated by new action leaving normal path untouched.
 
 ## Exact build and test commands executed
 
 ```sh
-bash scripts/run-all-tests.sh
+bash scripts/run-shell-tests.sh
+bash scripts/run-python-tests.sh
+bash scripts/run-python-tests.sh -- handoff-export
+```
+
+## Parallel verification groups
+
+```text
+1 2
 ```
 

@@ -93,8 +93,9 @@ def main():
     attest = load_attestation(lib)
     sealed = dict(journal.get('attestation') or {})
     if not sealed:
+        # Only this no-attestation fallback is stamped here; a journal attestation is used as attest-handoff sealed it.
         sealed = attest.seal(journal, STATE, root='.', version=os.environ.get('UNCLE_VERSION', ''), lib=lib)
-    sealed['gate_publication'] = 'HANDOFF (published by the host)'
+        sealed['gate_publication'] = 'handoff (published by the host)'
     result = verdict()
     draft = not result.startswith('READY')
     summary = ('Built by an unattended Uncle run; no human reviewed this change or the generated text. '
@@ -104,6 +105,7 @@ def main():
         body = ('> [!WARNING]\n> **Final audit verdict: %s.** The PR reviewer decides whether this merges.\n\n'
                 % result + body)
     body = attest.attach_body(body, sealed)
+    body = (journal.get('body_banners') or '') + body      # computed by attest-handoff, not recomputed here
     origin = (journal.get('origin') or '').strip().split('\t')
     if len(origin) == 3 and origin[1].isdigit():
         body += '\nRefs %s#%s\n' % (origin[0], origin[1])
@@ -113,7 +115,7 @@ def main():
     handoff = {'schema': SCHEMA, 'base_commit': base, 'head_branch': branch,
                'base_repo': journal.get('base_repo') or (origin[0] if len(origin) == 3 else ''),
                'commit_message': name + '\n\n' + body, 'pr_title': name, 'pr_body': body, 'draft': draft,
-               'audit_verdict': result, 'tree': tree, 'attestation': sealed, 'changes': rows}
+               'audit_verdict': result, 'tree': tree, 'audited_tree': journal.get('audited_tree') or tree, 'attestation': sealed, 'changes': rows}
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / 'handoff.json'
     path.write_text(json.dumps(handoff, indent=1, sort_keys=True) + '\n')

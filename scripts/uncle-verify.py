@@ -331,7 +331,33 @@ def check_4(statement):
     return 'implementation artifact ' + short(release), release
 
 
+def check_5_procedure(statement):
+    """A statement that attests procedure: every stage ran and the build says its procedure was followed. How it came out (the
+    audit verdict, each stage's result) is printed, never judged: the attestation does not say the build is correct."""
+    predicate = statement['predicate']
+    envelopes = predicate.get('envelopes') or {}
+    procedure = predicate.get('procedure') or {}
+    outcomes = predicate.get('outcomes') or {}
+    lines = []
+    for stage in ('review', 'plan', 'implementation', 'verification', 'audit'):
+        env = envelopes.get(stage)
+        result = env.get('result') if isinstance(env, dict) else 'missing'
+        if result not in ('pass', 'fail'):
+            raise Refused(['%s did not run (%s)' % (stage, result)
+                           + ('; ' + env['reason'] if isinstance(env, dict) and env.get('reason') else '')])
+        lines.append('%s stage ran (recorded result: %s)' % (stage, result))
+    if procedure.get('result') != 'pass':
+        raise Refused(['the build did not follow its procedure' + ('; ' + procedure['reason'] if procedure.get('reason') else '')])
+    lines.append('procedure followed')
+    verdict = outcomes.get('verdict') or 'unavailable'
+    lines.append('build verdict recorded: %s%s (attested as recorded, not as correct)'
+                 % (verdict, '; completed over an override' if outcomes.get('override') else ''))
+    return lines
+
+
 def check_5(statement):
+    if 'procedure' in (statement['predicate'] or {}):
+        return check_5_procedure(statement)
     envelopes = statement['predicate'].get('envelopes') or {}
     lines = []
     for stage in ('review', 'verification', 'audit'):

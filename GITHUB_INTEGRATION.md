@@ -78,6 +78,6 @@ When Uncle runs in a sandbox that has `git` but no GitHub login or `gh`, set `UN
 run Uncle does not push or open a PR. It writes `.uncle/handoff/handoff.json`, prints its path and exits 0. The file holds the
 base commit, the proposed head branch, the commit message, PR title and body (including the attestation block), the draft flag
 (draft unless the final audit is READY), and every changed path with its action (`add`, `modify`, `delete`), file mode, blob
-id and full base64 content. Applying those changes to the base commit gives exactly the audited tree (`tree`). The host creates
+id and full base64 content. With envelopes present the changes also list `.uncle/attestation.json` (and `.uncle/attestation.sig` when a signer exists), and `audited_tree` records the tree that was audited. Applying those changes to the base commit gives exactly the attested tree (`tree`), so `uncle verify --tree` on the host-opened commit reaches its integrity checks; the publication gate is recorded as a hand-off delegation, so verify reports no human approval there. The host creates
 the branch, writes the files and opens the PR through the hosting API. Not yet covered: planning and building without a git
-remote, and `uncle verify` against the host-opened PR.
+remote.

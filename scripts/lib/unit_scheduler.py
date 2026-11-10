@@ -15,6 +15,22 @@ import sys
 import time
 
 
+DEFAULT_TYPICAL_CALL_ATOMIC = 400000
+
+
+def budget_cap(remaining_atomic, typical_call_atomic, configured_concurrency):
+    """Total concurrent workers allowed by the remaining task budget.
+
+    min(configured, max(1, floor(remaining / typical))); typical is used only when a positive integer,
+    else 400000. Remaining <= 0 gives 1. An absent or non-integer remaining leaves concurrency unchanged."""
+    def integer(value):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if not integer(remaining_atomic):
+        return configured_concurrency
+    typical = typical_call_atomic if integer(typical_call_atomic) and typical_call_atomic > 0 else DEFAULT_TYPICAL_CALL_ATOMIC
+    return min(configured_concurrency, max(1, remaining_atomic // typical))
+
+
 def config_values():
     path = Path(os.environ.get('UNCLE_CONFIG') or
                 Path(os.environ.get('PROJECT_ROOT', os.getcwd()), '.uncle/config'))

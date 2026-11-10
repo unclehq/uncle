@@ -345,7 +345,7 @@ class StatementTests(Fixture):
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.assertEqual(verify.returncode, 1, verify.stdout)
         self.assertIn('required gate IMPLEMENTATION_REVIEW has no human approval', verify.stdout)
-        self.assertTrue(verify.stdout.rstrip().endswith('NOT HUMAN VERIFIED'))
+        self.assertTrue(verify.stdout.rstrip().endswith('then run uncle verify again.'))
 
     def test_delegated_plan_approval_is_kept_verbatim_and_not_human(self):
         self.seed_envelopes()

@@ -7,7 +7,7 @@ nothing from the Uncle install is imported, so `canonical()` and
 `ARTIFACT_EXCLUDES` below are copies of scripts/lib/envelope.py and must stay
 byte-identical.
 
-Exit codes: 0 VERIFIED; 1 NOT HUMAN VERIFIED or refused; 2 usage or a required tool
+Exit codes: 0 VERIFIED; 1 NOT VERIFIED (a check failed or refused); 2 usage or a required tool
 missing; 3 integrity only (no signature, untrusted signature, or a missing
 optional tool).
 """
@@ -388,19 +388,32 @@ def check_6(statement):
 
 
 def check_7(statement):
-    approved = []
+    """(line, unattended): a required gate approved by a person passes; one
+    delegated by an unattended run is reported, not refused (nobody was there
+    to approve it); supervisor and disabled gates are still refused."""
+    approved, unattended = [], []
     for entry in statement['predicate'].get('approvals') or []:
         if not entry.get('required'):
             continue
         by = entry.get('approved_by') or ''
-        if not by or DELEGATED.match(by):
+        delegated = entry.get('delegated_by') or ''
+        name = str(entry.get('gate')).lower().replace('_', ' ')
+        if by == 'unattended' or (not by and delegated == 'unattended'):
+            unattended.append(name)
+        elif not by or DELEGATED.match(by):
             raise Refused(['required gate %s has no human approval' % entry.get('gate'),
                            '  approved_by:  ' + (by or 'empty'),
-                           '  delegated_by: ' + (entry.get('delegated_by') or 'empty')])
-        approved.append(str(entry.get('gate')).lower().replace('_', ' '))
-    if not approved:
+                           '  delegated_by: ' + (delegated or 'empty')])
+        else:
+            approved.append(name)
+    if not approved and not unattended:
         raise Refused(['no required human gate is recorded'])
-    return 'human approvals: ' + ', '.join(approved)
+    parts = []
+    if approved:
+        parts.append('human approvals: ' + ', '.join(approved))
+    if unattended:
+        parts.append('made unattended, no human approval: ' + ', '.join(unattended))
+    return '; '.join(parts), bool(unattended)
 
 
 def check_8(statement, tree, release):
@@ -474,6 +487,19 @@ def resolve_target(args):
     return tree, raw, sig
 
 
+def print_not_verified(reasons):
+    """The failure verdict: say plainly that nothing was verified, and why."""
+    print('NOT VERIFIED')
+    print()
+    print('This change could not be verified. Do not trust its attestation as it stands.')
+    print('Reasons:')
+    for reason in reasons:
+        print('  - ' + reason)
+    print()
+    print('Fix the failed checks listed above (for example, re-run the workflow after the tree changed),')
+    print('then run uncle verify again.')
+
+
 def main(argv):
     parser = argparse.ArgumentParser(prog='uncle verify', description='Verify an Uncle change attestation.')
     parser.add_argument('pr', nargs='?', help='PR URL or number (needs gh); default: the main branch, else the current checkout')
@@ -496,19 +522,20 @@ def main(argv):
     except Usage as error:
         print(str(error))
         print()
-        print('NOT HUMAN VERIFIED')
+        print_not_verified([str(error).splitlines()[0] if str(error) else 'usage error'])
         return 2 if 'not installed' in str(error) else 1
     except Refused as error:
         print('✗ ' + error.args[0][0])
         for extra in error.args[0][1:]:
             print(extra)
         print()
-        print('NOT HUMAN VERIFIED')
+        print_not_verified([error.args[0][0]])
         return 1
     # Past the statement itself, every check runs and reports: stopping at the
     # first refusal hid whether anything else was wrong, and made each fix
     # cost a rerun to discover the next failure.
     failed = False
+    reasons = []
     state = {}
 
     def run(label, check):
@@ -517,6 +544,7 @@ def main(argv):
             return check()
         except Refused as error:
             failed = True
+            reasons.append(error.args[0][0])
             print('✗ ' + error.args[0][0])
             for extra in error.args[0][1:]:
                 print(extra)
@@ -550,26 +578,34 @@ def main(argv):
             print('✓ ' + check(statement, *extra))
         return go
 
+    def approvals_check():
+        nonlocal verdict
+        line, unattended = check_7(statement)
+        print(('○ ' if unattended else '✓ ') + line)
+        if unattended and verdict == 'VERIFIED':
+            verdict = 'NOT HUMAN VERIFIED'
+
     try:
         run('signature', signature)
         run('approvals', approved)
         run('artifact', artifact)
         run('results', results)
         run('check 6', single(check_6))
-        run('check 7', single(check_7))
+        run('check 7', approvals_check)
         if 'release' in state:
             run('check 8', single(check_8, tree, state['release']))
         else:
             print('○ check 8 skipped: it needs the release artifact, which check 4 did not establish')
+            reasons.append('check 8 skipped: the release artifact was not established')
             failed = True
     except Usage as error:
         print(str(error))
         print()
-        print('NOT HUMAN VERIFIED')
+        print_not_verified([str(error).splitlines()[0] if str(error) else 'usage error'])
         return 2 if 'not installed' in str(error) else 1
     print()
     if failed:
-        print('NOT HUMAN VERIFIED')
+        print_not_verified(reasons)
         return 1
     print(verdict)
     return 0 if verdict == 'VERIFIED' else 3

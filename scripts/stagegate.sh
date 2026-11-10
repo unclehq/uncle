@@ -4328,6 +4328,8 @@ project_plan_section_settle() {
     local name="$1" directory="$2" delivery="$3" pid="${4:-}"
     [[ -z "$pid" ]] || wait "$pid" || { echo "Project plan section $name did not complete." >&2; return 1; }
     project_plan_section_finish "$name" "$directory" "$delivery" && return 0
+    # A refused-for-spending worker would be refused again: rerunning it only spends the limit's last cents.
+    [[ ! -e "$STATE_DIR/spending-stop" ]] || { echo "Project plan section $name stopped at the spending limit." >&2; return 1; }
     echo "Project plan section $name delivered nothing usable; running that worker once more."
     # Keep the failed attempt's logs: the rerun overwrites them, and why it failed is the evidence.
     cp "$LOG_DIR/project-plan-section-$name.jsonl" "$LOG_DIR/project-plan-section-$name.attempt1.jsonl" 2>/dev/null || true
@@ -4351,7 +4353,23 @@ run_project_plan_sections_bounded() {
             for name in $phase; do dependent+=("$name"); done
         fi
     done < <(python3 -B "$ROOT/scripts/lib/project_plan_sections.py" phases)
-    [[ "${#pending[@]}" -gt 0 ]] || return 1
+    if [[ "${UNCLE_PLAN_SECTIONS_RESUME:-0}" == 1 ]]; then
+        # Resuming after a spending stop: sections already on disk are kept, only the missing ones run.
+        local -a todo=(); local kept=0
+        for name in ${pending[@]+"${pending[@]}"}; do
+            if [[ -s "$directory/$name.md" ]]; then
+                kept=$((kept + 1))
+                case " ${gate_names[*]} " in *" $name "*) gate_left=$((gate_left - 1)) ;; esac
+            else todo+=("$name"); fi
+        done
+        pending=(${todo[@]+"${todo[@]}"}); todo=()
+        for name in ${dependent[@]+"${dependent[@]}"}; do [[ -s "$directory/$name.md" ]] && kept=$((kept + 1)) || todo+=("$name"); done
+        dependent=(${todo[@]+"${todo[@]}"})
+        [[ "$gate_left" -gt 0 ]] || gate=1
+        echo "Project plan sections: resuming with $kept finished section(s) kept."
+    else
+        [[ "${#pending[@]}" -gt 0 ]] || return 1
+    fi
     while :; do
         active=0
         for index in "${!pids[@]}"; do
@@ -4409,8 +4427,17 @@ run_project_plan_sections() {
     elif stage_uses_self_hosted project-plan AGENT; then
         delivery=local
     fi
-    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    local resume=0
+    if [[ -e "$STATE_DIR/spending-stop" ]]; then
+        # The previous run stopped at a spending limit and kept its finished sections; the limit may have been raised.
+        rm -f "$STATE_DIR/spending-stop"
+        grep -q '^spending_limit' "$STATE_DIR/stop-reason" 2>/dev/null && rm -f "$STATE_DIR/stop-reason"
+        [[ -d "$directory" ]] && resume=1
+    fi
+    [[ "$resume" == 1 ]] || rm -rf "$directory"
+    mkdir -p "$directory/prompts"
     if [[ "$jobs" != 0 ]]; then
+        export UNCLE_PLAN_SECTIONS_RESUME="$resume"
         run_project_plan_sections_bounded "$directory" "$delivery" "$jobs" || return 1
     else
         # The first phase holds the outline and the workers that need only the requirements. The next phase starts when the
@@ -4418,6 +4445,7 @@ run_project_plan_sections() {
         # collected at the end.
         while IFS= read -r phase; do
             for name in $phase; do
+                [[ "$resume" == 1 && -s "$directory/$name.md" ]] && continue
                 echo "Project plan section worker: $name"
                 ( workflow_model_enter project-plan AGENT "$jobs" || exit 1; project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
                 pids+=("$!"); names+=("$name")
@@ -4567,6 +4595,13 @@ run_stage() {
                 echo 'Project plan written in parallel sections and assembled by the driver.'
             else
                 rm -f "$project_plan_investigation"
+                if [[ -e "$STATE_DIR/spending-stop" ]]; then
+                    # The single pass would run into the same limit and spend more doing it. Keep the finished sections.
+                    { printf 'spending_limit: '; cat "$STATE_DIR/spending-stop"; } > "$STATE_DIR/stop-reason"
+                    cat "$STATE_DIR/spending-stop" >&2
+                    echo 'Finished project-plan sections were kept; raise the limit and run again to resume them.' >&2
+                    exit 1
+                fi
             fi
             if [[ "$project_plan_sectioned" == 1 ]] || stage_uses_self_hosted project-plan AGENT; then
                 [[ "$project_plan_sectioned" == 1 ]] || run_initial_planning_agent prompts/project-plan-investigate.md project-plan-investigate

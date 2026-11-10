@@ -220,7 +220,26 @@ def load_config(path):
                     values['model'] = parse_value('model', top['model'])
             except ValueError:
                 values.pop('runner', None)
+    _hosted_defaults(values, errors, seen, path)
     return Config(values, errors)
+
+
+def _hosted_defaults(values, errors, seen, path):
+    """Hosted with no runner key: self-hosted and the hosted model. An explicit runner (including claude) is kept."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import hosted
+    if not hosted.is_hosted(os.environ) or 'runner' in values or 'runner' in seen:
+        return
+    if dict(read_config_lines(path, prefix='')).get('runner'):
+        return
+    values['runner'] = 'self-hosted'
+    if 'model' not in seen:
+        model = hosted.standard_model_settings(os.environ)['model']
+        if model:
+            values['model'] = model
+        else:  # never substitute the claude alias
+            values['model'] = ''
+            errors.append('Hosted mode has no model: set SEREN_MODEL or UNCLE_MODEL (or supervision.model)')
 
 
 # --- secrets ----------------------------------------------------------------

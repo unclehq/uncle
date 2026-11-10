@@ -1,66 +1,63 @@
-# Baseline report — Issue 236
+# Baseline Report
 
-Omitted sections: Reproduction (needs live host, not available here); Existing failures (none documented in repo; driver baseline is authority)
+Omitted sections: Reproduction (not a reproducible in-repo bug; the failure needs real Daytona); Areas outside change folded into section 12
 
 ## 1. Change-request summary
-See `.uncle/docs/CHANGE_REQUEST.md`. The hosted-build release must list Daytona's signed preview-link call (`GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, `require_approval` false) in its script publisher grants. The release definition and build script are NOT in this repository.
+Issue 235 (`.uncle/docs/CHANGE_REQUEST.md`): the hosted preview path never ran end to end. Most fixes live outside this repo (build script, release grants, Daytona sandbox settings). In-repo surface is small: a chat rule about Daytona's warning page, its test pattern, and a test pinning the `UNCLE_PREVIEW_HOST=0.0.0.0` path.
 
 ## 2. Repository architecture
-Uncle workflow driver: shell scripts (`scripts/*.sh`, `scripts/lib/`), Python helpers (`scripts/lib/*.py`, `uncle_tui.py`), skills (`skills/`), tests (`scripts/tests/`). A repo-wide grep (excluding `.uncle`, `docs`) for `signed-preview-url`, `publisher_grants` and a Daytona publisher entry found nothing; no release-definition file exists here.
+Bash drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) call `uncle_host_preview_hook` (`scripts/lib/host_preview_hook.sh`) which runs `scripts/lib/host_preview.py serve`. Chat skill text in `skills/uncle-build/SKILL.md`, checked by `scripts/tests/chat-skill-test.py`.
 
 ## 3. Relevant code paths
-- `scripts/lib/host_preview.py:281-292` prints `UNCLE_PREVIEW_PORT=<n>` (the port the external script asks a link for).
-- `skills/uncle-build/SKILL.md:8-16` chat rules for the `Preview:` line.
-Neither needs to change.
+- `scripts/lib/host_preview.py:50-63` `valid_host` / `urls_for` (0.0.0.0 accepted; URL shown as 127.0.0.1)
+- `scripts/lib/host_preview.py:210-213` host from `UNCLE_PREVIEW_HOST`, default 127.0.0.1
+- `skills/uncle-build/SKILL.md` rules 1-5 (16 lines)
+- `scripts/tests/chat-skill-test.py:13-35` REQUIRED patterns, `:147-157` per-rule removal cases, MAX_BODY_LINES=60
+- `scripts/tests/host-preview-test.py:199-207` `test_wildcard_host_records_loopback_url`
 
-## 4. Current observable behavior
+## 4/5. Current behavior and invariants
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Hosted build serves an app | `UNCLE_PREVIEW_PORT=<n>` printed | host_preview.py:288-291 | Yes |
-| B-2 | Script requests signed link | Refused (not granted); no `Preview:` line | CHANGE_REQUEST.md (external, not reproducible here) | No (target of change) |
-| B-3 | Script creates/deletes sandboxes via Daytona | Allowed by existing grants | CHANGE_REQUEST.md | Yes |
+| B-1 | Build output has `Preview:` line | Skill rules 1-5 relay link, expiry, no tab promise | SKILL.md | Yes |
+| B-2 | `UNCLE_PREVIEW_HOST=0.0.0.0` | App binds wildcard; record url is `http://127.0.0.1:<port>/` | host-preview-test.py:199 | Yes |
+| B-3 | Default host | Loopback bind | host-preview-test.py:191 | Yes |
+| B-4 | Skill mentions warning page | No such rule | SKILL.md | No (ADD) |
 
-## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Release lists only calls matching exactly one publisher operation | Host publisher (external) | None in repo | Medium |
-| I-2 | Existing Daytona grants unchanged | Release definition (external) | None in repo | Medium |
+| I-1 | Skill body <= 60 lines, every REQUIRED rule present, no forbidden tab-opening phrases | chat-skill-test.py:64 and REQUIRED | chat-skill-test.py | High |
+| I-2 | Invalid hosts rejected without spawning | valid_host | host-preview-test.py:209 | High |
+| I-3 | Loopback checks for wildcard host | urls_for | host-preview-test.py:199 | High |
 
-## 6. Contracts
-Release grant entry: publisher, method, path, optional `operation_id`, `require_approval`. External.
+## 6. Interface contracts
+`.uncle/preview.json` records `host`, `url`, `status`. Build script (external) reads `UNCLE_PREVIEW_PORT=<n>` from serve stdout.
 
-## 7. Test coverage
-No tests in this repo cover the release definition (CHANGE_REQUEST.md "Tests": none). Shell and Python suites use separate temp dirs and no shared ports, so they run as one parallel group.
+## 7. Existing coverage
+host-preview suite is in `scripts/tests/critical-suites.txt` (default python tier). chat-skill suite is not in the critical list, so the default runner does not execute it; it must be run explicitly. The two Python commands use separate temp dirs.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (Uncle's documented runners). No results run here; the driver's baseline is authoritative. No documented pre-existing failures beyond those the driver records.
+Commands come from `scripts/run-python-tests.sh` usage (supports `-- suite ...`). No results produced here; the driver baseline is authoritative. No documented pre-existing failure for these suites.
 
 ## 12. Likely change surface
-Outside this repository (release definition, build script). In-repo: none required.
+`skills/uncle-build/SKILL.md`, `scripts/tests/chat-skill-test.py`, `scripts/tests/host-preview-test.py`.
 
 ## 13. Regression-sensitive components
-None in-repo. External: the release's other Daytona grants.
+SKILL.md line cap and forbidden-phrase list (a warning-page sentence must avoid 'will open', 'opens automatically' etc.).
 
 ## 14. Outside the change
-`host_preview.py`, `SKILL.md`, all Uncle driver code and tests.
+Build script, release grants (#236), Daytona sandbox settings, `host_preview.py` logic, drivers, hook.
 
 ## 15. Unknowns and assumptions
-- UNRESOLVED: where the release definition lives and whether this workflow can modify it.
-- Assumed the host's Daytona publisher offers the call as the issue states (read 2026-11-10); not verifiable here.
+- UNRESOLVED (needs live Daytona): whether link reaches 127.0.0.1; auto-stop behavior; signed-link call success. Cannot be verified in this repo.
+- Assumption: the external build script is owned elsewhere; this repo only gets the 0.0.0.0 pinning test and chat rule.
 
-## 16. Initial risk assessment
-Low code risk; high delivery risk: no in-repo artifact can carry the fix, so completion depends on an external repository and live-host checks.
+## 16. Initial risk
+Low for in-repo edits. High residual risk that the end-to-end path remains unproven until live checks run outside this repo.
 
 ## Exact build and test commands executed
 
 ```sh
-bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-```
-
-## Parallel verification groups
-
-```text
-1 2
+bash scripts/run-python-tests.sh -- chat-skill
 ```
 

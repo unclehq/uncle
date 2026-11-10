@@ -1,176 +1,144 @@
-## AR-001: Blocking decision (a) external release repo vs (b) hand-off only is unresolved, so AC-1..AC-6 cannot be verified in-repo
+## AR-001: The plan never says what rule 6 does when no warning page appears (non-Daytona host, link already opened).
 
 - Severity: HIGH
-- References: CHANGE_PLAN intro 'BLOCKING PLANNING DECISION'; Restrictions feasibility says CAP-RELEASE-EDIT unavailable.
-- Failure: Blocking decision (a) external release repo vs (b) hand-off only is unresolved, so AC-1..AC-6 cannot be verified in-repo. Say: 'Approval selects (b): the deliverable is IMPLEMENTATION_NOTES.md only, and AC-1..AC-6 are recorded BLOCKED-SETUP, not PASS, until the release repo is supplied.'
+- References: CHANGE_PLAN s4.1.r1 ('on first open of each link'); CHANGE_SPEC B-4 gives no host or opened-before condition.
+- Failure: The plan never says what rule 6 does when no warning page appears (non-Daytona host, link already opened). Settle it: 'Rule 6 applies to every relayed Preview link and is worded conditionally ("if Daytona shows a warning page, continue past it").'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: The plan does not say what steps 2 and 3 do when access is absent; its status vocabulary is only PASS/BLOCKED-SETUP, and
-
-- Severity: HIGH
-- References: Implementation sequence steps 2-3; 'Missing live access does not block step 1'; CLAUDE.md completion rule.
-- Failure: The plan does not say what steps 2 and 3 do when access is absent; its status vocabulary is only PASS/BLOCKED-SETUP, and absent host access may be BLOCKED-IMPOSSIBLE. Say: 'Without release repo or host access, steps 2 and 3 record BLOCKED-SETUP naming the access needed, and the change is not declared complete.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-003: The expire POST grant has no decision rule for 'script ends links early'.
+## AR-002: The `warning-page` pattern has no defined match rule, so skill text, regex and removal case can read it differently.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC section 15 'unknown'; plan step 1 and scope cuts; AC-6.
-- Failure: The expire POST grant has no decision rule for 'script ends links early'. Step 1 writes it into the notes while it is also conditional. Say: 'Add the expire POST grant only if the script calls the Daytona expire endpoint; otherwise record it as not added.'
+- References: CHANGE_PLAN s4.1.r2 and R-1 ('no button name'); risk 'Pattern too loose'.
+- Failure: The `warning-page` pattern has no defined match rule, so skill text, regex and removal case can read it differently. Settle it: 'The pattern is case-insensitive, matches warning\s+page, and quoted button labels fail the forbidden-phrase check.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: The expiresInSeconds action is unspecified when the value is missing, exactly 3600, or above 3600.
+## AR-003: AC-3 requires the non-loopback answer 'when available', but the plan allows skipping the probe silently and cuts it firs
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 4 'missing or > 3600'; SI-2; AC-6.
-- Failure: The expiresInSeconds action is unspecified when the value is missing, exactly 3600, or above 3600. Say: 'If absent set 3600; if above 3600 lower to 3600; if 3600 or less leave unchanged.'
+- References: CHANGE_SPEC AC-3 vs CHANGE_PLAN s4.1.r3 ('skip that probe') and s13.
+- Failure: AC-3 requires the non-loopback answer 'when available', but the plan allows skipping the probe silently and cuts it first. Settle it: 'No non-loopback IPv4 means SKIP and the test passes; if one exists, a failed connection fails the test.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: LV-3 has no procedure or pass criterion, and the spec's 'require_approval false or omitted' conflicts with the plan's ex
+## AR-004: The plan does not say which non-loopback address the probe uses, or how it handles multiple interfaces, IPv6-only hosts,
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-1 'false or omitted' vs plan entry; Manual verification LV-3; AC-4.
-- Failure: LV-3 has no procedure or pass criterion, and the spec's 'require_approval false or omitted' conflicts with the plan's explicit false. Say: 'The entry sets require_approval explicitly to false; LV-3 passes only if a pre-existing hire installs with zero approval prompts.'
+- References: CHANGE_PLAN s4.1.r3 ('probe non-loopback IP if found') and its flakiness risk.
+- Failure: The plan does not say which non-loopback address the probe uses, or how it handles multiple interfaces, IPv6-only hosts, link-local addresses or blocked connects. Settle it: 'Probe the first non-loopback, non-link-local IPv4 with a 2s timeout; IPv6-only or timeout is SKIP.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: AC-5 'no existing grant removed or altered' has no stated baseline, and the diff is in an external repo that the in-repo
+## AR-005: The plan does not say where rule 6 sits relative to existing rules, or whether the 60-line cap covers the body or the wh
 
 - Severity: LOW
-- References: Traceability AC-5 'Diff review'; plan section 5.
-- Failure: AC-5 'no existing grant removed or altered' has no stated baseline, and the diff is in an external repo that the in-repo notes cannot prove. Say: 'The notes record the pre-change and post-change grant lists from the release repo.'
+- References: CHANGE_SPEC AC-1 ('body stays at or under 60 lines'); CHANGE_PLAN R-2 ('Keep rule to 1-2 lines').
+- Failure: The plan does not say where rule 6 sits relative to existing rules, or whether the 60-line cap covers the body or the whole file. Settle it: 'Rule 6 is one line appended after rule 5; the body stays at or under 60 lines.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Plan has no defined regression check for existing Daytona grants (SB-4/AC-5) since the release definition is external an
-
-- Severity: HIGH
-- References: CHANGE_PLAN traceability AC-5 -> 'Diff review' with automated test None; no artifact path is named for the diff.
-- Failure: Plan has no defined regression check for existing Daytona grants (SB-4/AC-5) since the release definition is external and in-repo suites cannot see it. Decision: AC-5 is verified by a recorded before/after diff of the full grant list saved under .uncle/docs/, and a missing diff means AC-5 is NOT RUN, not PASS.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: Plan says 'in-repo suites must match baseline' as the regression check, yet also says a green in-repo suite is not evide
-
-- Severity: HIGH
-- References: CHANGE_PLAN sections 16-17 vs Risks 'A green in-repo suite is not evidence for this change'.
-- Failure: Plan says 'in-repo suites must match baseline' as the regression check, yet also says a green in-repo suite is not evidence. The two statements make the regression gate vacuous. Decision: in-repo suite parity is only a no-source-change guard and never counts toward AC-1..AC-6.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: Step 3 allows recording LV-1..LV-3 as BLOCKED-SETUP, but the checks have no stated classification when host access is mi
+## AR-006: The `warning-page` regex could match text that is not the new rule.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN step 3 'PASS/BLOCKED-SETUP'; section 18 classification LIVE_VERIFICATION; CHANGE_SPEC SB-3.
-- Failure: Step 3 allows recording LV-1..LV-3 as BLOCKED-SETUP, but the checks have no stated classification when host access is missing. LV-3 (existing hire installs without approval) is the main compatibility regression guard. Decision: if host access is missing, LV-1..LV-3 are BLOCKED-SETUP, naming the action required, and the change is not complete.
+- References: CHANGE_PLAN s4.1.r2 lists 'Pattern too loose' as a risk with no stated mitigation; D-2 gives no exact wording.
+- Failure: The `warning-page` regex could match text that is not the new rule. Decision: the pattern must match only the new rule-6 line containing both 'warning page' and 'continue', and the removal case must delete exactly that line.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: The conditional expire POST has no decision rule.
+## AR-007: The 60-line cap and the new rule can collide, and the plan never gives the current line count.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-6 and section 15 'unknown'; CHANGE_PLAN R-2 'Conditional entry'.
-- Failure: The conditional expire POST has no decision rule. 'If and only if the script ends links early' is unresolved, so AC-6 passes or fails depending on how it is read, and a missing grant would regress link expiry. Decision: step 2 must grep the script for the expire call and record the finding. The expire entry is added if the call exists and omitted otherwise.
+- References: CHANGE_SPEC AC-1 and I-1 (<=60 lines); CHANGE_PLAN R-2 'Keep rule to 1-2 lines' with no baseline line count.
+- Failure: The 60-line cap and the new rule can collide, and the plan never gives the current line count. Decision: if rule 6 would push the body over 60 lines, condense an existing non-rule line; never raise the cap and never drop rule 6.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: The plan does not state the outcome when a script's expiresInSeconds is absent or above 3600.
+## AR-008: The non-loopback probe says 'if found' but not how it is found or what a skip looks like.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN section 4 'build script only if expiresInSeconds is missing or > 3600'; R-3 CAP-SCRIPT-EDIT.
-- Failure: The plan does not state the outcome when a script's expiresInSeconds is absent or above 3600. Both the script edit and the 3600 limit are listed as 'Never cut', but the script change is not in scope for any in-repo owner. Decision: a missing or over-limit value is edited to 3600 in the external script, and if that edit is not permitted, AC-6 is reported FAIL.
+- References: CHANGE_PLAN s4.1.r3 'probe non-loopback IP if found' and 'skip that probe'; CHANGE_SPEC AC-3.
+- Failure: The non-loopback probe says 'if found' but not how it is found or what a skip looks like. Decision: if a non-loopback IPv4 address exists, the test connects to it and fails on refusal; if none exists, it prints SKIP and the record-host assertions still run.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-012: Steps 2 and 3 both Own IMPLEMENTATION_NOTES.md with Depends on, but step 2 is 'if access is granted' with no defined beh
+## AR-009: The plan does not say whether the existing removal cases for rules 1-5 are kept.
 
 - Severity: LOW
-- References: CHANGE_PLAN Implementation sequence steps 2-3.
-- Failure: Steps 2 and 3 both Own IMPLEMENTATION_NOTES.md with Depends on, but step 2 is 'if access is granted' with no defined behavior when it is skipped. Decision: when step 2 is skipped, the notes record 'step 2 not performed: no release repo access', and step 3 is BLOCKED-SETUP.
+- References: CHANGE_SPEC AC-2 and AC-4; CHANGE_PLAN s4.1.r2.
+- Failure: The plan does not say whether the existing removal cases for rules 1-5 are kept. Decision: the existing five removal cases stay unchanged and the new case is appended after them.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: The grant path uses unconstrained {sandboxId}/{port} placeholders, so it covers every sandbox and port the host key reac
+## AR-010: Rule 6 tells people to continue past Daytona's warning page but never limits that to the Preview link from the build out
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC §10 only says the bearer-credential and untrusted-output rules must not be weakened. CHANGE_PLAN row s4.1.r1 says 'continue past it' with no limit.
+- Failure: Rule 6 tells people to continue past Daytona's warning page but never limits that to the Preview link from the build output. Add: 'Rule 6 applies only to the Preview link from the build output; never tell the person to continue past a warning for any other URL.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-011: The wildcard test binds to 0.0.0.0 and probes a non-loopback address, but the plan does not say the probe must stay loca
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN s4.1.r3: 'probe non-loopback IP if found'; risk column says skip when none. CHANGE_SPEC AC-3: 'when one is available'.
+- Failure: The wildcard test binds to 0.0.0.0 and probes a non-loopback address, but the plan does not say the probe must stay local-only or what happens with no such address. Add: 'The probe uses only local interface addresses, makes no outbound calls, skips when none exists, and stops the server on pass and failure.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: No test checks that 0.0.0.0 stays out of the recorded url and chat output.
+
+- Severity: LOW
+- References: CHANGE_SPEC AC-3 and I-3 say the url stays on loopback. Row s4.1.r3 lists only the record-host assertion and the probe.
+- Failure: No test checks that 0.0.0.0 stays out of the recorded url and chat output. Add: 'The wildcard test asserts the recorded url host is exactly 127.0.0.1 and 0.0.0.0 appears only in the host field of preview.json.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-013: The non-loopback probe is described as 'if found' and 'skip that probe', but the plan doesn't say how the test reports a
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1.2 path '/sandbox/{sandboxId}/ports/{port}/signed-preview-url'; CHANGE_SPEC AC-1 has no sandbox or port restriction.
-- Failure: The grant path uses unconstrained {sandboxId}/{port} placeholders, so it covers every sandbox and port the host key reaches. Plan should say: the grant stays a templated path, the script requests links only for its own sandbox, and diff review confirms no wider wildcard.
+- References: CHANGE_PLAN change-impact row r3 ('skip that probe'); CHANGE_SPEC AC-3 ('when one is available').
+- Failure: The non-loopback probe is described as 'if found' and 'skip that probe', but the plan doesn't say how the test reports a skip. A silent pass looks the same as a real pass. Settle with: 'With no non-loopback IPv4 address, the test prints SKIP, does not count the probe as passed, and does not fail.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: SI-2 (expiresInSeconds <= 3600) is enforced only by the external, unverified build script.
-
-- Severity: HIGH
-- References: CHANGE_PLAN R-3 'Inspect script' (CAP-SCRIPT-EDIT); CHANGE_SPEC SI-2 enforcement point is Script.
-- Failure: SI-2 (expiresInSeconds <= 3600) is enforced only by the external, unverified build script. The plan does not say what happens if the field is omitted. Plan should say: expiresInSeconds must be set explicitly in the call; a script that omits it fails AC-6.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-015: The signed link is a bearer credential, and with require_approval false no human sees it before it is printed.
+## AR-014: AC-1 and AC-2 only test that a regex such as 'warning-page' matches.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s11 saves 'publish output saved under .uncle/docs/'; AC-3 requires a Preview: line; no redaction rule.
-- Failure: The signed link is a bearer credential, and with require_approval false no human sees it before it is printed. The plan sets no rules for where it may be recorded. Plan should say: the URL appears only in build output, is never written to .uncle/docs or notes, and live-check evidence redacts the token.
+- References: CHANGE_SPEC AC-1 ('without quoting a button name'); CHANGE_PLAN R-1.
+- Failure: AC-1 and AC-2 only test that a regex such as 'warning-page' matches. They don't fix the matching wording or how the test catches a quoted button name. Settle with: 'The regex matches the phrase "warning page"; a forbidden pattern rejects quoted button labels, and a removal case proves a skill containing one is rejected.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: The conditional expire-POST grant is a state-changing write with require_approval false, and its trigger 'script ends li
+## AR-015: The plan says rule 6 is added and 'rules 1-5 remain', but not how the test confirms this.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-6 and s15 'Whether the script ends links early is unknown'; CHANGE_PLAN R-2.
-- Failure: The conditional expire-POST grant is a state-changing write with require_approval false, and its trigger 'script ends links early' is undefined. Plan should say: add it only if the script source contains an explicit expire call, scoped to the same path template, with the grep result recorded in the notes.
+- References: CHANGE_SPEC AC-4 and AC-1 (60-line cap); CHANGE_PLAN R-2.
+- Failure: The plan says rule 6 is added and 'rules 1-5 remain', but not how the test confirms this. Settle with: 'The chat-skill test asserts numbered rules 1 to 6 appear in order and the body is at most 60 lines; the current line count is recorded.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-017: AC-4 (no approval prompt) sits beside the spec's note that the host supports approval only for mail on the script surfac
+## AR-016: AC-3 says the app 'answers' on a non-loopback address but doesn't define an answer, how the address is chosen, or the ti
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC s10 'host supports approval only for mail on script surface' versus AC-4 and SB-3.
-- Failure: AC-4 (no approval prompt) sits beside the spec's note that the host supports approval only for mail on the script surface, so the new grant cannot be gated. Plan should say: the grant is accepted as ungated, and reviewer sign-off on the diff stands in for the host approval gate.
+- References: CHANGE_SPEC AC-3; CHANGE_PLAN row r3 ('probe non-loopback IP if found').
+- Failure: AC-3 says the app 'answers' on a non-loopback address but doesn't define an answer, how the address is chosen, or the timeout. Settle with: 'GET http://<first non-loopback IPv4>:<port>/ must return HTTP 200 with the same body as loopback, within 5 seconds.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: The plan has no pass/fail evidence for AC-1 and AC-5 when the release repo is inaccessible, because the only diff to ins
-
-- Severity: HIGH
-- References: CHANGE_PLAN Traceability lists 'Diff review'/'Script review' for AC-1/5/6; Restrictions says CAP-RELEASE-EDIT is unavailable in this checkout.
-- Failure: The plan has no pass/fail evidence for AC-1 and AC-5 when the release repo is inaccessible, because the only diff to inspect is external. Plan should say: 'If the release definition is not accessible, AC-1, AC-5 and AC-6 are recorded BLOCKED-SETUP (not PASS), and IMPLEMENTATION_NOTES.md is not evidence for them.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-019: The plan says it is 'executable only as (b)' but also keeps steps 2 and 3 that require external access.
-
-- Severity: HIGH
-- References: CHANGE_PLAN intro BLOCKING PLANNING DECISION versus Implementation sequence steps 2-3 and Restrictions feasibility note.
-- Failure: The plan says it is 'executable only as (b)' but also keeps steps 2 and 3 that require external access. Plan should say: 'Steps 2 and 3 are BLOCKED-SETUP unless the operator supplies the release repo path; the in-repo deliverable is complete when step 1 exists.' The condition for step 1 alone being sufficient is undefined.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: The expire-POST condition 'if and only if the script ends links early' has no objective test.
+## AR-017: AC-5 verifies with 'git diff --name-only against change-impact table', which has no pass/fail rule.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC AC-6, SB-5 and Assumptions ('whether the script ends links early is unknown'); CHANGE_PLAN R-2.
-- Failure: The expire-POST condition 'if and only if the script ends links early' has no objective test. Plan should say: 'The script ends links early iff it contains a call to the Daytona signed-preview-url expire endpoint; grep for that call decides it.'
+- References: CHANGE_SPEC AC-5 verification.
+- Failure: AC-5 verifies with 'git diff --name-only against change-impact table', which has no pass/fail rule. Settle with: 'AC-5 passes when the changed paths, ignoring .uncle/ workflow files, are exactly SKILL.md, chat-skill-test.py and host-preview-test.py.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: AC-3's 'small web app' and AC-4's 'existing hire' are unspecified, so the live checks cannot be repeated or compared.
+## AR-018: The plan claims the regression test fails before the edit and passes after, but gives no step to record that.
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-3 and AC-4; CHANGE_PLAN section 18 LV-2 and LV-3.
-- Failure: AC-3's 'small web app' and AC-4's 'existing hire' are unspecified, so the live checks cannot be repeated or compared. Plan should say which app and hire to use, or that the executor records which it picked.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-022: The scripts' behavior is unspecified when the signed link is returned with expiresInSeconds above 3600 or is refused, so
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC SI-2 and Failure behavior cover only the publish refusal; CHANGE_PLAN Error and recovery.
-- Failure: The scripts' behavior is unspecified when the signed link is returned with expiresInSeconds above 3600 or is refused, so SI-2's failure path has no expected output. Plan should say: 'If the host refuses or returns no link, the build prints no Preview: line and exits normally.'
+- Severity: LOW
+- References: CHANGE_PLAN section 16/17.
+- Failure: The plan claims the regression test fails before the edit and passes after, but gives no step to record that. The chat-skill suite is also outside the critical tier. Settle with: 'Implementation notes record the failing run ("missing rule: warning-page") before the SKILL.md edit and the passing run after; the chat-skill suite is run explicitly.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

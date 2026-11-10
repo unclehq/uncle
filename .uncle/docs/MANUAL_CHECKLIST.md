@@ -1,73 +1,62 @@
 # Manual checklist
 
-## Coverage
-
-### MC-102
-- Required for acceptance: YES
-- Exclusive resources: release:publish
-- Depends on: MC-100
-- Exact action: Publish the new release from the release repository and record the publish output (redacting any credentials).
-- Expected result: Publish succeeds with no 'must match one publisher operation' refusal. If it is refused, report the error without guessing an operation_id; if there is no host access, BLOCKED-SETUP.
-- Evidence to capture: The publish command output and exit status.
+### MC-100
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Open skills/uncle-build/SKILL.md for human reading and check the new rule 6 wording against the rules 1-5 that precede it.
+- Expected result: Rule 6 follows rule 5 as one or two lines and is conditional: if Daytona shows a warning page, continue past it. It applies only to the Preview link from the build output, names no button in quotes, and does not advise continuing past warnings for any other URL.
+- Evidence to capture: Quote rule 6 and the line numbers of rules 1-6.
 - Actual result: 
 - Status: NOT RUN
 
 ### MC-104
-- Required for acceptance: YES
 - Exclusive resources: none
-- Depends on: MC-102
-- Exact action: Using a recorded pre-existing hire created before the publish, reinstall or update it on the hosted host with the new release, counting approval prompts.
-- Expected result: The hire installs with zero approval prompts, including no Daytona-write approval prompt.
-- Evidence to capture: The hire id and creation date, the install output, and the prompt count.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-105
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: MC-102
-- Exact action: Run a hosted build where the host refuses the signed-link request or returns no link, then note the exit status and look for a `Preview:` line.
-- Expected result: No `Preview:` line is printed (and no over-limit or partial link), the build exits normally with status 0, and the refusal is reported in the build output.
-- Evidence to capture: The exit status and the build output showing the absence of a `Preview:` line.
+- Depends on: none
+- Exact action: Run `bash scripts/run-python-tests.sh` for the default tier and review the summary for failures or warnings.
+- Expected result: All previously passing suites still pass, with no new failures.
+- Evidence to capture: Summary output and exit status.
 - Actual result: 
 - Status: NOT RUN
 
 ## Invariants
 
-### MC-204
+### MC-201
 - Required for acceptance: YES
-- Exclusive resources: hosted-hire:existing
-- Depends on: MC-201
-- Exact action: Record a pre-existing hire (identifier and creation date before the publish), then reinstall or update it on the hosted host after the new release is published, counting approval prompts.
-- Expected result: The hire installs with zero approval prompts, including no Daytona-write approval prompt.
-- Evidence to capture: Hire identifier and creation date, the prompt count of zero, and a transcript or screenshot of the install.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-301
-- Exclusive resources: release:publish
-- Depends on: none
-- Exact action: With operator-supplied release repo access, publish the new release containing the signed-preview-url grant, and save the publish output with any token redacted.
-- Expected result: Publish succeeds without the "must match one publisher operation" refusal. If no release repo or host access exists, record BLOCKED-SETUP naming the access needed.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-303
 - Exclusive resources: none
+- Depends on: none
+- Exact action: Run `UNCLE_PREVIEW_HOST=0.0.0.0 python3 scripts/lib/host_preview.py serve <scratch project dir>` for a trivial local app, then open `<scratch project dir>/.uncle/preview.json` and the serve stdout (which prints UNCLE_PREVIEW_PORT=<n>) and look at every place 0.0.0.0 appears.
+- Expected result: The `host` field is `0.0.0.0`, status is running, the `url` host is exactly 127.0.0.1, and 0.0.0.0 appears nowhere else in the record or output.
+- Evidence to capture: Contents of preview.json and serve stdout showing the host and url values.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-202
+- Required for acceptance: YES
+- Exclusive resources: none
+- Depends on: none
+- Exact action: With the same wildcard-host server running, fetch http://<first non-loopback, non-link-local IPv4 of this machine>:<port>/ and http://127.0.0.1:<port>/, then stop the server.
+- Expected result: If such an address exists, both return HTTP 200 with identical bodies within 5 seconds; if none exists, record it as SKIP, not as passed. The server process is gone after stopping.
+- Evidence to capture: Status codes, body comparison, chosen address (or SKIP note), and a check that no server process remains.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-302
+- Exclusive resources: dir:.uncle/preview.json
 - Depends on: MC-301
-- Exact action: Record a pre-existing hire (id and creation date earlier than the publish), install or update it to the new release on the host, and count approval prompts.
-- Expected result: Zero Daytona-write approval prompts appear and the install succeeds.
+- Exact action: While the wildcard-host app from MC-301 runs, find the first non-loopback, non-link-local IPv4 address of a local interface and GET http://<address>:<port>/ with a 5s timeout; then stop the server.
+- Expected result: If such an address exists, the GET returns HTTP 200 with the same body as loopback; if none exists, record SKIP (not PASS). The server process is gone afterward.
+- Evidence to capture: Chosen address, HTTP status, body comparison result or SKIP note, and process list after shutdown.
 - Actual result: 
 - Status: NOT RUN
 
 ## Regressions
 
-### MC-404
+### MC-402
 - Required for acceptance: YES
-- Exclusive resources: account:existing-hire
-- Depends on: MC-403
-- Exact action: Record the pre-existing hire's name/id and creation date, which must predate the publish. After MC-403, reinstall or update that hire on the host and count approval prompts.
-- Expected result: The hire installs with zero Daytona-write approval prompts. This guards existing hires against a compatibility regression.
-- Evidence to capture: Hire id and creation date, install output, and the prompt count.
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Read rule 6 and judge its wording: it must be conditional (if Daytona shows a warning page, continue past it), limited to the Preview link from the build output, and quote no button name.
+- Expected result: Rule 6 does not tell the person to bypass warnings for any other URL, names no button label, and does not promise a tab will open.
+- Evidence to capture: The rule 6 text and a note on each of the three wording criteria.
 - Actual result: 
 - Status: NOT RUN

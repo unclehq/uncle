@@ -71,6 +71,8 @@ Small contributions and constructive criticism are welcome, including "this was 
 * **Model flexibility.** Use different supported runners and models for implementation, review and other stages: Claude, Codex, Kimi, self-hosted models, and AWS Bedrock ([docs/aws-bedrock.md](docs/aws-bedrock.md)).
 * **Local-first operation.** Uncle runs on your machine in a terminal UI, with no Uncle-hosted backend, account or telemetry. Your model runners and GitHub still receive what they need to do the work; see the [privacy policy](PRIVACY_POLICY.md).
 
+Configuration note: in hosted mode (`UNCLE_HOSTED=1`) supervision reads `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `SEREN_MODEL`/`UNCLE_MODEL` from the environment and needs no `supervision.base_url`. Unknown `supervision.*` keys are ignored with a warning. Do not put credentials (API keys, secrets) in `.uncle/config`. Unknown-key warnings name only the key, never its value. See [docs/supervision.md](docs/supervision.md).
+
 Limits worth knowing: the core drivers and `uncle_tui.py` are large, so changing the core takes more effort than changing prompts or config. Bedrock uses a bearer token, not an IAM role or SSO profile.
 
 ## The change is the unit of trust

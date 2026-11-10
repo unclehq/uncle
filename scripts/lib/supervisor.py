@@ -179,9 +179,10 @@ def read_config_lines(path, prefix='supervision.'):
 class Config:
     """Typed supervision settings plus the errors that disable correction."""
 
-    def __init__(self, values=None, errors=()):
+    def __init__(self, values=None, errors=(), warnings=()):
         self.values = dict(DEFAULTS, **(values or {}))
         self.errors = list(errors)
+        self.warnings = list(warnings)
 
     def __getattr__(self, name):
         if name in DEFAULTS:
@@ -200,9 +201,39 @@ class Config:
         return ['supervision.%s %s' % (key, format_value(key, self.values[key])) for key in DEFAULTS]
 
 
+WARNING_CAP = 20
+
+
+def _warning_key(key):
+    return re.sub(r'[^A-Za-z0-9._-]', '?', key)[:64]
+
+
+def config_notices(config, environ=None, config_path=None, hosted_mode=None):
+    """Stderr lines for a supervised-run entry: none unless hosted; then every
+    warning in file order, then the disabled reason. Redacted."""
+    if hosted_mode is None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import hosted
+        hosted_mode = hosted.is_hosted(os.environ if environ is None else environ)
+    if not hosted_mode:
+        return []
+    lines = list(config.warnings)
+    if config.errors:
+        lines.append(config.disabled_reason)
+    known = known_secret_values(environ, config_path)
+    return [redact(line, known) for line in lines]
+
+
 def load_config(path):
     values, errors, seen = {}, [], set()
+    warnings, unknown = [], set()
     for key, raw in read_config_lines(path):
+        if key not in KINDS:
+            if key not in unknown:
+                unknown.add(key)
+                if len(warnings) < WARNING_CAP:
+                    warnings.append("ignoring unknown supervision key: supervision.%s" % _warning_key(key))
+            continue
         if key in seen:
             continue
         seen.add(key)
@@ -221,7 +252,9 @@ def load_config(path):
             except ValueError:
                 values.pop('runner', None)
     _hosted_defaults(values, errors, seen, path)
-    return Config(values, errors)
+    if len(unknown) > WARNING_CAP:
+        warnings.append('... and %d more' % (len(unknown) - WARNING_CAP))
+    return Config(values, errors, warnings)
 
 
 def _hosted_defaults(values, errors, seen, path):
@@ -1814,6 +1847,8 @@ def supervised_lock_run(run_once, command, state_dir, root, environ=None):
     environ = os.environ if environ is None else environ
     config_path = environ.get('UNCLE_CONFIG') or str(Path(state_dir).parent / 'config')
     config = load_config(config_path)
+    for notice in config_notices(config, environ, config_path):
+        sys.stderr.write(notice + '\n')
     if not config.enabled or environ.get('UNCLE_SUPERVISION_HOST'):
         return run_once(command)
     import tempfile
@@ -1923,6 +1958,8 @@ def main(argv):
     if ns.action == 'config':
         config = load_config(ns.config)
         print('\n'.join(config.lines))
+        for warning in config.warnings:
+            print(redact(warning, known_secret_values(None, ns.config)), file=sys.stderr)
         if config.errors:
             print(config.disabled_reason, file=sys.stderr)
             return 1

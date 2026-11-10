@@ -922,7 +922,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(loaded.errors, [])
             for key, value in (('enabled', 'yes'), ('max_interventions', '-1'), ('call_timeout_seconds', '0'),
                                ('max_calls_per_run', '0'), ('call_max_cost_usd', 'inf'), ('call_max_cost_usd', '0'),
-                               ('call_max_cost_usd', 'nan'), ('effort', 'max'), ('model', 'two words'), ('bogus', '1'),
+                               ('call_max_cost_usd', 'nan'), ('effort', 'max'), ('model', 'two words'),
                                ('stage_time_seconds', '1.5'), ('max_interventions', 'true'),
                                ('files_allowlist', '../etc/passwd')):
                 path.write_text('supervision.%s %s\n' % (key, value))
@@ -930,6 +930,68 @@ class ConfigTests(unittest.TestCase):
                 self.assertTrue(loaded.errors, (key, value))
                 self.assertIn('supervision.' + key, loaded.disabled_reason)
                 self.assertEqual(loaded.values.get(key, sv.DEFAULTS.get(key)), sv.DEFAULTS.get(key), 'no substituted limit')
+            path.write_text('supervision.bogus 1\n')
+            loaded = sv.load_config(path)
+            self.assertEqual(loaded.errors, [])
+            self.assertEqual(loaded.disabled_reason, '')
+            self.assertEqual(loaded.warnings, ['ignoring unknown supervision key: supervision.bogus'])
+            for k, v in sv.DEFAULTS.items():
+                self.assertEqual(loaded.values.get(k, v), v)
+        with self.assertRaises(ValueError) as caught:
+            sv.parse_value('bogus', '1')
+        self.assertEqual(str(caught.exception), 'unknown supervision key: supervision.bogus')
+
+    def test_unknown_key_is_warning_only_and_keeps_valid_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config'
+            path.write_text('supervision.max_interventions 3\nsupervision.base_url SENTINEL-VALUE-123\n'
+                            'supervision.base_url again\n')
+            loaded = sv.load_config(path)
+            self.assertEqual(loaded.errors, [])
+            self.assertEqual(loaded.disabled_reason, '')
+            self.assertEqual(loaded.max_interventions, 3)
+            self.assertEqual(loaded.warnings, ['ignoring unknown supervision key: supervision.base_url'])
+            self.assertNotIn('SENTINEL-VALUE-123', '\n'.join(loaded.warnings + loaded.lines))
+            path.write_text('supervision.base_url x\nsupervision.max_interventions -1\n')
+            loaded = sv.load_config(path)
+            self.assertTrue(loaded.errors)
+            self.assertIn('supervision.max_interventions', loaded.disabled_reason)
+            self.assertEqual(len(loaded.warnings), 1)
+
+    def test_config_cli_unknown_key_warns_on_stderr(self):
+        script = str(ROOT / 'scripts' / 'lib' / 'supervisor.py')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config'
+            path.write_text('supervision.base_url SENTINEL-VALUE-123\n')
+            result = subprocess.run([sys.executable, '-B', script, 'config', '--config', str(path)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('supervision.enabled', result.stdout)
+            self.assertIn('ignoring unknown supervision key: supervision.base_url', result.stderr)
+            self.assertNotIn('ignoring', result.stdout)
+            self.assertNotIn('SENTINEL-VALUE-123', result.stdout + result.stderr)
+            path.write_text('supervision.base_url x\nsupervision.max_interventions -1\n')
+            result = subprocess.run([sys.executable, '-B', script, 'config', '--config', str(path)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            err = result.stderr
+            self.assertLess(err.index('ignoring unknown supervision key'), err.index('supervision.max_interventions'))
+
+    def test_hosted_notices_warn_once_and_stay_enabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config'
+            path.write_text('supervision.base_url x\n')
+            loaded = sv.load_config(path)
+            notices = sv.config_notices(loaded, {'UNCLE_HOSTED': '1'})
+            self.assertEqual(notices.count('ignoring unknown supervision key: supervision.base_url'), 1)
+            self.assertTrue(loaded.enabled)
+            self.assertEqual(sv.config_notices(loaded, {}), [])
+            path.write_text('supervision.base_url x\nsupervision.max_interventions -1\n')
+            loaded = sv.load_config(path)
+            notices = sv.config_notices(loaded, {'UNCLE_HOSTED': '1'})
+            self.assertIn(loaded.disabled_reason, notices)
+            self.assertLess(notices.index('ignoring unknown supervision key: supervision.base_url'),
+                            notices.index(loaded.disabled_reason))
 
     def test_invalid_config_disables_correction_at_runtime(self):
         with tempfile.TemporaryDirectory() as directory:

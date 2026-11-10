@@ -2593,8 +2593,7 @@ run_codex() {
         # guarded against the per-argument size limit.
         . "$ROOT/scripts/lib/reviewer-prompt.sh"
         local prompt_kind=argv
-        case "${client_cmd[*]}" in *native_stage.py*|*self_hosted.py*) prompt_kind=file ;; esac
-        case "${cmd##*/}" in self_hosted.py|native_stage.py) prompt_kind=file ;; esac
+        prompt_kind="$(reviewer_prompt_kind ${client_cmd[@]+"${client_cmd[@]}"})"
         reviewer_prompt_guard "$log_name" "$prompt_kind" "$prompt_file" || return 1
         local -a prompt_args=()
         if [[ "$prompt_kind" == file ]]; then

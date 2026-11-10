@@ -20,3 +20,5 @@ jobs:
           python-version: "3.x"
       - name: Run named suites
         run: bash scripts/run-python-tests.sh -- reviewer-prompt-file
+      - name: Run reviewer-prompt-kind suite
+        run: bash scripts/run-python-tests.sh -- reviewer-prompt-kind

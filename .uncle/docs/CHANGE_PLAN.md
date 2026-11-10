@@ -1,98 +1,140 @@
 # Change Plan
 
-Omitted sections: Schema (none); Migration (none); Concurrency (none); Feature flag (none); Observability (none); Data-flow/state/API changes (none)
+Source seed: https://github.com/unclehq/uncle/issues/232
 
-Issue 235
+Issue 232
 
-Seeded from [unclehq/uncle#235](https://github.com/unclehq/uncle/issues/235).
+Omitted sections: Schema/persistence, Migration, Concurrency, Feature flag, State transitions, Observability (none affected)
 
-## 1. Selected approach
-In-repo scope only: add a warning-page rule to the chat skill, pin it with a test pattern, and strengthen the wildcard-host test. Decision D-1: no change to `host_preview.py` (default stays 127.0.0.1; the 0.0.0.0 choice is the external build script's after a live test). Decision D-2: the warning rule is rule 6, worded without 'will open'-type phrases.
+## 1. Selected technical approach
 
-## 2/3. Alternatives
-Change default host to 0.0.0.0: rejected, widens exposure without live evidence. Put the note in the build script: out of repo.
+Add `reviewer_prompt_kind CMD...` to `scripts/lib/reviewer-prompt.sh`. Matching rule (AR-005): positional, not a scan of all elements. Only element 0 counts, or element 1 when the basename of element 0 is an interpreter (`python3`, `python`, `bash`, `sh`). The basename of that one element is compared with `self_hosted.py`, `native_stage.py` and `reviewer-self-hosted.sh`; a match prints `file`, otherwise `argv` (including zero arguments or only empty strings); the helper always returns 0. Later elements are never inspected, so an argv-only client whose later arguments are named like an allowlisted script stays `argv` and keeps its guard. The wrapper basename `reviewer-self-hosted.sh` counts only when the element's resolved path is under `${UNCLE_RUNTIME_ROOT}/scripts`; another script of that name found via PATH or a configured runner is `argv`. Both drivers call it with `"${client_cmd[@]}"`. Decision D1 (AR-006): stagegate keeps its existing `client_cmd[0]==python3` clause OR'd with the helper (preserving B1), so in stagegate a python3-first client is always `file` even when the helper alone says `argv`; this is a deliberate, documented stagegate-only divergence, and invariant I3 is amended to read 'the helper alone decides the allowlist everywhere; stagegate additionally treats a python3-first command as file'. Decision D2: change-workflow's two `case` lines are replaced by the helper alone, so there a python3-first client whose script is not allowlisted is `argv`. The test table pins both outcomes (stagegate and change-workflow), plus negative look-alike cases (later-argument look-alike, wrapper outside the runtime scripts dir). Bash 3.2 compatible, no associative arrays.
 
-## 4/5. Components
-Modify: SKILL.md, chat-skill-test.py, host-preview-test.py. Not modified: host_preview.py, hook, drivers, stage-config.sh.
+Decision D3 (AR-008): `reviewer_prompt_kind` with zero arguments, or only empty-string arguments, prints `argv` and returns 0. Call sites expand the array with the bash 3.2 `set -u`-safe form `${client_cmd[@]+"${client_cmd[@]}"}` so an empty or unset `client_cmd` neither aborts nor errors. Decision D4 (AR-007): kind is computed per candidate command, including in the `self-hosted.candidates 2` race path (race code itself unchanged); a wrapper candidate is classified `file` and an argv-only candidate in the same list stays `argv`. An automated test in `reviewer-prompt-kind-test.py` covers a two-candidate list (wrapper plus argv-only) in each driver.
 
-## Change-impact table
+## 2. Alternatives
+(a) Add the wrapper name to each driver's check: rejected, drifts again. (b) Make the wrapper the python3 client: rejected, changes launch semantics. (c) Raise the limit: impossible (OS limit).
 
-| Component | Planned change | Reason | Regression risk | Test coverage |
-|---|---|---|---|---|
-| `skills/uncle-build/SKILL.md` | Add rule 6 as one conditional line: if Daytona shows a warning page, continue past it. It applies only to the Preview link from the build output (every relayed Preview link, including non-Daytona hosts and already-opened links where no warning appears); never advise continuing past a warning for any other URL; no quoted button name. | Issue Fix 5 | Forbidden-phrase / line cap; unconditional wording (e.g. 'on first open of each link') would be wrong when no warning appears; wording must not extend to non-Preview URLs | chat-skill suite |
-| `scripts/tests/chat-skill-test.py` | Add `warning-page` REQUIRED pattern, case-insensitive, matching `warning\s+page` only on the rule-6 line that also contains `continue`; quoted button labels fail the forbidden-phrase check. Append the `('warning page','warning-page')` removal case after the existing five, deleting exactly that line and no other. | Pin rule | Pattern too loose; mitigated by the fixed case-insensitive match rule `warning\s+page` anchored to the rule-6 line (both 'warning page' and 'continue'), shared by skill text, regex and removal case; removal case must delete exactly that line | chat-skill suite |
-| `scripts/tests/host-preview-test.py` | Extend wildcard test: assert record host `0.0.0.0`; assert the recorded url host is exactly `127.0.0.1` and `0.0.0.0` appears only in the host field of preview.json (not in url or chat output). Then probe the first non-loopback, non-link-local IPv4 address of a local interface (2s connect timeout; local interface addresses only, no outbound calls). If one exists, the connection must succeed; refusal or timeout FAILS the test. If none exists (including IPv6-only hosts), print `SKIP: no non-loopback IPv4`; the probe is not counted as passed, and the record-host and url assertions still run and can fail. The server is stopped on pass and on failure. | Issue Tests step 4 | Hosts with no non-loopback IPv4: explicit SKIP (never a silent pass, not counted as a pass); record-host and url assertions still run. Multiple interfaces: only the first qualifying address is probed. Leaked server on failure is mitigated by stopping the server in a finally path. | host-preview suite |
+## 3. Why preferred
+One decision point, exact allowlist, minimal diff.
 
-Scope check (AC-5): passes when the changed paths from `git diff --name-only`, plus untracked files, ignoring `.uncle/` workflow files, are exactly `skills/uncle-build/SKILL.md`, `scripts/tests/chat-skill-test.py` and `scripts/tests/host-preview-test.py`. Any other changed path fails the check.
+## 4. Components to modify
+See change-impact table.
+
+## 5. Not to modify
+
+`self_hosted.py`, `reviewer-self-hosted.sh`, `stage-config.sh`, guard logic and message, race path, `review_schema_setup`, and the retained `client_cmd[0]==python3` clause in stagegate (it must keep winning over the helper).
+
+## 6. Data flow
+
+Prompt for wrapper reviewers now flows by file path rather than argv. File lifecycle (existing prompt-file mechanism, not modified by this change): the prompt file is created mode 0600 in a per-run private directory and removed on exit, including on failure. The implementer confirms this by reading the existing code and the new test asserts it; any gap is recorded in IMPLEMENTATION_NOTES.md rather than silently patched.
+
+## 8. Interface changes
+Additive function `reviewer_prompt_kind`. Existing contract unchanged.
 
 ## 10. Compatibility
-No interface changes.
+Existing classifications preserved; only the wrapper changes from argv to file.
 
-## 12. Error behavior
-None changed.
+## 12. Error and recovery
+Unrecognized commands fall back to `argv`, still guarded.
 
 ## 14. Rollback plan
-Revert the three files with git; no persisted state.
+Revert the commit. No state or schema to restore.
 
-## 16/17. Automated and regression tests
-Commands live in the baseline: `bash scripts/run-python-tests.sh` (default tier incl. host-preview) and `bash scripts/run-python-tests.sh -- chat-skill` (not in the critical tier). Bug-style regression: removing the new SKILL.md rule makes the `warning-page` removal case and REQUIRED check fail before the edit, pass after.
+## 16. Automated-test strategy
+
+New `scripts/tests/reviewer-prompt-kind-test.py` (hyphenated name): (1) helper table test, including: zero arguments and an empty-string-only command, both printing `argv` with exit 0; element 0 allowlisted basename -> `file`; `python3`/`bash`/`sh` followed by an allowlisted script -> `file` (e.g. `python3 .../self_hosted.py`, `python3 .../native_stage.py`, `bash .../reviewer-self-hosted.sh`); `codex`, `claude`, `reviewer-kimi.sh` -> `argv`; allowlisted basename only in a later argument of an argv-only client (e.g. `codex --config self_hosted.py`, `claude reviewer-self-hosted.sh`, `codex exec reviewer-self-hosted.sh`, `python3 other.py native_stage.py`) -> `argv`; an interpreter-first command with a non-allowlisted script (`python3 other.py`) -> `argv` in the helper; (2) stagegate launch block extracted by the same markers as the CallSites tests but with `client_cmd` set from the real wrapper path and `UNCLE_RUNTIME_ROOT` at a temp root containing a copy of the real `scripts/reviewer-self-hosted.sh` and a fake `scripts/lib/self_hosted.py` recording argv; asserts `--prompt-file`, max arg length <=120000, no guard message, with a 200000-byte prompt, and that the prompt file is mode 0600, lives in a private per-run directory, and is gone after exit both on success and when the fake reviewer fails; also asserts the stagegate/change-workflow divergence: a `python3 other.py` client is sent as `file` by stagegate; (3) same for change-workflow block, where `python3 other.py` stays `argv` and is guarded; (4) hosted-mode: source `scripts/lib/stage-config.sh` with `UNCLE_HOSTED=1` and an empty config, resolve the reviewer command, assert it ends in `reviewer-self-hosted.sh` and the helper says `file`; (5) negative: `codex`, `claude`, `reviewer-kimi.sh` classify `argv`; a 200000-byte prompt makes the guard return 1; boundary: an argv-kind prompt of exactly 120000 bytes is allowed (guard returns 0) and 120001 bytes is refused (guard returns 1); (6) grep assertion that change-workflow.sh contains `reviewer_prompt_kind` and contains no `case` pattern over the basenames `native_stage.py` or `self_hosted.py` (so a reworded case over those names also fails); (7) a script named `reviewer-self-hosted.sh` located outside `UNCLE_RUNTIME_ROOT/scripts` classifies `argv`. Failing-before proof: step 4 runs tests 2-4 by assertion on the unmodified tree and records them failing (assertion failures, not errors) before steps 2-3 land; steps 2-3 then make them pass.
+
+Added tests (AR-003, AR-004): (7) helper with no arguments and with only empty strings prints argv, exit 0; both drivers' launch blocks run with an empty client_cmd under bash set -u without aborting. (8) Guard boundary: an argv-kind client with a 120000-byte prompt is allowed, 120001 bytes returns 1 with the guard message. (9) Race path: a two-candidate list of the wrapper plus an argv-only client is classified per candidate, the wrapper as file and the other as argv, and the test asserts both launch forms in one run.
+
+## 17. Regression strategy
+Run existing `reviewer-prompt-file` suite plus the full shell and Python runners.
 
 ## 18. Manual verification
-Live, outside this repo (LIVE_VERIFICATION phase, not a coding prerequisite): issue Checks 1-5 against real Daytona, after the external script and release (#236) exist. Not performable here; must be recorded BLOCKED, never PASS.
 
-## Restrictions
+On Linux (CI or host): hosted run with prompts >128 KB shows `Launching reviewer (.../reviewer-self-hosted.sh)` and no `prompt is N bytes` line; repeat with `self-hosted.candidates 2`. Not performable on this macOS host.
 
-| ID | Source | Property | Mechanism | CAP | Phase | Requirement |
-|---|---|---|---|---|---|---|
-| R-1 | USER (issue Fix 5) | Rule 6 is conditional ('if Daytona shows a warning page, continue past it'), applies to every relayed Preview link, names the phrase 'warning page' and quotes no button name | SKILL.md rule 6 plus case-insensitive `warning\s+page` regex that matches only the rule-6 line containing both 'warning page' and 'continue'; a forbidden pattern rejects quoted button labels in the skill body; a removal case deleting exactly that rule-6 line, and a case containing a quoted button label, are both rejected | CAP-SKILL | CODING | AC-1 |
-| R-2 | REPOSITORY (chat-skill-test.py:13) | Body <= 60 lines (body only), no forbidden phrases; rule 6 positioned after rule 5; the chat-skill test asserts numbered rules 1 to 6 appear in order (existing rules 1-5 retained) and the body is at most 60 lines; the current line count is recorded in implementation notes | Rule 6 is one line appended after rule 5 (keep rule to 1-2 lines); the body (not the whole file) stays at or under 60 lines. Record the current body line count in implementation notes. If rule 6 would push the body over 60 lines, condense an existing non-rule line; never raise the cap and never drop rule 6. Add ordered-rules and line-cap assertions to chat-skill-test.py. | CAP-SKILL | CODING | AC-1 |
-| R-3 | USER (issue Tests) | Wildcard host recorded as 0.0.0.0; recorded url host stays exactly 127.0.0.1 and 0.0.0.0 appears only in preview.json's host field; when a non-loopback IPv4 exists, GET http://<first non-loopback IPv4>:<port>/ returns HTTP 200 with the same body as loopback within 5 seconds; the probe reports its outcome explicitly (PASS, FAIL or SKIP), is local-only, and stops the server on pass and failure | Test edit; run via python runner. Probe target is the first non-loopback, non-link-local IPv4 address from local interfaces. Probe makes a local-only GET http://<address>:<port>/ with a 5s timeout and no outbound calls; it passes only if it returns HTTP 200 with the same body as loopback. A failed connection or mismatch to an existing address FAILS. With no such address (e.g. IPv6-only) the test prints SKIP, does not count the probe as passed, and does not fail. The record-host assertions always run, and the server is stopped on pass and failure. | CAP-PYRUN | CODING | AC-3 |
+The mixed-candidate race case (wrapper plus an argv-only client in self-hosted.candidates 2) is covered by automated test (9), so the Linux manual run only confirms it live.
 
-Feasibility: `scripts/run-python-tests.sh` supports `-- suite` (usage line 14, inspected). CAP-PYRUN and CAP-SKILL need no credentials.
+## Change-impact table
+| Component | Planned change | Reason | Regression risk | Test coverage |
+|---|---|---|---|---|
+| `scripts/lib/reviewer-prompt.sh` | add `reviewer_prompt_kind` | single decision point | Low | new helper test |
+| `scripts/stagegate.sh` | use helper at ~:2358, keep marker text | fix B3 | Low | wrapper test, CallSites |
+| `scripts/change-workflow.sh` | replace two case lines at ~:2595-2597 with helper | fix B3, no drift | Low | wrapper test, CallSites |
+| `scripts/tests/reviewer-prompt-kind-test.py` | new | AC-1..6 | None | itself |
+| `scripts/tests/critical-suites.txt` | add `reviewer-prompt-kind` | run in default tier | Low | runner |
+| `.github/workflows/linux-tests.yml` | add suite to named-suites command | AC-7 | Low | CI |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1: rule 6 is conditional (if Daytona shows a warning page, continue past it), applies to every relayed Preview link, matches case-insensitive `warning\s+page`, and quotes no button name | B-4 | I-1 | SKILL.md | chat-skill suite: REQUIRED pattern matches the phrase 'warning page' (case-insensitive, `warning\s+page`), chat-skill suite: forbidden pattern rejects quoted button labels, chat-skill suite: removal case proves a skill containing a quoted button label is rejected | Live Check 1 |
-| AC-2 | B-4 | I-1 | chat-skill-test.py | chat-skill suite: existing five removal cases (rules 1-5) stay unchanged; the new warning-page removal case is appended after them, chat-skill suite: the `warning-page` removal case fails the suite when the 'warning page' phrase is removed, chat-skill suite: the quoted-button-label removal case fails the suite | none |
-| AC-3: the wildcard-host test asserts the record host is `0.0.0.0`. It probes the first non-loopback, non-link-local IPv4 address: GET http://<that address>:<port>/ must return HTTP 200 with the same body as loopback within 5 seconds; a failed connection, non-200 status, differing body or timeout fails the test. When no such IPv4 address exists (including IPv6-only hosts), the test prints SKIP and passes. | B-2 | I-3 | host-preview-test.py | host-preview suite: record host is 0.0.0.0; non-loopback probe passes if an IPv4 exists, else prints SKIP, is not counted as passed, and does not fail | Live address check |
-| AC-4: existing behavior is preserved; the chat-skill test asserts numbered rules 1 to 6 appear in order (rules 1-5 remain) and the body is at most 60 lines, with the current line count recorded. | B-1, B-3 | I-2 | all | default python tier | none |
+| AC-1: `reviewer_prompt_kind` prints `file` only when element 0's basename, or element 1's basename after an interpreter (python3, bash, sh) in element 0, is `self_hosted.py`, `native_stage.py` or `reviewer-self-hosted.sh`; every other command prints `argv`. Allowlisted names in later arguments are never matched. Zero arguments, or only empty-string arguments, print `argv` and return 0; call sites expand the array with the ${client_cmd[@]+"${client_cmd[@]}"} form so an empty or unset array does not abort under bash 3.2 set -u. Kind is computed per candidate command (race path included), so a wrapper and an argv-only candidate in a two-candidate list each get their own kind. The argv guard refuses only when the prompt is strictly over 120000 bytes (120000 allowed, 120001 refused). | B7 | I3 | reviewer-prompt.sh | helper test (table incl. positional cases: wrapper-named later argument => argv; empty and empty-string args => argv, exit 0), two-candidate mixed wrapper/argv test, prompt-size boundary test (120000 allowed, 120001 refused) | n/a |
+| AC-2: both drivers classify via `reviewer_prompt_kind`; stagegate additionally keeps the python3-first clause (python3-first => file there), change-workflow uses the helper alone (python3-first with non-allowlisted script => argv). | B3 | I3 | stagegate.sh, change-workflow.sh | grep test, helper/driver table pinning the python3-first divergence | n/a |
+| AC-3 | B3 | I2 | stagegate.sh | wrapper test | Linux hosted run |
+| AC-4 | B3 | I2 | change-workflow.sh | wrapper test | Linux hosted run |
+| AC-5 | B3b | I3 | stage-config.sh (read-only) | hosted test (runs offline, no network; fails, not skips, if the wrapper is not resolved) | Linux hosted run |
+| AC-6: argv-only clients stay `argv` and guarded, including clients whose later arguments carry an allowlisted basename; stagegate's python3-first clause wins over the helper (python3-first is `file` in stagegate, `argv` in change-workflow unless the script is allowlisted). | B4, B5 | I1 | reviewer-prompt.sh | negative + existing Guard, later-argument allowlisted basename stays argv, python3-first divergence pinned in stagegate and change-workflow tests | n/a |
+| AC-7 | B3 | n/a | linux-tests.yml | CI | CI run |
+
+Restrictions:
+
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
+|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST Fix 2 | AC-6 | guard unchanged for argv clients; python3-first precedence in stagegate preserved | no edit to guard function; stagegate's python3-first clause is retained and wins over the helper | explicit request | CAP-bash | CODING |
+| R-2 | USER | CHANGE_REQUEST Fix 5 | AC-7 | Linux CI runs tests | edit linux-tests.yml | explicit request | CAP-ci | CODING; live on Linux CI in LIVE_VERIFICATION |
+| R-3 | PLATFORM | bash 3.2 on macOS | AC-1 | portable helper; empty/unset client_cmd does not abort under bash 3.2 set -u | indexed loops only; positional (element 0/1) matching; call sites expand client_cmd with the set -u-safe form ${client_cmd[@]+"${client_cmd[@]}"} so an empty array does not abort under bash 3.2 | macOS default shell | CAP-bash | CODING |
+
+Feasibility: `scripts/lib/reviewer-prompt.sh`, `stagegate.sh:2355-2367`, `change-workflow.sh:2595-2597` inspected; wrapper at `scripts/reviewer-self-hosted.sh:3-8` honors `UNCLE_RUNTIME_ROOT`. Live Linux check needs no credentials beyond CI. The element-0 / post-interpreter-element-1 matching rule needs only indexed array access, available in bash 3.2.
 
 ## Implementation sequence
 
-1. Skill rule and its test pattern (shared contract, edited together so the suite never sits half-changed). Order: first add the test pattern and removal case, run `bash scripts/run-python-tests.sh -- chat-skill` explicitly (the suite is outside the critical tier) and record the failing run ("missing rule: warning-page") in .uncle/docs/IMPLEMENTATION_NOTES.md; then edit SKILL.md, rerun the same command and record the passing run.
-   Owns: `skills/uncle-build/SKILL.md`, `scripts/tests/chat-skill-test.py`
-2. Wildcard host test strengthening (independent of step 1)
-   Owns: `scripts/tests/host-preview-test.py`
+1. Add helper `reviewer_prompt_kind` and document it in the header comment (decision D1/D2).
+   Owns: `scripts/lib/reviewer-prompt.sh`
+2. Wire stagegate.sh to the helper, preserving the `local prompt_kind=argv` and `        fi\n        # race_self` marker text.
+   Owns: `scripts/stagegate.sh`
+   Depends on: 1, 4
+3. Wire change-workflow.sh to the helper, preserving the `. "$ROOT/scripts/lib/reviewer-prompt.sh"` and `        wait "$!"` markers.
+   Owns: `scripts/change-workflow.sh`
+   Depends on: 1, 4
+4. Write the new test suite and run it on the unmodified tree, recording tests 2-4 failing by assertion (saved output) before steps 2-3 land; re-run after steps 2-3 to show them passing. Independent file, no code dependency beyond the helper name. The helper table test (1) must include a row pinning the divergence: a python3-first command with a non-allowlisted script classifies `argv` from the helper, `file` through the stagegate launch block (python3 clause OR'd) and `argv` through the change-workflow launch block. The hosted test (4) runs offline (no network, no credentials) and FAILS, not skips, if the wrapper path is not resolved; the wrapper basename counts only when its resolved path is under UNCLE_RUNTIME_ROOT/scripts, with a negative test for a same-named wrapper elsewhere.
+   Owns: `scripts/tests/reviewer-prompt-kind-test.py`
+5. Register suite and CI.
+   
+   Step 4 must record its failing-before run before steps 2 and 3 begin; steps 2 and 3 are then parallel-safe with each other (disjoint files).
+   Owns: `scripts/tests/critical-suites.txt`, `.github/workflows/linux-tests.yml`
+   Depends on: 4
 
-## 21. Scope cuts
+## 21. Scope cuts under time pressure
 
-Cut first: the non-loopback IPv4 probe in step 2 (keep the record-host and recorded-url assertions). If cut, AC-3's non-loopback clause must be recorded as unverified in implementation notes, never as passed; a probe that runs and finds no address prints SKIP instead. Never cut step 1.
+Cut first: hosted-mode test (AC-5; it runs offline and fails rather than skips if the wrapper is unresolved, so cutting it is an explicit decision, never a silent skip), then CI edit; never cut helper and call-site wiring or the wrapper launch tests.
 
 ## 22. Risks
-- The end-to-end path stays unproven until external work and live checks happen; this change does not close issue 235 alone.
-- Out-of-repo items (#236 release, build script autoStopInterval/autoDeleteInterval, 3600s lifetime) are not delivered here; state this in implementation notes.
+
+- Misclassifying an argv-only client as file would lose the prompt; mitigated by positional matching (element 0, or element 1 after python3/bash/sh) against the exact basename allowlist, with negative tests including an argv client carrying a wrapper-named later argument.
+- Extraction-marker tests break if markers move; steps 2-3 keep marker text.
+- Mixed race candidates (wrapper plus argv-only) must be classified per candidate; covered by an automated two-candidate test, not only the manual `self-hosted.candidates 2` run.
+- Linux E2BIG behavior cannot be reproduced on macOS; CI covers it (continue-on-error, so a human must read the result).
+- Unresolved: none blocking.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | The plan left the no-warning case undefined; a conditional wording applies safely to any relayed Preview link. | Row s4.1.r1 and R-1 now require conditional wording: if Daytona shows a warning page, continue past it; it applies to every relayed Preview link. |
-| AR-002 | Accepted | An undefined match rule lets skill text, regex and removal case diverge; fixing it removes ambiguity. | Row s4.1.r2 defines the warning-page pattern as case-insensitive warning\s+page; quoted button labels fail the forbidden-phrase check. |
-| AR-003 | Accepted | AC-3 needs a defined outcome when no non-loopback IPv4 exists: SKIP is printed, test passes; a failed connect on an existing address fails. | Edited s4.1.r3, R-3 and AC-3 to define SKIP-pass when no address exists and FAIL on connection failure. |
-| AR-004 | Accepted | The probe target and failure handling must be deterministic to avoid ambiguity and flakiness. | Edited s4.1.r3 and R-3 to probe the first non-loopback, non-link-local IPv4 with a 2s timeout; IPv6-only is SKIP. |
-| AR-005 | Accepted | Placement and cap scope were unstated; fixing both removes ambiguity. | R-2 and s4.1.r1-adjacent text now say rule 6 is one line appended after rule 5 and the body stays at or under 60 lines. |
-| AR-006 | Accepted | A loose pattern could match unrelated text; anchoring it to the rule-6 line prevents false passes. | s4.1.r2 and R-1 now require the pattern to match only the rule-6 line with 'warning page' and 'continue', and the removal case to delete exactly that line. |
-| AR-007 | Accepted | The 60-line cap and a new rule can collide; a stated resolution order removes the ambiguity. | R-2 mechanism now says: if rule 6 pushes the body over 60 lines, condense an existing non-rule line; never raise the cap or drop rule 6. |
-| AR-008 | Accepted | The probe's find, fail and skip behavior must be explicit so a skip cannot pass silently or hide a refusal. | s4.1.r3 now defines the non-loopback IPv4 probe: connect and fail on refusal; with none, print SKIP while record-host assertions still run. |
-| AR-009 | Accepted | The plan was silent on existing removal cases; keeping them unchanged protects AC-4 preservation. | Traceability row AC-2 tests now state the five existing removal cases stay unchanged and the new case is appended after them. |
-| AR-010 | Accepted | Unbounded 'continue past it' could be read as advice to bypass warnings for any URL, weakening untrusted-output handling. | Change-impact row s4.1.r1 now limits rule 6 to the Preview link from the build output and forbids advising continuing past warnings for any other URL. |
-| AR-011 | Accepted | The probe's locality and cleanup were unstated; local-only, skip-when-none and server shutdown are cheap, real constraints. | Row s4.1.r3 change and risk now require local-only addresses, no outbound calls, skip when none, and server stop on pass and failure. |
-| AR-012 | Accepted | I-3 (url stays on loopback) had no test pinning it; asserting the recorded url host closes that gap. | Row s4.1.r3 adds an assertion that the recorded url host is 127.0.0.1 and 0.0.0.0 appears only in preview.json's host field; R-3 property updated. |
-| AR-013 | Accepted | A silent skip is indistinguishable from a pass; the test must report SKIP explicitly and not count it as passed. | R-3 and AC-3 now state: with no non-loopback IPv4 the test prints SKIP, does not count the probe as passed, and does not fail. |
-| AR-014 | Accepted | The match wording and the quoted-button check need to be fixed so the test can reject a skill that names a button. | R-1, AC-1 and AC-2 now fix the regex on 'warning page', add a forbidden pattern for quoted button labels, and add a removal case proving such a skill is rejected. |
-| AR-015 | Accepted | Plan did not say how the test confirms rules 1-5 remain and rule 6 follows. | R-2 and AC-4 now require the chat-skill test to assert numbered rules 1-6 in order and body <=60 lines, with current line count recorded. |
-| AR-016 | Accepted | AC-3 left 'answers', address choice and timeout undefined. | R-3 and AC-3 define the probe: first non-loopback IPv4, GET / returns HTTP 200 with the same body as loopback within 5 seconds. |
-| AR-017 | Accepted | A pass/fail rule for the scope check removes ambiguity in AC-5 verification. | Added a scope-check pass rule to the change-impact table (s4) naming the three allowed paths, ignoring .uncle/ files. |
-| AR-018 | Accepted | The before/after regression claim needs recorded evidence, and the chat-skill suite is outside the critical tier so must be run explicitly. | Step 1 now requires running the chat-skill suite before and after the SKILL.md edit and recording both runs in implementation notes. |
+| AR-001 | Accepted | Scanning every element lets an argv-only client with a wrapper-named argument lose its prompt; the match must be positional. | s1.1 and s18.1.i1: helper matches only element 0, or element 1 when element 0 is python3/bash/sh; AC-1 updated. |
+| AR-002 | Accepted | D1 ORing a python3 clause contradicts 'helper alone decides'; the divergence must be explicit and tested. | s1.1 D1 states python3-first is file in stagegate only (change-workflow uses helper alone); AC-2 and R-3 note it and tests pin both. |
+| AR-003 | Accepted | Empty or unset client_cmd was unspecified; zero args or only empty strings must print argv with status 0 and not abort under bash 3.2 set -u. | Added empty-command behavior to AC-1 and R-3, and empty-command cases to s11 tests. |
+| AR-004 | Accepted | Kind must be per candidate command and the guard boundary exact, so mixed race candidates and 120000 vs 120001 are pinned. | Added per-candidate classification and strict >120000 guard to AC-1, plus boundary and mixed-candidate tests in s11 and s13. |
+| AR-005 | Accepted | Scanning every element lets an argv-only client with a matching argument lose its prompt; restricting to element 0 or the script after an interpreter removes that. | s1.1 helper rule narrowed to element 0 or the script argument after an interpreter; s11.1, AC-6 and s15.4 gain matching tests. |
+| AR-006 | Accepted | The plan left unstated which rule wins in stagegate; the retained python3 clause must win and the divergence must be pinned. | s1.1 states the python3 clause wins in stagegate only; R-1, AC-6 and s11.1 pin the stagegate/change-workflow divergence. |
+| AR-007 | Accepted | Race path code stays unchanged, but a wrapper in a two-candidate list must be pinned as classified per candidate. | Add s1 block stating per-candidate kind (wrapper => file) and add AC-1 note plus risk item requiring an automated two-candidate test. |
+| AR-008 | Accepted | Zero-argument and unset-array behavior must be defined so bash 3.2 set -u cannot abort. | Add s1 block: helper prints argv and returns 0 for zero args; call sites expand with ${client_cmd[@]+"${client_cmd[@]}"}; update R-3 and AC-1. |
+| AR-009 | Accepted | Moving the prompt from argv to a file is a new exposure, so the lifecycle must be stated and tested even though the existing prompt-file code is not modified. | Section 6 states the 0600 private-dir, removed-on-exit lifecycle; section 16 test (2) asserts mode and cleanup, including on failure. |
+| AR-010 | Accepted | Matching any element lets an argv-only client with a look-alike argument skip the guard and lose its prompt. | Section 1 and AC-1 restrict matching to element 0, or element 1 when element 0 is python3/bash/sh; section 16 adds negative look-alike cases. |
+| AR-011 | Accepted | Basename-only trust lets an unrelated script named reviewer-self-hosted.sh receive --prompt-file; restricting the wrapper to the runtime root closes that. | s1.1 and test strategy s11.1: the wrapper basename counts only when its resolved path is under UNCLE_RUNTIME_ROOT/scripts; negative test added. |
+| AR-012 | Accepted | Failing-before proof must be ordered and recorded; steps 2-3 therefore depend on step 4 rather than being parallel. | Step 4 records tests 2-4 failing by assertion on the unmodified tree; steps 2 and 3 depend on step 4; parallel-safe note in step 5 corrected; s11.1 updated. |
+| AR-013 | Accepted | Boundary and empty-command cases are real gaps in the test table and cheap to add. | s11.1 test (1) enumerates empty/zero-arg as argv; test (5) adds 120000-byte allowed and 120001-byte refused cases. |
+| AR-014 | Accepted | An unnamed grep pattern would let a reworded case pass; naming the forbidden patterns pins it. | s11.1 test (6) now asserts no case over native_stage.py/self_hosted.py basenames and presence of reviewer_prompt_kind. |
+| AR-015 | Accepted | The D1 divergence (python3-first is file in stagegate, argv in change-workflow) is real and untested; I3 must state it and tests must pin both. | Edit s1.1 to state the divergence and amend I3; add a test-table row pinning python3-first in both drivers. |
+| AR-016 | Accepted | The hosted test's offline behavior and fail-vs-skip semantics are unspecified. | Edit AC-5 and s17.1 so the hosted test runs offline and fails, not skips, if the wrapper is not resolved. |

@@ -4,6 +4,14 @@
 # Contract (fixed for callers):
 #   reviewer_prompt_guard NAME KIND FILE
 #   reviewer_report_launch_failure NAME STATUS LOG [PACKET]
+#   reviewer_prompt_kind CMD...   prints "file" or "argv", always returns 0.
+#     Positional match: only element 0, or element 1 when element 0's basename
+#     is an interpreter (python3, python, bash, sh). That element's basename
+#     must be self_hosted.py, native_stage.py or reviewer-self-hosted.sh
+#     (the wrapper only when its resolved dir is ${UNCLE_RUNTIME_ROOT}/scripts)
+#     to print "file". No arguments, empty strings, or later look-alike
+#     arguments print "argv". stagegate.sh additionally treats a python3-first
+#     command as file (decision D1); change-workflow.sh uses the helper alone (D2).
 
 # Linux caps one argv element at 131072 bytes; stay below it.
 REVIEWER_PROMPT_ARGV_LIMIT=120000
@@ -38,6 +46,37 @@ reviewer_prompt_guard() {
     echo "Reviewer $name: prompt is $size bytes, over Linux's 131,072-byte per-argument limit (guard $REVIEWER_PROMPT_ARGV_LIMIT); this reviewer command cannot read the prompt from a file. Shorten the prompt or use a file-capable reviewer (self_hosted.py / native_stage.py)." >&2
     return 1
   fi
+  return 0
+}
+
+# reviewer_prompt_kind CMD...
+reviewer_prompt_kind() {
+  local el="${1:-}" base dir want got
+  if [ -n "$el" ]; then
+    case "${el##*/}" in
+      python3|python|bash|sh) el="${2:-}" ;;
+    esac
+  fi
+  [ -n "$el" ] || { echo argv; return 0; }
+  base="${el##*/}"
+  case "$base" in
+    self_hosted.py|native_stage.py) echo file; return 0 ;;
+    reviewer-self-hosted.sh)
+      case "$el" in
+        */*)
+          if [ -n "${UNCLE_RUNTIME_ROOT:-}" ]; then
+            dir=$(cd -P "$(dirname "$el")" 2>/dev/null && pwd -P) || dir=""
+            want=$(cd -P "${UNCLE_RUNTIME_ROOT}/scripts" 2>/dev/null && pwd -P) || want=""
+            if [ -n "$dir" ] && [ "$dir" = "$want" ]; then
+              echo file
+              return 0
+            fi
+          fi
+          ;;
+      esac
+      ;;
+  esac
+  echo argv
   return 0
 }
 

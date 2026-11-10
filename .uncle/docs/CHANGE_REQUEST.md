@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 235
+Issue 232
 
-Seeded from [unclehq/uncle#235](https://github.com/unclehq/uncle/issues/235).
+Seeded from [unclehq/uncle#232](https://github.com/unclehq/uncle/issues/232).
 
 ## Change Type
 
@@ -10,82 +10,76 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Hosted preview link has never worked end to end: the signed-link call is offered now (#236 replaces #209), #208 is untested against Daytona, and Daytona's 15-minute auto-stop ends the app before the link expires
+Reviewer prompts over 120 KB still fail in hosted runs after #214: the self-hosted reviewer starts through reviewer-self-hosted.sh, which the prompt-file check does not recognize
 
 ## Motivation
 
 ## Summary
 
-For a hosted build, the person who asked for it sees the finished app through a link in the chat. Five issues built that path, and all are closed: #206 (Uncle serves the app for the host), #207 (the build script gets a signed Daytona link), #208 (the script keeps the sandbox while the link works), #209 (the release allows the signed-link call) and #210 (the chat passes the link on).
+The fix for #214 (PR #222) gives a reviewer its prompt as a file only when the reviewer command starts with `python3`. Hosted runs use the self-hosted runner, and its reviewer command is the wrapper `scripts/reviewer-self-hosted.sh`. The wrapper runs `self_hosted.py`, which reads `--prompt-file`, but `stagegate.sh` doesn't recognize it. The prompt stays a single command-line argument, and the new size guard refuses it.
 
-The path has never run end to end. No hosted build has printed a `Preview:` line yet:
+The result is the same as #214: every adversarial-review lens fails before any reviewer starts, and the build exits 1. Only the message changed.
 
-- **#209 was closed with no change,** because the host's Daytona publisher didn't offer the signed-link call yet. It does now, and #236 replaces #209. The publisher lists `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, with `expiresInSeconds` "at most 3600", and `POST /sandbox/{sandboxId}/ports/{port}/signed-preview-url/{token}/expire`.
-- **#208 was closed on a change that wasn't merged yet** and was "tested only with a mocked Daytona."
-- **#206's last check was never run:** whether the host's link reaches an app listening on `127.0.0.1`. No link could be made to try it.
+## What happened (2026-11-10, UTC)
 
-Two things the earlier issues didn't cover:
+A headless hosted run (`UNCLE_HOSTED=1`, self-hosted runner, Linux sandbox) built a small app: one cabal program, `base` as the only dependency, three modules. The build included PR #222, since the guard message below first appears in `a1d6abcf`. The project plan was written and approved. At `ADVERSARIAL_REVIEW`, all four lenses (requirements, regression, security and testability) and their retries failed the same way:
 
-- **Daytona's auto-stop doesn't count a running app as activity.** Per Daytona's sandbox docs, auto-stop defaults to 15 minutes. Only preview visits, toolbox calls, SSH and lifecycle changes reset it; "merely having a script or background task running is not sufficient to keep the sandbox alive." Stopping ends every process in the sandbox. So with the default, a link nobody opens within 15 minutes of the build ending reaches a sandbox with no app, even though the chat said the link works for an hour. A signed link survives a restart; the app does not.
-- **Daytona shows a warning page** the first time a browser opens each preview link ([Preview and authentication](https://www.daytona.io/docs/en/preview-and-authentication/)). Accepting it lasts 24 hours for that link only, so the person sees it after every build. A click can't send the header that skips it. Removing it needs a higher Daytona account tier or a custom preview proxy, and neither is planned, so the chat should prepare the person for it.
+```
+Reviewer adversarial-review-worker-requirements: prompt is 148103 bytes, over Linux's 131,072-byte per-argument limit (guard 120000); this reviewer command cannot read the prompt from a file. Shorten the prompt or use a file-capable reviewer (self_hosted.py / native_stage.py).
+Adversarial-review worker failed validation; stopping the panel.
+uncle --noui: driver exited with status 1
+```
 
-## How it happens
+**Shortening the plan doesn't get under the limit.** This three-module plan still produced a 148,103-byte review prompt, close to the 150,668 bytes in #214's larger run. So most of the prompt is fixed text, and nearly every hosted build will hit this. A headless run also can't act on the message's advice.
 
-1. Hosted mode defaults `UNCLE_PREVIEW_MODE` to `host` (`stage-config.sh:51`).
-2. When a build completes, both drivers call `uncle_host_preview_hook` (`stagegate.sh:6830-6831`, `change-workflow.sh:5020-5021`), which runs `host_preview.py serve`.
-3. `serve` starts the app in its own session, on `UNCLE_PREVIEW_HOST`, default `127.0.0.1` (`host_preview.py:210`), and prints `UNCLE_PREVIEW_PORT=<n>` (`:290`).
-4. The build script, kept outside this repository, asks the host's Daytona publisher for a signed link to that port (#207), prints `Preview: <url> (works until …)` and keeps the sandbox (#208).
-5. The chat instructions pass the `Preview:` line on as a clickable link (`skills/uncle-build/SKILL.md:12-16`).
+## Code paths (main `5a5cd30`)
 
-Steps 4 and 5 have not happened in a real hosted run. Step 4's call was refused until the publisher offered it, and the release that would allow it (#236, replacing #209) hasn't been published.
-
-## Code paths (main `09a832b`)
-
-Blame is `git blame`.
+Blame is `git blame -w`.
 
 | Where | What it does | Last changed in |
 |---|---|---|
-| `scripts/lib/stage-config.sh:47-51` | `uncle_is_hosted`; hosted mode defaults `UNCLE_PREVIEW_MODE` to `host`. | `688d2194` 2026-11-09 (#211, PR #223) |
-| `scripts/stagegate.sh:6830-6831`, `scripts/change-workflow.sh:5020-5021` | The `COMPLETE` branch sources and calls `uncle_host_preview_hook`. | `bd3cde00` 2026-11-09 (#206, committed without a PR) |
-| `scripts/lib/host_preview_hook.sh:7-15` | Runs `host_preview.py serve "$PWD"` only in host mode; failures are ignored. | `bd3cde00` 2026-11-09 (#206) |
-| `scripts/lib/host_preview.py:210-213` | The app's address is `UNCLE_PREVIEW_HOST`, default `127.0.0.1`. | `bd3cde00` 2026-11-09 (#206) |
-| `scripts/lib/host_preview.py:50-63` | `valid_host` accepts `localhost` or any IPv4 address, `0.0.0.0` included. `urls_for` checks a `0.0.0.0` app through `127.0.0.1`. | `bd3cde00` 2026-11-09 (#206) |
-| `scripts/lib/host_preview.py:241-243` | Starts the app with `group_options()`, which is `start_new_session=True` (`process_tree.py:203-206`, `fd6272d5` 2026-09-09), so it outlives Uncle. | `bd3cde00` 2026-11-09 (#206) |
-| `scripts/lib/host_preview.py:281-292` | `serve` prints `UNCLE_PREVIEW_PORT=<n>` and always exits 0. | `bd3cde00` 2026-11-09 (#206) |
-| `skills/uncle-build/SKILL.md:8-16` | Chat rules for the `Preview:` line. Nothing about Daytona's warning page. | `274a636e` 2026-11-09 (#210, PR #220) |
+| `scripts/lib/stage-config.sh:47-49` | Hosted mode makes `self-hosted` the default runner. | `688d2194` 2026-11-09 (#211) |
+| `scripts/lib/stage-config.sh:241-243` | A reviewer on `aider`, `opencode` or `self-hosted` runs `scripts/reviewer-self-hosted.sh`. | `b122fc32` 2026-09-10 |
+| `scripts/stagegate.sh:2259-2268` | `client_cmd=("$cmd")`. It is replaced with `python3 native_stage.py` only when the runner is **not** `self-hosted` (`:2264`). For self-hosted, `client_cmd[0]` stays the wrapper's path. | `ceae3faa` 2026-09-15, `cc340817` 2026-09-12 |
+| `scripts/reviewer-self-hosted.sh:8` | `exec python3 "$ROOT/scripts/lib/self_hosted.py" reviewer "$@"`, which passes every argument through, including `--prompt-file`. | `4b8f4b6e` 2026-09-09 |
+| `scripts/lib/self_hosted.py:452-492` | Parses and checks `--prompt-file` for the reviewer. So the wrapper's target can already take the prompt as a file. | `a1d6abcf` 2026-11-09 (#214), `ade8195a`, `4b8f4b6e` |
+| `scripts/stagegate.sh:2355-2363` | **The gap.** `prompt_kind=file` only if `client_cmd[0] == python3`. The wrapper fails that test, so the prompt goes as one argument (`prompt_kind=argv`). | `a1d6abcf` 2026-11-09 (#214) |
+| `scripts/stagegate.sh:2364-2367` | Runs the guard. On failure it writes the message to the lens log and sets `status=1`. The retry fails the same way. | `a1d6abcf` 2026-11-09 (#214) |
+| `scripts/lib/reviewer-prompt.sh:11-17, 36-39` | `reviewer_prompt_guard` refuses an argument prompt over 120,000 bytes. That is correct for real argument-only clients; here the client was classified wrong. | `a1d6abcf` 2026-11-09 (#214) |
+| `scripts/change-workflow.sh:2595-2597` | Same gap in the change workflow. It matches `*self_hosted.py*` or `*native_stage.py*` anywhere in the command, or a basename of `self_hosted.py` or `native_stage.py`. `reviewer-self-hosted.sh` matches none of these. | `a1d6abcf` 2026-11-09 (#214) |
+| `scripts/stagegate.sh:2343-2350`, `:2157-2159` | The only reviewer path that already passes `--prompt-file` on self-hosted: the candidate race, used when more than one candidate is configured. The count defaults to 1 (`:1345`), so a default hosted run takes the single-reviewer path above. | `61633718` 2026-09-28, `a1d6abcf` 2026-11-09 |
+| `scripts/tests/reviewer-prompt-file-test.py:204, 220, 240` | The tests set `client_cmd=(python3 "<fake runner>")` directly. None of them launches through `reviewer-self-hosted.sh`, so the hosted path is untested. | `a1d6abcf` 2026-11-09 (#214) |
 
-The build script's signed-link request (#207), its sandbox keep and limits (#208), and the release's publisher grants (#209) are not in this repository.
+**Provenance.** #214 was closed by PR #222 (merged 2026-11-10 00:03 UTC). The PR's own audit verdict was "NOT READY". Its finding FA-004 says the Linux check and the stage-level guard behavior were never run (no Linux host, and the new Linux CI workflow had not run yet). Only helper-level tests and grep checks of the wiring were in place, which is how a launch path the tests don't cover got through.
 
 ## Fix
 
-1. **Allow the call and publish (#236, which replaces #209).** Add `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url` to the release's script publisher grants, plus the `expire` call if the script ends links early, and publish a new release. A hirer can't see a release's grants, so whoever publishes the release has to confirm this.
-2. **Ask for at most 3600 seconds.** That's the host's limit and Daytona's recommended lifetime. Keep #207's retry with a shorter lifetime if one is refused.
-3. **Ship #208's change, with auto-stop set from the link.** Create the sandbox with `autoStopInterval` of at least the link's lifetime in minutes (60 for a 3600-second link) and `autoDeleteInterval: 0`, so Daytona deletes it as soon as it stops and nothing keeps costing the person afterward. The printed "works until" time must be no later than the time the sandbox is sure to still be running.
-4. **Check the app's address against real Daytona (#206's step 4).** If the link can't reach an app on `127.0.0.1`, have the build script set `UNCLE_PREVIEW_HOST=0.0.0.0`. `host_preview.py` already accepts it, and its own checks still go through `127.0.0.1` (`:62`, `:119`), so nothing else changes. If `127.0.0.1` works, keep the default.
-5. **Tell the person about the warning page.** Add a rule to `skills/uncle-build/SKILL.md`: when relaying a link, say that Daytona shows a warning page first and they should continue past it to reach the app. Don't quote a button name; Daytona may change its wording.
-
-## Tests
-
-- Build script, with a mocked publisher: a run that prints a link creates its sandbox with `autoStopInterval` of at least the link's lifetime in minutes and `autoDeleteInterval` 0, asks for `expiresInSeconds` of at most 3600, and prints an end time no later than the link's expiry.
-- `scripts/tests/chat-skill-test.py`: add a pattern requiring the warning-page rule, beside `preview-line` and `why-when-no-link`.
-- If step 4 needs `0.0.0.0`: a `host_preview.py serve` test with `UNCLE_PREVIEW_HOST=0.0.0.0` showing the app answers on a non-loopback address and `.uncle/preview.json` records that host.
+1. **Decide file mode by what the command runs, in one shared place.** Add a helper to `scripts/lib/reviewer-prompt.sh`, for example `reviewer_prompt_kind CMD...`. It returns `file` for `python3 … self_hosted.py|native_stage.py` and for `scripts/reviewer-self-hosted.sh`, which only `exec`s `self_hosted.py reviewer "$@"`. Everything else gets `argv`. Call it from `stagegate.sh:2358-2363` and `change-workflow.sh:2595-2597` instead of the two separate checks, so they can't drift apart again.
+2. **Keep the guard as it is** for real argument-only clients (`codex`, `claude`, `reviewer-kimi.sh`, `reviewer-claude.sh`).
+3. **Tests that use the real wrapper.** Point `UNCLE_RUNTIME_ROOT` at a temporary root that contains the real `scripts/reviewer-self-hosted.sh` and a fake `scripts/lib/self_hosted.py` that records its arguments. With a 200,000-byte prompt, in both `stagegate.sh` and `change-workflow.sh`, check that:
+   - the fake receives `--prompt-file <path>`;
+   - no argument is over 120,000 bytes;
+   - the guard message never appears.
+4. **An end-to-end case for hosted mode:** `UNCLE_HOSTED=1` with no runner in `.uncle/config`, so the default runner resolution (`stage-config.sh:47-49` → `:243` → `stagegate.sh:2264`) is covered, not only a hand-set `client_cmd`.
+5. **Run these in the Linux CI workflow added by #222,** where the per-argument limit actually applies.
 
 ## Checks after the fix
 
-In a real hosted build with a real Daytona sandbox:
+- A hosted run on Linux (`UNCLE_HOSTED=1`, no runner config) whose review prompts are over 128 KB. Each lens log shows `Launching reviewer (.../reviewer-self-hosted.sh)`, there is no `prompt is N bytes` line, every lens writes its packet, and the panel finishes.
+- The same run with two candidates (`self-hosted.candidates 2`) still passes, so the race path is unchanged.
 
-1. A build of a small web app prints `Preview: https://… (works until …)`, and the chat reply shows a clickable link with the warning-page note.
-2. The link opens the app from another computer, after Daytona's warning page.
-3. Wait 20 minutes without opening the link, then open it: the app still loads. This is the 15-minute auto-stop case.
-4. After the end time, the sandbox is gone without another run.
-5. A build that prints no link deletes its sandbox before it ends, as today.
+Related: #214 (closed by PR #222), #230, #231.
 
-## Related
 
-- #206, #207, #208, #209, #210: the five parts of this path.
-- #236: the release permission, replacing #209.
-- #211: hosted mode.
-- #230, #231, #232: the latest hosted builds stopped at these before completing, so the preview step isn't reached until they're fixed.
+### Comment from taariq
+
+Seen again on 2026-11-10 at 18:39 UTC in a hosted run. The plan step finished and was approved. Then all four reviewers (requirements, regression, security and testability) and their retries were refused with:
+
+> prompt is 146375 bytes, over Linux's 131,072-byte per-argument limit (guard 120000); this reviewer command cannot read the prompt from a file.
+
+That's the second hosted build that day to fail this way, after the 148,103-byte case in this report. One other build that day did get past review, so whether a build fails seems to depend on how large the reviewer prompt turns out. Each failed attempt spends several dollars of model calls on planning before the panel stops it.
+
+Hosted builds can't get through review reliably until this is fixed. Could it be prioritized?
 
 ## Observed Current Behavior
 

@@ -4014,6 +4014,10 @@ EOF
 # where this call sat before the fast-path extraction.
 _stagegate_execute_checklist_stop_app_server() {
     python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
+    # A worker may start its own preview (`vite preview`) and leave it running; it then holds the port until some later run's
+    # Playwright webServer fails on it. Stop this project's own leftovers now; port_guard never touches anyone else's listener.
+    [[ -f "$STATE_DIR/green-check.commands" ]] \
+        && python3 -B "$ROOT/scripts/lib/port_guard.py" "$STATE_DIR/green-check.commands" "${UNCLE_PROJECT_ROOT:-$PWD}" "${UNCLE_ORIGINAL_PROJECT_ROOT:-}" > /dev/null 2>&1 || true
 }
 
 # Per-group resume check: a group already merged under checkpoint_dir is

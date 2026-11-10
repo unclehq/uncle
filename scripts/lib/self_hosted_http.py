@@ -147,8 +147,83 @@ def merge_request_options(body, options):
 
 def _error_detail(error):
     if not hasattr(error, '_uncle_detail'):
-        error._uncle_detail = error.read().decode('utf-8', errors='replace').lower()
+        error._uncle_raw = error.read().decode('utf-8', errors='replace')
+        error._uncle_detail = error._uncle_raw.lower()
     return error._uncle_detail
+
+
+SPENDING_CODES = ('budget_reached', 'balance_exhausted')
+SPENDING_ATOMIC_FIELDS = ('limit_atomic', 'used_atomic', 'suggested_increase_atomic', 'balance_atomic')
+BUDGET_HEADER = 'x-seren-budget-task-remaining-atomic'
+
+
+class SpendingStop(Exception):
+    """The gateway refused a request (HTTP 402) because a spending limit or the balance was reached."""
+
+    def __init__(self, code, scope=None, limit_atomic=None, used_atomic=None, suggested_increase_atomic=None,
+                 balance_atomic=None):
+        super().__init__(code)
+        self.code, self.scope = code, scope
+        self.limit_atomic, self.used_atomic = limit_atomic, used_atomic
+        self.suggested_increase_atomic, self.balance_atomic = suggested_increase_atomic, balance_atomic
+
+    def as_marker(self):
+        return {'code': self.code, 'scope': self.scope, 'limit_atomic': self.limit_atomic,
+                'used_atomic': self.used_atomic, 'suggested_increase_atomic': self.suggested_increase_atomic,
+                'balance_atomic': self.balance_atomic}
+
+
+def parse_spending_stop(code, body):
+    """A SpendingStop for HTTP 402 with a JSON object body whose top-level `code` is exactly a spending code, else None.
+
+    Atomic fields must be absent (None) or JSON integers; any other type invalidates the whole stop (None, so the
+    existing error path runs). `scope` must be a string; it is cut to printable ASCII and 64 characters."""
+    if code != 402:
+        return None
+    try:
+        data = json.loads(body.decode('utf-8', errors='replace') if isinstance(body, (bytes, bytearray)) else body)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(data, dict) or data.get('code') not in SPENDING_CODES:
+        return None
+    fields = {}
+    for name in SPENDING_ATOMIC_FIELDS:
+        value = data.get(name)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            return None
+        fields[name] = value
+    scope = data.get('scope')
+    if scope is not None:
+        if not isinstance(scope, str):
+            return None
+        scope = ''.join(c for c in scope if 0x20 <= ord(c) <= 0x7E)[:64]
+    return SpendingStop(data['code'], scope, **fields)
+
+
+def _spending_stop(error):
+    """SpendingStop for an HTTPError, or None. Reads the body once (shared with _error_detail)."""
+    try:
+        _error_detail(error)
+        return parse_spending_stop(error.code, error._uncle_raw)
+    except Exception:
+        return None
+
+
+def _record_budget_header(headers):
+    """Write the remaining-budget header (non-negative base-10 integer only) atomically to UNCLE_BUDGET_REMAINING_FILE."""
+    path = os.environ.get('UNCLE_BUDGET_REMAINING_FILE')
+    if not path:
+        return
+    try:
+        value = headers.get(BUDGET_HEADER)
+        if value is None or not re.fullmatch(r'[0-9]+', value.strip()):
+            return
+        temporary = '%s.tmp.%d' % (path, os.getpid())
+        with open(temporary, 'w') as handle:
+            handle.write(value.strip())
+        os.replace(temporary, path)
+    except (OSError, AttributeError, TypeError):
+        pass
 
 
 def _names_option(detail, options):
@@ -167,92 +242,6 @@ def _server_reason(error, limit=300):
     except Exception:
         return ''
     return (': ' + detail[:limit]) if detail else ''
-
-
-class SpendingStop(ValueError):
-    """The host refused a call because a spending limit was reached (HTTP 402).
-
-    A subclass of ValueError so existing handlers still catch it, but distinct
-    so callers can stop cleanly and keep finished work instead of treating the
-    stop as a bad Base URL or key. Amounts are the host's atomic units
-    (millionths of a US dollar)."""
-
-    def __init__(self, code, message, scope='', limit_atomic=None, used_atomic=None,
-                 suggested_increase_atomic=None, balance_atomic=None):
-        super().__init__(message)
-        self.code = code
-        self.scope = scope
-        self.limit_atomic = limit_atomic
-        self.used_atomic = used_atomic
-        self.suggested_increase_atomic = suggested_increase_atomic
-        self.balance_atomic = balance_atomic
-
-
-SPENDING_CODES = ('budget_reached', 'balance_exhausted')
-
-
-def _dollars(atomic):
-    return '$%.2f' % (atomic / 1_000_000)
-
-
-def spending_stop(error):
-    """A SpendingStop for an HTTP 402 whose JSON body carries a known spending
-    code, else None."""
-    if getattr(error, 'code', None) != 402:
-        return None
-    try:
-        body = json.loads(_error_detail(error))
-    except Exception:
-        return None
-    if not isinstance(body, dict):
-        return None
-    inner = body.get('error')
-    if isinstance(inner, dict) and 'code' in inner:
-        body = inner
-    code = str(body.get('code') or '').lower()
-    if code not in SPENDING_CODES:
-        return None
-
-    def amount(key):
-        value = body.get(key)
-        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
-
-    limit, used, more, balance = (amount(k) for k in
-                                  ('limit_atomic', 'used_atomic', 'suggested_increase_atomic', 'balance_atomic'))
-    if code == 'budget_reached':
-        message = 'Stopped: the %s spending limit%s was reached' % (
-            body.get('scope') or 'task', ' (%s)' % _dollars(limit) if limit is not None else '')
-        if more is not None:
-            message += '; about %s more lets the next step start' % _dollars(more)
-    else:
-        message = 'Stopped: the account balance is exhausted'
-        if balance is not None:
-            message += ' (%s left)' % _dollars(balance)
-    return SpendingStop(code, message + '.', str(body.get('scope') or ''), limit, used, more, balance)
-
-
-def record_spending_stop(stop):
-    """Leave `.uncle/workflow/spending-stop` for the stage driver. Section
-    workers are separate processes whose exit status says only "failed", so the
-    driver learns it was a spending stop, and not a defect, from this file."""
-    root = os.environ.get('UNCLE_PROJECT_ROOT') or os.getcwd()
-    try:
-        directory = os.path.join(root, '.uncle', 'workflow')
-        os.makedirs(directory, exist_ok=True)
-        with open(os.path.join(directory, 'spending-stop'), 'w', encoding='utf-8') as handle:
-            handle.write(str(stop) + '\n')
-    except OSError:
-        pass
-
-
-def _request_failure(error):
-    """The exception for an HTTP error the caller will not retry."""
-    stop = spending_stop(error)
-    if stop is not None:
-        record_spending_stop(stop)
-        return stop
-    return ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model'
-                      % (error.code, _server_reason(error)))
 
 
 # The reason the last tool-capable turn was refused, so "no tool calling" can say what the server said.
@@ -1250,6 +1239,7 @@ def _request(url, api_key, body=None, timeout=30, headers=None):
     method = 'POST' if data is not None else 'GET'
     transport = _via_http2 if wants_http2(urlsplit(url).scheme) else _via_http1
     status, reason, response_headers, raw = transport(method, url, data, headers, timeout)
+    _record_budget_header(response_headers)
     if not 200 <= status < 300:
         if api_key and not isinstance(raw, dict):
             # An upstream body or reason may echo the Authorization value; scrub it and bound what is kept.
@@ -1419,7 +1409,11 @@ def constrained_completion(values, messages, schema, name, limit, effort=None, t
             return text, reason, usage, mode
         except HTTPError as error:
             if error.code not in REJECTED:
-                raise _request_failure(error) from None
+                stop = _spending_stop(error)
+                if stop is not None:
+                    raise stop from None
+                raise ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model'
+                                 % (error.code, _server_reason(error))) from None
             caps['rejected'].add(mode)
             last = error
         except TimeoutError:
@@ -1516,7 +1510,11 @@ def chat(values, messages, tools, limit, effort=None, timeout=3600):
         return data
     except HTTPError as error:
         if error.code not in REJECTED:
-            raise _request_failure(error) from None
+            stop = _spending_stop(error)
+            if stop is not None:
+                raise stop from None
+            raise ValueError('Model API request failed (HTTP %d%s); check the Base URL, API key and model'
+                             % (error.code, _server_reason(error))) from None
         global last_rejection
         last_rejection = 'HTTP %d%s' % (error.code, _server_reason(error))
     except TimeoutError:

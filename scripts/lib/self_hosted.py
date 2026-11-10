@@ -2221,7 +2221,66 @@ def _spent(usage, values):
     return float(spent) if isinstance(spent, (int, float)) and not isinstance(spent, bool) else 0.0
 
 
+def _usd(atomic):
+    """Atomic units (1e-6 USD) as dollars rounded up to cents; `unknown` for a missing figure."""
+    if atomic is None:
+        return 'unknown'
+    cents = -(-int(atomic) // 10000)
+    return '$%d.%02d' % divmod(cents, 100)
+
+
+def spending_stop_line(stop):
+    """One-line Stopped message; clauses whose figure is missing are omitted, never rendered as None or $0."""
+    scope = ' (%s)' % stop.scope if stop.scope else ''
+    clauses = []
+    if stop.code == 'balance_exhausted':
+        head = 'Stopped: account balance exhausted' + scope
+        if stop.balance_atomic is not None:
+            clauses.append('balance %s' % _usd(stop.balance_atomic))
+    else:
+        head = 'Stopped: spending limit reached' + scope
+        if stop.limit_atomic is not None:
+            clauses.append('limit %s' % _usd(stop.limit_atomic))
+        if stop.used_atomic is not None:
+            clauses.append('used %s' % _usd(stop.used_atomic))
+        if stop.suggested_increase_atomic is not None:
+            clauses.append('suggested increase %s' % _usd(stop.suggested_increase_atomic))
+    return head + (': ' + ', '.join(clauses) if clauses else '') + '.'
+
+
+def write_spending_marker(stop):
+    """Write the JSON marker atomically to the path stagegate gave us; never create its directory."""
+    path = os.environ.get('UNCLE_SPENDING_STOP_FILE')
+    if not path:
+        return
+    temporary = '%s.tmp.%d' % (path, os.getpid())
+    try:
+        with open(temporary, 'w', encoding='utf-8', newline='\n') as stream:
+            json.dump(stop.as_marker(), stream)
+        os.replace(temporary, path)
+    except OSError as error:
+        print('Self hosted: could not write spending-stop marker (%s)' % error, file=sys.stderr)
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+
+SPENDING_STOP_EXIT = 75
+
+
 def main(side, args):
+    """Runner entry: a typed spending stop prints one line, records its marker and exits 75."""
+    from self_hosted_http import SpendingStop
+    try:
+        return _main(side, args)
+    except SpendingStop as stop:
+        print(spending_stop_line(stop), file=sys.stderr, flush=True)
+        write_spending_marker(stop)
+        return SPENDING_STOP_EXIT
+
+
+def _main(side, args):
     started = time.monotonic()
     if side in ('models', 'choose-model', 'set-key', 'apply-all'):
         position = 2 if side == 'set-key' else 1

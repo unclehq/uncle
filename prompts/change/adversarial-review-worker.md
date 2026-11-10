@@ -14,9 +14,11 @@ plan should say to settle it (a decision, not a question):
   a rounding rule against a stored precision), or one section's behavior against another's.
 
 Report at most 6 findings, most severe first, and only ones that would change the plan.
-`severity` is Critical, High, Medium, or Low. `summary` is one or two sentences; `evidence` is
-a file and line, requirement ID or command output in at most two sentences. Do not restate the
-same issue under a second ID or pad with Low findings.
+`severity` is Critical, High, Medium, or Low. `summary` is one or two sentences and at most 400
+characters; `evidence` is a file and line, requirement ID or command output in at most two
+sentences and at most 700 characters. The packet is rejected, with every finding in it, if a field
+is longer, so count characters and shorten the proposed wording instead of quoting it in full. Do
+not restate the same issue under a second ID or pad with Low findings.
 
 - Finding ID or `No finding`
 - Exact evidence: file path and line/symbol, requirement ID, or command output

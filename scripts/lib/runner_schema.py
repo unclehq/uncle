@@ -111,7 +111,9 @@ def validate(value, schema):
                             ('minItems', 'maxItems', len(value) if isinstance(value, list) else None),
                             ('minimum', 'maximum', value if type(value) in (int, float) else None)]:
         if size is not None and (size < schema.get(low, size) or size > schema.get(high, size)):
-            raise ValueError('answer is outside schema bounds')
+            # Name the bound, not the field: a model that is only told "out of bounds" repeats the same answer.
+            bound = high if size > schema.get(high, size) else low
+            raise ValueError('answer is outside schema bounds (%s %s, got %s)' % (bound, schema[bound], size))
 
 
 def restore(value, schema):

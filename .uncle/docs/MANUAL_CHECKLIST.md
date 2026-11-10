@@ -1,26 +1,20 @@
 # Manual checklist
 
-## Coverage: spending stop
-
-### MC-105
-- Required for acceptance: YES
-- Exclusive resources: dir:headless-run-231
+### MC-100
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Trigger a host spending stop (HTTP 402) during the repair turn of a headless run with an invalid plan, then raise the budget and resume.
-- Expected result: The stage stops with a spending_limit stop-reason and no re-check. The resume runs a fresh repair turn.
-- Evidence to capture: Stop-reason file content, run output, and the agent calls on resume.
+- Exact action: Open skills/uncle-build/SKILL.md for human reading and check the new rule 6 wording against the rules 1-5 that precede it.
+- Expected result: Rule 6 follows rule 5 as one or two lines and is conditional: if Daytona shows a warning page, continue past it. It applies only to the Preview link from the build output, names no button in quotes, and does not advise continuing past warnings for any other URL.
+- Evidence to capture: Quote rule 6 and the line numbers of rules 1-6.
 - Actual result: 
 - Status: NOT RUN
 
-## Coverage: UPDATED_PLAN repair
-
-### MC-106
-- Required for acceptance: YES
-- Exclusive resources: dir:headless-run-231
+### MC-104
+- Exclusive resources: none
 - Depends on: none
-- Exact action: Run the updated-plan stage with an invalid saved UPDATED_PLAN, with a real model agent.
-- Expected result: One repair turn runs and the stage continues if the re-check passes. Otherwise it exits 1 with the file, step and resume command named.
-- Evidence to capture: Run log and stderr showing the repair turn and outcome.
+- Exact action: Run `bash scripts/run-python-tests.sh` for the default tier and review the summary for failures or warnings.
+- Expected result: All previously passing suites still pass, with no new failures.
+- Evidence to capture: Summary output and exit status.
 - Actual result: 
 - Status: NOT RUN
 
@@ -30,51 +24,28 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Create a scratch project whose saved PROJECT_PLAN has a valid Owns line plus a step whose Owns is a backticked span `foo bar`, run the stage headlessly with a stub agent that rewrites the span to a real path, and count agent calls.
-- Expected result: Exactly one repair agent call occurs, the warning line 'warning: step <label> owns: dropped foo bar' appears on stderr, the re-check passes and the run continues; a rerun with a valid plan makes zero repair calls.
-- Evidence to capture: Stderr transcript, agent-call count, and presence/absence of the plan-check-repair-project-plan marker file after the run.
+- Exact action: Run `UNCLE_PREVIEW_HOST=0.0.0.0 python3 scripts/lib/host_preview.py serve <scratch project dir>` for a trivial local app, then open `<scratch project dir>/.uncle/preview.json` and the serve stdout (which prints UNCLE_PREVIEW_PORT=<n>) and look at every place 0.0.0.0 appears.
+- Expected result: The `host` field is `0.0.0.0`, status is running, the `url` host is exactly 127.0.0.1, and 0.0.0.0 appears nowhere else in the record or output.
+- Evidence to capture: Contents of preview.json and serve stdout showing the host and url values.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-203
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: MC-202
-- Exact action: After a failed repair, hand-edit the plan to still be invalid but different, then resume; separately, run the same scenario for the UPDATED_PLAN check.
-- Expected result: The changed plan hash gets exactly one fresh repair call; the UPDATED_PLAN check behaves identically (one repair, then final failure naming UPDATED_PLAN with no second repair).
-- Evidence to capture: Agent-call counts per run and stderr showing the plan file name.
-- Actual result: 
-- Status: NOT RUN
-
-### MC-205
+### MC-202
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Run the repair with stub agents that respectively exit non-zero, edit nothing, truncate the plan file, delete it, and edit an unrelated file in the working tree.
-- Expected result: In every case there is exactly one agent call, no re-check, exit 1, the marker is retained, and the message names the file and resume command (the stray-file case reports the stray change on stderr).
-- Evidence to capture: Per-case exit code, stderr, agent-call count and marker state.
+- Exact action: With the same wildcard-host server running, fetch http://<first non-loopback, non-link-local IPv4 of this machine>:<port>/ and http://127.0.0.1:<port>/, then stop the server.
+- Expected result: If such an address exists, both return HTTP 200 with identical bodies within 5 seconds; if none exists, record it as SKIP, not as passed. The server process is gone after stopping.
+- Evidence to capture: Status codes, body comparison, chosen address (or SKIP note), and a check that no server process remains.
 - Actual result: 
 - Status: NOT RUN
 
-### MC-207
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run the plan parser against Owns lines containing `../x`, `a/../../b`, `/abs`, `a..b.py`, `src/{a,b}.py`, `~`, and `src/`, on both the Markdown and JSON routes.
-- Expected result: `../x`, `a/../../b` and `/abs` are dropped with warnings; `a..b.py`, `src/{a,b}.py` and `~` are kept; `src/` is kept by the filter but the validator still rejects it as a directory; an all-dropped step yields empty owns with warnings first and then the missing-owns error.
-- Evidence to capture: Printed owns lists, stderr warnings, and validator output per route.
-- Actual result: 
-- Status: NOT RUN
-
-## Dropped-token warning display
-
-### MC-303
-- Required for acceptance: YES
-- Exclusive resources: none
-- Depends on: none
-- Exact action: Run the plan check on a plan whose Owns line contains a backticked span with spaces and one whose token includes an ANSI escape sequence and a 200-character run, viewing stderr in a real terminal.
-- Expected result: Each dropped token prints as one `warning: step <label> owns: dropped <token>` line; the terminal shows no escape-driven colour or cursor effects and long tokens end in `...` at 80 characters.
-- Evidence to capture: Screenshot or copied terminal output of the warning lines.
+### MC-302
+- Exclusive resources: dir:.uncle/preview.json
+- Depends on: MC-301
+- Exact action: While the wildcard-host app from MC-301 runs, find the first non-loopback, non-link-local IPv4 address of a local interface and GET http://<address>:<port>/ with a 5s timeout; then stop the server.
+- Expected result: If such an address exists, the GET returns HTTP 200 with the same body as loopback; if none exists, record SKIP (not PASS). The server process is gone afterward.
+- Evidence to capture: Chosen address, HTTP status, body comparison result or SKIP note, and process list after shutdown.
 - Actual result: 
 - Status: NOT RUN
 
@@ -84,8 +55,8 @@
 - Required for acceptance: YES
 - Exclusive resources: none
 - Depends on: none
-- Exact action: Feed the parser previously valid tokens (`src/{a,b}.py`, `~`, `+`, `=`, `a..b.py`, `src/`) on a ticked Owns line and on JSON owns arrays, then run validation on each.
-- Expected result: All tokens are kept unchanged with no warning on stderr, `src/` is still rejected by the validator's directory rule, and tokens with a `..` segment or whitespace are dropped with a warning `warning: step <label> owns: dropped <token>`.
-- Evidence to capture: Owns lists, stderr text, and validator output per input.
+- Exact action: Read rule 6 and judge its wording: it must be conditional (if Daytona shows a warning page, continue past it), limited to the Preview link from the build output, and quote no button name.
+- Expected result: Rule 6 does not tell the person to bypass warnings for any other URL, names no button label, and does not promise a tab will open.
+- Evidence to capture: The rule 6 text and a note on each of the three wording criteria.
 - Actual result: 
 - Status: NOT RUN

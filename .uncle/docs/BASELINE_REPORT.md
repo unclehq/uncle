@@ -1,85 +1,63 @@
-# Baseline report: issue 231
+# Baseline Report
 
-Omitted sections: Reproduction result (not run; saved plan was deleted with the sandbox, inferred only); Current API/schema contracts (no external interface changes)
+Omitted sections: Reproduction (not a reproducible in-repo bug; the failure needs real Daytona); Areas outside change folded into section 12
 
 ## 1. Change-request summary
-See CHANGE_REQUEST.md (Issue 231). A failed project-plan check (`plan-unprotected`) exits 1 with no repair turn; headless runs never start the supervisor. Parser also admits non-path backticked spans in `Owns:`.
+Issue 235 (`.uncle/docs/CHANGE_REQUEST.md`): the hosted preview path never ran end to end. Most fixes live outside this repo (build script, release grants, Daytona sandbox settings). In-repo surface is small: a chat rule about Daytona's warning page, its test pattern, and a test pinning the `UNCLE_PREVIEW_HOST=0.0.0.0` path.
 
 ## 2. Repository architecture
-Bash driver `scripts/stagegate.sh` runs stages; Python helpers in `scripts/lib/` (`plan_context.py` CLI, `plan_model.py` validator/model, `plan_steps.py` Markdown step parser). Tests are `scripts/tests/*-test.py` and `*-test.sh`.
+Bash drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) call `uncle_host_preview_hook` (`scripts/lib/host_preview_hook.sh`) which runs `scripts/lib/host_preview.py serve`. Chat skill text in `skills/uncle-build/SKILL.md`, checked by `scripts/tests/chat-skill-test.py`.
 
 ## 3. Relevant code paths
-| Path | Role |
-|---|---|
-| `scripts/lib/plan_steps.py:69-90` | `COMMENT_MARKER` + `paths()`; backticked spans taken unconditionally except comment markers (`:88`); plain tokens must match `[\w./*?\[\]@-]+` (`:80`) |
-| `scripts/lib/plan_model.py:474-482` | `validate` rejects invalid/dir `owns` tokens |
-| `scripts/lib/plan_model.py:738-749` | `split_list` keeps any string, strips backticks |
-| `scripts/lib/plan_context.py:335,358-361` | `plan-unprotected` action; prints `Correct the saved document and resume.` and exits 1 |
-| `scripts/stagegate.sh:4636-4643` | PROJECT_PLAN check: on failure prints, `supervision_validation_failed`, `exit 1`; no repair |
-| `scripts/stagegate.sh:5696-5700` | UPDATED_PLAN check: same shape, no repair |
-| `scripts/stagegate.sh:1708` | `run_initial_planning_agent` (model call) |
-| `scripts/stagegate.sh:4598-4604, 4431-4435` | existing spending-stop handling (`$STATE_DIR/spending-stop`, `stop-reason`) |
-| `scripts/stagegate.sh:5011-5030` | precedent: format-retry marker file + prompt with appended error |
-| `scripts/lib/supervision.sh:43-49`, `scripts/lib/supervisor.py:1204`, `scripts/lib/uncle_headless.py` | supervisor reacts only inside TUI; headless never starts it |
+- `scripts/lib/host_preview.py:50-63` `valid_host` / `urls_for` (0.0.0.0 accepted; URL shown as 127.0.0.1)
+- `scripts/lib/host_preview.py:210-213` host from `UNCLE_PREVIEW_HOST`, default 127.0.0.1
+- `skills/uncle-build/SKILL.md` rules 1-5 (16 lines)
+- `scripts/tests/chat-skill-test.py:13-35` REQUIRED patterns, `:147-157` per-rule removal cases, MAX_BODY_LINES=60
+- `scripts/tests/host-preview-test.py:199-207` `test_wildcard_host_records_loopback_url`
 
-## 4. Current observable behavior
+## 4/5. Current behavior and invariants
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Owns line contains backticked comment marker (`-- EOF-GUARD`, `// end`, `# end`) | Marker dropped, real paths kept | `plan_steps.py:69,88`; `scripts/tests/plan-owns-comment-marker-test.py` | Yes |
-| B-2 | Owns line has backticked span that is neither a comment marker nor path-shaped (e.g. `foo bar`) | Kept as path; validate fails `owns: replace ...` | `plan_steps.py:73-74,83-89`; `plan_model.py:480` | No (MODIFY) |
-| B-3 | JSON `owns` array holds a non-path string | Kept after stripping backticks; validate fails | `plan_model.py:746` | No (MODIFY) |
-| B-4 | PROJECT_PLAN check fails | Error printed to stderr, status event, exit 1, no repair | `stagegate.sh:4636-4643` | No (MODIFY) |
-| B-5 | UPDATED_PLAN check fails | Same as B-4 | `stagegate.sh:5696-5700` | No (MODIFY) |
-| B-6 | Valid plan | Check passes, flow continues to `ensure_project_plan_json` | `stagegate.sh:4644` | Yes |
-| B-7 | Real path/glob spans (`src/**`, `.gitignore`, `.uncle/launch.json`) | Kept | plan-owns-comment-marker-test.py | Yes |
-| B-8 | Spending stop in model call | Stage stops cleanly with `stop-reason: spending_limit` | `stagegate.sh:4598-4604` | Yes |
+| B-1 | Build output has `Preview:` line | Skill rules 1-5 relay link, expiry, no tab promise | SKILL.md | Yes |
+| B-2 | `UNCLE_PREVIEW_HOST=0.0.0.0` | App binds wildcard; record url is `http://127.0.0.1:<port>/` | host-preview-test.py:199 | Yes |
+| B-3 | Default host | Loopback bind | host-preview-test.py:191 | Yes |
+| B-4 | Skill mentions warning page | No such rule | SKILL.md | No (ADD) |
 
-## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Every `owns` token is a valid path/glob and not a directory | `plan_model.validate` `:474-482` | plan-executability / plan-model suites | High |
-| I-2 | An invalid saved plan never advances past the check | `exit 1` at `stagegate.sh:4642` | not directly tested | Medium |
-| I-3 | A model call stops on a host spending stop | `spending-stop` file checks | `plan-sections-spending-stop-test.sh`, `self-hosted-spending-stop-test.py` | High |
+| I-1 | Skill body <= 60 lines, every REQUIRED rule present, no forbidden tab-opening phrases | chat-skill-test.py:64 and REQUIRED | chat-skill-test.py | High |
+| I-2 | Invalid hosts rejected without spawning | valid_host | host-preview-test.py:209 | High |
+| I-3 | Loopback checks for wildcard host | urls_for | host-preview-test.py:199 | High |
 
-## 6. Existing automated-test coverage
-`plan-owns-comment-marker-test.py` (parser markers), `plan-executability-test.py`, `updated-plan-*-test.py`, `plan-disposition-gate-test.sh`, `headless-run-test.py`, spending-stop tests. No test covers a repair turn after a failed plan check, nor backticked non-path spans, nor `split_list` filtering. Shell and Python runners are independent (separate temp dirs), so they form one parallel group.
+## 6. Interface contracts
+`.uncle/preview.json` records `host`, `url`, `status`. Build script (external) reads `UNCLE_PREVIEW_PORT=<n>` from serve stdout.
 
-## 7. Baseline test results (section 9)
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (the repo's documented runners; default tier = `scripts/tests/critical-suites.txt`). Results are supplied by the driver's baseline, not run here. Some Python suites may already fail on a clean tree (documented in the driver instructions).
+## 7. Existing coverage
+host-preview suite is in `scripts/tests/critical-suites.txt` (default python tier). chat-skill suite is not in the critical list, so the default runner does not execute it; it must be run explicitly. The two Python commands use separate temp dirs.
 
-## 10. Existing failures, warnings, flaky behavior
-None observed by reading; driver baseline is authoritative.
+## 9. Baseline test results
+Commands come from `scripts/run-python-tests.sh` usage (supports `-- suite ...`). No results produced here; the driver baseline is authoritative. No documented pre-existing failure for these suites.
 
 ## 12. Likely change surface
-`plan_steps.py`, `plan_model.py` (owns call sites), `stagegate.sh` (two check sites + helper), `plan_context.py` message, one new prompt, new tests.
+`skills/uncle-build/SKILL.md`, `scripts/tests/chat-skill-test.py`, `scripts/tests/host-preview-test.py`.
 
 ## 13. Regression-sensitive components
-Plan ingestion for every project (`paths()` is used by three Owns routes); `ensure_project_plan_json` after a repaired plan; spending-stop flow; sectioned-plan flow.
+SKILL.md line cap and forbidden-phrase list (a warning-page sentence must avoid 'will open', 'opens automatically' etc.).
 
 ## 14. Outside the change
-Supervisor/TUI behavior, `uncle_headless.py`, section-writing workers, the validator rules themselves, other stages' retries.
+Build script, release grants (#236), Daytona sandbox settings, `host_preview.py` logic, drivers, hook.
 
 ## 15. Unknowns and assumptions
-- The issue says the parser takes every backticked span; the checked-out tree already drops comment markers, so only non-marker junk remains. Assumed the issue text predates that fix.
-- Exact resume command text for the headless message is taken from existing stop messages in the driver (implementer to reuse).
+- UNRESOLVED (needs live Daytona): whether link reaches 127.0.0.1; auto-stop behavior; signed-link call success. Cannot be verified in this repo.
+- Assumption: the external build script is owned elsewhere; this repo only gets the 0.0.0.0 pinning test and chat rule.
 
-## 16. Initial risk assessment
-| Risk | Level |
-|---|---|
-| Path-shape filter drops a legitimate path containing a space | Medium (warned, plan then fails validation only if step ends with no owns, which is a warning) |
-| Repair turn rewrites more than the error | Medium |
-| Loop on repeated failure | Low with marker |
+## 16. Initial risk
+Low for in-repo edits. High residual risk that the end-to-end path remains unproven until live checks run outside this repo.
 
 ## Exact build and test commands executed
 
 ```sh
-bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-```
-
-## Parallel verification groups
-
-```text
-1 2
+bash scripts/run-python-tests.sh -- chat-skill
 ```
 

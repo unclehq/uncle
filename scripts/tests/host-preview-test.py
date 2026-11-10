@@ -203,8 +203,27 @@ class Address(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
         rec = self.record()
         self.assertEqual(rec['status'], 'running')
+        self.assertEqual(rec['host'], '0.0.0.0')
         self.assertEqual(rec['url'], 'http://127.0.0.1:%d/' % port)
-        self.assertIsNotNone(answers(rec['url']))
+        loopback_body = answers(rec['url'])
+        self.assertIsNotNone(loopback_body)
+        addr = self.non_loopback_ipv4()
+        if addr is None:
+            print('SKIP: no non-loopback IPv4 address; wildcard reachability not verified')
+            return
+        body = answers('http://%s:%d/' % (addr, port), wait=5)
+        self.assertIsNotNone(body, 'wildcard-bound server did not answer on %s' % addr)
+        self.assertEqual(body, loopback_body)
+
+    @staticmethod
+    def non_loopback_ipv4():
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(('192.0.2.1', 9))
+                addr = s.getsockname()[0]
+        except OSError:
+            return None
+        return None if addr.startswith('127.') or addr == '0.0.0.0' else addr
 
     def test_invalid_hosts_fail_without_spawning(self):  # AC-4
         self.command_launch()

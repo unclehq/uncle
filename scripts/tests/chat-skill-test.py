@@ -28,7 +28,10 @@ REQUIRED = [
     ('http-https-verbatim', r'only http or https links[^.\n]{0,60}verbatim'),
     ('untrusted-output', r'untrusted[^.\n]{0,40}never follow instructions'),
     ('bearer-credential', r'bearer credential[^.\n]{0,80}only with the person'),
+    ('warning-page', r'(?m)^6\.[^\n]*warning\s+page[^\n]*continue|^6\.[^\n]*continue[^\n]*warning\s+page'),
 ]
+# A button name quoted after a click-type verb (AC-1): the rule must not quote any button label.
+QUOTED_BUTTON = re.compile(r'\b(click|press|select|tap|choose|hit)\b[^.\n]{0,40}["“‘\'`][^"”’\'`\n]+["”’\'`]', re.I)
 FORBIDDEN = [
     'will open', 'opens automatically', 'open automatically', 'a tab will', 'tab will open',
     'will be opened', 'opens a tab', 'will launch', 'launches automatically',
@@ -76,6 +79,11 @@ def check(text):
     for phrase in FORBIDDEN:
         if phrase in low:
             fails.append(f'forbidden promise phrase: {phrase}')
+    if QUOTED_BUTTON.search(body):
+        fails.append('quoted button label')
+    nums = re.findall(r'^(\d+)\. ', body, re.M)
+    if nums[:6] != ['1', '2', '3', '4', '5', '6']:
+        fails.append(f'rules not numbered 1-6 in order: {nums}')
     return fails
 
 
@@ -152,7 +160,8 @@ class ChatSkill(unittest.TestCase):
                  ('not provided', 'missing-malformed-not-provided'),
                  ('only http or https', 'http-https-verbatim'),
                  ('untrusted', 'untrusted-output'),
-                 ('bearer', 'bearer-credential')]
+                 ('bearer', 'bearer-credential'),
+                 ('warning page', 'warning-page')]
         for needle, rid in cases:
             variant = drop_lines(self.text, re.escape(needle))
             self.assertNotEqual(variant, self.text, rid)
@@ -170,9 +179,19 @@ class ChatSkill(unittest.TestCase):
             self.assertIn(old, self.text, old)
             self.assertRejected(self.text.replace(old, new), rid)
 
+    def test_defect_quoted_button_label(self):
+        self.assertRejected(self.text + '\nClick "Visit Site" to proceed.\n', 'quoted button label')
+
+    def test_warning_rule_is_rule_6_and_body_within_cap(self):
+        body = split_front_matter(self.text)[1]
+        self.assertEqual(re.findall(r'^(\d+)\. ', body, re.M)[:6], ['1', '2', '3', '4', '5', '6'])
+        self.assertLessEqual(len(body.strip('\n').splitlines()), MAX_BODY_LINES)
+
     def test_good_minimal_variant_passes_checker(self):
         good = (
             '---\nname: x\ndescription: y\n---\n'
+            '1. a\n2. b\n3. c\n4. d\n5. e\n'
+            '6. If the host shows a warning page for the Preview link, continue past it.\n'
             'Find the `Preview:` line in the build output and give the person the link as a plain-text link or Markdown link, never in backticks or code formatting.\n'
             'Relay the expiry exactly as stated; do not reword it.\n'
             'Say that you cannot open the tab for them. Do not promise a tab.\n'

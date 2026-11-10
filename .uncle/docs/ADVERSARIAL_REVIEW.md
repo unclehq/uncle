@@ -1,184 +1,144 @@
-## AR-001: Plan never says what happens when filtering leaves a step with zero owns tokens.
+## AR-001: The plan never says what rule 6 does when no warning page appears (non-Daytona host, link already opened).
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-1/D-2 drop tokens with no empty-result rule; AC-2/AC-3 cover only mixed valid and invalid tokens.
-- Failure: Plan never says what happens when filtering leaves a step with zero owns tokens. Settle it: 'If filtering empties a step's owns, the validator reports its normal missing-owns error, which triggers the single repair turn; the dropped-token warning prints first.'
+- References: CHANGE_PLAN s4.1.r1 ('on first open of each link'); CHANGE_SPEC B-4 gives no host or opened-before condition.
+- Failure: The plan never says what rule 6 does when no warning page appears (non-Daytona host, link already opened). Settle it: 'Rule 6 applies to every relayed Preview link and is worded conditionally ("if Daytona shows a warning page, continue past it").'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Marker lifecycle is inconsistent: D-3 removes it only on a pass, section 6 retains it on failure.
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-3 vs section 6 ('marker retained'); CHANGE_SPEC Assumptions.
-- Failure: Marker lifecycle is inconsistent: D-3 removes it only on a pass, section 6 retains it on failure. A human who fixes the plan by hand and resumes cannot get a fresh repair. Settle it: 'The marker stores the plan file hash; a different hash on resume gets one repair, the same hash exits 1.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-003: Marker state after a spending stop during repair is unspecified.
+## AR-002: The `warning-page` pattern has no defined match rule, so skill text, regex and removal case can read it differently.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-3/D-4, section 6; CHANGE_SPEC AC-5 (no second repair on resume) vs AC-7.
-- Failure: Marker state after a spending stop during repair is unspecified. D-4 exits without re-check, leaving the marker set, so a resume after budget is raised skips repair and fails. Settle it: 'On a spending stop during repair the marker is removed so resume repairs again.'
+- References: CHANGE_PLAN s4.1.r2 and R-1 ('no button name'); risk 'Pattern too loose'.
+- Failure: The `warning-page` pattern has no defined match rule, so skill text, regex and removal case can read it differently. Settle it: 'The pattern is case-insensitive, matches warning\s+page, and quoted button labels fail the forbidden-phrase check.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: The shape test is specified for backticked spans only; mixed lines (ticks plus plain prose) and the no-ticks route are l
+## AR-003: AC-3 requires the non-loopback answer 'when available', but the plan allows skipping the probe silently and cuts it firs
 
 - Severity: MEDIUM
-- References: plan_steps.py lines 72-90 (shape test only in no-ticks branch); CHANGE_PLAN D-1.
-- Failure: The shape test is specified for backticked spans only; mixed lines (ticks plus plain prose) and the no-ticks route are left ambiguous. Settle it: 'The shape filter runs on every candidate token from either route; a line with any ticks ignores unticked text.'
+- References: CHANGE_SPEC AC-3 vs CHANGE_PLAN s4.1.r3 ('skip that probe') and s13.
+- Failure: AC-3 requires the non-loopback answer 'when available', but the plan allows skipping the probe silently and cuts it first. Settle it: 'No non-loopback IPv4 means SKIP and the test passes; if one exists, a failed connection fails the test.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Final-failure message leaves the step unspecified when the error has no step-N, several steps fail, or the plan is UPDAT
+## AR-004: The plan does not say which non-loopback address the probe uses, or how it handles multiple interfaces, IPv6-only hosts,
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5 (parsed from step-N); CHANGE_SPEC section 8 and AC-5.
-- Failure: Final-failure message leaves the step unspecified when the error has no step-N, several steps fail, or the plan is UPDATED_PLAN. Settle it: 'Print every distinct step-N in the errors, or "step: unknown" if none.'
+- References: CHANGE_PLAN s4.1.r3 ('probe non-loopback IP if found') and its flakiness risk.
+- Failure: The plan does not say which non-loopback address the probe uses, or how it handles multiple interfaces, IPv6-only hosts, link-local addresses or blocked connects. Settle it: 'Probe the first non-loopback, non-link-local IPv4 with a 2s timeout; IPv6-only or timeout is SKIP.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Section 8 claims previously valid plans are unchanged, yet D-1 drops spaced backticked tokens the old parser kept.
+## AR-005: The plan does not say where rule 6 sits relative to existing rules, or whether the 60-line cap covers the body or the wh
 
 - Severity: LOW
-- References: CHANGE_PLAN section 8 vs D-1; CHANGE_SPEC section 7.
-- Failure: Section 8 claims previously valid plans are unchanged, yet D-1 drops spaced backticked tokens the old parser kept. Warning channel and repetition are also unspecified. Settle it: 'Warnings go to stderr once per parse; a previously valid plan yields an identical owns list.'
+- References: CHANGE_SPEC AC-1 ('body stays at or under 60 lines'); CHANGE_PLAN R-2 ('Keep rule to 1-2 lines').
+- Failure: The plan does not say where rule 6 sits relative to existing rules, or whether the 60-line cap covers the body or the whole file. Settle it: 'Rule 6 is one line appended after rule 5; the body stays at or under 60 lines.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Tick-span shape test is narrower than what validate accepts (e.g.
-
-- Severity: HIGH
-- References: plan_steps.py:73-80 applies shape regex only to untick'd tokens; CHANGE_SPEC s7 vs CHANGE_PLAN D-1.
-- Failure: Tick-span shape test is narrower than what validate accepts (e.g. `src/{a,b}.py`, `~`, `+`, `=`), so previously valid plans may lose owns. Say: 'The tick filter drops only spans with whitespace or a comment marker; any token that passed validate before is kept.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: Plan does not say what happens when filtering drops every Owns token for a step (empty owns valid, or new validator fail
+## AR-006: The `warning-page` regex could match text that is not the new rule.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1/D-2 give no empty-result behavior; INV-1 covers only kept tokens.
-- Failure: Plan does not say what happens when filtering drops every Owns token for a step (empty owns valid, or new validator failure). Say: 'A step whose owns become empty is passed through as empty owns and the validator decides.'
+- References: CHANGE_PLAN s4.1.r2 lists 'Pattern too loose' as a risk with no stated mitigation; D-2 gives no exact wording.
+- Failure: The `warning-page` regex could match text that is not the new rule. Decision: the pattern must match only the new rule-6 line containing both 'warning page' and 'continue', and the removal case must delete exactly that line.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: Retained marker makes a resumed run exit 1 without clarity on re-check; a user-edited plan or a different later failure
+## AR-007: The 60-line cap and the new rule can collide, and the plan never gives the current line count.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s6 'resumed run goes straight to exit 1' vs D-3 marker removed only on passing check.
-- Failure: Retained marker makes a resumed run exit 1 without clarity on re-check; a user-edited plan or a different later failure gets no repair. Say: 'On resume the check always re-runs first; the marker only suppresses the repair turn and is cleared when the plan hash changes.'
+- References: CHANGE_SPEC AC-1 and I-1 (<=60 lines); CHANGE_PLAN R-2 'Keep rule to 1-2 lines' with no baseline line count.
+- Failure: The 60-line cap and the new rule can collide, and the plan never gives the current line count. Decision: if rule 6 would push the body over 60 lines, condense an existing non-rule line; never raise the cap and never drop rule 6.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Marker lifetime across stage restart or plan regeneration is unspecified; a regenerated plan may never get its one repai
+## AR-008: The non-loopback probe says 'if found' but not how it is found or what a skip looks like.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-3 and s10 rollback 'harmless if left'.
-- Failure: Marker lifetime across stage restart or plan regeneration is unspecified; a regenerated plan may never get its one repair, and 'harmless if left' contradicts AC-5. Say: 'Markers are cleared when the stage regenerates its plan.'
+- References: CHANGE_PLAN s4.1.r3 'probe non-loopback IP if found' and 'skip that probe'; CHANGE_SPEC AC-3.
+- Failure: The non-loopback probe says 'if found' but not how it is found or what a skip looks like. Decision: if a non-loopback IPv4 address exists, the test connects to it and fails on refusal; if none exists, it prints SKIP and the record-host assertions still run.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: Repair-turn outcomes besides spending stop (timeout, nonzero exit, deleted or empty plan file, error lacking step-N) are
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s9 and D-5 parse step from step-N only.
-- Failure: Repair-turn outcomes besides spending stop (timeout, nonzero exit, deleted or empty plan file, error lacking step-N) are unspecified for the final-failure message. Say: 'If no step-N is parsable, the message omits the step and still names file and resume command.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-012: New stderr warnings from three Owns call sites may break existing tests asserting clean stderr while existing tests may
+## AR-009: The plan does not say whether the existing removal cases for rules 1-5 are kept.
 
 - Severity: LOW
-- References: CHANGE_PLAN D-1, R-3, s12.
-- Failure: New stderr warnings from three Owns call sites may break existing tests asserting clean stderr while existing tests may not be edited. Say: 'Warnings are emitted only when dropped is non-empty; existing suites are run against baseline after step 1.'
+- References: CHANGE_SPEC AC-2 and AC-4; CHANGE_PLAN s4.1.r2.
+- Failure: The plan does not say whether the existing removal cases for rules 1-5 are kept. Decision: the existing five removal cases stay unchanged and the new case is appended after them.
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Repair prompt embeds validator output and plan text (model-authored, possibly attacker-influenced) with no stated trust
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-3 passes plan path plus exact validator output to run_initial_planning_agent; INV-5 is enforced only by prompt wording (R-4).
-- Failure: Repair prompt embeds validator output and plan text (model-authored, possibly attacker-influenced) with no stated trust boundary, and the repair agent's write scope is unspecified. Plan should say: the prompt labels plan text and validator output as untrusted data, and the driver re-checks that only the plan file changed.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-014: Marker file name uses <label> and the step number is parsed from validator error text, but neither is constrained.
+## AR-010: Rule 6 tells people to continue past Daytona's warning page but never limits that to the Preview link from the build out
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-3 `$STATE_DIR/plan-check-repair-<label>`; D-5 parses `step-N` from error text.
-- Failure: Marker file name uses <label> and the step number is parsed from validator error text, but neither is constrained. Plan should state that label is a fixed literal (project-plan or updated-plan) and the parsed step is digits-only before being printed or used in a path.
+- References: CHANGE_SPEC §10 only says the bearer-credential and untrusted-output rules must not be weakened. CHANGE_PLAN row s4.1.r1 says 'continue past it' with no limit.
+- Failure: Rule 6 tells people to continue past Daytona's warning page but never limits that to the Preview link from the build output. Add: 'Rule 6 applies only to the Preview link from the build output; never tell the person to continue past a warning for any other URL.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: Dropped tokens are echoed to stderr verbatim in warnings.
+## AR-011: The wildcard test binds to 0.0.0.0 and probes a non-loopback address, but the plan does not say the probe must stay loca
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1 prints `warning: step N owns: dropped <token>`; tokens come from model-written backticked spans.
-- Failure: Dropped tokens are echoed to stderr verbatim in warnings. Plan should say the token is escaped or truncated (control characters and ANSI escapes stripped, max length) before printing.
+- References: CHANGE_PLAN s4.1.r3: 'probe non-loopback IP if found'; risk column says skip when none. CHANGE_SPEC AC-3: 'when one is available'.
+- Failure: The wildcard test binds to 0.0.0.0 and probes a non-loopback address, but the plan does not say the probe must stay local-only or what happens with no such address. Add: 'The probe uses only local interface addresses, makes no outbound calls, skips when none exists, and stops the server on pass and failure.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: The shared path-shape predicate accepts tokens like `../../etc/x`; the old code only rejects a leading `/`.
-
-- Severity: MEDIUM
-- References: D-1 pattern `[\w./*?\[\]@-]+` allows `../` segments; plan_steps.py:88 only rejects a leading `/`.
-- Failure: The shared path-shape predicate accepts tokens like `../../etc/x`; the old code only rejects a leading `/`. Plan should say whether `..` segments in an owned path are dropped, since owns drives which files a step may write.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-017: A stale marker from a prior run can suppress the one repair for a changed plan.
+## AR-012: No test checks that 0.0.0.0 stays out of the recorded url and chat output.
 
 - Severity: LOW
-- References: CHANGE_PLAN section 6: marker retained on failure; section 10: leftover marker 'harmless'.
-- Failure: A stale marker from a prior run can suppress the one repair for a changed plan. Plan should state the marker is cleared whenever the plan file's content hash changes or a new run begins.
+- References: CHANGE_SPEC AC-3 and I-3 say the url stays on loopback. Row s4.1.r3 lists only the record-host assertion and the probe.
+- Failure: No test checks that 0.0.0.0 stays out of the recorded url and chat output. Add: 'The wildcard test asserts the recorded url host is exactly 127.0.0.1 and 0.0.0.0 appears only in the host field of preview.json.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-018: The plan does not say whether a later, different failure in the same run gets its own repair once the marker is cleared.
+## AR-013: The non-loopback probe is described as 'if found' and 'skip that probe', but the plan doesn't say how the test reports a
 
 - Severity: HIGH
-- References: CHANGE_PLAN D-3 ('Marker is removed when a check passes') against section 6 ('marker retained') and INV-2 'per plan check'.
-- Failure: The plan does not say whether a later, different failure in the same run gets its own repair once the marker is cleared. Settle with: 'The marker is removed when a check passes; a later failure is a new failure and gets one repair; a failure with the marker present exits 1 with no agent call.'
+- References: CHANGE_PLAN change-impact row r3 ('skip that probe'); CHANGE_SPEC AC-3 ('when one is available').
+- Failure: The non-loopback probe is described as 'if found' and 'skip that probe', but the plan doesn't say how the test reports a skip. A silent pass looks the same as a real pass. Settle with: 'With no non-loopback IPv4 address, the test prints SKIP, does not count the probe as passed, and does not fail.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-019: The plan leaves unspecified a repair agent that crashes, times out, makes no edit, or empties the plan file.
-
-- Severity: HIGH
-- References: CHANGE_PLAN section 9 says only that a crash is a 'failed repair' and the re-check runs. No AC covers a crashed or no-op repair.
-- Failure: The plan leaves unspecified a repair agent that crashes, times out, makes no edit, or empties the plan file. Settle with: 'A non-zero agent exit or an unchanged file skips the re-check and takes the final-failure path with the marker set.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-020: The dropped-token warning format is fixed loosely.
+## AR-014: AC-1 and AC-2 only test that a regex such as 'warning-page' matches.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1 and D-2 against CHANGE_SPEC AC-2 and AC-3.
-- Failure: The dropped-token warning format is fixed loosely. D-1 gives one text, AC-2/AC-3 say only 'names the step', and D-2 gives no JSON-route format. Settle with: 'Both routes emit exactly `warning: step <label> owns: dropped <token>` on stderr, one line per dropped token, in input order.'
+- References: CHANGE_SPEC AC-1 ('without quoting a button name'); CHANGE_PLAN R-1.
+- Failure: AC-1 and AC-2 only test that a regex such as 'warning-page' matches. They don't fix the matching wording or how the test catches a quoted button name. Settle with: 'The regex matches the phrase "warning page"; a forbidden pattern rejects quoted button labels, and a removal case proves a skill containing one is rejected.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-021: The plan does not say what happens when every Owns span is dropped, or how a directory-like span such as `src/` is treat
+## AR-015: The plan says rule 6 is added and 'rules 1-5 remain', but not how the test confirms this.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1 regex `[\w./*?\[\]@-]+` admits a trailing slash; CHANGE_SPEC INV-1 (plan_model.py:474-482) says directories are invalid.
-- Failure: The plan does not say what happens when every Owns span is dropped, or how a directory-like span such as `src/` is treated. Settle with: 'All spans dropped gives an empty owns list and the validator's existing error applies; `src/` passes the shape test and the validator still rejects it.'
+- References: CHANGE_SPEC AC-4 and AC-1 (60-line cap); CHANGE_PLAN R-2.
+- Failure: The plan says rule 6 is added and 'rules 1-5 remain', but not how the test confirms this. Settle with: 'The chat-skill test asserts numbered rules 1 to 6 appear in order and the body is at most 60 lines; the current line count is recorded.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-022: The final-failure diagnostic is untestable when the error names no step or several steps, and its stream and resume text
+## AR-016: AC-3 says the app 'answers' on a non-loopback address but doesn't define an answer, how the address is chosen, or the ti
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-5 ('parsed from step-N in the error') and CHANGE_SPEC AC-5.
-- Failure: The final-failure diagnostic is untestable when the error names no step or several steps, and its stream and resume text are unspecified. Settle with: 'Print to stderr; with zero or several steps print them comma-separated or `step: n/a`; the resume command is the one the driver prints for other stage failures.'
+- References: CHANGE_SPEC AC-3; CHANGE_PLAN row r3 ('probe non-loopback IP if found').
+- Failure: AC-3 says the app 'answers' on a non-loopback address but doesn't define an answer, how the address is chosen, or the timeout. Settle with: 'GET http://<first non-loopback IPv4>:<port>/ must return HTTP 200 with the same body as loopback, within 5 seconds.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-023: The plan is ambiguous when `spending-stop` already exists before the repair starts, for example from a resumed run.
+## AR-017: AC-5 verifies with 'git diff --name-only against change-impact table', which has no pass/fail rule.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-4 and R-2 against AC-7 ('during the repair turn').
-- Failure: The plan is ambiguous when `spending-stop` already exists before the repair starts, for example from a resumed run. It checks the flag only after the repair. Settle with: 'The flag is checked before launching the repair (stop without calling the agent) and after it (stop without re-checking).'
+- References: CHANGE_SPEC AC-5 verification.
+- Failure: AC-5 verifies with 'git diff --name-only against change-impact table', which has no pass/fail rule. Settle with: 'AC-5 passes when the changed paths, ignoring .uncle/ workflow files, are exactly SKILL.md, chat-skill-test.py and host-preview-test.py.'
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-018: The plan claims the regression test fails before the edit and passes after, but gives no step to record that.
+
+- Severity: LOW
+- References: CHANGE_PLAN section 16/17.
+- Failure: The plan claims the regression test fails before the edit and passes after, but gives no step to record that. The chat-skill suite is also outside the critical tier. Settle with: 'Implementation notes record the failing run ("missing rule: warning-page") before the SKILL.md edit and the passing run after; the chat-skill suite is run explicitly.'
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

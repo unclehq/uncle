@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 231
+Issue 235
 
-Seeded from [unclehq/uncle#231](https://github.com/unclehq/uncle/issues/231).
+Seeded from [unclehq/uncle#235](https://github.com/unclehq/uncle/issues/235).
 
 ## Change Type
 
@@ -10,65 +10,82 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-A project plan that fails its check ends a headless build (exit 1) with no repair turn; a code span on an Owns: line becomes an owned file
+Hosted preview link has never worked end to end: the signed-link call is offered now (#236 replaces #209), #208 is untested against Daytona, and Daytona's 15-minute auto-stop ends the app before the link expires
 
 ## Motivation
 
 ## Summary
 
-A project plan that fails its check ends the build with exit 1. The error says `Correct the saved document and resume.`, but in a headless hosted run nothing does: the supervisor that reacts to validation failures runs only inside the TUI. Other stages already give the model one repair attempt; the project plan doesn't.
+For a hosted build, the person who asked for it sees the finished app through a link in the chat. Five issues built that path, and all are closed: #206 (Uncle serves the app for the host), #207 (the build script gets a signed Daytona link), #208 (the script keeps the sandbox while the link works), #209 (the release allows the signed-link call) and #210 (the chat passes the link on).
 
-In this run, the token that failed the check was not a file the model meant to own. It was most likely a code span on the step's `Owns:` line that Uncle's parser took as a path.
+The path has never run end to end. No hosted build has printed a `Preview:` line yet:
 
-## What happened (2026-11-10, UTC)
+- **#209 was closed with no change,** because the host's Daytona publisher didn't offer the signed-link call yet. It does now, and #236 replaces #209. The publisher lists `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, with `expiresInSeconds` "at most 3600", and `POST /sandbox/{sandboxId}/ports/{port}/signed-preview-url/{token}/expire`.
+- **#208 was closed on a change that wasn't merged yet** and was "tested only with a mocked Daytona."
+- **#206's last check was never run:** whether the host's link reaches an app listening on `127.0.0.1`. No link could be made to try it.
 
-Headless self-hosted run on a host (no terminal in the sandbox) for a small Haskell app. After the parallel plan was discarded (#230), the single-pass plan was written, converted and checked. It failed:
+Two things the earlier issues didn't cover:
 
-```
-.uncle/docs/PROJECT_PLAN.md: step-2 owns: replace '-- EOF-GUARD' with a file or glob (directory/**). Correct the saved document and resume.
-```
+- **Daytona's auto-stop doesn't count a running app as activity.** Per Daytona's sandbox docs, auto-stop defaults to 15 minutes. Only preview visits, toolbox calls, SSH and lifecycle changes reset it; "merely having a script or background task running is not sufficient to keep the sandbox alive." Stopping ends every process in the sandbox. So with the default, a link nobody opens within 15 minutes of the build ending reaches a sandbox with no app, even though the chat said the link works for an hour. A signed link survives a restart; the app does not.
+- **Daytona shows a warning page** the first time a browser opens each preview link ([Preview and authentication](https://www.daytona.io/docs/en/preview-and-authentication/)). Accepting it lasts 24 hours for that link only, so the person sees it after every build. A click can't send the header that skips it. Removing it needs a higher Daytona account tier or a custom preview proxy, and neither is planned, so the chat should prepare the person for it.
 
-Uncle exited 1 at 08:13:30, and the build ended with no code written. A one-line correction of that step's file list would have let it continue.
+## How it happens
 
-**Where `-- EOF-GUARD` most likely came from.** `plan_steps.paths()` (`scripts/lib/plan_steps.py:69-85`) takes **every** backticked span on an `Owns:` line as a path, with no check (`:70-71`). Without backticks it accepts only tokens matching `[\w./*?\[\]@-]+` (`:74-77`), which `-- EOF-GUARD` (it contains a space) does not. So the plan most likely had a line like ``Owns: `app/Tutorial.hs` (ends with a `-- EOF-GUARD` comment)``. The saved plan was deleted with the sandbox, so this is inferred from the code.
+1. Hosted mode defaults `UNCLE_PREVIEW_MODE` to `host` (`stage-config.sh:51`).
+2. When a build completes, both drivers call `uncle_host_preview_hook` (`stagegate.sh:6830-6831`, `change-workflow.sh:5020-5021`), which runs `host_preview.py serve`.
+3. `serve` starts the app in its own session, on `UNCLE_PREVIEW_HOST`, default `127.0.0.1` (`host_preview.py:210`), and prints `UNCLE_PREVIEW_PORT=<n>` (`:290`).
+4. The build script, kept outside this repository, asks the host's Daytona publisher for a signed link to that port (#207), prints `Preview: <url> (works until …)` and keeps the sandbox (#208).
+5. The chat instructions pass the `Preview:` line on as a clickable link (`skills/uncle-build/SKILL.md:12-16`).
 
-## Code paths (main `5a5cd30`)
+Steps 4 and 5 have not happened in a real hosted run. Step 4's call was refused until the publisher offered it, and the release that would allow it (#236, replacing #209) hasn't been published.
 
-Blame is `git blame -w`.
+## Code paths (main `09a832b`)
 
-| Where | What it does | Last changed by |
+Blame is `git blame`.
+
+| Where | What it does | Last changed in |
 |---|---|---|
-| `scripts/stagegate.sh:4571-4594` | Single-pass plan: copies the investigation to `PROJECT_PLAN.md`, runs the shape-only repair (`repair_document_format.py`, `:4586-4588`), then `export-project-plan` and `render-project-plan` (`:4589-4592`), each `\|\| exit 1`. | `ed8609fb9` 2026-09-23, `82fbc92a9` 2026-10-27, `b3ef425f0` 2026-10-28 |
-| `scripts/stagegate.sh:4602-4607` | `plan-unprotected` check: on failure it prints the error, calls `supervision_validation_failed`, and runs `exit 1`. No repair. | `ebe265a9a` 2026-09-23, `78d391a49` 2026-09-24 |
-| `scripts/lib/plan_model.py:474-482` (in `validate`) | Rejects an `owns` token that isn't a valid path or is a directory. The check is right; the plan reached it with a bad token. | `1c89bbad9` 2026-10-31 |
-| `scripts/lib/plan_context.py:358-361` | Prints `{path}: {error}. Correct the saved document and resume.` and exits 1. | `31bfe97b1` 2026-09-23, `ebe265a9a` 2026-09-23 |
-| `scripts/lib/plan_steps.py:69-85` (`paths`) | Backticked spans on an `Owns:` line are taken as paths without the path-shape test that plain tokens get. All three `Owns:` routes use it (`:179`, `:224`, `:228`). | `a3a507e28` 2026-10-31, `e0a548e83` 2026-10-31 |
-| `scripts/lib/plan_model.py:738-749` (`split_list`) | The JSON route: any string in an `owns` array is kept after stripping backticks. | `70af75017` 2026-10-28, `8c5257472` 2026-10-28 |
-| `scripts/lib/supervision.sh:43-49` (`supervision_validation_failed`) | Only writes a status event. Its comment: "the outcome of that handling is unchanged". | `32b16e627` 2026-09-14 |
-| `scripts/lib/supervisor.py:1204-1225` (`_validation_failed`) | Reacts to that event with a diagnosis and correction note. The supervisor runs inside the TUI (`uncle_tui.py:113`). | |
-| `uncle:484-498` and `scripts/lib/uncle_headless.py` | With no terminal (a cloud sandbox, CI), a startup action runs headlessly through `uncle_headless.py`. That file never starts the supervisor or retries, so in hosted runs nothing reads the event. | |
-| `scripts/stagegate.sh:6612-6627` | For comparison: the checklist acceptance report gets one retry with the format error as instructions before it exits 1. | `fbda706d8` 2026-10-30 |
+| `scripts/lib/stage-config.sh:47-51` | `uncle_is_hosted`; hosted mode defaults `UNCLE_PREVIEW_MODE` to `host`. | `688d2194` 2026-11-09 (#211, PR #223) |
+| `scripts/stagegate.sh:6830-6831`, `scripts/change-workflow.sh:5020-5021` | The `COMPLETE` branch sources and calls `uncle_host_preview_hook`. | `bd3cde00` 2026-11-09 (#206, committed without a PR) |
+| `scripts/lib/host_preview_hook.sh:7-15` | Runs `host_preview.py serve "$PWD"` only in host mode; failures are ignored. | `bd3cde00` 2026-11-09 (#206) |
+| `scripts/lib/host_preview.py:210-213` | The app's address is `UNCLE_PREVIEW_HOST`, default `127.0.0.1`. | `bd3cde00` 2026-11-09 (#206) |
+| `scripts/lib/host_preview.py:50-63` | `valid_host` accepts `localhost` or any IPv4 address, `0.0.0.0` included. `urls_for` checks a `0.0.0.0` app through `127.0.0.1`. | `bd3cde00` 2026-11-09 (#206) |
+| `scripts/lib/host_preview.py:241-243` | Starts the app with `group_options()`, which is `start_new_session=True` (`process_tree.py:203-206`, `fd6272d5` 2026-09-09), so it outlives Uncle. | `bd3cde00` 2026-11-09 (#206) |
+| `scripts/lib/host_preview.py:281-292` | `serve` prints `UNCLE_PREVIEW_PORT=<n>` and always exits 0. | `bd3cde00` 2026-11-09 (#206) |
+| `skills/uncle-build/SKILL.md:8-16` | Chat rules for the `Preview:` line. Nothing about Daytona's warning page. | `274a636e` 2026-11-09 (#210, PR #220) |
+
+The build script's signed-link request (#207), its sandbox keep and limits (#208), and the release's publisher grants (#209) are not in this repository.
 
 ## Fix
 
-1. **Parser.** In `paths()`, apply the same path-shape test to backticked spans as to plain tokens, and drop spans that fail it, with a warning naming the step. Apply the same filter in `split_list` for `owns`.
-2. **Repair once.** When the project-plan check fails (`stagegate.sh:4586-4607`, and the updated-plan check at `:5662-5666`):
-   - Run one repair turn. Give the model the saved plan and the validator's exact errors, and ask it to fix only those.
-   - Re-check, and exit 1 only if it still fails.
-   - Use a one-time marker, as the checklist retry does, so it can't loop.
-   - The repair turn is a model call, so it must also stop cleanly on a host spending stop (#230).
-3. **Message.** In headless runs the "Correct the saved document and resume" message has no one to act on it. After a failed repair, say which file and step to fix and the command to resume.
+1. **Allow the call and publish (#236, which replaces #209).** Add `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url` to the release's script publisher grants, plus the `expire` call if the script ends links early, and publish a new release. A hirer can't see a release's grants, so whoever publishes the release has to confirm this.
+2. **Ask for at most 3600 seconds.** That's the host's limit and Daytona's recommended lifetime. Keep #207's retry with a shorter lifetime if one is refused.
+3. **Ship #208's change, with auto-stop set from the link.** Create the sandbox with `autoStopInterval` of at least the link's lifetime in minutes (60 for a 3600-second link) and `autoDeleteInterval: 0`, so Daytona deletes it as soon as it stops and nothing keeps costing the person afterward. The printed "works until" time must be no later than the time the sandbox is sure to still be running.
+4. **Check the app's address against real Daytona (#206's step 4).** If the link can't reach an app on `127.0.0.1`, have the build script set `UNCLE_PREVIEW_HOST=0.0.0.0`. `host_preview.py` already accepts it, and its own checks still go through `127.0.0.1` (`:62`, `:119`), so nothing else changes. If `127.0.0.1` works, keep the default.
+5. **Tell the person about the warning page.** Add a rule to `skills/uncle-build/SKILL.md`: when relaying a link, say that Daytona shows a warning page first and they should continue past it to reach the app. Don't quote a button name; Daytona may change its wording.
 
-## Tests to add
+## Tests
 
-- `plan_steps` test: ``Owns: `app/Main.hs`, `test/Spec.hs` (ends with a `-- EOF-GUARD` comment)`` gives `owns == ['app/Main.hs', 'test/Spec.hs']`.
-- Stage test: a single-pass plan whose step 2 owns `-- EOF-GUARD` gets one repair turn and continues. A plan still invalid after the repair exits 1 with the diagnostic, and no second repair runs.
-- Headless run of the same, with no TUI.
+- Build script, with a mocked publisher: a run that prints a link creates its sandbox with `autoStopInterval` of at least the link's lifetime in minutes and `autoDeleteInterval` 0, asks for `expiresInSeconds` of at most 3600, and prints an end time no later than the link's expiry.
+- `scripts/tests/chat-skill-test.py`: add a pattern requiring the warning-page rule, beside `preview-line` and `why-when-no-link`.
+- If step 4 needs `0.0.0.0`: a `host_preview.py serve` test with `UNCLE_PREVIEW_HOST=0.0.0.0` showing the app answers on a non-loopback address and `.uncle/preview.json` records that host.
+
+## Checks after the fix
+
+In a real hosted build with a real Daytona sandbox:
+
+1. A build of a small web app prints `Preview: https://… (works until …)`, and the chat reply shows a clickable link with the warning-page note.
+2. The link opens the app from another computer, after Daytona's warning page.
+3. Wait 20 minutes without opening the link, then open it: the app still loads. This is the 15-minute auto-stop case.
+4. After the end time, the sandbox is gone without another run.
+5. A build that prints no link deletes its sandbox before it ends, as today.
 
 ## Related
 
-- #230: the refused call that led to the single-pass plan.
-- #226: a supervision setting that turned off corrections for unattended runs. This issue is about headless runs, which never start the supervisor.
+- #206, #207, #208, #209, #210: the five parts of this path.
+- #236: the release permission, replacing #209.
+- #211: hosted mode.
+- #230, #231, #232: the latest hosted builds stopped at these before completing, so the preview step isn't reached until they're fixed.
 
 ## Observed Current Behavior
 

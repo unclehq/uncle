@@ -2037,6 +2037,7 @@ STRUCTURED_OUTPUT_CONTRACT
 }
 
 . "$ROOT/scripts/lib/reviewer-artifacts.sh"
+. "$ROOT/scripts/lib/reviewer-prompt.sh"
 
 
 # Reviewer-side counterpart to race_self_hosted_candidates, for
@@ -2140,7 +2141,9 @@ RENDER_PY
         else
             printf -- '--output-last-message "$CANDIDATE_DIR/output" '
         fi
-        printf -- '"$(cat "$CANDIDATE_DIR/prompt.md")" < /dev/null > "$CANDIDATE_DIR/raw.jsonl" 2>&1\n'
+        # Candidates only ever run on self_hosted.py, which reads the prompt
+        # from a file: a large prompt never lands in a single argv element.
+        printf -- '--prompt-file "$CANDIDATE_DIR/prompt.md" < /dev/null > "$CANDIDATE_DIR/raw.jsonl" 2>&1\n'
         printf 'echo $? > "$CANDIDATE_DIR/status"\n'
     } > "$launch_script"
 
@@ -2336,14 +2339,35 @@ run_codex_review() {
         # stdin is the operator's gate-answer channel, not stage input: codex
         # appends a non-TTY stdin to the prompt and would block on it forever.
         # Project dirs need not be git repos; the read-only sandbox is the boundary.
-        env UNCLE_ARTIFACT_DELIVERY="$delivery_file" UNCLE_OUTPUT_SCHEMA_FILE="$review_schema" UNCLE_STRUCTURED_OUTPUT_PATH="${review_schema:+$review_schema.out}" "${client_cmd[@]}" exec \
-            --ephemeral \
-            --skip-git-repo-check \
-            --sandbox "$reviewer_sandbox" \
-            "${model_args[@]+"${model_args[@]}"}" \
-            --output-last-message "$output_file" \
-            "$(cat "$prompt_file")" \
-            < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" || status=$?
+        # Only python3 clients (self_hosted.py, native_stage.py) accept the
+        # prompt as a file; every other client keeps the prompt in argv and
+        # is guarded against the per-argument size limit.
+        local prompt_kind=argv
+        local -a prompt_args=()
+        if [[ "${client_cmd[0]}" == python3 ]]; then
+            prompt_kind=file
+            prompt_args=(--prompt-file "$prompt_file")
+        fi
+        local guard_output=""
+        if ! guard_output="$(reviewer_prompt_guard "$log_name" "$prompt_kind" "$prompt_file" 2>&1)"; then
+            printf '%s\n' "$guard_output" | tee "$LOG_DIR/${log_name}.log" >&2
+            status=1
+        else
+            if [[ "$prompt_kind" == argv ]]; then
+                prompt_args=("$(cat "$prompt_file")")
+            fi
+            env UNCLE_ARTIFACT_DELIVERY="$delivery_file" UNCLE_OUTPUT_SCHEMA_FILE="$review_schema" UNCLE_STRUCTURED_OUTPUT_PATH="${review_schema:+$review_schema.out}" "${client_cmd[@]}" exec \
+                --ephemeral \
+                --skip-git-repo-check \
+                --sandbox "$reviewer_sandbox" \
+                "${model_args[@]+"${model_args[@]}"}" \
+                --output-last-message "$output_file" \
+                "${prompt_args[@]}" \
+                < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" || status=$?
+            if [[ "$status" -ne 0 ]]; then
+                reviewer_report_launch_failure "$log_name" "$status" "$LOG_DIR/${log_name}.log" || true
+            fi
+        fi
         fi
         # race_self_hosted_reviewer_candidates already wrote $output_file
         # straight from the winning candidate's own delivery/output file;

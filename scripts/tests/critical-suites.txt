@@ -112,4 +112,4 @@ shell-syntax
 json-field-helpers
 suite-tier
 host-preview
-hosted-mode
+reviewer-prompt-file

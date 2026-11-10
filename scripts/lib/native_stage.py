@@ -38,8 +38,41 @@ CONTEXT_BUDGET_NOTE = ('Context budget: your requests now carry %d tokens. Befor
     'the smallest set that finishes the stage: do not re-read files or logs already inspected, '
     'read by path and section when needed, and keep tool outputs short.')
 
+def read_prompt_file(args):
+    """Return (remaining_args, prompt_or_None) for an optional --prompt-file PATH.
+
+    The path must be a regular file whose resolved real path lies inside the
+    stage directory (UNCLE_PROMPT_FILE_ROOT, else the working directory).
+    """
+    args = list(args)
+    if args.count('--prompt-file') > 1:
+        raise ValueError('--prompt-file may be given only once')
+    if '--prompt-file' not in args:
+        return args, None
+    i = args.index('--prompt-file')
+    if i + 1 >= len(args):
+        raise ValueError('--prompt-file requires a path')
+    path = args[i + 1]
+    rest = args[:i] + args[i + 2:]
+    root = Path(os.environ.get('UNCLE_PROMPT_FILE_ROOT') or os.getcwd()).resolve()
+    try:
+        real = Path(path).resolve(strict=True)
+        inside = real == root or root in real.parents
+        if not inside or not real.is_file():
+            raise ValueError('--prompt-file must be a regular file inside %s: %s' % (root, path))
+        text = real.read_bytes().decode('utf-8')
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError('--prompt-file unreadable: %s (%s)' % (path, exc))
+    if not text.strip():
+        raise ValueError('--prompt-file is empty: %s' % path)
+    return rest, text
+
+
 class Stage:
     def __init__(self, runner, side, stage, args, prompt=None):
+        args, file_prompt = read_prompt_file(args)
+        if file_prompt is not None and prompt is None and side == 'reviewer':
+            prompt = file_prompt
         self.parent_pid = os.getppid()
         self.parent_lost = False
         self.parent_watch_stop = threading.Event()

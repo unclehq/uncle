@@ -1,36 +1,57 @@
 # Defects
 
-## Supervision section never calls _draw_config_desc (uncle_tui.py:8528 gated on config_section == 'stages'), so the strip fallback for the highlighted row's description is missing at 60 and 30 columns. Proposed ID: DEF-MC102.
-
-- **Status:** FAIL
-- **Evidence:** Probe output: '99 hinted rows: 0 / 13', '100 hinted rows: 13 / 13', '60 ... 0 / 13', '30 ... 0 / 13'. Full draw: '99 drawn 37 desc shown: False', '100 ... False', '60 drawn 14 desc shown: False', '30 drawn 14 desc shown: False'. Code: uncle_tui.py:8528 `if self.state == "config" and getattr(self, "config_section", "") == "stages": self._draw_config_desc(...)`; grep shows _draw_config_desc has no other caller. Probe script: .uncle/tests/mc102.py. Note: the driver green-check passes, but its test_draw_at_small_sizes only exercises the picker draw, not this config screen.
-- **Expected result:** Inline hints absent at <=99 columns and present at 100; at 60 and 30 columns the highlighted row's description still appears (strip fallback); nothing crashes or truncates keys or values.
-- **Actual result:** Inline hints behave as expected: 0/13 rows hinted at 99, 13/13 at 100, 0/13 at 60 and 30. No exceptions at any width. Keys and values were intact in the sample rows. FAIL on the description fallback: in the full screen draw (_draw_prompt) the highlighted row's description ('Reasoning effort for the supervisor...') is NOT drawn at 99, 100, 60 or 30 columns. In uncle_tui.py the only caller of _draw_config_desc is at line 8528-8529, which is gated on config_section == 'stages', so the Supervision section never gets the description panel or the narrow strip. Calling _draw_config_desc directly does produce the strip at 60/30, but the screen never calls it for Supervision. With inline hints hidden at <=99, the user sees no description at all at those widths.
-
-## None. Setup action: install tmux (or a pty/terminal emulator such as pyte) and rerun MC-200 at 120 cols, or a human performs the check.
+## None. Action: free disk space on the host volume, then rerun.
 
 - **Status:** BLOCKED-SETUP
-- **Evidence:** `which tmux` returned 'tmux not found'; .uncle/launch.json absent; green-check.md lists 'bash scripts/run-python-tests.sh -- supervisor supervisor-default-runner supervision-tooltips' as driver command.
-- **Expected result:** Every control row starts with its key, then value, then a short '  - hint' (<=40 chars, untruncated); Enter acts on the row's own key (bool toggles without picker, numeric opens edit); highlighted row's full description still shows in side panel/strip.
-- **Actual result:** Live interactive observation not performed: no terminal multiplexer/emulator (tmux not installed) is available to drive and capture the real TUI. Mocked-curses unit tests (test_every_control_has_a_short_hint_appended_unmodified, test_width_boundary, test_enter_and_toggle_on_each_hinted_row_target_matching_key) exist and are run by the driver green-check (supervision-tooltips), but they are not a live observation and were not re-run here.
+- **Evidence:** Terminal output; df -h shows /System/Volumes/Data 100% used; 'no space left on device' errors from zsh and cp.
+- **Expected result:** Both runs pass; .gitignore hash identical after restoration.
+- **Actual result:** Run 1 (.uncle present): 13 tests, FAILED (failures=1, errors=2). Run 2 (clean): FAILED (errors=13). Shell reported 'no space left on device' (ENOSPC) during writes; volume at 100% (249Mi free). Failures are not attributable to the application. Restored .gitignore hash equals original (f65fdeed...), cmp byte-identical.
 
-## None. Needs a person to visually confirm in a real terminal resized to 99/100/60/30 columns and capture screens; programmatic evidence above found no defect.
+## Missing-tool handling in worktree-run-test.sh does not emit 'missing prerequisite: <tool>'. Without the nested override the suite exits 77 (skip). No DEFECTS.md entry was written, because workers may not edit that file.
+
+- **Status:** FAIL
+- **Evidence:** exit=77 with empty stderr; exit=1 with stderr 'mktemp: command not found / mktemp -d failed'. grep -rIn 'missing prerequisite' in scripts/ returned nothing.
+- **Expected result:** stderr contains `missing prerequisite: <tool>`, exit is nonzero and not 127, and it is reported as FAILED, never passed or skipped.
+- **Actual result:** Plain run: stdout said 'skipped, an uncle build is driving this checkout', exit 77, stderr empty. That is a skip, not a failure. With UNCLE_TEST_ALLOW_NESTED=1: exit 1, stderr was 'line 59: mktemp: command not found' and 'worktree-run-test.sh: mktemp -d failed'. No 'missing prerequisite: <tool>' text appeared. The grep found no emitter of that string in scripts/; the only hits were in docs and prompts.
+
+## None. Free disk space on the host's tmp volume, then rerun with only git removed from PATH. A possible defect, still unconfirmed, is that no code emits `missing prerequisite: <tool>`.
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** worktree-run-test.sh: exit 1 with cp 'No space left on device' on the tmp fixture. gates-test.sh: exit 1 with 'canonical artifact missing: ...ADVERSARIAL_REVIEW.json' and FAIL [sg-missing-driver-results-block], and rm 'No such file or directory'. The only 'missing prerequisite' string in the repo is a prompt sentence in scripts/lib/gates.sh:406, not a runtime message about a missing tool.
+- **Expected result:** Stderr shows `missing prerequisite: <tool>`, and the exit code is nonzero and not 127. The suite is not reported as passed or skipped.
+- **Actual result:** Inconclusive. Both suites exited 1 (nonzero, not 127), but neither printed `missing prerequisite: git` in the captured output (grep for missing/prereq/skip found nothing relevant). The output was dominated by `No space left on device` (cp ENOSPC in the worktree-run fixtures) and cascading fixture failures such as 'canonical artifact missing'. The disk-full condition confounds the result, so it can't be attributed to the hidden tool. Without UNCLE_TEST_ALLOW_NESTED, worktree-run-test.sh exited 77 (skipped, because a build is driving the checkout). Suites that previously exited 127 were not separately enumerated.
+
+## None. Action: free disk space, then rerun.
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Same output as MC-105; disk 100% full.
+- **Expected result:** Both runs pass; .gitignore hash identical after restoration.
+- **Actual result:** Same as MC-105: runs failed under a full disk (ENOSPC), so they are inconclusive. Hash restored identically to the original.
+
+## None; free disk space on the host (/tmp or the volume), then rerun MC-305.
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** H0=fb94ad9fa6cae8a1, H1=fb94ad9fa6cae8a1. Test tail output: 'FAILED (failures=1, errors=1)' and 'FAILED (errors=13)'. Error: 'cp: /tmp/gi.bak: could not copy extended attributes to .gitignore: No space left on device'.
+- **Expected result:** Both runs pass; the restored .gitignore hash equals the original hash.
+- **Actual result:** Run with `.uncle` line: 13 tests, FAILED (failures=1, errors=1), 37s. Run clean: 13 tests, FAILED (errors=13), 0.7s. Restored hash fb94ad9fa6cae8a1 equals the original. The restore `cp` also reported 'No space left on device' (xattr copy), and a shell cwd write to /tmp failed with the same error, so the host disk was full during the runs. I could not read the failure detail or tell whether the failures are caused by the disk or by the code. The all-errors clean run points to an environment fault.
+
+## None
 
 - **Status:** BLOCKED-HUMAN
-- **Evidence:** Ad-hoc python run importing scripts/tests/supervision-tooltips-test.py Base harness; output table showed 'none' for widths <=99 and 'hints' for 100, all draws 'ok'. Driver green-check covers the unit tests (test_width_boundary, test_draw_at_small_sizes_does_not_raise).
-- **Expected result:** Inline hints absent at 99 and below, present at 100; keys/values not truncated by hint logic; highlighted description still shows; tiny sizes never crash.
-- **Actual result:** Rows had no hint separator at 99, 60, 30, 10, 5, 1 and had hints at 100 (e.g. 'enabled   true  (default)  - turn supervision on or off'); base key/value text unchanged. No exceptions in any picker draw at any width/height combination. _draw_config_desc rendered the highlighted description ('!supervision — Opt in to event-triggered diagnosis') at 99/100/60 and truncated gracefully at 30/10/5 without error. Not observed in a live terminal: no screen captures and no actual terminal resize events.
+- **Evidence:** Test output ended 'Ran 39 tests ... OK' and 'Ran 12 tests ... OK'. Direct call printed: ValueError Cannot list this project's worktrees: fatal: not a git repository (or any of the parent directories): .git. Temp dir had 0 entries afterwards. Source: uncle_tui.py:5874-5882.
+- **Expected result:** Both suites pass; the TUI shows a refusal message when worktree listing fails, without a traceback and without changing state.
+- **Actual result:** Both suites passed (home-actions: 39 tests OK; early-branch: 12 tests OK). The resolver raised ValueError "Cannot list this project's worktrees: fatal: not a git repository ...", which is the refusal text, and the temp dir was left empty (no state change). I did not observe the rendered TUI screen, so I could not confirm that the TUI displays this ValueError without a traceback. No existing test covers the 'Cannot list' message.
 
-## New defect: the highlighted-option description never renders in Configure -> Supervision (no side panel and no narrow-width strip), because _draw_config_desc is only invoked for the 'stages' section. Observed: no description at 60 or 30 columns. Expected: the strip description shows.
+## None. Action: free disk space, then rerun.
+
+- **Status:** BLOCKED-SETUP
+- **Evidence:** Same output as MC-105; disk 100% full.
+- **Expected result:** Both runs pass; .gitignore hash after restoration equals the original.
+- **Actual result:** Same as MC-105: runs failed under a full disk (ENOSPC), so they are inconclusive. Hash restored identically to the original.
+
+## New: worktree-run-test.sh does not detect a missing required tool or emit `missing prerequisite: <tool>`. It fails late with unrelated errors.
 
 - **Status:** FAIL
-- **Evidence:** Probe output: width 99 'hinted rows 0 / 13'; width 100 'hinted rows 13 / 13'; widths 60 and 30 'hinted rows 0 / 13', 'draw ok; lines 14'. The drawn lines at 60 and 30 were the 'Configure' title plus the 13 rows, with no description line. The _draw_config_desc call is guarded by the 'stages' section check at uncle_tui.py:8528. Not verified in a real terminal.
-- **Expected result:** Inline hints are absent at 99 columns and below and present at 100. At 60 and 30 columns the highlighted-option description still shows through the strip fallback. No crash or garbled screen appears, and keys and values are not truncated by the hint logic.
-- **Actual result:** The hint boundary and no-crash parts match. Width 99 had 0 of 13 rows hinted, width 100 had 13 of 13 (e.g. 'enabled   true  (default)  - turn supervision on or off'), width 60 had 0 and width 30 had 0. _draw_prompt drew all four widths without an exception. At 60 and 30 columns only the title and the 13 option rows were drawn (14 lines), and no highlighted-option description or strip appeared. The same was true at width 160, where there is no side panel either. In the code, _draw_config_desc, which contains the strip fallback, is called only when config_section == 'stages' (uncle_tui.py:8528-8529). Supervision-section descriptions (_supervision_desc) are therefore never drawn on the Configure screen at any width. At width 30 the rows are cut by the existing addnstr(w-1) clipping, so the value is cut, not by hint logic. This is pre-existing behaviour, since no hint is appended below 100.
-
-## Highlighted-row description is not drawn on the Supervision config screen at any width (uncle_tui.py:8528 only draws it for the 'stages' section). Needs a DEFECTS entry.
-
-- **Status:** FAIL
-- **Evidence:** Probe output: no description text in any draw call for any width or selection. The 100-column output shows the hint suffixes. At 60 the rows have no hints. Gate at uncle_tui.py:8527-8529 (section == 'stages'). Driver green-check already covers hint width boundaries in unit tests (supervision-tooltips-test.py test_width_boundary), which do not exercise the description panel on the config screen.
-- **Expected result:** At 60 and 99 columns: no inline hints, rows not garbled, and the highlighted row's description still shows in the strip or side panel. At 100 columns: hints appear and the description still shows. No crash at any width.
-- **Actual result:** Partly met. Hints: none at 60 or 99, and appended as '  - <hint>' on every row at 100 (for example 'effort  low  (default)  - supervisor reasoning effort'). Rows are intact and the highlight marker moves correctly. Nothing raised at any width. The description does not show: at 60, 99 and 100 no side panel or strip text was drawn for the highlighted row. The only draw calls were the title, the rows (plus the logo at 99 and 100) and nothing else. Cause: uncle_tui.py:8528 calls _draw_config_desc only when config_section == 'stages', so _supervision_desc() (uncle_tui.py:5128) is never rendered on the Supervision config screen. The same gate applies at every width, and the git diff shows no change to that line. The description is only reachable through the picker, which this check did not cover.
+- **Evidence:** Attempt 2 (git removed) exit=1; stderr contained 'bin/git: line 3: exec: : not found'. Attempt 1 stderr: 'chmod: command not found', 'cp: command not found'. grep for 'missing prerequisite' found only scripts/lib/gates.sh:406 (prose). worktree-run-test.sh lines 1-90 read: no `command -v` prerequisite guard other than REAL_GIT="$(command -v git)" at line 84, which is unchecked.
+- **Expected result:** Stderr shows `missing prerequisite: <tool>` and the exit code is nonzero and not 127; the result is not a pass or skip.
+- **Actual result:** The suite never printed `missing prerequisite: <tool>`. Attempt 1 exited 1 with 'chmod: command not found' and 'cp: command not found' on stderr, and fixtures reported 'expected exit 0, got 127' (the 127 came from fixtures, not the suite's own exit). Attempt 2 (git removed) exited 1 with FAIL lines such as 'Not a git repository' and the stub git wrapper's 'exec: : not found'; REAL_GIT resolved to empty and the suite carried on. The only occurrence of 'missing prerequisite' in scripts/ or uncle_tui.py is a prose sentence at scripts/lib/gates.sh:406. The suite has no up-front tool check. The exit was nonzero and not 127, but the required stderr message is absent.

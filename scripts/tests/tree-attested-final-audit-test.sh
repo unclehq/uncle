@@ -5,11 +5,14 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT/scripts/lib/change-pr.sh"
 d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
-cd "$d" && git init -q -b main && git config user.email t@t && git config user.name t && git config commit.gpgsign false
+: > "$d/empty-gitconfig"; mkdir -p "$d/home"
+export GIT_CONFIG_GLOBAL="$d/empty-gitconfig" GIT_CONFIG_SYSTEM="$d/empty-gitconfig" HOME="$d/home"
+unset GPG_AGENT_INFO GNUPGHOME
+mkdir -p "$d/repo" && cd "$d/repo" && git init -q -b main && git config user.email t@t && git config user.name t && git config commit.gpgsign false && git config tag.gpgsign false
 mkdir -p .uncle/docs && echo old > .uncle/docs/FINAL_AUDIT.md && echo a > code.txt
-git add -A && git commit -qm base
+git add -A && git -c commit.gpgsign=false -c tag.gpgsign=false commit --no-gpg-sign -qm base
 echo new > .uncle/docs/FINAL_AUDIT.md                        # this run's audit, written after the tree is bound
-export GIT_INDEX_FILE="$d/.git/tmp-index"; git read-tree HEAD; git rm -q --cached .uncle/docs/FINAL_AUDIT.md
+export GIT_INDEX_FILE="$d/repo/.git/tmp-index"; git read-tree HEAD; git rm -q --cached .uncle/docs/FINAL_AUDIT.md
 tree="$(git write-tree)"; unset GIT_INDEX_FILE              # the attested tree: no .uncle/docs/FINAL_AUDIT.md
 fail=0
 check() { if [[ "$2" == "$3" ]]; then echo "ok   $1"; else echo "FAIL $1 (got $3, want $2)"; fail=1; fi; }

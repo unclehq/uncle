@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 81
+Issue 228
 
-Seeded from [unclehq/uncle#81](https://github.com/unclehq/uncle/issues/81).
+Seeded from [unclehq/uncle#228](https://github.com/unclehq/uncle/issues/228).
 
 ## Change Type
 
@@ -10,32 +10,40 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Add tooltips to each option in the Supervision configuration menu
+Fix failing tests so the full suite passes 100% green
 
 ## Motivation
 
-## Summary
+## Problem
 
-Add tooltips to each option in the Supervision configuration menu (Configure → Supervision in `uncle_tui.py`) so every setting explains what it does without requiring the user to consult `.uncle/config.example` or the README.
+`./scripts/run-all-tests.sh` does not pass. Latest run on `main` (4c23afa): **96 passed, 11 failed, 0 skipped**. Goal: every suite green, with no skips and no weakened tests.
 
-## Current state
+## Failing suites
 
-- The menu lists the 12 typed controls from `supervision_lib.CONTROLS` (`scripts/lib/supervisor.py:44`): `enabled`, `runner`, `model`, `effort`, `max_interventions`, `steering_timeout_seconds`, `stage_time_seconds`, `stage_tokens`, `call_timeout_seconds`, `max_calls_per_run`, `call_max_cost_usd`, `delegate_gates`.
-- Rows are rendered by `_supervision_items()` (`uncle_tui.py:3477`) as plain `key  value` text with no inline hint.
-- Per-option descriptions already exist in `SUPERVISION_DESC` (`uncle_tui.py:670`), but they are shown only for the **highlighted** option, in the side panel / bottom strip drawn by `_draw_config_desc()` (`uncle_tui.py:5450`).
-- The value pickers opened when editing an option (effort → low/medium/high/custom, runner, model, delegate_gates → none/routine) present bare choices with no explanation of what each choice implies (see `_picker_rows()`, `uncle_tui.py:1231`).
+- `scripts/tests/worktree-run-test.sh` (shards #3of4, #4of4): many checks fail with `expected exit 0, got 127` (command not found), so the cause is probably an environment or PATH assumption. Needs confirming.
+- `scripts/tests/attestation-statement-test.py` (shards #1of3, #2of3, #3of3):
+  - `test_not_ready_audit_with_driver_override_never_publishes`
+  - `test_gitignore_boundary`
+  - `test_final_audit_writes_audit_and_release_envelopes`
+- `scripts/tests/early-branch-test.py`: `test_t1_unknown_default_defers_without_guessing`, `test_t3_non_default_current_branch_is_the_head`, `test_t4_divergent_candidate_ref_is_never_overwritten`, `test_t5_unavailable_contexts_skip_without_journal_or_ref`, plus 1 error
+- `scripts/tests/supervisor-test.py`: `test_every_fixture_commit_and_tag_disables_signing`
+- `scripts/tests/unattended-test.sh`: `sg-version-flag` (expected `0.1.0`, got empty) and `stagegate-help` (`--unattended` not documented in `--help`)
+- `scripts/tests/home-actions-test.py`: 2 errors
+- `gates-verification-integrity`, `gates-verification-integrity-2`, `gates-verification-integrity-4`: workflow sits in `IMPLEMENT` where the tests expect `REPAIR`, `COMPLETE` or `VALIDATE_TEST_REVIEW` (`sg-repair-*`, `sg-review-cannot-bless-failed-command`, `sg-missing-driver-results-block`, `sg-verifier-rewrites-test`, `sg-command-rewrites-test`, `sg-approved-parallel-checks`, `sg-invalid-parallel-plan`)
 
-## Proposal
+The first run printed the failing suites above, and a second run printed the individual `FAIL` lines. Re-run to get current output, since the list may shift.
 
-- Show a tooltip/hint for every option in the Supervision menu, not just the highlighted row — e.g. a short inline hint per row, or an expanded panel — so users can compare settings at a glance.
-- Extend tooltips into the value pickers so each choice (e.g. `delegate_gates` none vs routine, effort low/medium/high) explains its effect before it is selected.
-- Reuse/extend `SUPERVISION_DESC` as the single source of tooltip text so menu rows and picker choices stay consistent; keep text in sync with `.uncle/config.example` and README (AT-9 already checks the control key list against `CONTROLS`).
+## Requirements
 
-## Acceptance criteria
+- For each failure, decide whether the product or the test is wrong. Fix the root cause.
+- Do not weaken, delete or skip tests, and do not loosen assertions to get green. Any test change needs a requirement-based explanation.
+- Separate environment-dependent failures (for example exit 127) from real defects. Make the tests self-contained or have them fail with a clear prerequisite message.
+- Fix the `--version` and `--help` regressions in `stagegate.sh`.
 
-- [ ] Every option in the Supervision configuration menu has a visible tooltip/hint without needing to read external docs.
-- [ ] Each choice in the option value pickers carries a short explanation.
-- [ ] Tooltip text covers all keys in `supervision_lib.CONTROLS` and degrades gracefully on narrow terminals (existing `_draw_config_desc` fallback behavior).
+## Definition of done
+
+- `./scripts/run-all-tests.sh` exits 0 with `0 failed, 0 skipped` on a clean checkout of `main`.
+- Failures that were not code defects are documented in the PR.
 
 ## Observed Current Behavior
 

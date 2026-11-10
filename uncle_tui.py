@@ -5760,7 +5760,7 @@ class UncleTUI:
         best, best_time = None, -1.0
         try:
             rows = worktree_runs.runs(str(root))
-        except (OSError, ValueError):
+        except (OSError, ValueError, worktree_runs.WorktreeListError):
             return None
         for row in rows:
             path = Path(row['path'])
@@ -5875,7 +5875,11 @@ class UncleTUI:
         """The run worktree `<command> #N` or `<command> <path>` names."""
         wanted = target.lstrip('#')
         if wanted.isdigit():
-            for row in worktree_runs.runs(str(root)):
+            try:
+                rows = worktree_runs.runs(str(root))
+            except worktree_runs.WorktreeListError as error:
+                raise ValueError('Cannot list this project\'s worktrees: %s' % sanitize(str(error)))
+            for row in rows:
                 if str(row.get('issue')) == wanted:
                     return Path(row['path'])
             raise ValueError('No run for #%s among this project\'s worktrees.' % wanted)
@@ -5884,7 +5888,7 @@ class UncleTUI:
             path = root / path
         try:
             listed = [Path(p).resolve() for p in worktree_runs.worktrees(str(root))]
-        except (OSError, ValueError):
+        except (OSError, ValueError, worktree_runs.WorktreeListError):
             listed = []
         if path.is_dir() and path.resolve() in listed:
             return path

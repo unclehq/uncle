@@ -1,83 +1,70 @@
-# Baseline: Supervision menu tooltips
+# Baseline Report (Issue 228)
 
-Omitted sections: Reproduction (feature, not a bug); Flaky behavior (none documented in repo)
+Omitted sections: Reproduction of a single bug (multi-suite test-health issue; per-suite findings in section 11 instead)
 
 ## 1. Change-request summary
-See .uncle/docs/CHANGE_REQUEST.md (Issue 81): show a hint for every Supervision option, not only the highlighted one, and explain each value-picker choice; reuse `SUPERVISION_DESC` as single text source.
+See `.uncle/docs/CHANGE_REQUEST.md`. `./scripts/run-all-tests.sh` reports 96 passed / 11 failed on main 4c23afa. Goal: 0 failed, 0 skipped, no weakened tests; classify each failure product-vs-test-vs-environment.
 
 ## 2. Repository architecture
-Single-file curses TUI `uncle_tui.py` (class `UncleTUI`); supervision config schema in `scripts/lib/supervisor.py` (imported as `supervision_lib`). Python suites in `scripts/tests/*-test.py`, shell suites `*-test.sh`.
+Bash drivers (`scripts/stagegate.sh` 6918 lines, `scripts/change-workflow.sh`, `scripts/workflow.sh`), shell libs in `scripts/lib/` (`run-policy.sh`, `mode.sh`, `worktree_runs.py`, `all_suites.py`), Python TUI `uncle_tui.py`, suites in `scripts/tests/` (`*-test.sh`, `*-test.py`). `scripts/run-all-tests.sh` execs `scripts/lib/all_suites.py` (all Python+shell suites in one pool).
 
 ## 3. Relevant code paths
-| Symbol | Location |
-|---|---|
-| `supervision_lib.CONTROLS` (13 tuples incl. `files_allowlist`), `DELEGATIONS`, `KINDS`, `DEFAULTS` | scripts/lib/supervisor.py:55-74 |
-| `SUPERVISION_DESC` (13 keys) | uncle_tui.py:772-786 |
-| `_picker_rows` | uncle_tui.py:1739-1778 |
-| `_picker_current` | uncle_tui.py:1794 |
-| `_open_picker` | uncle_tui.py:1814 |
-| `items()` -> `_supervision_items` | uncle_tui.py:1361, 1660, 5070 |
-| `_supervision_desc`, `_supervision_enter` | uncle_tui.py:5081, 5087 |
-| `_draw_config_desc` | uncle_tui.py:8336 |
-| `_title` (picker titles) | uncle_tui.py:8269 |
-| `_draw_picker` | uncle_tui.py:8377 |
-| Existing TUI test (`TuiHostTests`) | scripts/tests/supervisor-test.py:1016, asserts `_supervision_items()[0].startswith('enabled')` at :1214 |
+- `scripts/stagegate.sh:51-86` version/usage/arg parse; but `:29-38` runs `run_policy_app_preflight` (from `scripts/lib/run-policy.sh`) BEFORE arg parsing, so `--version`/`--help` are refused when the tree is dirty or not on clean main (observed: `Refusing app build: the working tree on 'main' has uncommitted changes`, empty stdout). Same ordering in `scripts/change-workflow.sh` (version at :51, args at :84).
+- `scripts/tests/unattended-test.sh:39,46` sg-version-flag / `--help` documents `--unattended`.
+- `scripts/lib/worktree_runs.py:55-62` raises `WorktreeListError` when `git worktree list` fails; reached from `uncle_tui.py:5750-5762` (`_resume_build`/`_latest_resumable_run`); `scripts/tests/home-actions-test.py:192,204`.
+- `scripts/tests/early-branch-test.py:280-302` (t5) and t1/t3/t4; `scripts/tests/supervisor-test.py:~1785` signing audit; `scripts/tests/attestation-statement-test.py:392,447,473`.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Open Configure -> Supervision | One row per CONTROLS key: `key(ljust 26)  value` or `value  (default)`; extra `! reason` row when config invalid | uncle_tui.py:5070-5079; test :1214 | Yes (row prefix `key`) |
-| B-2 | Highlight a row | Full `SUPERVISION_DESC` + "Enter edits..." shown in right panel (>=18 cols free) else strip below list | :5081, :8336-8375 | Yes |
-| B-3 | Enter on bool (`enabled`) | Toggles true/false, no picker | :5092 | Yes |
-| B-4 | Enter on `effort`/`runner`/`model` | Picker lists bare values (effort: EFFORTS none/low/medium/high + Custom; runner: installed supported runners; model: catalog) | :1744-1778 | Yes (values/order) |
-| B-5 | Enter on `delegate_gates` and numeric keys | `_open_picker` -> picker_kind unrecognised -> only `Custom...` free-text row; no none/routine choices | :1778, :1814 | Choice list is MODIFIED; free-text validation preserved |
-| B-6 | Picker row render | `> value  <label>  <current>`; label only for models | :8388-8402 | Yes |
+| B-1 | `stagegate.sh --version` in dirty tree | Run-policy refusal, no version printed | ran it | No (defect) |
+| B-2 | `stagegate.sh --help` | Same preflight refusal in dirty tree; usage text itself mentions `--unattended` | usage at :54-72 | Help text yes |
+| B-3 | Run policy on dirty/non-main app build | Refuses build | run-policy.sh | Yes |
+| B-4 | `attestation-statement-test.py` here | 3 failures; output shows `approved artifact is ignored: .gitignore:36:.uncle` -> fixture inherits this worktree's UNCOMMITTED `.gitignore` line `.uncle`, causing tree-mismatch | ran suite; `git diff .gitignore` | Attestation ignore-boundary yes |
+| B-5 | `home-actions-test.py` resume tests | `WorktreeListError: fatal: not a git repository` from `git worktree list` | ran suite | Error on real git failure: yes |
+| B-6 | `early-branch-test.py` t5 | Unexpected `refs/heads/uncle/early-branch-demo` created in a case that must create no ref | ran suite | Yes |
+| B-7 | `supervisor-test.py` signing audit | Lists fixture commits without explicit no-sign flags, e.g. `tree-attested-final-audit-test.sh:10`, `build-attestation-test.py:34,62` (+1) | ran suite | Policy yes |
+| B-8 | `worktree-run-test.sh` | Did NOT reproduce exit 127 locally (no FAIL lines) | ran suite | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Documented control key list equals `CONTROLS` (AT-9) | DocsTests | supervisor-test.py:1750 | High |
-| I-2 | Values are validated by supervision_lib before use; invalid disables corrections | `load_config` | ConfigTests :903 | High |
-| I-3 | Drawing never raises on tiny terminals (curses.error swallowed) | try/except in draw funcs | none found | Medium |
+| I-1 | App builds start only from clean main | `run-policy.sh` preflight | run-policy tests | High |
+| I-2 | Every fixture git commit/tag disables signing | convention + audit test | `supervisor-test.py` signing audit | High |
+| I-3 | `.uncle`-ignored artifacts never enter attested tree boundary | attestation code | `attestation-statement-test.py` | Medium |
+| I-4 | Early-branch skips (no remote/detached/unborn) create no ref/journal | early-branch code | `early-branch-test.py` | Medium |
 
 ## 6. Interface contracts
-No external API/schema. Internal: `items()` returns list[str] consumed for selection/width; `_picker_rows()` returns (kind,text) with kind in header/option/model/custom; `.uncle/config` keys unchanged.
+`stagegate.sh --version` prints `0.1.0`, exit 0; `--help` exits 0 and documents `--unattended`; same for `change-workflow.sh`. `run-all-tests.sh` exit 0 only if all suites pass.
 
 ## 7. Existing automated-test coverage
-supervisor-test.py covers config, docs and TUI host wiring but nothing on `SUPERVISION_DESC` content, `_draw_config_desc`, or `_picker_rows` (grep found only :1214). No test draws a picker. Parallel commands use separate temp dirs (shell and python runners per CLAUDE.md guidance).
+Suites run in a shared pool by `all_suites.py`; shell and Python suites use separate temp dirs, so they are grouped. Critical-tier default runners skip non-critical suites; full coverage needs `run-all-tests.sh`.
 
 ## 9. Baseline test results
-Not run by the analyst. Commands are from scripts/run-shell-tests.sh and scripts/run-python-tests.sh. Command 3 names a suite (`supervision-tooltips`) that does not exist at baseline; it is expected to fail/not-found pre-change and is added by the change. Driver baseline is authoritative.
+Commands come from `scripts/README.md`/runners. Not run here (driver baseline is authority). Issue documents 96 passed / 11 failed; the failing list is in CHANGE_REQUEST. Failures may differ by environment: this worktree has an uncommitted `.gitignore` line `.uncle` and branch `uncle/fix-...`, which plausibly explain B-1, B-4 (not main-clean).
+
+## 10. Existing failures, warnings, flakiness
+See section 4 rows B-1..B-8. Not reproduced locally: worktree-run exit 127 (likely PATH/tool assumption in CI/sandbox), gates-verification-integrity* (IMPLEMENT vs REPAIR/COMPLETE; possibly a consequence of the same dirty-tree/run-policy or git-signing behavior). UNRESOLVED until driver baseline logs.
 
 ## 12. Likely change surface
-uncle_tui.py (SUPERVISION_DESC area, `_picker_rows`, `_picker_current`, `_title`, `_draw_picker`, `_supervision_items`, `_draw_config_desc`); new test file scripts/tests/supervision-tooltips-test.py; possibly README/.uncle/config.example only if wording drift is found.
+`scripts/stagegate.sh`, `scripts/change-workflow.sh` (arg parsing before preflight); `scripts/lib/worktree_runs.py` or `uncle_tui.py` caller / test fixtures (home-actions); early-branch implementation or fixture; fixture git calls in `tree-attested-final-audit-test.sh`, `build-attestation-test.py` and others flagged by the signing audit; attestation fixture `.gitignore` isolation; gates-verification-integrity suites.
 
 ## 13. Regression-sensitive components
-Model/runner/effort pickers of stage config (same `_picker_rows`/`_draw_picker` shared); `items()` width drives side-panel vs strip layout; `_picker_filtered` typing filter; custom-entry flow.
+Run policy (I-1), attestation boundary (I-3), early-branch ref mutation (I-4), signing hygiene (I-2).
 
 ## 14. Outside the change
-Supervisor engine, CONTROLS semantics/defaults, config parsing, stage (non-supervision) config menus' text, gate logic.
+No weakening/deleting/skipping tests; no unrelated cleanup; no change to run-policy semantics for real builds.
 
 ## 15. Unknowns and assumptions
-- `files_allowlist` has a description but is a 13th CONTROLS key (issue says 12); all 13 get hints.
-- Picker choice rendering for non-supervision targets must stay unchanged.
-- Picker-apply path for a `delegate` kind not yet read; plan step 3 reads it.
+- Which failures are caused by this worktree's state vs. real on clean main is unknown; plan requires reproducing in a clean checkout (`git worktree` of main HEAD) first.
+- Exit 127 cause and gates-verification-integrity cause are unknown.
 
-## 16. Initial risk assessment
-Medium-low: UI-only, but shared picker code and curses width handling. Main risk is changing `items()` width and degrading the side panel.
+## 16. Initial risk
+Medium: many independent root causes; changing preflight ordering must not let real builds bypass I-1.
 
 ## Exact build and test commands executed
 
 ```sh
-bash scripts/run-shell-tests.sh
-bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- supervisor supervisor-default-runner supervision-tooltips
-python3 -B -m py_compile uncle_tui.py
-```
-
-## Parallel verification groups
-
-```text
-1 2
+bash scripts/run-all-tests.sh
 ```
 

@@ -1,139 +1,133 @@
-# Change plan: Supervision tooltips
+# Change Plan (Issue 228)
 
-Issue 81
+Seeded from [unclehq/uncle#228](https://github.com/unclehq/uncle/issues/228).
 
-Seeded from [unclehq/uncle#81](https://github.com/unclehq/uncle/issues/81).
+Issue 228
 
-Omitted sections: Schema/persistence (none); Migration (none); Concurrency (single-threaded UI); Feature flag (none, UI-only)
+Omitted sections: Schema/persistence, Migration, Concurrency, Feature flags (none apply)
 
 ## 1. Selected technical approach
 
-All in `uncle_tui.py`, text next to `SUPERVISION_DESC`:
+Triage-then-fix per suite. Step 1 reproduces every failure on a clean checkout of main HEAD (a throwaway `git worktree`, no signing, no commit to the project) to separate host-state artifacts from real defects. Failures are judged against clean main: a failure seen only in the dirty tree is recorded in IMPLEMENTATION_NOTES.md as host-state and needs no code change. Fixes: (D-1) in both drivers parse `--help/-h/--version` before the run-policy preflight, using this argv rule: scan argv left to right; the first of `--help`, `-h`, `--version` found wins, is handled before preflight (prints and exits 0, writing no state), and all later arguments are ignored (so `--version --unattended` prints the version and `--help build` prints help). If none of those appears, including an unknown argument alone, the full run-policy preflight runs before any state write exactly as today; real-run args (e.g. `--unattended`, a build request) with no help/version flag still run preflight. (D-2) fixture isolation: attestation, early-branch, home-actions fixtures must create their own git repo and `.gitignore` rather than inherit host state; the attestation fixture writes its own `.gitignore` in two variants, one without `.uncle` and one containing `.uncle` (simulating the dirty host case), and at least one shard asserts the ignore-containing case so AC-5 is exercised; (D-3) add explicit `-c commit.gpgsign=false -c tag.gpgsign=false` and `--no-gpg-sign` to flagged fixture git calls; (D-4) for exit 127 and gates-verification-integrity, locate the missing command/ordering in the failing check, then fix product or add a prerequisite check with a clear message. Prerequisite checks fail closed: a missing tool produces a nonzero exit that names the tool, and is never reported as a pass or a skip; a suite failing on a missing prerequisite counts as FAILED for AC-8.
 
-- D-1: add `SUPERVISION_HINT` (one short phrase per CONTROLS key, <=40 chars excluding the `  - ` separator; authoring limit enforced by a test, never truncated at runtime) and `SUPERVISION_CHOICE_DESC` mapping `(key, value)` to a short explanation (effort none/low/medium/high; delegate_gates none/routine). Runner explanations: the runner value set is enumerated from the same list `_picker_rows` uses for the runner picker (tests iterate that list, not a hardcoded copy); each runner gets an entry where known, otherwise a fixed non-empty generic fallback string (a module constant). All hint and explanation text comes only from these static dict entries or the fixed fallback; user-supplied values (e.g. runner names) are never interpolated into them. Tests assert every runner in that list yields a non-empty explanation.
-- D-2: `_supervision_items()` appends `  - <hint>` after the value iff the full stdscr width `self.stdscr.getmaxyx()[1] >= 100` (not the menu-panel width). Hints are absent at width 99 and below, and absent if getmaxyx raises or returns a non-positive or non-integer width. Rows keep key prefix. Hints are authored at <=40 chars excluding the separator and are never truncated at runtime; a test asserts len(hint)<=40 for every hint. Key and value are never truncated by the hint logic (the window may clip the row at draw time). Rows beginning with `!` (invalid-config reason rows) and non-CONTROLS rows get no hint; every CONTROLS row has a non-empty hint at width >=100. At width >=100 hints are always rendered; if the side description panel does not fit, `_draw_config_desc` uses its existing bottom-strip fallback and the inline hints stay. No caller parses row text: selection, Enter and toggle act on the row index/key, so Enter/toggle on a hinted row must act on the correct key (asserted by a test).
-- D-3: add picker_kind `delegate` in `_picker_rows` returning `option` rows none/routine only (no Custom row, like `network`); extend `_picker_current` and `_title` for it. none and routine are the only selectable values. The current value is marked on the matching row; a stored delegate_gates value outside none/routine is shown as the current value via a fallback current row (no explanation, no none/routine row highlighted), is left unchanged unless the user selects none/routine, and Esc leaves it unchanged. The old free-text Custom entry is no longer reachable for delegate_gates; supervision_lib validation remains the only write gate. Verify the apply path by reading the Enter handler (step 3) so that selection calls the same `_set_field("!supervision", key, value)`.
-- D-4: `_supervision_enter` opens the `delegate` picker for `delegate_gates` regardless of the stored value, including an out-of-set one (other non-bool kinds unchanged). The picker lists only none/routine; free-text Custom entry for delegate_gates is intentionally replaced by it, and supervision_lib validation remains the only write gate. Test: with a stored value outside none/routine, the picker opens with no row marked current, Esc leaves the stored value unchanged, and selecting routine stores routine.
-- D-5: `_draw_picker` appends `  - <explanation>` only to option rows, and only when `picker_target == "!supervision"` and the row's (key, value) has an entry in `SUPERVISION_CHOICE_DESC` (or the fixed non-empty runner fallback for runner values). Custom, filter, model, current-fallback and empty-list rows, and rows with no entry, are never annotated. No width gate applies to pickers: explanations are drawn at every width and truncated only by the existing `addnstr` width limit; non-supervision pickers are unchanged. Explanation text comes only from static `SUPERVISION_CHOICE_DESC` entries or the fixed fallback (never interpolating user values), and any drawn user-supplied value (such as a runner name) has control characters stripped before `addnstr`.
-- D-6: hint eligibility — `_supervision_items()` appends a hint only to rows whose key is in CONTROLS and that have a SUPERVISION_HINT entry; invalid-config rows (beginning with "!"), non-CONTROLS rows, and rows with a missing hint get no hint, whatever the value (empty, bool or long).
+Argument rule for D-1 (AR-013): `--help`, `-h` or `--version` is honored before preflight only when it is the first argument (`$1`); it prints and exits 0 and writes no state. Every other form, including `--unattended --version`, `build --help`, or an unknown argument, goes through the full run-policy preflight before any state write, and is then parsed normally. Arguments after a leading help/version flag are ignored.
 
-## 2. Alternatives
-(a) Separate tooltip popup on a key: more input handling, hidden until pressed. (b) Show all descriptions in an expanded panel: no room for 13 long entries. (c) Reuse long `SUPERVISION_DESC` inline: too long for one line.
+Host-isolation rule (AR-016): every fixture (attestation, early-branch, home-actions, worktree-run, gates-verification-integrity and the exit-127 fix) runs only in a disposable temp repo with sanitized HOME and GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM (pointed at an empty or temp file) and GPG agent env neutralized. No fix or fixture may read, write, or depend on the project checkout's real .gitignore, git config, or refs; the fixture writes its own .gitignore inside the temp repo.
 
-## 3. Why preferred
-Smallest change, no new state or keys, reuses existing draw fallbacks, hints visible at a glance.
+## 2-3. Alternatives and rationale
 
-## 4. Components to modify
-See Change-impact table.
+Alternative: edit assertions to match behavior (rejected: forbidden). Alternative: relax run-policy (rejected: weakens SI-1). Selected approach fixes root causes minimally.
 
-## 5. Not to modify
+Side-effect freedom (AR-014): the help/version path prints and exits 0 before sourcing any state, creating directories, writing journals or state, creating worktrees or branches, or invoking git or agent/reviewer CLIs. A test snapshots the tree (file-hash inventory including untracked files, plus `git for-each-ref`) before and after `--help`, `-h` and `--version` for both drivers and fails on any difference.
 
-`scripts/lib/supervisor.py`, stage config menus' text, `CONFIG_DESC`, README, `.uncle/config.example` (unless a drift test fails), existing tests.
+## 4. Components to modify / 5. Not to modify
+Modify per table below. Not: run-policy semantics, test assertions, `all_suites.py`.
 
-Non-goal / invariant: hint and explanation text comes only from static dict entries or a fixed fallback constant; user-supplied values (e.g. runner names) are never interpolated into it, and drawn user values have control characters stripped.
+## 8. Interface changes
+None beyond `--version`/`--help` working in any tree state.
 
-## 6-8. Data flow / interfaces
-Pure-display additions. `items()` rows get a hint suffix (width-conditional); `_picker_rows` gains a `delegate` kind. No external API changes.
+## 12. Error behavior
 
-## 10. Compatibility
+Worktree listing failure: keep `WorktreeListError`. The resume path (`uncle_tui.py` / `scripts/lib/worktree_runs.py`) catches it and shows a refusal message; the TUI does not raise and no state is changed. The `home-actions-test.py` fixture is repaired (made a valid repo) only if triage shows the non-repo fixture was unintended, i.e. the test itself asserts a valid-repo outcome; fixture edits change setup only, never assertions. Otherwise the product handling is fixed and the fixture is left as is. Step 1 triage records which case applies.
 
-Row prefix, stored values and non-supervision pickers unchanged. MODIFY (declared): delegate_gates Enter changes from free-text Custom entry to a none/routine picker; an out-of-set stored value is shown unchanged with no row selected and Esc leaves it unchanged; supervision_lib validation remains the only write gate.
+## 14. Rollback
+Revert the change commit; no persisted state altered.
 
-## 12. Error and recovery
-Missing hint/description -> nothing appended. Width read failure -> no hints.
+## 16-17. Test strategy
 
-## 14. Rollback plan
-Revert the commit; no persisted data or schema involved.
+Regression tests already exist (the failing suites). Each suite that fails on clean main fails before and passes after; a suite that fails only in the dirty tree is recorded as host-state, needs no code change, and must still pass after. Command: `bash scripts/run-all-tests.sh` (from baseline). Protected paths: `scripts/tests/**`; any edit there requires a requirement-based note in IMPLEMENTATION_NOTES.md and limits to fixture setup, never assertions. A suite failing on a missing prerequisite counts as FAILED for AC-8; the change is complete only when all suites pass, otherwise the suite is listed as unresolved. The `missing prerequisite: <tool>` stderr wording and non-127 nonzero exit are checked by the message-wording check named under AC-7.
 
-## 16. Automated-test strategy
-
-New `scripts/tests/supervision-tooltips-test.py` (hyphenated; leaves protected existing test files untouched). Builds `UncleTUI.__new__` as supervisor-test.py:1038 does, with a fake stdscr that records `addnstr` text. Cases: hint coverage per CONTROLS key (SI-1) and len(hint)<=40 for every hint; '!' reason rows get no hint; row prefix; Enter/toggle on a hinted row at width 120 acts on the correct key (same key and effect as with no hints); width cut-off; effort/delegate/runner picker explanations observed via the recording stdscr, drawn at width >= 120; picker Custom, filter and model rows, and rows without a dict entry, are asserted to have no explanation; delegate selection stores value; small-size draw without exception. Oracle for 'non-supervision picker rows unchanged': the pre-change `_picker_rows` output for each non-supervision picker kind is captured now as literal expected lists in the test (not recomputed from code), and the drawn picker text for a non-supervision target must contain no explanation. Defect injection (record all in IMPLEMENTATION_NOTES.md, each must make the suite fail, then be reverted): (1) blank one hint key; (2) add an explanation to a non-supervision picker row or draw it when picker_target != '!supervision'; (3) put a supervision hint in the wrong picker/key.
-
-Additional required cases: Enter/toggle on each hinted row index at width 120 calls the handler with the matching CONTROLS key; a runner name containing control characters yields the static fallback explanation and drawn text has no control characters; delegate picker with out-of-set stored value highlights no row, offers only none/routine, and Esc leaves the value unchanged.
-
-## 17. Regression-test strategy
-Baseline commands in BASELINE_REPORT (shell suites, python critical tier) plus explicit `supervisor`, `supervisor-default-runner`, `supervision-tooltips` and `py_compile`.
+AC-5 dirty-host verification: run `python3 -B scripts/tests/attestation-statement-test.py` twice in the same session, once with the host checkout's .gitignore containing a `.uncle` entry and once with it clean. Create each condition deliberately, restoring the original .gitignore byte-for-byte afterward (hash before and after); the incidental dirty state of this worktree is not evidence. Both runs must pass, and the results are recorded in IMPLEMENTATION_NOTES.md.
 
 ## 18. Manual verification
-Run `uncle` -> Configure -> Supervision at ~120 cols and ~60 cols: see per-row hints, highlight description, open effort/delegate_gates/runner pickers and read explanations; Esc backs out.
 
-## 20. Implementation sequence
-
-1. Text tables: add `SUPERVISION_HINT` and `SUPERVISION_CHOICE_DESC` beside `SUPERVISION_DESC`
-   Owns: `uncle_tui.py`
-2. Row hints in `_supervision_items` (D-2): hints at width >=100 only, no truncation of key/value, strip fallback for the side panel; tests cover widths 99, 100, 119 and 120; confirm by reading Enter/toggle handlers that no caller parses row text - builds on step 1's edits to uncle_tui.py (same file, text dependency)
-   Owns: `uncle_tui.py`
-   Depends on: 1
-3. Picker work: `delegate` kind in `_picker_rows`/`_picker_current`/`_title`, `_supervision_enter`, `_draw_picker` explanations (D-3..D-6). First read the picker Enter handler and `_picker_current`'s out-of-set fallback; these are named touched functions, and any change to either is recorded in IMPLEMENTATION_NOTES.md. Out-of-set stored delegate_gates highlights no row, only none/routine are selectable, Esc leaves the value unchanged — builds on same file
-   Owns: `uncle_tui.py`
-   Depends on: 1
-4. Tests: `scripts/tests/supervision-tooltips-test.py` written against the specified behavior. Deliverables: literal expected lists of pre-change non-supervision `_picker_rows` output; hint non-empty/len<=40/unmodified-in-row test; '!' and non-CONTROLS rows unhinted; width 99/100/raising getmaxyx; Enter/toggle on every hinted row index at width 120 targets the matching CONTROLS key; runner set enumerated from the list `_picker_rows` uses; runner name with control characters yields the static fallback and no control characters in drawn text; delegate out-of-set stored value case
-   Owns: `scripts/tests/supervision-tooltips-test.py`
-   Depends on: 2, 3
-5. Reconcile and run commands. Perform defect injection as temporary reversible edits to uncle_tui.py only (blank hint; explanation leaked into non-supervision picker; hint in wrong key), confirm the suite fails each time, revert, and record results in IMPLEMENTATION_NOTES.md. Record any invoked scope cut there; if the runner-explanation cut is invoked, amend AC-2 and remove the runner test from step 4's file in this same step.
-   Owns: `uncle_tui.py`, `.uncle/docs/IMPLEMENTATION_NOTES.md`
-   Depends on: 2, 3, 4
-
-## 21. Scope cuts under time pressure
-
-Cut first: runner-choice explanations (if invoked, AC-2 is amended in the plan and deviation notes to exclude the runner picker), then width-conditional hints (keep picker explanations for effort/delegate_gates), never cut SI-1 coverage test.
-
-## 22. Risks
-| Risk | Mitigation |
-|---|---|
-| Longer rows shrink the side panel | 40-char cap, width>=100 gate, existing strip fallback |
-| Shared `_draw_picker` regression | Gate on `picker_target == '!supervision'`; test non-supervision rows |
-| Unknown delegate selection path | Step 3 reads handler; no stop condition unless apply path cannot call `_set_field` |
-
-## Restrictions
-
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST.md Proposal | AC-5 | Single text source in SUPERVISION_* dicts | Dicts beside SUPERVISION_DESC (DESIGN: location revisable) | Keeps menu/picker consistent | CAP-python3 | CODING |
-| R-2 | REPOSITORY | supervisor-test.py:1214 | AC-1 | Rows start with key; no caller parses row text, so Enter/toggle on a hinted row act on the correct key; every CONTROLS row has a hint at width >=100; hint length <=40 asserted by test | Append hint after value; hints authored <=40 chars, never truncated at render; '!' rows get no hint; Enter/toggle test on hinted rows | Existing test | CAP-python3 | CODING |
-| R-3 | USER | CHANGE_REQUEST.md AC3 | AC-3 | Graceful narrow terminal; hints iff width >= 100 | Width gate (stdscr.getmaxyx()[1] >= 100; boundary tests at 99 and 100) + existing fallback | Spec | CAP-python3 | CODING |
-| R-4 | REPOSITORY | CLAUDE.md | AC-4 | Existing tests not edited; unchanged-picker baseline fixed as literals and tests proven to reject leaked explanations | New test file with literal expected non-supervision picker rows and multiple defect injections | Protected paths | CAP-python3 | CODING |
-
-Feasibility: symbols inspected at the lines in the baseline; python3 and bash runners exist (scripts/run-python-tests.sh). No live-authentication prerequisites; LIVE_VERIFICATION is the manual check above.
+Run `scripts/stagegate.sh --version` and `--help` in a dirty tree; confirm a real run is still refused. With a required tool removed from PATH, confirm stderr shows `missing prerequisite: <tool>` and the exit code is nonzero and not 127.
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `uncle_tui.py` | Add hint/choice dicts, row hints, `delegate` picker, picker explanations | Feature | Shared picker/draw code | supervision-tooltips-test, supervisor-test |
-| `scripts/tests/supervision-tooltips-test.py` | New suite | Cover AC-1..5 | None | Self + defect injection |
-| `.uncle/docs/IMPLEMENTATION_NOTES.md` | Record deviations/defect injection | Workflow | None | n/a |
+| `scripts/stagegate.sh` | scan argv for --help/-h/--version before preflight: the first of these flags found anywhere in argv wins (so --help/-h wins over --version when it comes first), later args are ignored, it prints and exits 0; no flag (including unknown args alone) means full preflight unchanged; the early path performs no state write, directory creation, journal, worktree/branch creation, or git/agent CLI invocation | SB-1, SB-2 | Preflight bypass via mixed args; mitigated because only these three flags short-circuit and nothing is written | unattended-test.sh, run-policy tests, plus new before/after tree-unchanged assertion |
+| `scripts/change-workflow.sh` | same argv rule as stagegate.sh: first of --help/-h/--version wins before preflight, later args ignored, otherwise full preflight; early help/version path has no side effects | SB-1, SB-2 | same | unattended-test.sh, plus new before/after tree-unchanged assertion |
+| `scripts/tests/attestation-statement-test.py` | isolate fixture `.gitignore` (setup only): fixture creates its own temp repo and writes its own `.gitignore`; one shard writes a `.gitignore` containing `.uncle`, another omits it, and at least one shard asserts the ignore-containing case | SB-6 | isolation could mask a real ignore bug; mitigated by the host-isolation rule (temp repo, sanitized HOME/GIT_CONFIG_GLOBAL, never touching the project's real .gitignore or git config), by the `.uncle`-ignored shard, and by the triage decision recording any product defect it exposes | itself (both `.gitignore` variants asserted); step 1 triage records whether the product must handle a repo `.gitignore` listing `.uncle`, otherwise marks it out of scope in IMPLEMENTATION_NOTES.md |
+| `scripts/tests/early-branch-test.py` and the early-branch product files named by step 1 triage (added to step 4 Owns before any edit) | fix unexpected ref creation (product or fixture per triage); each skip context snapshots `git for-each-ref` and a file-hash inventory (including untracked files) before and after, and any difference fails | SB-4 | branch semantics | early-branch-test.py (ref + file-hash before/after comparison per skip context) |
+| `scripts/tests/home-actions-test.py`, `scripts/lib/worktree_runs.py`, `uncle_tui.py` | catch `WorktreeListError` in the resume path and show a refusal message without raising or changing state; repair the fixture (setup only) only if the test is meant to assert a valid repo and non-repo was unintended | SB-5 | resume behavior; a fixture change could mask a real listing failure or handling gap | itself |
+| every fixture file under `scripts/tests/**` that the `supervisor-test.py` signing audit flags (initially `scripts/tests/tree-attested-final-audit-test.sh` and `scripts/tests/build-attestation-test.py`), and no others | add no-sign flags to each flagged fixture git commit/commit-tree/tag call, set repo-local gpgsign=false, and sanitize inherited git/GPG env (fixture setup only) | SB-7 | none; edits limited to fixture setup, no assertion changes | supervisor-test.py |
+| `scripts/tests/worktree-run-test.sh`, gates-verification-integrity suites and their product code | fix per step 1 recorded cause and expected behavior; where a tool is missing, print `missing prerequisite: <tool>` on stderr and exit nonzero with a code other than 127; if no cause is found, leave unresolved and list it (AC-7 not met) | SB-8 | gate state machine; a prerequisite-message fix is still a red suite for AC-8 and is listed for the PR | those suites |
+| `.uncle/docs/IMPLEMENTATION_NOTES.md` | record rationale per test edit, and the fail-closed prerequisite behavior for any missing tool | AC-8 | none | review |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| At width >=100 every CONTROLS row shows a non-empty hint (<=40 chars, authored not truncated) after the value; '!' reason rows get no hint. | SB-1 | SI-1 | _supervision_items | tooltips-test row hints, tooltips-test hint len<=40 authored limit, no runtime truncation, tooltips-test: '!' reason rows and non-CONTROLS rows get no hint | Menu at 120 cols |
-| AC-2: effort, delegate_gates and runner pickers show a non-empty explanation for each option row, observed as addnstr text recorded by a fake stdscr at width >=120. delegate_gates offers only none/routine; an unrecognised stored value highlights no row and Esc leaves it unchanged. The runner set is the list `_picker_rows` uses, with a non-empty fixed fallback explanation for unlisted runners. Hints are authored <=40 chars and never truncated at render. Custom, filter, unmapped and '!' rows get no explanation. | SB-3, SB-4, SB-5 | SI-2 | _picker_rows, _draw_picker | tooltips-test pickers (fake stdscr recording addnstr text at width 120; explanation non-empty per option row with an entry), tooltips-test: Custom/filter rows unannotated; delegate out-of-set stored value shown as current and editable, tooltips-test delegate picker with out-of-set stored value: no row current, Esc leaves value unchanged | Open each picker |
-| AC-3 | SB-2, SB-7 | SI-3 | _supervision_items, _draw_config_desc | tooltips-test narrow draw at widths 30 and 60, tooltips-test width boundary: hints absent at 99, present at 100, present at 120, absent when getmaxyx raises or width <= 0 | Menu at 60 cols, Menu at 99 and 100 cols |
-| AC-4 | SB-6 | SI-2 | pickers | supervisor, shell suites, tooltips-test literal non-supervision picker rows + defect injection (explanation leaked into non-supervision picker) | Stage config picker |
-| AC-5 | SB-1 | SI-1, SI-4 | dicts | key-set test, DocsTests | n/a |
+| AC-1/2: help/version works regardless of tree state when it is the first recognized flag; mixed or real-run args (`--unattended --version`, `build --help`) still go through full preflight and write no state before it | SB-1, SB-2 | SI-1 | stagegate.sh, change-workflow.sh | unattended-test.sh (including mixed-argument cases: `--version --unattended`, `--help build`, `build --help`, `--help --version`; an unknown argument alone still refused by preflight in a dirty tree), tree-unchanged check (file-hash inventory and git for-each-ref before/after --help/-h/--version) | dirty-tree --version |
+| AC-3 | SB-3 | SI-1 | run-policy | run-policy suites | refused build |
+| AC-4: in skip contexts no ref, journal, or mutation is produced; detected by comparing `git for-each-ref` output and a file-hash inventory before and after each skip context, where any difference fails. | SB-4 | SI-3 | early-branch | early-branch-test.py (asserts identical for-each-ref output and file-hash inventory before/after each skip context) | none |
+| AC-5: attestation-statement-test.py passes both with a host .gitignore containing `.uncle` and with a clean host .gitignore; the fixture writes its own .gitignore in each case, and at least one shard asserts the ignore-containing case. | SB-6 | - | attestation fixtures | attestation-statement-test.py (run twice with the fixture writing its own .gitignore: once containing `.uncle`, once clean; both must pass, at least one shard asserts the ignore-containing case, and triage records the product behavior or out-of-scope decision), run-all-tests.sh | none |
+| AC-6: every fixture git commit, commit-tree and tag under scripts/tests/** disables signing via explicit flags and repo-local config, with inherited global git/GPG config neutralized; supervisor-test.py audits all of them and passes. | SB-7 | SI-2 | fixtures | supervisor-test.py | none |
+| AC-7: for each of worktree-run, gates-verification-integrity and exit 127, step 1 records the cause and expected behavior, and the suite then either passes, or fails closed on a missing prerequisite by printing `missing prerequisite: <tool>` on stderr and exiting nonzero with a code other than 127 (never a pass or a skip). A prerequisite-failing suite still counts as FAILED for AC-8 and is listed as unresolved for the PR; a suite whose cause is not found is listed as unresolved and AC-7 is marked not met. | SB-5, SB-8 | - | see table | named suites, message-wording check: run the suite with the tool absent from PATH, assert stderr contains `missing prerequisite: <tool>` and exit code is nonzero and not 127; record in IMPLEMENTATION_NOTES.md, home-actions-test.py: worktree listing failure shows refusal, no exception, no state change | none |
+| AC-8: `bash scripts/run-all-tests.sh` exits 0 reporting 0 failed and 0 skipped. A suite failing on a missing prerequisite counts as FAILED (red), so AC-8 is unmet until every suite passes; any suite still failing is listed as unresolved in IMPLEMENTATION_NOTES.md and the PR. | all | SI-4 | all | run-all-tests.sh | diff review |
+
+## 20. Implementation sequence
+
+## Implementation sequence
+
+1. Triage: reproduce all failures on a clean main checkout and a dirty one; record in IMPLEMENTATION_NOTES.md which are host-state, environment, or defects. For exit 127 and gates-verification-integrity, record for each the root cause (missing command or ordering defect), the failing check, and the concrete expected behavior (e.g. a missing tool prints `missing prerequisite: <tool>` on stderr, exits nonzero other than 127, and is never a pass or skip). For early-branch (SB-4), record whether the fix is fixture or product and name every early-branch product file to change; step 4 Owns is amended with those exact paths (recorded as a deviation entry) before any edit to them. If no cause is found for a suite, list it as unresolved in IMPLEMENTATION_NOTES.md and mark AC-7 not met for it; do not guess a fix.
+   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
+2. Drivers: parse help/version before preflight.
+   Owns: `scripts/stagegate.sh`, `scripts/change-workflow.sh`
+3. **Signing hygiene in all flagged fixtures** — Every fixture `git commit`, `git commit-tree` and tag call in the files the `supervisor-test.py` signing audit flags (initially tree-attested-final-audit-test.sh and build-attestation-test.py) carries `-c commit.gpgsign=false -c tag.gpgsign=false` plus `--no-gpg-sign` / `--no-sign`. Each disposable fixture repo also sets repo-local commit.gpgsign=false and tag.gpgsign=false, and fixture subprocesses neutralize inherited signing config (GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM pointed at an empty file, HOME set to a temp dir, GPG_AGENT_INFO/GNUPGHOME unset). Scope is exactly the files the audit flags under scripts/tests/** and no others; supervisor-test.py is the enforcer. No unflagged file is edited; any additional flagged file is recorded in IMPLEMENTATION_NOTES.md before editing. Edits are fixture setup only and change no assertion, expected value or skip condition.
+   Owns: `scripts/tests/tree-attested-final-audit-test.sh`, `scripts/tests/build-attestation-test.py`
+4. Attestation, early-branch, home-actions, worktree-run, gates-verification-integrity fixes per triage; files are named in step 1 notes and limited to the files the triage identifies. Early-branch product files named in step 1 triage are added to this step's Owns (with a deviation entry in IMPLEMENTATION_NOTES.md) before any edit; no early-branch product file is edited until it is so named. Any other file outside this step's Owns list requires an IMPLEMENTATION_NOTES.md deviation entry (file, reason, requirement) written before it is edited. A fixture 'setup edit' changes no assertion, expected value, or skip condition; any edit that does is not permitted. For home-actions: catch WorktreeListError in the resume path and show a refusal with no state change; repair the fixture only if triage shows non-repo was unintended. For AC-5, run attestation-statement-test.py with a host .gitignore containing `.uncle` and again with it clean (restoring the original byte-for-byte); both must pass, and both results are recorded in IMPLEMENTATION_NOTES.md.
+   Owns: `scripts/tests/attestation-statement-test.py`, `scripts/tests/early-branch-test.py`, `scripts/tests/home-actions-test.py`, `scripts/tests/worktree-run-test.sh`, `scripts/lib/worktree_runs.py`, `uncle_tui.py`
+   Depends on: 1, 3
+5. Full run `bash scripts/run-all-tests.sh`; append only a clearly separated results/deviations section to IMPLEMENTATION_NOTES.md (never edit the step 1 triage records). AC-8 is met only if the run exits 0 with 0 failed and 0 skipped; otherwise list each red suite as unresolved. Steps 2 and 3 are independent and may be batched.
+   Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md`
+   Depends on: 1, 2, 3, 4
+
+## 21. Scope cuts
+
+Cut first: nothing that weakens AC. A suite that fails on a missing prerequisite counts as FAILED (red) for AC-8; the change is complete only when `bash scripts/run-all-tests.sh` exits 0 with 0 failed, and AC-8 is unmet until every suite passes. If time expires, leave the suite red and list it as unresolved in IMPLEMENTATION_NOTES.md and the PR rather than skip it or report it as passing; AC-8 is then marked not met.
+
+## 22. Risks and unresolved questions
+
+- Exit 127 and gates-verification-integrity causes unknown until step 1; if the fix needs files outside step 4's Owns list, record a deviation entry in IMPLEMENTATION_NOTES.md before editing those files. Fixture edits are limited to setup that changes no assertion, expected value, or skip condition.
+- Failures caused by this worktree's dirty `.gitignore` may vanish on clean main; documented for the PR.
+
+## Restrictions
+
+| ID | source_kind | Source | Reqs | Property | Mechanism | CAP | Phase |
+|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST Requirements | AC-8 | no weakened/skipped tests; missing prerequisites fail closed (nonzero exit naming the tool, never a pass or skip) | diff review + 0 skipped | CAP-TESTS | CODING |
+| R-2 | REPOSITORY | system rules | AC-6 | no real signer | explicit no-sign flags on every fixture commit/commit-tree/tag under scripts/tests/**, repo-local gpgsign=false, sanitized global config/GPG env; supervisor-test.py audit enforces | CAP-GIT | CODING |
+| R-3 | DESIGN | run-policy.sh | AC-3 | clean-main preflight retained for every argv lacking --help/-h/--version; those flags anywhere in argv short-circuit with no state write and --help/-h wins over --version | only the help/version scan moved earlier; --help/-h wins over --version; no side effects on that path; every other argv, including real-run args, runs full preflight before any state write; test covers `--unattended --version` and `build --help` in a dirty tree | CAP-DRIVER | CODING |
+
+Runner binding: `bash scripts/run-all-tests.sh`; feasibility evidence: `scripts/run-all-tests.sh` execs `scripts/lib/all_suites.py`; suites reproduced locally via `python3 -B scripts/tests/<name>-test.py`. No live-authentication prerequisites.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | Plan did not define how hinted rows coexist with the side panel or strip fallback. | D-2 (s1.2.i2) now states hints always render at width>=100 and the description uses the bottom strip when the panel does not fit. |
-| AR-002 | Accepted | The 40-char cap was ambiguous between truncation and authoring limit. | D-2 and AC-1 now say hints are authored <=40 chars excluding separator, never truncated at runtime, and a test asserts length. |
-| AR-003 | Accepted | Hint eligibility for invalid-config, non-CONTROLS and empty/long-value rows was unspecified. | Add D-6 to s1.2 and update AC-1 requirement/tests: only CONTROLS-key rows get hints; '!' rows and non-CONTROLS rows get none. |
-| AR-004 | Accepted | Explanation scope for Custom/filter/missing-entry rows and the delegate out-of-set stored value were unspecified. | Edit D-3 and D-5 in s1.2 and AC-2 tests: explanations only on option rows with an entry; delegate stored out-of-set value handled via fallback current row. |
-| AR-005 | Accepted | Picker width handling was ambiguous; stating that pickers have no width gate and are tested at width >=120 removes the ambiguity. | D-5 states explanations are shown at all widths with no width gate and truncated by addnstr; AC-2 test observes them at width 120. |
-| AR-006 | Accepted | The boundary was untested and the gate was not pinned to stdscr width. | D-2 now says hints appear iff stdscr.getmaxyx()[1] >= 100 (absent at 99, on exception or width <=0); AC-3 and R-3 add boundary tests at 99 and 100. |
-| AR-007 | Accepted | The delegate picker has no Custom row, so handling of out-of-set stored values must be explicit. | D-3 and D-4 state the picker lists only none/routine, shows an out-of-set value as current, and Esc leaves it unchanged. |
-| AR-008 | Accepted | Behavior at widths 100-119 versus the side panel needs a stated rule. | D-2 states hints always show at width >=100, the side panel falls back to the strip if it does not fit, and key/value are never truncated. |
-| AR-009 | Accepted | D-5 did not say which picker rows get explanations; limiting to dict-backed option rows protects Custom, filter and model rows (SB-6). | Edit D-5 (s1.2.i5) to annotate only option rows with a SUPERVISION_CHOICE_DESC entry, and add a test case in section 16. |
-| AR-010 | Accepted | Appending hints could break callers parsing row text; the plan must state none do and test Enter/toggle on hinted rows. | Edit D-2 (s1.2.i2) with a no-parse rule, add Enter/toggle test to section 16 and R-2, and extend step-2. |
-| AR-011 | Accepted | The cap meaning was ambiguous; authoring-time limit excluding separator, test-enforced, is simplest and avoids runtime truncation. | D-1 and D-2 (s1.2.i1, s1.2.i2) now state hints are <=40 chars excluding the '  - ' separator, enforced by test, never truncated at runtime. |
-| AR-012 | Accepted | Static-only text and control-character stripping of drawn values prevents injection of terminal escapes from user-supplied runner names. | D-1 and D-5 (s1.2.i1, s1.2.i5) now state text comes only from static dicts or a fixed non-empty fallback, no user value is interpolated, and drawn values have control characters stripped. |
-| AR-013 | Accepted | Real gap: delegate picker has no Custom row, so out-of-set stored values need a stated handling. | D-3 (s1.2.i3) states out-of-set values show unchanged with no current selection; validation in supervision_lib stays the only write gate. |
-| AR-014 | Accepted | Gate boundary and width source were ambiguous; pinning to stdscr width with 99/100 tests removes the split. | D-2 (s1.2.i2) states hints appear iff stdscr.getmaxyx()[1] >= 100; AC-3 and test rows cover widths 30, 60, 99, 100, 120. |
-| AR-015 | Accepted | Cap enforcement and treatment of '!' reason rows were unspecified; authoring-time limit plus a test resolves it. | D-2 now says hints are authored <=40 chars, never truncated at render, '!' rows get no hint; s10 and R-2 add a length test. |
-| AR-016 | Accepted | Observation method for picker explanations was undefined. | D-5 and s10 specify a fake stdscr recording addnstr text at width >=120; Custom, filter and unmapped rows get no explanation. |
-| AR-017 | Accepted | Runner set and fallback text must be pinned so tests can assert non-empty explanations; the cut-first item contradicted AC-2. | D-1 pins runner set to _picker_rows list and non-empty fallback; section 21 cut amends AC-2; AC-2 requirement updated. |
-| AR-018 | Accepted | Delegate picker behavior for current and out-of-set stored values needs a defined expected result. | D-3 and D-4 state none/routine are the only selectable values, unrecognised stored value highlights no row, Esc leaves it unchanged. |
-| AR-019 | Accepted | Fixed literal oracles for unchanged pickers and extra defect injections are cheap and prove the tests reject leaked explanations. | Section 16 test strategy and R-4/AC-4 now require literal expected non-supervision picker rows and a second defect injection. |
+| AR-001 | Accepted | The plan left argument combinations unspecified; a single precedence rule closes the gap without weakening preflight for real runs. | s1.1 D-1 now states the first-of --help/-h/--version-wins rule; s9.1.r1/r2 and s10.1.r1 updated to match. |
+| AR-002 | Accepted | AC-7 and AC-8 conflict; a prerequisite-failing suite is a red suite, so AC-8 is unmet until every suite passes. | Edit s13.1 and AC-7 so a prerequisite-failing suite counts as FAILED for AC-8 and is listed as unresolved in the PR. |
+| AR-003 | Accepted | SB-5 offered two incompatible outcomes; one rule is needed: the TUI refuses without raising, and the fixture changes only if the test asserts a valid repo. | Edit s5.1 and s9.1.r5 to fix the refusal behavior and fixture rule, and AC-7 to state the expected result. |
+| AR-004 | Accepted | Self-created fixture .gitignore alone leaves the dirty-host case untested; the fixture must cover both ignore variants so AC-5 is exercised. | Edit s1.1 D-2, s9.1.r3 and AC-5 so the attestation fixture writes its own .gitignore with and without .uncle and one shard asserts the ignore-containing case. |
+| AR-005 | Accepted | The step-4 Owns list is closed while the exit-127 and gates-verification-integrity fixes may need other files, and 'setup edit' was undefined. | Step 4 text and s14.1.i1 now require an IMPLEMENTATION_NOTES.md deviation entry before editing any file outside Owns, and define a setup edit as changing no assertion, expected value, or skip condition. |
+| AR-006 | Accepted | A missing-tool failure needs a defined channel and exit code so it is testable and distinguishable from a shell 'command not found'. | Row s9.1.r7 and AC-7 now require `missing prerequisite: <tool>` on stderr with a nonzero exit other than 127; s8.1 adds a manual check. |
+| AR-007 | Accepted | Mixed-argument handling was unspecified; a precise rule keeps SI-1 intact because any real-run args still go through full preflight. | D-1 in s1.1, traceability row s10.1.r1 and restriction R-3 now state the first-recognized-flag rule, no state writes, and that real-run args still run preflight. |
+| AR-008 | Accepted | AC-7 prerequisite-failure wording conflicts with AC-8's zero-failed requirement; a prerequisite failure must count as red. | Edited s13.1, AC-7, AC-8 and s9.1.r7 so a prerequisite-failing suite counts as FAILED, AC-8 stays unmet, and the suite is listed for the PR. |
+| AR-009 | Accepted | The early-branch fix location is open and step 4 Owns omits the product files, so triage must name them and Owns must be amended before any edit. | Step 1 names early-branch product files; step 4 Owns amended before edits; change-impact row r4 updated. |
+| AR-010 | Accepted | Isolating the fixture .gitignore could mask a real product defect when a host .gitignore lists .uncle, so the plan must state the product expectation and a covering check. | Edit s9.1.r3 risk/coverage and AC-5 so one shard uses a .gitignore containing .uncle and triage records the product behavior or out-of-scope decision. |
+| AR-011 | Accepted | SB-5 left two incompatible outcomes deferred to step 4; the plan should fix the product behavior and the only condition for touching the fixture. | Edited s5.1 and s9.1.r5 to fix the TUI refusal behavior, and AC-7 and step-4 to match. |
+| AR-012 | Accepted | Open-ended 'other flagged fixtures' makes step 3 scope unbounded; tying it to the supervisor-test.py audit bounds it. | Edited s9.1.r6 component/change and step-3 text to scope signing fixes to exactly the files the supervisor-test.py audit flags. |
+| AR-013 | Accepted | Mixed-argument parsing was unspecified; a deterministic rule is needed so preflight cannot be bypassed by real-run args. | Added mixed-argument rule to s1 and updated R-3: help/version honored only as the first argument, otherwise full preflight. |
+| AR-014 | Accepted | The plan specified only output and exit code for the early help/version path, so side-effect freedom was unstated and untested. | Added a side-effect-freedom rule to s2, extended change-impact rows r1/r2, and added a no-side-effects test to the AC-1/2 traceability row. |
+| AR-015 | Accepted | SB-7 and AC-6 cover every fixture commit/tag, so scope must be all of scripts/tests/**, enforced by the supervisor audit, with repo-local config and neutralized global signing env. | Step 3, AC-6, R-2 and change-impact row r6 now cover all fixture git commit/tag/commit-tree calls under scripts/tests/** with repo-local config and sanitized env. |
+| AR-016 | Accepted | Fixes need an explicit rule that they never read or mutate the host checkout's .gitignore or git config. | Added a host-isolation rule block to section 1 and updated the s9.1.r3 risk to match. |
+| AR-017 | Accepted | A missing tool must fail closed; AC-7 and AC-8 leave that ambiguous, so the plan should state it explicitly. | Add fail-closed rule to s1.1 (D-4), AC-7, and R-1; clarify in the s9.1.r8 notes entry. |
+| AR-018 | Accepted | Mixed-argument parsing was unspecified; a single deterministic rule removes ambiguity and keeps preflight for real runs. | D-1 in s1.1 states the anywhere-in-argv rule (--help/-h wins over --version, no preflight, no state); s9.1.r1/r2, s10.1.r1 and R-3 aligned. |
+| AR-019 | Accepted | AC-7 and AC-8 conflict; a prerequisite-failing suite is still a failure, so AC-8 governs and the message wording needs a named check. | Edit AC-7, AC-8 and s7.1 so prerequisite failures count as FAIL and the message wording has a named check. |
+| AR-020 | Accepted | Causes of exit 127 and gates-verification-integrity failures are unknown, so SB-8/AC-7 need recorded causes and expected behavior or an explicit unresolved/not-met status. | Step 1 records cause and expected behavior per failure; unresolved suites are listed and AC-7 marked not met; s9.1.r7 and AC-7 updated to match. |
+| AR-021 | Accepted | AC-5 names a dirty host .gitignore but no step creates it; incidental worktree state is not evidence, so the condition must be created deliberately. | Edit AC-5 and s7.1: run attestation-statement-test.py with host .gitignore containing .uncle and clean; both must pass; step-4 records both runs. |
+| AR-022 | Accepted | The baseline came from a dirty tree, so 'fails before' is ambiguous; judging against clean main removes the ambiguity. | Edited s1.1 (triage judged against clean main) and s7.1 (regression claim restated: host-state-only failures need no code change). |
+| AR-023 | Accepted | SB-4/SI-3 'no mutation' needs a concrete detector; a before/after ref and file-hash comparison is checkable and cheap. | Edited s9.1.r4 coverage/change and AC-4 requirement/tests to compare git for-each-ref and a file-hash inventory around each skip context. |

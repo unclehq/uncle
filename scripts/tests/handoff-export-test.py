@@ -63,7 +63,8 @@ class Handoff(unittest.TestCase):
         # Apply to a fresh checkout of the base commit through a temporary index and compare trees.
         r = self.repo
         env = {'GIT_INDEX_FILE': os.path.join(r, '.git', 'apply-index')}
-        run(r, 'git', 'read-tree', h['base_commit'], env=env)
+        base_oid = h['base_commit']
+        run(r, 'git', 'read-tree', base_oid, env=env)
         for c in h['changes']:
             if c['action'] == 'delete':
                 run(r, 'git', 'update-index', '--force-remove', c['path'], env=env)

@@ -71,6 +71,26 @@ READY_AUDIT = '# FINAL_AUDIT.md\n\n## Findings\n\n| ID | Severity | Evidence | R
 NOT_READY_AUDIT = READY_AUDIT.replace('READY\n', 'NOT READY\n').replace('| low | fixture | none | NO |', '| blocking | fixture | fix it | YES |')
 
 
+# The fixture's own .gitignore (never the host checkout's, which may be dirty): the committed
+# boundary rules, so the test is independent of host .gitignore state.
+FIXTURE_GITIGNORE = '''.uncle/*
+!.uncle/docs/
+!.uncle/attestation.json
+!.uncle/attestation.sig
+!.uncle/allowed_signers
+.uncle/workflow/state
+.uncle/workflow/approvals/
+.uncle/workflow/logs/
+.uncle/workflow/change.diff
+.uncle/workflow/change-stat.txt
+.uncle/config
+.uncle/model-catalog.json
+__pycache__/
+*.pyc
+.uncle/self-hosted-keys.json
+'''
+
+
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='attestation-statement-')
@@ -91,7 +111,7 @@ class Fixture(unittest.TestCase):
             (self.bin / name).chmod(0o755)
         subprocess.run([fixture_repo.REAL_GIT, 'init', '--bare', '-q', str(self.bare)], check=True, env=self.env)
         self.repo = fixture_repo.init_repo(self.root / 'repo', env=self.env)
-        (self.repo / '.gitignore').write_text((ROOT / '.gitignore').read_text())
+        (self.repo / '.gitignore').write_text(FIXTURE_GITIGNORE)
         (self.repo / 'source.txt').write_text('before\n')
         (self.repo / 'CHANGE_REQUEST.md').write_text('## Summary\n\nAttested change\n')
         (self.repo / '.uncle').mkdir()
@@ -385,7 +405,7 @@ class StatementTests(Fixture):
         self.assertEqual(self.creates(), [])
 
     def test_gitignore_boundary(self):
-        # AC-14, against this repository's .gitignore copied into the fixture.
+        # AC-14, against the fixture's own .gitignore.
         for path, expected in (('.uncle/attestation.json', 1), ('.uncle/attestation.sig', 1),
                                ('.uncle/allowed_signers', 1), ('.uncle/workflow/envelopes/x.json', 0), ('.uncle/config', 0)):
             result = subprocess.run([fixture_repo.REAL_GIT, 'check-ignore', '-q', path], cwd=self.repo, env=self.env)

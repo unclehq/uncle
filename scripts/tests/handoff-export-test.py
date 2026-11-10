@@ -313,7 +313,7 @@ class HandoffE2E(statement_fixture.Fixture):
         self.assertIn('\u2717 required gate publication has no human approval', out.stdout)
         self.assertIn('delegated_by: handoff', out.stdout)
         self.assertIn('\u2713 head tree matches release artifact', out.stdout)
-        self.assertIn('NOT HUMAN VERIFIED', out.stdout)
+        self.assertIn('NOT VERIFIED', out.stdout)
         self.assertEqual(out.stdout.count('\u2717'), 1)
 
     def test_tampered_changes_row_fails_verify_on_the_applied_tree(self):

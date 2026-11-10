@@ -61,7 +61,7 @@ In order, and stopping at the first failure:
 | Exit | Meaning |
 |---|---|
 | 0 | `VERIFIED`: all checks passed and the signature is valid against a trust root you supplied. |
-| 1 | `NOT HUMAN VERIFIED`: a check failed or the change was refused. |
+| 1 | `NOT VERIFIED`: a check failed or the change was refused. |
 | 2 | Usage error, or a required tool (such as `git`) is missing. |
 | 3 | Integrity only: all checks passed, but there is no signature, the signature is untrusted, or an optional tool is missing. |
 

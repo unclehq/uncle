@@ -1,79 +1,59 @@
-# Change spec: branch and worktree policy
+# Change spec: Supervision tooltips (Issue 81)
 
-Omitted sections: Performance (negligible git calls); Security (no new trust boundary); Migration (none); Prototype isolation (not applicable).
+Omitted sections: Performance (negligible); Security (no new input/IO); Migration (none); Prototype isolation (not a prototype)
 
 ## 1. Change type
-Behavior change.
+Feature (TUI usability).
 
 ## 2. Problem statement
-App builds and change runs both get an Uncle worktree by default, and a change run on a checkout with no remote (or unborn/detached HEAD) gets no branch at all. The operator wants a predictable policy: change work on a new branch, new app builds directly in `main` with no worktree and no branch.
-
-## 3. Current behavior
-See baseline B-1..B-9.
+Only the highlighted Supervision option explains itself; pickers show bare choices.
 
 ## 4. Desired behavior
-1. Change run (`change-workflow.sh`, `from-issue.sh` change mode, home actions create_change/run_change/github_issue) is on a newly created branch before any edit, unless already on the branch recorded as created for this run.
-2. App build (`stagegate.sh`, create_app/run_app) runs in `main` of the current checkout: no worktree, no branch.
-3. Any worktree option/setting requested for an app build is ignored and Uncle says so plainly.
-4. App build refuses to start (nothing written) if the checkout is a git repository with commits and is not on `main`, or has uncommitted changes other than Uncle's own files; the message states which and why.
-5. Opt-in issue worktrees keep working.
+Every Supervision row carries a short visible hint; every picker choice for supervision options (effort, delegate_gates, runner) carries a short explanation; text lives in uncle_tui.py beside `SUPERVISION_DESC` and covers every `supervision_lib.CONTROLS` key.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| BH-1 | MODIFY | Change run, any launcher, no worktree and no remote (B-4) | Stays on current branch | Switches to a new branch before first stage; prints `Branch: <name>` | run-policy-test.sh |
-| BH-2 | PRESERVE | Change run with remote on default branch (B-3) | Engine creates branch | Unchanged; same branch name scheme | early-branch-test.py |
-| BH-3 | PRESERVE | Change run resumed on its recorded run branch (B-5) | Adopts branch | No second branch created | run-policy-test.sh |
-| BH-4 | MODIFY | App run via `uncle`/TUI/headless | Sibling worktree + new branch | No worktree, no branch; runs in the current checkout on `main` | run-policy-test.sh/.py |
-| BH-5 | ADD | App build off `main` | Runs | Exit 1 before any write; message names current branch and `main` | run-policy-test.sh |
-| BH-6 | ADD | App build with uncommitted changes (excluding `.uncle/`, `REQUIREMENTS.md`, `CHANGE_REQUEST.md`) | Runs | Exit 1 before any write; message says uncommitted changes and lists up to 10 paths | run-policy-test.sh |
-| BH-7 | ADD | App build with `WORKFLOW_WORKTREE=1` set explicitly | Worktree made | Notice `Worktrees are not used for application builds; building in main of this checkout.`; no worktree | run-policy-test.sh |
-| BH-8 | PRESERVE | `from-issue.sh N --worktree` | Worktree on new branch | Unchanged | worktree-run-test.sh |
-| BH-9 | PRESERVE | `from-issue.sh --new --worktree` | Exit 1 | Unchanged | existing tests |
-| BH-10 | PRESERVE | Resumed app run (state file exists) or non-git/unborn-HEAD project | n/a | Preflight skipped; run continues | run-policy-test.sh |
-| BH-11 | PRESERVE | Legacy in-flight owned app worktree | Merge-back | Merge code retained and unchanged | worktree-merge tests |
-| BH-12 | MODIFY | Docs and home-agent prompt | No policy text | Describe the policy | grep in test |
+| SB-1 | ADD | Render Supervision menu on a wide terminal | Rows are `key value` only | Each row shows a short hint (<=40 chars) after the value, from a per-key hint source; rows still start with the key | AC-1, unit test on `_supervision_items` |
+| SB-2 | PRESERVE | Highlight a row | Full description in side panel/strip | Unchanged, incl. narrow-terminal strip fallback | AC-3 |
+| SB-3 | MODIFY | Open effort picker for supervision | Bare none/low/medium/high + Custom | Each value row is followed by a short explanation | AC-2 |
+| SB-4 | MODIFY | Enter on `delegate_gates` | Free-text Custom row only | Picker lists `none` and `routine` each with explanation; selecting stores the same value `_set_field` stored before | AC-2 |
+| SB-5 | MODIFY | Open runner picker for supervision | Bare runner names | Each runner row has a short explanation (generic text for any supported runner) | AC-2 |
+| SB-6 | PRESERVE | Model picker, stage-config pickers, bool toggle, numeric edit, filter typing, Custom entry | As today | Unchanged | AC-4 |
+| SB-7 | ADD | Narrow terminal | n/a | Inline hints omitted rather than truncating keys/values; draws never raise | AC-3 |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| INV-1 | NEW | The branch/worktree decision for a run kind is made only in `scripts/lib/run-policy.sh` | all launchers and drivers | run-policy.sh | run-policy-test.sh (callers delegate) |
-| INV-2 | NEW | An app build never creates a worktree or a branch | stagegate path | worktree_auto + driver | run-policy-test.sh (`git worktree list`/`git branch` before = after) |
-| INV-3 | NEW | A change run has left the starting branch for a new branch before the first stage | change path | driver guard | run-policy-test.sh |
-| INV-4 | NEW | A refused app start writes nothing | stagegate path | preflight before first write | run-policy-test.sh |
-| INV-5 | EXISTING | No existing branch or worktree is deleted or force-modified | all | no delete in new code | run-policy-test.sh, worktree tests |
-| INV-6 | EXISTING | Approval and verification gates unchanged | drivers | untouched code | existing suites |
-
-No invariant is RELAXED or REMOVED.
+| SI-1 | NEW | Every key in `supervision_lib.CONTROLS` has non-empty hint text and description | uncle_tui.py | test comparing key sets | AC-5 |
+| SI-2 | EXISTING | Value stored for a picker choice is identical to that of the typed value (validated by supervision_lib) | supervision config | existing `_set_field` path | AC-4 |
+| SI-3 | EXISTING | Drawing swallows curses.error | draw funcs | try/except | AC-3 |
+| SI-4 | EXISTING | AT-9 doc key list equals CONTROLS | docs | DocsTests | AC-5 |
+No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Change runs keep their worktree default (already a new branch). `WORKFLOW_WORKTREE=0`, `--no-worktree`, `--worktree`, `--worktree-dir`, `--branch` keep meaning for change and issue runs.
+`.uncle/config` keys/values unchanged. Rows keep `key` prefix (supervisor-test.py:1214). Non-supervision pickers render unchanged.
 
-## 8. Error and failure behavior
-App preflight failure: message on stderr, exit 1, no state written. Branch-guard failure (name invalid, switch fails): message, exit 1 before any stage; no branch deleted. Non-git, unborn HEAD: policy skips with no error (`uncle_ensure_project_git` owns repo creation). Detached HEAD on change run: branch created from it.
+## 8. Error behavior
+Missing hint for a key renders no hint (no exception). Invalid config row `! reason` unchanged.
 
-## 11-12. Migration and rollback
-No data migration. Rollback is reverting the commit; branches created by runs are left in place.
+## 11-12. Migration/rollback
+None / revert the commit; no persisted state.
 
 ## 14. Non-goals
-Changing review/plan/verify stages; removing issue worktree support; changing push/PR behavior; editing `from-issue.sh`; removing `worktree-merge.sh`.
+Stage config menus, Configure other pages, model catalog descriptions, changing defaults or CONTROLS, mouse hover.
 
 ## 15. Assumptions
-- A1: `main` includes `master` only when no local `main` exists.
-- A2: Change runs keep their default worktree (it satisfies 'new branch'); the guard covers runs that proceed in place.
-- A3: Uncle's own files excluded from the dirty check: `.uncle/`, `REQUIREMENTS.md`, `CHANGE_REQUEST.md`.
+- 'Tooltip' means inline text, since curses has no hover.
+- Hint text must stay consistent with `.uncle/config.example`/README; no doc edit unless drift is found.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | A change run that proceeds in place (WORKFLOW_WORKTREE=0, no remote) is on a newly created branch, shown by `git branch --show-current`, before the first stage runs. | run-policy-test.sh: fixture repo on main, run policy function/driver start, assert branch differs from main and is new. |
-| AC-2 | A change run resumed on the branch recorded as created for it creates no further branch. | run-policy-test.sh: run guard twice; branch list unchanged after second call. |
-| AC-3 | A new application build started on a clean `main` creates no worktree and no branch. | run-policy-test.sh and run-policy-test.py: `git worktree list` and `git branch` identical before and after the launcher path (worktree_auto with app kind prints nothing). |
-| AC-4 | An application build refuses to start, exit 1 with a message naming the cause, when the checkout is not on `main` or has uncommitted changes; nothing is written. | run-policy-test.sh: both refusal cases plus clean-main pass case; assert exit status, message, and no new files under .uncle/workflow. |
-| AC-5 | An explicitly requested worktree setting (WORKFLOW_WORKTREE=1) on an app build is ignored and Uncle says plainly that worktrees are not used for application builds. | run-policy-test.sh: assert notice text and no worktree. |
-| AC-6 | Opt-in issue worktrees and existing worktree tests are unaffected. | scripts/run-shell-tests.sh and scripts/run-python-tests.sh show no new failures against baseline. |
-| AC-7 | The branch/worktree decision is made in one place (scripts/lib/run-policy.sh); uncle, uncle_tui.py, run_duties.py, uncle_headless.py and the drivers delegate to it. | run-policy-test.py asserts launchers pass the run kind to the shared function; code inspection. |
-| AC-8 | docs/worktrees.md, prompts/home-agent.md and scripts/README.md describe the policy. | run-policy-test.sh greps for the policy sentences. |
-| AC-9 | No existing branch or worktree is deleted or force-modified by the new code. | run-policy-test.sh: pre-existing branch and worktree still present with same SHA. |
+| AC-1 | At a width of 120 columns, every row from `_supervision_items()` for all CONTROLS keys contains a non-empty hint after the value and still begins with its key. | New unit test iterating CONTROLS asserting hint presence and key prefix; existing :1214 assertion still passes. |
+| AC-2 | The supervision effort, delegate_gates (none/routine) and runner pickers each show a non-empty explanation for every choice; selecting a delegate_gates choice stores 'none' or 'routine' via the existing set-field path. | Unit test on `_picker_rows`/draw output for each picker kind with a fake screen; test of selection result. |
+| AC-3 | On narrow terminals the inline hints are dropped, the highlighted-option description still appears via the existing side-panel/strip logic, and drawing raises no exception at small sizes. | Unit test drawing with fake stdscr at widths 30, 60, 120; asserts no exception and description present. |
+| AC-4 | Model pickers, stage-config pickers (effort/runner/network), bool toggle, custom entry and picker filtering behave as before. | Existing suites supervisor, supervisor-default-runner and shell suites pass; new test asserts non-supervision `_picker_rows` output equals prior values. |
+| AC-5 | Hint and description text exist for every key in `supervision_lib.CONTROLS`, and AT-9 still passes. | New test comparing key sets; DocsTests in supervisor suite. |
 

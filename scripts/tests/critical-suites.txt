@@ -112,4 +112,5 @@ shell-syntax
 json-field-helpers
 suite-tier
 host-preview
+self-hosted-budget
 reviewer-prompt-file

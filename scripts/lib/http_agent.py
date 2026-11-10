@@ -883,6 +883,12 @@ def run_agent(values, prompt, policy, limit, turns=80, usage=None, final_schema=
             cached = None
     parent_budget = ACTIVE.get()
     budget = parent_budget or Budget(policy.root, final_name, transport.turn_output_tokens(limit, final_name))
+    if getattr(budget, 'ledger', None) is None:
+        # One Ledger per stage process, beside the ACTIVE Budget; nested runs reuse it.
+        import budget as spend
+        budget.ledger = spend.Ledger()
+        if getattr(budget.ledger, 'cap', None) is None:
+            budget.ledger.cap = values.get('max_budget_usd')
     budget_token = ACTIVE.set(budget)
     replay_token = REPLAY.set(cached_data)
     outcome, delivered = 'invalid', ''
@@ -946,6 +952,25 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     pending_json = None
     from self_hosted_performance import ACTIVE, REPLAY
     learned = ACTIVE.get()
+    ledger = learned.ledger
+
+    def gate():
+        """Single pre-request choke point; BudgetExceeded is never caught or retried."""
+        import budget as spend
+        cap = getattr(ledger, 'cap', None)
+        if cap is not None and ledger.would_exceed(cap):
+            raise spend.BudgetExceeded('Stage stopped: spent $%.6f of $%.6f budget (--max-budget-usd); '
+                                       'stopping before the next model request.' % (ledger.spent, cap))
+
+    def record_cost(billed_usage):
+        """Charge one billed response; unknown cost adds $0 and leaves last_turn alone."""
+        import budget as spend
+        cost = spend.turn_cost(billed_usage, values.get('model'))
+        if cost is not None and cost == cost and cost not in (float('inf'),) and cost >= 0:
+            ledger.spent += cost
+            ledger.last_turn = cost
+            if isinstance(usage, dict):
+                usage['_spent_usd'] = ledger.spent
 
     def request_turn(offered_tools=tools, interruptible=True):
         nonlocal requests, early_stops
@@ -954,6 +979,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             REPLAY.set(None)
             return dict(cached, _reused=True)
         while True:
+            gate()
             try:
                 budget = min(timeout, max(1, deadline - time.monotonic()))
                 if interruptible:
@@ -963,6 +989,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 requests += 1
                 record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason)
                 add_usage(usage, error.usage)
+                record_cost(error.usage)
                 if error.reason == 'learned_budget':
                     learned.intervene(error.reason)
                     partial = getattr(error, 'message', {})
@@ -1005,6 +1032,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         choice = data['choices'][0]
         record_turn(request_group, requests, choice['message'], data.get('usage'), choice.get('finish_reason'))
         add_usage(usage, data.get('usage') or {})
+        record_cost(data.get('usage'))
         if stage is not None:
             stage.tokens(usage, inclusive=True)
         else:
@@ -1285,6 +1313,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         # A schema-first writer's packet is shaped by the server and bounded by the
         # group-sized answer cap; a learned length guess only cut valid packets short
         # (run 14 writer 1: stopped at ~530 tokens, then failed in prompt mode).
+        gate()
         unbudgeted = ACTIVE.set(None) if schema_first else None
         try:
             final, reason, final_usage, mode = constrained_completion(values, messages, final_schema, final_name, cap,
@@ -1301,12 +1330,14 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 requests += 1
                 record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason, 'final')
                 add_usage(usage, error.usage)
+                record_cost(error.usage)
                 attempts.insert(attempt + 1, ((), final_limit))
                 messages.append({'role': 'user', 'content': 'Generation stopped for ' + error.reason + '. ' + COMPACT_JSON_REQUEST})
                 continue
             requests += 1
             record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason, 'final')
             add_usage(usage, error.usage)
+            record_cost(error.usage)
             if bounded_writer:
                 raise
             if error.reason == 'learned_budget':
@@ -1334,6 +1365,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         requests += 1
         record_turn(request_group, requests, {'content': final}, final_usage, reason, 'final')
         add_usage(usage, final_usage)
+        record_cost(final_usage)
         if stage is not None:
             stage.tokens(usage, inclusive=True)
         else:

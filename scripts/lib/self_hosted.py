@@ -498,6 +498,38 @@ def parse_arguments(side, args):
 
 
 
+def parse_budget(args):
+    """The --max-budget-usd cap: a finite float > 0, else None when the flag is absent.
+
+    The last occurrence wins and only it is validated; 0, negative, nan, inf, empty
+    and a missing value are refused so a positive cap always admits the first request."""
+    import math
+    args = list(args)
+    positions = [i for i, arg in enumerate(args) if arg == '--max-budget-usd']
+    if not positions:
+        return None
+    index = positions[-1]
+    raw = args[index + 1] if index + 1 < len(args) else ''
+    try:
+        cap = float(raw)
+    except (TypeError, ValueError):
+        cap = None
+    if cap is None or not math.isfinite(cap) or cap <= 0:
+        raise ValueError('--max-budget-usd requires a finite number greater than 0 (got %r)' % raw)
+    return cap
+
+
+def warn_if_unpriced(cap, model):
+    """With a cap set, warn once per build when the model has no known rate."""
+    if cap is None:
+        return
+    import budget
+    probe = {'input_tokens': 1, 'output_tokens': 1, 'total_tokens': 2}
+    if budget.turn_cost(probe, model) is None:
+        budget.warn_once('Self hosted: no price known for model %s; --max-budget-usd %s cannot be enforced '
+                         'for this stage (set a rate in WORKFLOW_PRICING_FILE).' % (model, cap))
+
+
 def opencode_events(path):
     if not path.exists():
         return []
@@ -2181,6 +2213,14 @@ def _bedrock_configure(config, keys, old, profile):
     return 0
 
 
+def _spent(usage, values):
+    """Stage-wide spend (the single Ledger total, nested runs included), or None when no cap is set."""
+    if values.get('max_budget_usd') is None:
+        return None
+    spent = usage.get('_spent_usd', usage.get('_total_cost_usd'))
+    return float(spent) if isinstance(spent, (int, float)) and not isinstance(spent, bool) else 0.0
+
+
 def main(side, args):
     started = time.monotonic()
     if side in ('models', 'choose-model', 'set-key', 'apply-all'):
@@ -2231,6 +2271,8 @@ def main(side, args):
     from self_hosted_http import configure_request_options, _config_values
     values = configure_request_options(values, stage, _config_values(config))
     values['max_turns'] = _turns
+    values['max_budget_usd'] = parse_budget(args)
+    warn_if_unpriced(values['max_budget_usd'], values['model'])
     if effort:
         values['effort'] = effort
     def interrupt(*_): raise KeyboardInterrupt
@@ -2367,12 +2409,14 @@ def main(side, args):
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,
                               'model':local_model(values['model']), 'usage':usage, 'total_cost_usd':usage.get('_total_cost_usd'),
+                              'max_budget_usd':values['max_budget_usd'], 'spent_usd':_spent(usage, values),
                               'usage_source':'Model API usage' if http_transport() else 'OpenCode step_finish events', 'usage_scope':'stage'}))
             print('tokens used\n' + str(usage['total_tokens']))
     else:
         print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':text}]}}))
         print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':text,
                           'model':local_model(values['model']),'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':usage,'total_cost_usd':usage.get('_total_cost_usd'),
+                          'max_budget_usd':values['max_budget_usd'],'spent_usd':_spent(usage, values),
                           'usage_source':'Model API usage' if http_transport() else 'OpenCode step_finish events','usage_scope':'stage'}))
     return 0
 

@@ -397,7 +397,7 @@ def render(directory):
             if row.get('cpu_seconds') is not None:
                 total[2] += row['cpu_seconds']; total[3] += 1
         title = 'Model API Continuation' if kind == 'model_usage' else kind.replace('_', ' ').title()
-        lines += [f'## {title}', '', '| Name | State | Spans | Seconds | CPU seconds | Input | Output | Cache read | Cache write | Total tokens | Token coverage | Reported USD | Estimated USD | Cost coverage |', '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|']
+        lines += [f'## {title}', '', '| Name | State | Spans | Seconds | CPU seconds | Input | Output | Cache read | Cache write | Total tokens | Token coverage | Reported USD | Estimated USD | Cost coverage | Cap USD | Spent USD |', '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|---:|']
         for (name, state), (count, elapsed, cpu, known) in sorted(totals.items(), key=lambda item: item[1][1], reverse=True):
             usage = combine(usage_rows[(name, state)])
             name = name.replace('|', '&#124;').replace('\n', ' ')
@@ -406,7 +406,7 @@ def render(directory):
                 return (f'{value:.6f}' if cost else f'{value:g}') if number(value) else 'Unavailable'
             lines.append(f'| {name} | {state} | {count} | {elapsed:.3f} | {f"{cpu:.3f}" if known else "Unavailable"} | '
                          + ' | '.join(cell(key) for key in ('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','total_tokens'))
-                         + f" | {usage['total_tokens_coverage']} | {cell('reported_cost_usd', True)} | {cell('estimated_cost_usd', True)} | {usage['estimated_cost_usd_coverage']} |")
+                         + f" | {usage['total_tokens_coverage']} | {cell('reported_cost_usd', True)} | {cell('estimated_cost_usd', True)} | {usage['estimated_cost_usd_coverage']} | {cell('max_budget_usd', True)} | {cell('spent_usd', True)} |")
         lines.append('')
     caches = [row for row in records if row['kind'] == 'read_cache']
     if caches:

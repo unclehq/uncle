@@ -24,6 +24,30 @@ finished application's location at the end. Both carry the `[+HH:MM:SS]`
 elapsed prefix, contain no escape sequences, and are never written inside a
 partially written driver line. They do not change the exit code.
 
+## Opening the preview in a browser
+
+`--noui` opens the same browser tabs the interactive screen does, for a new
+application build (never for a change request, and not for a desktop app such as
+Electron or Tauri, which are launched rather than browsed):
+
+* The preview build runs as a driver stage and opens its own first tab, as in
+  the interactive screen.
+* **Early page.** If a previewable page appears during requirements, planning,
+  review, preflight, implementation or repair and the driver is not already
+  serving one (for example the preview build was skipped), `--noui` serves it
+  and opens a tab. A server the driver already owns is never duplicated.
+* **Finished app.** When the build completes, the driver has stopped its own
+  preview server, so `--noui` serves the finished project and opens it. That
+  server outlives the command, so it expires: `UNCLE_NOUI_PREVIEW_SECONDS`
+  (default 3600) sets its lifetime, and the `Preview:` line gives the pid to
+  `kill` sooner. A React or Svelte project is handed to its dev server once
+  dependencies exist, and the page reloads itself.
+
+Turn this off with `UNCLE_NOUI_PREVIEW=0` (or the driver's own
+`WORKFLOW_PREVIEW_OPEN_BROWSER=0`). On a machine with no browser the server still
+starts and `.uncle/workflow/logs/preview-server.log` says the tab could not be
+opened.
+
 Only the exact value `UNCLE_NOUI=1` enables `--noui`; any other value (unset,
 empty, `0`, `true`) is ignored and the launcher behaves as before.
 

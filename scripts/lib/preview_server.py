@@ -216,13 +216,25 @@ def serve_live_preview(root, state):
     pid_path, url_path = state / 'preview-server.pid', state / 'preview-server.url'
     pid_path.write_text(str(os.getpid()), encoding='utf-8')
     url_path.write_text(server.url, encoding='utf-8')
-    _open_local_browser(server.url)
+    if not _open_local_browser(server.url):
+        # Nothing else says so: the server is up and the tab never opened.
+        print('preview: could not open a browser; open %s yourself' % server.url, flush=True)
     stopped = threading.Event()
+    # A server started for a person to look at (uncle --noui, after the build) outlives the command that started it, so it
+    # expires: UNCLE_PREVIEW_TTL_SECONDS bounds it. Unset (the driver's own preview, the TUI) it runs until it is stopped.
+    try:
+        ttl = float(os.environ.get('UNCLE_PREVIEW_TTL_SECONDS') or 0)
+    except ValueError:
+        ttl = 0
+    expires = time.monotonic() + ttl if ttl > 0 else None
     previous = signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     development = None
     handed_off = False
     try:
         while not stopped.wait(.2):
+            if expires is not None and time.monotonic() >= expires:
+                print('preview: stopped after %d seconds' % ttl, flush=True)
+                break
             # preview-build deliberately creates standalone HTML before the
             # implementation has dependencies.  Once implementation installs
             # Vite, serving its module index through SimpleHTTPServer produces

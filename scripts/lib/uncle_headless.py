@@ -9,10 +9,12 @@ signal n.
 """
 import codecs
 import collections
+import json
 import os
 import re
 import select
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -136,6 +138,117 @@ class _Writer:
         self.at_start = text.endswith("\n")
 
 
+POLL_SECONDS = 0.5
+STATE_READ_CAP = 2048
+_URL_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/\S*)?$")
+
+
+def _read_state(path):
+    """Bounded, nonblocking read of a regular file; None on any failure or oversize."""
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = os.read(fd, STATE_READ_CAP + 1)
+        if len(data) > STATE_READ_CAP:
+            return None
+        return data.decode("utf-8")
+    except (OSError, ValueError, UnicodeError):
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _one_line(text):
+    """Strip escape sequences and every control/separator character; single line."""
+    text = EscapeFilter().feed(text.encode("utf-8", "replace"), True)
+    text = "".join(" " if ch in "\n\t" else ch for ch in text)
+    return "".join(ch for ch in text if ch.isprintable()).strip()
+
+
+def _valid_url(raw):
+    if raw is None:
+        return None
+    url = raw.strip()
+    if not url or any((not ch.isprintable()) or ch.isspace() for ch in url):
+        return None
+    if len(url.encode("utf-8")) > STATE_READ_CAP or not _URL_RE.match(url):
+        return None
+    return url
+
+
+def _alive(path):
+    raw = _read_state(path)
+    try:
+        pid = int((raw or "").strip())
+        if pid <= 0:
+            return False
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except (ValueError, OSError, OverflowError):
+        return False
+
+
+def new_watch_state():
+    return {"seen_preview": None, "emitted_app_urls": set(), "launch_printed": False}
+
+
+def _scan_announcements(root, state):
+    """Return new 'Preview:'/'App:' lines from the driver's state files (read-only)."""
+    lines = []
+    try:
+        base = os.path.join(root, ".uncle", "workflow")
+        for name in ("preview-server", "app-server", "preview-vite"):
+            if not _alive(os.path.join(base, name + ".pid")):
+                continue
+            url = _valid_url(_read_state(os.path.join(base, name + ".url")))
+            if not url:
+                continue
+            if name == "preview-server":
+                if url != state["seen_preview"]:
+                    state["seen_preview"] = url
+                    lines.append("Preview: %s\n" % _one_line(url))
+            elif url not in state["emitted_app_urls"]:
+                state["emitted_app_urls"].add(url)
+                lines.append("App: %s\n" % _one_line(url))
+    except Exception:
+        pass
+    return lines
+
+
+def _launch_line(root, state):
+    """One 'App: launch ...' line from .uncle/launch.json, once; None when absent/malformed."""
+    if state["launch_printed"]:
+        return None
+    try:
+        if not os.path.isfile(os.path.join(root, ".uncle", "launch.json")):
+            return None
+        import completion_preview
+        spec = completion_preview.launch_spec(root)
+        kind = spec.get("kind")
+        if kind == "none":
+            text = "none"
+        elif kind == "command":
+            text = "command " + json.dumps(spec.get("command"))
+        elif kind == "webpage" and spec.get("command"):
+            text = "page %s %s" % (json.dumps(spec["command"]), spec.get("url", ""))
+        elif kind == "webpage":
+            text = "page %s" % (spec.get("path") or spec.get("url") or "")
+        else:
+            return None
+        state["launch_printed"] = True
+        return "App: launch %s\n" % _one_line(text)
+    except Exception:
+        return None
+
+
 def run(cmd, root, attended=False, env=None, out=None, err=None, stdin_fd=0,
         grace=KILL_GRACE_SECONDS, idle=IDLE_FLUSH_SECONDS, install_signals=True,
         desktop_decision=True):
@@ -198,6 +311,12 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
     eacc, eof_err, discard = "", False, False
     elast = time.monotonic()
     tail = collections.deque(maxlen=20)  # redacted diagnostic lines; never replayed
+    watch = new_watch_state()
+    next_scan = 0.0
+
+    def announce(lines):
+        for text in lines:
+            writer.emit(redact(text, env))
 
     def handle_line(line, banner_only=False):
         nonlocal completed, in_block
@@ -348,6 +467,10 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
                     stdin_open = False
             except (BrokenPipeError, OSError):
                 stdin_open = False
+        now = time.monotonic()
+        if now >= next_scan and writer.at_start and not acc:
+            next_scan = now + POLL_SECONDS
+            announce(_scan_announcements(root, watch))
         if eof and eof_err and (not stdin_open or proc.poll() is not None):
             break
     # reap, still honoring a late signal; ignore repeats
@@ -361,6 +484,14 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
         time.sleep(0.02)
     _killpg(proc, signal.SIGKILL)  # no surviving descendants
     rc = proc.returncode
+    final = _scan_announcements(root, watch)
+    launch = _launch_line(root, watch)
+    if launch:
+        final.append(launch)
+    if final:
+        if not writer.at_start:
+            writer.emit("\n")
+        announce(final)
     if finished:
         out.write("\n".join(finished) + "\n")
         out.flush()

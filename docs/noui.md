@@ -16,6 +16,14 @@ prints the finished-build summary, and exits with a code you can script on:
 Precedence when several apply: signal (130/143) > gate or signing stop (3) >
 driver nonzero or failed check (1) > 0.
 
+## Preview and App lines
+
+During an `--application` build, `--noui` prints a `Preview:` line announcing
+the preview URL as soon as one is available, and an `App:` line with the
+finished application's location at the end. Both carry the `[+HH:MM:SS]`
+elapsed prefix, contain no escape sequences, and are never written inside a
+partially written driver line. They do not change the exit code.
+
 Only the exact value `UNCLE_NOUI=1` enables `--noui`; any other value (unset,
 empty, `0`, `true`) is ignored and the launcher behaves as before.
 

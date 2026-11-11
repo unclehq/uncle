@@ -169,6 +169,11 @@ tests_collate() {
         fi
         while IFS= read -r file; do
             [[ -n "$file" ]] || continue
+            # A lane sometimes lists its own bookkeeping (`.uncle/workflow/tests/lane-<name>.files`, `.md`) among its files. That is
+            # driver state, never a test, and `.uncle/` is not a valid protected path, so freezing it fails the whole stage.
+            if [[ "$file" == .uncle/* ]]; then
+                echo "  note: lane $lane listed $file, which is driver state and not a test file; ignoring it."; continue
+            fi
             if [[ ! -f "$file" ]]; then
                 echo "  lane $lane lists $file, which does not exist"; problems=$((problems + 1)); continue
             fi

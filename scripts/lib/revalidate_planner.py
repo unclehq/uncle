@@ -126,14 +126,16 @@ def apply(rows, proposal, names):
             notes.append('ignored %s: it never ran in this project' % stage)
             continue
         if row['action'] == 'reuse':
-            row['action'], row['reason'] = 'run', 'supervisor: ' + (_clean(entry.get('reason')) or 'invalidated by the change')
+            row['action'], row['cause'] = 'run', 'supervisor'
+            row['reason'] = 'supervisor: ' + (_clean(entry.get('reason')) or 'invalidated by the change')
             added.append(stage)
     # A later stage follows an added one; the floor's own propagation already covers the stages it changed.
     for stage in added:
         for later in names[names.index(stage) + 1:]:
             row = out[index[later]] if later in index else None
             if row and row['action'] == 'reuse':
-                row['action'], row['reason'] = 'run', 'follows %s, which the supervisor added' % stage
+                row['action'], row['cause'] = 'run', 'supervisor'
+                row['reason'] = 'follows %s, which the supervisor added' % stage
     summary = _clean(proposal.get('summary'))
     if summary:
         notes.insert(0, 'supervisor: ' + summary)

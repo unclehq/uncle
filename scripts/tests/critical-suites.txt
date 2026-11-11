@@ -120,3 +120,4 @@ reviewer-prompt-kind
 revalidate
 revalidate-integration
 revalidate-planner
+revalidate-attestation

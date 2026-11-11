@@ -147,6 +147,10 @@ uncle --revalidate --dry-run --noui   # print the plan; run nothing, change noth
 uncle --revalidate --noui             # rerun the stale stages
 ```
 
+A project built before stage fingerprints existed has none; `--revalidate` then compares it with its attestation (`.uncle/attestation.json`) instead of refusing. If only documentation changed (a root-level `README`/`*.md`, or a file under `docs/`), nothing needs to run: the attestation is re-issued for the new tree with the recorded results carried forward (a failure stays recorded as a failure) and a `revalidation` claim that `uncle verify` checks independently. A change to source, tests, configuration or an approved document is never carried forward. Re-issuing re-signs with the same signer a build uses, and never replaces a signed attestation with an unsigned one. Commit the changed files together with `.uncle/attestation.json` and `.sig` afterwards: `uncle verify` checks the committed tree.
+
+The supervisor reads the change and may add stages the fingerprints cannot see; it can never remove one that a changed input requires. It makes one bounded, tool-free model call, headless, and if it is unavailable the deterministic plan stands. `--no-supervisor` or `UNCLE_REVALIDATE_SUPERVISOR=0` turns it off.
+
 `--dry-run` lists each stage as reused or to be rerun, with the changed input as the reason, and leaves the tree untouched. If no passes have been recorded (an empty directory, or a project that predates stage fingerprints), `--revalidate` exits 2 without running any stage. Approvals and attestations are not rewritten during a revalidate; a reopened gate blocks the run.
 
 ## Talk to Uncle while it works

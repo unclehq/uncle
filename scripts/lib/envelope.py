@@ -76,6 +76,7 @@ VOCABULARY = frozenset((
     'artifact', 'producer', 'verifier', 'release', 'digest', 'approvals', 'findings',
     'dispositions', 'evidence', 'inputs', 'result', 'reason', 'source', 'authentication',
     'procedure', 'outcomes', 'verdict',
+    'revalidation', 'method', 'carried_forward_from', 'rest', 'changed_files',
 ))
 STRUCTURE = frozenset((
     'schema_version', 'stage', 'attempt', 'role', 'runner', 'model', 'uncle_version',

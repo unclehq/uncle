@@ -7,6 +7,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import os
+
+# The planner calls a real model unless told not to; a test must never spend one. Tests of the planner inject `ask`.
+os.environ['UNCLE_REVALIDATE_SUPERVISOR'] = '0'
+
 LIB = Path(__file__).resolve().parents[1]/'lib'
 MODULE = LIB/'revalidate.py'
 sys.path.insert(0, str(LIB))

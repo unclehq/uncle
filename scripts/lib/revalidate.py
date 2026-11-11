@@ -310,15 +310,22 @@ def _stage_completed(stage, root):
     return True
 
 
-def run(root, dry_run=False, runner=None, out=sys.stdout):
-    """Returns the process exit code."""
+def run(root, dry_run=False, runner=None, out=sys.stdout, supervisor=True, ask=None):
+    """Returns the process exit code. `supervisor=False` (or --no-supervisor) uses the deterministic plan alone."""
     root = Path(root)
     why, rows = plan(root)
     if why:
         print('revalidate: no recorded passes exist (%s); no stage run' % why, file=out)
         return 2
+    notes = []
+    if supervisor:
+        # The supervisor may only add stages to this plan; see revalidate_planner. Headless: one bounded model call.
+        import revalidate_planner
+        rows, notes = revalidate_planner.refine(root, rows, NAMES, ask=ask)
     for r in rows:
         print('%-18s %-12s %s' % (r['stage'], r['action'], r['reason']), file=out)
+    for note in notes:
+        print(note, file=out)
     cur_readme = _file(root / 'README.md')
     if any((_read(root, r['stage']) or {}).get('readme', cur_readme) != cur_readme for r in rows):
         print('README.md changed; 0 stages read it; %d stages reused' % sum(r['action'] == 'reuse' for r in rows), file=out)
@@ -376,8 +383,8 @@ def main(argv):
             print('revalidate: record %s failed: %s' % (args[1], e), file=sys.stderr)
             return 1
         return 0
-    if args[:1] == ['run'] and set(args[1:]) <= {'--dry-run'}:
-        return run(root, dry_run='--dry-run' in args)
+    if args[:1] == ['run'] and set(args[1:]) <= {'--dry-run', '--no-supervisor'}:
+        return run(root, dry_run='--dry-run' in args, supervisor='--no-supervisor' not in args)
     print(__doc__, file=sys.stderr)
     return 2
 

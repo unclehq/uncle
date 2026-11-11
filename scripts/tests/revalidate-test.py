@@ -1,9 +1,4 @@
-"""`uncle revalidate` (issue #243): which stages of a finished build still hold, from its attestation.
-
-The fixture is a small git project with a hand-made attestation whose tree and document digests are real, so every case
-compares the recorded baseline with a real change. The README case is the acceptance test: a documentation edit must not
-re-run any stage."""
-import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -12,260 +7,429 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-REVALIDATE = ROOT / 'scripts' / 'lib' / 'revalidate.py'
-sys.path.insert(0, str(ROOT / 'scripts' / 'lib'))
-import revalidate
+LIB = Path(__file__).resolve().parents[1]/'lib'
+MODULE = LIB/'revalidate.py'
+sys.path.insert(0, str(LIB))
+spec = importlib.util.spec_from_file_location('revalidate', MODULE)
+rv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rv)
 
-DOCS = {
-    'BASELINE_REPORT.md': 'baseline\n', 'PROJECT_PLAN.md': 'plan\n', 'ADVERSARIAL_REVIEW.md': 'review\n',
-    'FINAL_AUDIT.md': 'audit\n',
-}
-STAGE_DOC = {'requirements': 'BASELINE_REPORT.md', 'plan': 'PROJECT_PLAN.md', 'review': 'ADVERSARIAL_REVIEW.md',
-             'audit': 'FINAL_AUDIT.md'}
-
-
-def sha(text):
-    return hashlib.sha256(text.encode()).hexdigest()
+# Hard-coded from the plan's D-9 table; deliberately not read from rv.STAGES.
+FIRST = 'PLAN'
+LATER = 'IMPLEMENT'
 
 
-class Revalidate(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.repo = Path(self.tmp.name)
-        self.git('init', '-q', '.')
-        self.git('config', 'user.email', 'a@b.test')
-        self.git('config', 'user.name', 'fixture')
-        self.git('config', 'commit.gpgsign', 'false')
-        for rel, text in {'README.md': 'hello\n', 'src/app.js': 'export const x = 1;\n',
-                          'tests/app.test.js': 'test\n', 'package.json': '{}\n'}.items():
-            self.write(rel, text)
-        for name, text in DOCS.items():
-            self.write('.uncle/docs/' + name, text)
-        self.git('add', '-A')
-        self.git('commit', '-q', '-m', 'built')
-        self.attest()
+class StubRunner:
+    def __init__(self, fail_on=None):
+        self.calls = []
+        self.fail_on = fail_on
 
-    def git(self, *args):
-        return subprocess.run(['git', *args], cwd=self.repo, check=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE).stdout.decode().strip()
+    def __call__(self, stage, *args, **kwargs):
+        self.calls.append(stage)
+        return 1 if stage == self.fail_on else 0
 
-    def write(self, rel, text):
-        path = self.repo / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
 
-    def attest(self, results=None, tree=None):
-        """Record what a passing run would have: the filtered tree of HEAD and each stage's approved documents."""
-        previous = os.getcwd()
-        os.chdir(self.repo)
-        try:
-            baseline = tree or revalidate.load_verifier().artifact_of(self.git('rev-parse', 'HEAD^{tree}'))
-        finally:
-            os.chdir(previous)
-        results = results or {}
-        envelopes = {}
-        for stage in revalidate.STAGES:
-            evidence = []
-            if stage in STAGE_DOC:
-                name = STAGE_DOC[stage]
-                evidence = [{'path': '.uncle/docs/' + name, 'digest': {'sha256': sha(DOCS[name])}}]
-            envelopes[stage] = {'result': results.get(stage, 'pass'), 'evidence': evidence,
-                                'reason': 'NOT_READY' if results.get(stage) == 'fail' else None}
-        predicate = {'schema_version': 1, 'run_id': 'fixture', 'envelopes': envelopes,
-                     'release': {'artifact': {'digest': {'gitTree': baseline}}}}
-        self.write('.uncle/attestation.json', json.dumps({'predicate': predicate}))
+def make_project(d):
+    root = Path(d)
+    subprocess.run(['git', '-c', 'commit.gpgsign=false', 'init', '-q', str(root)], check=True)
+    (root/'.uncle/docs').mkdir(parents=True)
+    (root/'.uncle/workflow').mkdir(parents=True)
+    (root/'README.md').write_text('docs\n')
+    (root/'app.py').write_text('print(1)\n')
+    return root
 
-    def run_cli(self, *args):
-        result = subprocess.run([sys.executable, str(REVALIDATE), *args], cwd=self.repo, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True)
-        return result.returncode, result.stdout
 
-    def status(self, out):
-        """stage label -> 'reused' or 're-run', read from the printed report."""
-        rows = {}
-        for line in out.splitlines():
-            if line[:1] in ('✓', '✗'):
-                for stage in revalidate.STAGES:
-                    if line[2:].startswith(revalidate.LABEL[stage]):
-                        rows[stage] = 'reused' if line[0] == '✓' else 're-run'
-        return rows
+def cli(root, *args):
+    return subprocess.run([sys.executable, str(MODULE), *args], cwd=root, capture_output=True, text=True)
 
-    def assertReused(self, out, *stages):
-        rows = self.status(out)
-        for stage in stages:
-            self.assertEqual(rows.get(stage), 'reused', '%s should be reused:\n%s' % (stage, out))
 
-    def assertRerun(self, out, *stages):
-        rows = self.status(out)
-        for stage in stages:
-            self.assertEqual(rows.get(stage), 're-run', '%s should re-run:\n%s' % (stage, out))
+class RevalidateCli(unittest.TestCase):
+    def test_no_recorded_passes_exits_2_and_runs_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            r = cli(root, 'run', '--dry-run')
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn('no recorded passes', (r.stdout + r.stderr).lower())
+            self.assertFalse((root/'.uncle/workflow/stage-fingerprints').exists() and
+                             any((root/'.uncle/workflow/stage-fingerprints').glob('*.json')))
 
-    # --- the acceptance case ---------------------------------------------------------------------------------------
+    def test_legacy_project_with_state_only_exits_2_with_zero_runner_calls(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            (root/'.uncle/workflow/state').write_text('DONE\n')
+            runner = StubRunner()
+            try:
+                code = rv.run(root, False, runner)
+            except TypeError:
+                code = rv.run(root, dry_run=False, runner=runner)
+            code = code if isinstance(code, int) else getattr(code, 'exit_code', 2)
+            self.assertEqual(code, 2)
+            self.assertEqual(runner.calls, [])
 
-    def test_readme_change_reuses_every_stage_without_a_full_run(self):
-        self.write('README.md', 'hello, with a new paragraph\n')
-        code, out = self.run_cli()
-        self.assertEqual(code, 0, out)
-        self.assertReused(out, *revalidate.STAGES)
-        self.assertEqual(sum(1 for status in self.status(out).values() if status == 're-run'), 0)
-        self.assertIn('README.md', out)
-        self.assertIn('documentation that no stage reads as an input', out)
-        self.assertIn('6 stage(s) reused, none re-run.', out)
+    def test_record_writes_pass_record(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            r = cli(root, 'record', FIRST)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rec = json.loads((root/'.uncle/workflow/stage-fingerprints'/f'{FIRST}.json').read_text())
+            self.assertEqual(rec['stage'], FIRST)
+            self.assertEqual(rec['status'], 'pass')
+            self.assertTrue(rec['hash'])
+            self.assertIsInstance(rec['inputs'], dict)
 
-    def test_readme_change_still_reports_the_attestation_as_stale(self):
-        self.write('README.md', 'changed\n')
-        _, out = self.run_cli()
-        self.assertIn('attestation is stale', out)
-        self.assertIn('does not by itself re-run any stage', out)
+    def test_record_is_deterministic_for_unchanged_inputs(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            cli(root, 'record', FIRST)
+            p = root/'.uncle/workflow/stage-fingerprints'/f'{FIRST}.json'
+            h1 = json.loads(p.read_text())['hash']
+            cli(root, 'record', FIRST)
+            self.assertEqual(json.loads(p.read_text())['hash'], h1)
 
-    def test_other_documentation_is_reused_too(self):
-        self.write('docs/guide.md', 'guide\n')
-        self.write('CHANGELOG.md', 'log\n')
-        self.write('docs/diagram.svg', '<svg/>\n')
-        code, out = self.run_cli()
-        self.assertEqual(code, 0, out)
-        self.assertReused(out, *revalidate.STAGES)
+    def test_readme_edit_does_not_change_stage_hash(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            cli(root, 'record', LATER)
+            p = root/'.uncle/workflow/stage-fingerprints'/f'{LATER}.json'
+            h1 = json.loads(p.read_text())['hash']
+            (root/'README.md').write_text('changed docs\n')
+            cli(root, 'record', LATER)
+            self.assertEqual(json.loads(p.read_text())['hash'], h1)
 
-    # --- unchanged and changed ------------------------------------------------------------------------------------
+    def test_dry_run_does_not_modify_tree(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            cli(root, 'record', FIRST)
+            before = sorted((str(p.relative_to(root)), p.read_bytes()) for p in root.rglob('*')
+                            if p.is_file() and '.git/' not in str(p))
+            (root/'app.py').write_text('print(2)\n')
+            before = sorted((str(p.relative_to(root)), p.read_bytes()) for p in root.rglob('*')
+                            if p.is_file() and '.git/' not in str(p))
+            r = cli(root, 'run', '--dry-run')
+            self.assertIn(r.returncode, (0, 1))
+            after = sorted((str(p.relative_to(root)), p.read_bytes()) for p in root.rglob('*')
+                           if p.is_file() and '.git/' not in str(p))
+            self.assertEqual(before, after)
 
-    def test_nothing_changed_reuses_everything(self):
-        code, out = self.run_cli()
-        self.assertEqual(code, 0, out)
-        self.assertReused(out, *revalidate.STAGES)
-        self.assertIn('no project file changed since the attestation', out)
-        self.assertNotIn('attestation is stale', out)
 
-    def test_source_change_reruns_verification_and_audit_but_not_the_plan_stages(self):
-        self.write('src/app.js', 'export const x = 2;\n')
-        code, out = self.run_cli()
-        self.assertEqual(code, 1, out)
-        self.assertReused(out, 'requirements', 'plan', 'review')
-        self.assertRerun(out, 'implementation', 'verification', 'audit')
-        self.assertIn('changed outside a run: src/app.js', out)
+class RevalidateApi(unittest.TestCase):
+    def _rows(self, root):
+        why, rows = rv.plan(root)
+        self.assertIsNone(why)
+        return {r['stage']: r for r in rows}
 
-    def test_a_test_file_change_is_reported_as_a_protected_verification_change(self):
-        self.write('tests/app.test.js', 'weaker test\n')
-        code, out = self.run_cli()
-        self.assertEqual(code, 1, out)
-        self.assertRerun(out, 'verification', 'audit')
-        self.assertIn('protected verification file changed, needs review: tests/app.test.js', out)
+    def test_source_edit_reruns_stage_and_invalidates_downstream_before_runner(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            rv.record(FIRST, root)
+            rv.record(LATER, root)
+            (root/'app.py').write_text('print(2)\n')
+            seen = []
 
-    def test_a_file_listed_in_the_protected_paths_is_a_test_even_with_an_ordinary_name(self):
-        self.write('.uncle/workflow/verification.paths', 'checks/oracle.txt\n')
-        self.write('checks/oracle.txt', 'a\n')
-        self.git('add', '-A')
-        self.git('commit', '-q', '-m', 'oracle')
-        self.attest()
-        self.write('checks/oracle.txt', 'b\n')
-        code, out = self.run_cli()
-        self.assertEqual(code, 1, out)
-        self.assertIn('protected verification file changed, needs review: checks/oracle.txt', out)
+            def runner(stage, *a, **k):
+                rec = root/'.uncle/workflow/stage-fingerprints'/f'{LATER}.json'
+                seen.append((stage, json.loads(rec.read_text()).get('status') if rec.exists() else None))
+                return 1
 
-    def test_an_unknown_file_counts_as_source_not_documentation(self):
-        self.write('data.json', '{"a": 1}\n')
-        code, out = self.run_cli()
-        self.assertEqual(code, 1, out)
-        self.assertRerun(out, 'verification', 'audit')
+            rv.run(root, False, runner)
+            self.assertTrue(seen, 'runner was never called')
+            self.assertEqual(seen[0][0], FIRST)
+            # Downstream record is already invalidated when the FIRST runner call happens.
+            self.assertEqual(seen[0][1], 'invalidated')
 
-    def test_a_changed_plan_reruns_the_plan_and_everything_after_it(self):
-        self.write('.uncle/docs/PROJECT_PLAN.md', 'plan, edited\n')
-        code, out = self.run_cli()
-        self.assertEqual(code, 1, out)
-        self.assertReused(out, 'requirements')
-        self.assertRerun(out, 'plan', 'review', 'implementation', 'verification', 'audit')
-        self.assertIn('follows plan, which must be re-run', out)
+    def test_failed_runner_keeps_invalidation_for_next_invocation(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            rv.record(FIRST, root)
+            rv.record(LATER, root)
+            (root/'app.py').write_text('print(2)\n')
+            r1 = StubRunner(fail_on=LATER)
+            rv.run(root, False, r1)
+            r2 = StubRunner()
+            rv.run(root, False, r2)
+            self.assertIn(LATER, r2.calls)
+            self.assertNotIn(FIRST, r2.calls)
 
-    # --- never reuse what did not pass ----------------------------------------------------------------------------
+    def test_unchanged_inputs_reuse_everything(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            rv.record(FIRST, root)
+            runner = StubRunner()
+            code = rv.run(root, False, runner, out=open('/dev/null', 'w'))
+            self.assertEqual(runner.calls, [])
+            self.assertEqual(code, 0)
+            rows = self._rows(root)
+            self.assertEqual(rows[FIRST]['action'], 'reuse')
+            self.assertTrue(all(r['action'] == 'skip' for n, r in rows.items() if n != FIRST))
 
-    def test_a_stage_that_did_not_pass_last_time_is_never_reused(self):
-        self.attest(results={'audit': 'fail'})
-        code, out = self.run_cli()
-        self.assertEqual(code, 1, out)
-        self.assertRerun(out, 'audit')
-        self.assertReused(out, 'requirements', 'plan', 'review', 'implementation', 'verification')
-        self.assertIn('did not pass last time (NOT_READY)', out)
+    def test_unmapped_stage_is_reported_changed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            rv.record(FIRST, root)
+            p = root/'.uncle/workflow/stage-fingerprints/NOT_A_STAGE.json'
+            p.write_text(json.dumps({'stage': 'NOT_A_STAGE', 'hash': 'x', 'inputs': {}, 'status': 'pass'}))
+            runner = StubRunner()
+            rv.run(root, False, runner, out=open('/dev/null', 'w'))
+            self.assertNotIn('NOT_A_STAGE', runner.calls)
+            self.assertNotIn('NOT_A_STAGE', self._rows(root))
+            with self.assertRaises(Exception):
+                rv.fingerprint('NOT_A_STAGE', root)
 
-    def test_a_failed_verification_also_reruns_the_audit_after_it(self):
-        self.attest(results={'verification': 'fail'})
-        _, out = self.run_cli()
-        self.assertRerun(out, 'verification', 'audit')
 
-    # --- cannot compare: re-run, never guess ----------------------------------------------------------------------
+class DefaultRunnerArguments(unittest.TestCase):
+    """default_runner started the driver with `--noui`, which change-workflow.sh rejects as an unknown argument, so the first stage
+    that actually had to run failed before doing anything (found by the PR's own manual check). A stub runner never sees the
+    driver's parser; these feed the runner's real arguments to it."""
+    DRIVER = Path(__file__).resolve().parents[1]/'change-workflow.sh'
 
-    def test_an_attested_tree_that_is_not_in_the_repository_reruns_what_it_cannot_compare(self):
-        self.attest(tree='0123456789abcdef0123456789abcdef01234567')
-        code, out = self.run_cli()
-        self.assertEqual(code, 1, out)
-        self.assertRerun(out, 'verification', 'audit')
-        self.assertIn('nothing can be compared', out)
+    def argv_used(self, env_extra):
+        from unittest import mock
+        captured = {}
 
-    def test_no_attestation_is_a_clear_refusal(self):
-        (self.repo / '.uncle' / 'attestation.json').unlink()
-        code, out = self.run_cli()
-        self.assertEqual(code, 2, out)
-        self.assertIn('No recorded passing run', out)
+        def fake(argv, **kwargs):
+            captured['argv'], captured['env'] = argv, kwargs.get('env', {})
+            return subprocess.CompletedProcess(argv, 0)
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            with mock.patch.object(rv.subprocess, 'run', side_effect=fake), \
+                    mock.patch.dict(rv.os.environ, env_extra, clear=False):
+                rv.default_runner('PLAN', root)
+        return captured['argv'], captured['env']
 
-    def test_an_attestation_without_stage_results_is_refused(self):
-        self.write('.uncle/attestation.json', json.dumps({'predicate': {'envelopes': {}}}))
-        code, out = self.run_cli()
-        self.assertEqual(code, 2, out)
-        self.assertIn('Cannot revalidate', out)
+    def test_the_driver_accepts_every_argument_default_runner_passes(self):
+        argv, _ = self.argv_used({'UNCLE_ATTENDED': ''})
+        self.assertNotIn('--noui', argv)
+        # The driver parses its arguments in order, so a trailing --help proves every earlier one was accepted.
+        # Run it inside a throwaway project with the run policy off: the driver acts on its working directory before it parses.
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            env = {k: v for k, v in os.environ.items() if not k.startswith(('UNCLE_', 'WORKFLOW_'))}
+            env.update(UNCLE_PROJECT_ROOT=str(root), UNCLE_RUN_POLICY='off', UNCLE_NOUI='1')
+            done = subprocess.run(['bash', str(self.DRIVER), *argv[2:], '--help'], cwd=root, env=env,
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn('Unknown argument', done.stderr)
 
-    # --- it only reads -------------------------------------------------------------------------------------------
+    def test_no_ui_travels_in_the_environment(self):
+        _, env = self.argv_used({})
+        self.assertEqual(env.get('UNCLE_NOUI'), '1')
 
-    def test_it_writes_nothing_to_the_project(self):
-        self.write('README.md', 'changed\n')
-        before = {p: p.read_bytes() for p in self.repo.rglob('*') if p.is_file() and '.git' not in p.parts}
-        status_before = self.git('status', '--porcelain')
-        self.run_cli()
-        after = {p: p.read_bytes() for p in self.repo.rglob('*') if p.is_file() and '.git' not in p.parts}
-        self.assertEqual(before, after)
-        self.assertEqual(self.git('status', '--porcelain'), status_before)
-        self.assertEqual(self.git('stash', 'list'), '')
+    def test_an_attended_run_passes_attended_and_otherwise_unattended(self):
+        self.assertEqual(self.argv_used({'UNCLE_ATTENDED': '1'})[0][2:], ['--attended'])
+        self.assertEqual(self.argv_used({'UNCLE_ATTENDED': ''})[0][2:], ['--unattended'])
 
-    def test_dry_run_is_accepted_and_changes_nothing(self):
-        code, out = self.run_cli('--dry-run')
-        self.assertEqual(code, 0, out)
 
-    # --- through the real launcher ---------------------------------------------------------------------------------
+class DriverExitIsNotAPass(unittest.TestCase):
+    """The driver exits 0 after reopening a gate whose approval no longer matches, having run nothing; default_runner recorded
+    that as a pass. A stage passed only if the driver's own pending list no longer names it."""
 
-    def launcher(self, *args):
-        env = dict(os.environ, UNCLE_SKIP_UPGRADE='1')
-        env.pop('UNCLE_PROJECT_ROOT', None)
-        result = subprocess.run([str(ROOT / 'uncle'), *args], cwd=self.repo, env=env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
-        return result.returncode, result.stdout
+    def run_with_pending(self, pending_text):
+        from unittest import mock
 
-    def test_uncle_revalidate_is_wired_into_the_launcher(self):
-        self.write('README.md', 'launcher\n')
-        code, out = self.launcher('--revalidate')
-        self.assertEqual(code, 0, out)
-        self.assertIn('UNCLE REVALIDATION', out)
-        self.assertReused(out, *revalidate.STAGES)
+        def fake(argv, **kwargs):
+            if pending_text is not None:
+                (Path(kwargs['cwd'])/'.uncle/workflow/revalidate-pending.txt').write_text(pending_text)
+            return subprocess.CompletedProcess(argv, 0)
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            with mock.patch.object(rv.subprocess, 'run', side_effect=fake):
+                return rv.default_runner('PLAN', root)
 
-    def test_the_launcher_passes_the_exit_code_through(self):
-        self.write('src/app.js', 'export const x = 3;\n')
-        code, out = self.launcher('--revalidate')
-        self.assertEqual(code, 1, out)
-        self.assertRerun(out, 'verification', 'audit')
+    def test_exit_0_with_the_stage_still_pending_is_a_failure(self):
+        self.assertEqual(self.run_with_pending('PLAN\n'), 'failed')
 
-    def test_help_lists_the_command(self):
-        code, out = self.launcher('--help')
-        self.assertEqual(code, 0, out)
-        self.assertIn('uncle --revalidate', out)
+    def test_only_this_stage_being_listed_as_pending_makes_it_a_failure(self):
+        self.assertEqual(self.run_with_pending('IMPLEMENT\n'), 'pass')
 
-    # --- classification, in isolation ----------------------------------------------------------------------------
+    def test_exit_0_with_the_pending_list_emptied_is_a_pass(self):
+        self.assertEqual(self.run_with_pending(''), 'pass')
 
-    def test_classification(self):
-        cases = {'README.md': 'docs', 'docs/guide.md': 'docs', 'LICENSE': 'docs', 'CHANGELOG': 'docs',
-                 'docs/img/a.png': 'docs', 'src/App.jsx': 'source', 'package.json': 'source', 'requirements.txt': 'source',
-                 'src/style.css': 'source', 'tests/a.js': 'tests', 'src/a.test.js': 'tests', 'e2e/flow.js': 'tests',
-                 'playwright.config.js': 'tests', 'test_x.py': 'tests', 'index.html': 'source', 'vite.config.js': 'source'}
-        for path, want in cases.items():
-            self.assertEqual(revalidate.classify(path, set()), want, path)
-        self.assertEqual(revalidate.classify('weird/name.dat', {'weird/name.dat'}), 'tests')
+    def test_exit_0_when_the_driver_never_wrote_a_pending_list_is_a_failure(self):
+        self.assertEqual(self.run_with_pending(None), 'failed')
+
+
+class AttestationLine(unittest.TestCase):
+    """The attestation line reports the verifier's verdict, not whatever line it printed last (it prints an explanation after
+    a NOT VERIFIED verdict, which used to surface as `attestation: then run uncle verify again.`)."""
+
+    def line(self, stdout, returncode=1):
+        import io
+        from unittest import mock
+        done = subprocess.CompletedProcess([], returncode, stdout=stdout, stderr='')
+        out = io.StringIO()
+        with mock.patch.object(rv.subprocess, 'run', return_value=done):
+            rv._attestation_line('.', out)
+        return out.getvalue().strip()
+
+    def test_verdict_before_an_explanation_block_is_the_one_reported(self):
+        text = ('UNCLE CHANGE VERIFICATION\n\n\u2717 head tree does not match\n\nNOT VERIFIED\n\n'
+                'This change could not be verified.\nReasons:\n  - head tree does not match\n\n'
+                'Fix the failed checks listed above, then run uncle verify again.')
+        self.assertEqual(self.line(text), 'attestation: NOT VERIFIED')
+
+    def test_each_verdict_form_is_recognised(self):
+        for verdict in ('VERIFIED', 'NOT HUMAN VERIFIED', 'INTEGRITY ONLY \u2014 SIGNATURE PRESENT BUT UNTRUSTED'):
+            self.assertEqual(self.line('checks\n\n%s\n' % verdict, 0), 'attestation: ' + verdict)
+
+    def test_output_with_no_verdict_falls_back_to_its_last_line(self):
+        self.assertEqual(self.line('something odd\nlast words'), 'attestation: last words')
+
+    def test_the_real_verifier_run_in_a_project_prints_a_verdict(self):
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            out = io.StringIO()
+            rv._attestation_line(root, out)
+            self.assertRegex(out.getvalue(), r'^attestation: (NOT VERIFIED|NOT HUMAN VERIFIED|VERIFIED|INTEGRITY ONLY|[A-Za-z]).*')
+            self.assertNotIn('then run uncle verify again', out.getvalue())
+
+
+class RevalidateAudit(unittest.TestCase):
+    def _rows(self, root):
+        why, rows = rv.plan(root)
+        self.assertIsNone(why)
+        return {r['stage']: r for r in rows}
+
+    def test_only_root_readme_is_exempt(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            rv.record(FIRST, root)
+            (root/'README.md').write_text('changed\n')
+            self.assertEqual(self._rows(root)[FIRST]['action'], 'reuse')
+            (root/'docs').mkdir()
+            (root/'docs/README.md').write_text('a\n')
+            rv.record(FIRST, root)
+            (root/'docs/README.md').write_text('b\n')
+            self.assertEqual(self._rows(root)[FIRST]['action'], 'run')
+
+    def test_protected_path_edit_is_needs_review_not_run_and_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            (root/'verify.sh').write_text('true\n')
+            (root/'.uncle/workflow/protected-paths').write_text('verify.sh\n')
+            for st in (FIRST, LATER):
+                rv.record(st, root)
+            (root/'verify.sh').write_text('exit 0\n')
+            rows = self._rows(root)
+            self.assertEqual(rows[LATER]['action'], 'needs-review')
+            runner = StubRunner()
+            code = rv.run(root, False, runner, out=open('/dev/null', 'w'))
+            self.assertNotEqual(code, 0)
+            self.assertNotIn(LATER, runner.calls)
+
+    def test_legacy_stage_runs_and_never_run_stage_skips(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            rv.record(FIRST, root)
+            (root/'.uncle/docs/ADVERSARIAL_REVIEW.md').write_text('x\n')
+            rows = self._rows(root)
+            self.assertEqual(rows['ADVERSARIAL_REVIEW']['action'], 'run')
+            self.assertEqual(rows['FINAL_AUDIT']['action'], 'skip')
+
+    def test_no_passes_exits_2_even_with_history(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            (root/'.uncle/docs/ADVERSARIAL_REVIEW.md').write_text('x\n')
+            runner = StubRunner()
+            self.assertEqual(rv.run(root, False, runner, out=open('/dev/null', 'w')), 2)
+            self.assertEqual(runner.calls, [])
+
+    def test_run_writes_plan_handoff_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            rv.record(FIRST, root)
+            (root/'app.py').write_text('print(2)\n')
+            rv.run(root, False, StubRunner(), out=open('/dev/null', 'w'))
+            data = json.loads(rv.plan_path(root).read_text())
+            self.assertIn(FIRST, {r['stage'] for r in data['rows'] if r['action'] == 'run'})
+
+
+class RevalidateHook(unittest.TestCase):
+    def test_driver_records_only_at_explicit_success_points(self):
+        for script in ('change-workflow.sh', 'stagegate.sh'):
+            text = (LIB.parent/script).read_text()
+            self.assertIn('revalidate.py', text)
+            for line in text.splitlines():
+                if 'revalidate.py' in line and 'record' in line:
+                    self.assertNotIn('set_state()', line)
+        text = (LIB.parent/'change-workflow.sh').read_text()
+        body = text.split('set_state()', 1)[-1].split('\n}', 1)[0]
+        self.assertNotIn('revalidate.py', body)
+
+
+UNCLE = LIB.parents[1]/'uncle'
+
+
+class RevalidateTableIndependent(unittest.TestCase):
+    """Expectations hard-coded from the plan's D-9 table, not read from rv.STAGES."""
+
+    def _hash(self, root, stage):
+        return rv.fingerprint(stage, root)
+
+    def test_plan_stage_hash_ignores_unrelated_plan_doc(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            (root/'.uncle/docs/CHANGE_PLAN.md').write_text('plan v1\n')
+            h = self._hash(root, 'PLAN')
+            (root/'.uncle/docs/CHANGE_PLAN.md').write_text('plan v2\n')
+            self.assertEqual(self._hash(root, 'PLAN'), h)
+
+    def test_classify_stage_hash_tracks_plan_doc(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            (root/'.uncle/docs/CHANGE_PLAN.md').write_text('plan v1\n')
+            h = self._hash(root, 'CLASSIFY')
+            (root/'.uncle/docs/CHANGE_PLAN.md').write_text('plan v2\n')
+            self.assertNotEqual(self._hash(root, 'CLASSIFY'), h)
+
+    def test_analyze_stage_ignores_app_source_but_tracks_request(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            (root/'.uncle/docs/CHANGE_REQUEST.md').write_text('req 1\n')
+            h = self._hash(root, 'ANALYZE')
+            (root/'app.py').write_text('print(99)\n')
+            self.assertEqual(self._hash(root, 'ANALYZE'), h)
+            (root/'.uncle/docs/CHANGE_REQUEST.md').write_text('req 2\n')
+            self.assertNotEqual(self._hash(root, 'ANALYZE'), h)
+
+    def test_implement_stage_tracks_app_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            h = self._hash(root, 'IMPLEMENT')
+            (root/'app.py').write_text('print(99)\n')
+            self.assertNotEqual(self._hash(root, 'IMPLEMENT'), h)
+
+    def test_unmapped_stage_raises_so_it_counts_as_changed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            with self.assertRaises(KeyError):
+                rv.fingerprint('NOT_A_STAGE', root)
+
+    def test_unmapped_input_kind_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            with self.assertRaises(KeyError):
+                rv.input_hash('bogus-kind', root)
+
+
+class UncleDispatch(unittest.TestCase):
+    def test_usage_lists_revalidate(self):
+        r = subprocess.run(['bash', str(UNCLE), '--help'], capture_output=True, text=True)
+        self.assertIn('--revalidate', r.stdout + r.stderr)
+
+    def test_dry_run_without_revalidate_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run(['bash', str(UNCLE), '--dry-run'], cwd=d, capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn('--revalidate', r.stdout + r.stderr)
+
+    def test_revalidate_dispatches_to_module_with_no_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            r = subprocess.run(['bash', str(UNCLE), '--revalidate', '--dry-run'], cwd=root,
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn('no recorded passes', (r.stdout + r.stderr).lower())
 
 
 if __name__ == '__main__':

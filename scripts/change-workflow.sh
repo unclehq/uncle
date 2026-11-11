@@ -578,6 +578,17 @@ set_state() {
     state_write "$STATE_FILE" "$1" "$(current_issue)"
 }
 
+# Best-effort revalidation record, called only at an explicit stage-success
+# point (never from set_state). It cannot fail or slow the driver.
+revalidate_record() {
+    python3 -B "$ROOT/scripts/lib/revalidate.py" record "$1" >/dev/null 2>&1 || true
+    # In a revalidation resume, a recorded stage is no longer pending.
+    if [[ -n "${RV_PENDING:-}" && -f "$RV_PENDING" ]]; then
+        grep -vx -- "$1" "$RV_PENDING" > "$RV_PENDING.tmp" || true
+        mv -f "$RV_PENDING.tmp" "$RV_PENDING"
+    fi
+}
+
 get_state() {
     local state
     state="$(state_read "$STATE_FILE" DERIVE_BRIEF)"
@@ -3916,7 +3927,93 @@ case "$(get_state)" in
     *DERIVE_BRIEF|*ANALYZE) early_baseline_start || true ;;
 esac
 
+# Revalidation (uncle --revalidate) resumes at the first invalidated stage.
+# The entry is explicit and one-shot; it is not a general state override.
+RV_ACTIONS=""
+RV_PENDING=""
+if [[ -n "${UNCLE_REVALIDATE_RESUME:-}" ]]; then
+    # The value is the computed per-stage action plan: a JSON file path or inline
+    # JSON ([{"stage":..,"action":..}] or {"rows":[..]}). A bare stage name is the
+    # legacy single-stage form (that stage runs, nothing else is planned).
+    RV_ACTIONS="$STATE_DIR/revalidate-actions.tsv"
+    RV_PENDING="$STATE_DIR/revalidate-pending.txt"
+    python3 -B - "$UNCLE_REVALIDATE_RESUME" "$RV_ACTIONS" "$RV_PENDING" <<'PY' || { echo "Invalid UNCLE_REVALIDATE_RESUME" >&2; exit 1; }
+import json, os, re, sys
+raw, out, pend = sys.argv[1:4]
+if re.fullmatch(r'[A-Z_]+', raw):
+    rows = [{'stage': raw, 'action': 'run'}]
+else:
+    data = json.load(open(raw)) if os.path.isfile(raw) else json.loads(raw)
+    rows = data.get('rows', []) if isinstance(data, dict) else data
+for r in rows:
+    if not re.fullmatch(r'[A-Z_]+', str(r.get('stage', ''))) or r.get('action') not in ('run', 'reuse', 'skip', 'needs-review'):
+        raise SystemExit(1)
+open(out, 'w').write(''.join('%s\t%s\n' % (r['stage'], r['action']) for r in rows))
+open(pend, 'w').write(''.join(r['stage'] + '\n' for r in rows if r['action'] == 'run'))
+PY
+    unset UNCLE_REVALIDATE_RESUME
+    export UNCLE_REVALIDATE=1
+    _rv_first="$(awk -F'\t' '$2=="run"{print $1; exit}' "$RV_ACTIONS")"
+    if [[ -n "$_rv_first" ]]; then set_state "$_rv_first"; fi
+fi
+
+if [[ "${UNCLE_REVALIDATE:-0}" == 1 ]]; then
+    # Revalidation never writes an approval or attestation: refuse the writers
+    # before any resumed stage can invoke them.
+    human_gate() {
+        echo "Revalidation stopped: a human gate was reached ($*); it will not be approved automatically." >&2
+        exit 75
+    }
+    python3() {
+        local _a _w=""
+        for _a in "$@"; do
+            case "$_a" in
+                *approval_snapshot.py|*attestation.py|*build_attestation.py|*approval_export.py) _w=1 ;;
+            esac
+        done
+        if [[ -n "$_w" ]]; then
+            for _a in "$@"; do
+                case "$_a" in
+                    record|write|approve|sign|attest|export)
+                        echo "Revalidation refused an approval/attestation write: $*" >&2
+                        exit 75 ;;
+                esac
+            done
+        fi
+        command python3 "$@"
+    }
+fi
+
 while true; do
+    # Revalidation never writes an approval or attestation: stop at a reopened gate.
+    if [[ "${UNCLE_REVALIDATE:-0}" == 1 ]]; then
+        case "$(get_state)" in
+            WAIT_*)
+                echo "Revalidation stopped: $(get_state) is a reopened human gate; it will not be approved automatically." >&2
+                exit 75 ;;
+        esac
+        if [[ -n "$RV_ACTIONS" ]]; then
+            _rv_state="$(get_state)"
+            _rv_act="$(awk -F'\t' -v s="$_rv_state" '$1==s{print $2; exit}' "$RV_ACTIONS")"
+            if [[ "$_rv_act" == needs-review ]]; then
+                echo "Revalidation stopped: $_rv_state needs review; it will not be run." >&2
+                exit 75
+            fi
+            if [[ ! -s "$RV_PENDING" ]]; then
+                echo "Revalidation complete: every run-marked stage has passed."
+                exit 0
+            fi
+            if [[ "$_rv_act" == reuse || "$_rv_act" == skip ]]; then
+                case "$_rv_state" in
+                    PLAN) set_state CLASSIFY ;;
+                    ADVERSARIAL_REVIEW) set_state VALIDATE_ADVERSARIAL_REVIEW ;;
+                    IMPLEMENT) set_state WAIT_IMPLEMENT_APPROVAL ;;
+                    *) echo "Revalidation cannot step past $_rv_state" >&2; exit 75 ;;
+                esac
+                continue
+            fi
+        fi
+    fi
     # Only a request to rerun a stage needs the helper; the loop turns over many times without one.
     [[ ! -e .uncle/workflow/rerun-request.json ]] || python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
     state="$(get_state)"
@@ -4018,6 +4115,7 @@ while true; do
             envelope_write --stage plan --result pass \
                 --evidence .uncle/docs/CHANGE_PLAN.md \
                 --producer-stage change-plan --producer-kind agent
+            revalidate_record PLAN
             set_state CLASSIFY
             ;;
 
@@ -4132,6 +4230,7 @@ while true; do
             python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             check_document_budget .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             write_review_envelope
+            revalidate_record ADVERSARIAL_REVIEW
             set_state WAIT_PLAN_APPROVAL
             ;;
 
@@ -4448,6 +4547,7 @@ REPAIR
                 > "$STATE_DIR/step-groups.json" 2>/dev/null || true
             plan_delivery_summary
 
+            revalidate_record IMPLEMENT
             set_state WAIT_IMPLEMENT_APPROVAL
             ;;
 

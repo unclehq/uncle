@@ -70,7 +70,7 @@ Usage: uncle [-h|--help|--performance|--runs] [--attended] [--noui]
        uncle --issue [ISSUE] [--attended]
        uncle --change-request [--attended] < request.md
        uncle --audit [BRANCH]
-       uncle --revalidate [--attestation PATH] [--tree TREE] [--dry-run]
+       uncle --revalidate [--noui] [--attended] [--dry-run]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -115,6 +115,11 @@ starts the change workflow. stdin must be piped or redirected; it refuses to
 overwrite an existing CHANGE_REQUEST.md. The text is untrusted input to
 tool-using agents, especially with --unattended. --application, --issue and
 --change-request are mutually exclusive.
+--revalidate re-runs only the stages of a finished run whose recorded inputs
+changed (and their dependents), reusing the rest; --dry-run (valid only with
+--revalidate) reports what would run without running or changing anything.
+Exit: 0 all reused/passed; 1 failed, blocked or needs review; 2 no recorded
+passes. It cannot be combined with other startup options or --audit.
 --performance reports recorded runtime and token usage for the current project.
 --runs lists the runs across this project's git worktrees (see
 `from-issue.sh --worktree`): one line per worktree holding a run, as
@@ -133,10 +138,6 @@ a gate or needs a signed commit; 130/143 interrupted by SIGINT/SIGTERM.
 UNCLE_SKIP_UPGRADE=1 skips the interactive startup upgrade check.
 verify runs the standalone attestation verifier (scripts/uncle-verify.py) in
 the directory you invoked uncle from; exit 0 only for VERIFIED.
---revalidate compares the project with its attestation and reports, per stage,
-whether it can be reused or must be re-run (a README-only change re-runs nothing).
-It reads and reports only: exit 0 every stage reusable; 1 something must be re-run;
-2 no attestation to compare with.
 EOF
 }
 
@@ -246,7 +247,7 @@ for _a in "$@"; do
         if [[ -n "$_a" && "$_a" != -* ]]; then continue; fi
     fi
     case "$_a" in
-        -h|--help|verify|--revalidate|--performance|--runs)
+        -h|--help|verify|--performance|--runs)
             if [[ "$_audit_n" -eq 0 ]]; then break; fi
             _audit_other=$((_audit_other + 1)) ;;
         --audit) _audit_n=$((_audit_n + 1)); _skip=1 ;;
@@ -256,6 +257,30 @@ done
 if [[ "$_audit_n" -gt 0 && ( "$_audit_n" -gt 1 || "$_audit_other" -gt 0 ) ]]; then
     printf 'Error: --audit cannot be combined with other startup options or early-exit flags\n' >&2
     exit "$UNCLE_REFUSE_CODE"
+fi
+# --revalidate is a startup action: exclusive with the other startup actions
+# and --audit. --dry-run is accepted only with it. -h/--help still wins.
+_reval_n=0
+_dry_n=0
+_reval_other=0
+_help_seen=""
+for _a in "$@"; do
+    case "$_a" in
+        --revalidate) _reval_n=$((_reval_n + 1)) ;;
+        --dry-run) _dry_n=$((_dry_n + 1)) ;;
+        -h|--help) _help_seen=1 ;;
+        --application|--application=*|--issue|--change-request|--audit|--audit=*) _reval_other=$((_reval_other + 1)) ;;
+    esac
+done
+if [[ -z "$_help_seen" ]]; then
+    if [[ "$_dry_n" -gt 0 && "$_reval_n" -eq 0 ]]; then
+        printf 'Error: --dry-run is only valid with --revalidate\n' >&2
+        exit "$UNCLE_REFUSE_CODE"
+    fi
+    if [[ "$_reval_n" -gt 1 || ( "$_reval_n" -gt 0 && "$_reval_other" -gt 0 ) ]]; then
+        printf 'Error: --revalidate cannot be combined with other startup options\n' >&2
+        exit "$UNCLE_REFUSE_CODE"
+    fi
 fi
 UNCLE_FLAG_NOUI=""
 _noinput_seen=""
@@ -274,8 +299,6 @@ while [[ $# -gt 0 ]]; do
         -h|--help)     usage; exit 0 ;;
         # The verifier reads the caller's checkout, not the install dir.
         verify)        shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/uncle-verify.py" "$@" ;;
-        # Reads the caller's checkout and attestation; never starts a driver, a model call or the TUI.
-        --revalidate)  shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/lib/revalidate.py" "$@" ;;
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
         --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
         --audit)
@@ -301,6 +324,23 @@ while [[ $# -gt 0 ]]; do
         --audit=*)
             printf 'Error: --audit takes BRANCH as a separate argument, not %s\n' "$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177')" >&2
             exit "$UNCLE_REFUSE_CODE" ;;
+        --revalidate)
+            # Runs in the caller's checkout; --noui/--attended are accepted and
+            # --dry-run is forwarded to the module.
+            _reval_args=(run)
+            for _a in "$@"; do
+                [[ "$_a" != --dry-run ]] || _reval_args+=(--dry-run)
+                [[ "$_a" != --noui ]] || export UNCLE_NOUI=1
+                [[ "$_a" != --attended ]] || export UNCLE_ATTENDED=1
+            done
+            for _a in "$@"; do
+                case "$_a" in
+                    --revalidate|--dry-run|--noui|--attended|--unattended|--noinput) ;;
+                    *) printf 'Unknown argument: %s\n' "$_a" >&2; exit "$UNCLE_REFUSE_CODE" ;;
+                esac
+            done
+            cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/lib/revalidate.py" "${_reval_args[@]}" ;;
+        --dry-run)     shift ;;
         --unattended)  UNCLE_FLAG_UNATTENDED=1; shift ;;
         --attended)    UNCLE_FLAG_ATTENDED=1; shift ;;
         --noui)        UNCLE_FLAG_NOUI=1; shift ;;
@@ -390,7 +430,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request --audit --revalidate verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request --audit --revalidate --dry-run verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else

@@ -1156,6 +1156,12 @@ unattended_prewarm_stage_for_state() {
             "${warm_args[@]}" >/dev/null 2>&1 || true
 }
 
+# Best-effort revalidation record, called only at an explicit stage-success
+# point (never from set_state). It cannot fail or slow the driver.
+revalidate_record() {
+    python3 -B "$ROOT/scripts/lib/revalidate.py" record "$1" >/dev/null 2>&1 || true
+}
+
 set_state() {
     # In unattended runs we know the next state before publishing it.  Start
     # its idle CLI first, in the background, so the following loop iteration
@@ -5045,6 +5051,7 @@ run_stage() {
             fi
             require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
             require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
+            revalidate_record IMPLEMENT
             # A runtime-readiness repair applies to this implementation pass
             # only. Keep its attempted marker (it bounds retries), but do not
             # leak the repair prompt into later report-only reconciliations.

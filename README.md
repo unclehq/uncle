@@ -138,6 +138,17 @@ Its result says four different things, and they should not be confused:
 
 Exit codes at a glance: `0` verified, `1` not verified, `2` usage error, `3` integrity only. Signing, the full check list and the exit codes are in [docs/verify.md](docs/verify.md).
 
+## Revalidate a finished project
+
+After a project has finished, `uncle --revalidate` reruns only the stages whose inputs changed since their last recorded pass. Inputs are compared by byte hash, so editing `README.md` does not invalidate stages that never read it. A stage whose inputs changed also invalidates the stages downstream of it.
+
+```sh
+uncle --revalidate --dry-run --noui   # print the plan; run nothing, change nothing
+uncle --revalidate --noui             # rerun the stale stages
+```
+
+`--dry-run` lists each stage as reused or to be rerun, with the changed input as the reason, and leaves the tree untouched. If no passes have been recorded (an empty directory, or a project that predates stage fingerprints), `--revalidate` exits 2 without running any stage. Approvals and attestations are not rewritten during a revalidate; a reopened gate blocks the run.
+
 ## Talk to Uncle while it works
 
 Uncle is not a fire-and-forget coding agent. You can ask what the current stage is doing, add context, redirect the implementation, or discuss a failure, all from the terminal.
@@ -199,7 +210,6 @@ In attended mode, Uncle shows you the audited diff and asks for approval before 
 
 * [Quickstart](docs/quickstart.md) and [Prerequisites](PREREQUISITES.md)
 * [Verifying a change](docs/verify.md): `uncle verify`, signing, checks and exit codes
-* [Revalidating a change](docs/revalidate.md): `uncle --revalidate`, which stages can be reused after an edit
 * [Running without the TUI](docs/noui.md): `--noui`, exit codes, signals
 * [Supervision and recovery](docs/supervision.md): supervision settings, triage, the home chat agent, stdin input
 * [Two issues on one project](docs/worktrees.md): git worktrees

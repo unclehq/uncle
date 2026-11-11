@@ -75,12 +75,12 @@ def strict_schema(schema, root=True):
     return result
 
 
-def validate(value, schema):
-    """Check the supported source schema as well as the provider's reduced one."""
+def validate(value, schema, path='$'):
+    """Check the supported source schema as well as the provider's reduced one. `path` only labels a bounds error."""
     if 'anyOf' in schema:
         for sub in schema['anyOf']:
             try:
-                validate(value, sub)
+                validate(value, sub, path)
                 return
             except ValueError:
                 pass
@@ -103,17 +103,17 @@ def validate(value, schema):
         if schema.get('additionalProperties') is False and set(value) - set(props):
             raise ValueError('answer has unexpected fields')
         for key in value.keys() & props.keys():
-            validate(value[key], props[key])
+            validate(value[key], props[key], '%s.%s' % (path, key))
     if isinstance(value, list):
-        for item in value:
-            validate(item, schema['items'])
+        for index, item in enumerate(value):
+            validate(item, schema['items'], '%s[%d]' % (path, index))
     for low, high, size in [('minLength', 'maxLength', len(value) if isinstance(value, str) else None),
                             ('minItems', 'maxItems', len(value) if isinstance(value, list) else None),
                             ('minimum', 'maximum', value if type(value) in (int, float) else None)]:
         if size is not None and (size < schema.get(low, size) or size > schema.get(high, size)):
             # Name the bound, not the field: a model that is only told "out of bounds" repeats the same answer.
             bound = high if size > schema.get(high, size) else low
-            raise ValueError('answer is outside schema bounds (%s %s, got %s)' % (bound, schema[bound], size))
+            raise ValueError('answer is outside schema bounds at %s (%s %s, got %s)' % (path, bound, schema[bound], size))
 
 
 def restore(value, schema):

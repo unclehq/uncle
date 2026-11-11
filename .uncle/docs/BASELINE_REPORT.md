@@ -1,66 +1,77 @@
-# Baseline: Issue 254
+# Baseline report: issue 260
 
-Omitted sections: Reproduction (reproduced by code reading, not execution); Existing failures (driver baseline is authority)
+Omitted sections: Reproduction result (no deterministic repro; writer not observed live); Areas outside change folded into section 12
 
 ## 1. Change-request summary
-See CHANGE_REQUEST.md (Issue 254). PR body always ends `Closes <origin>` for a bound issue, even over NOT_READY, override, or BLOCKED acceptance rows. Wanted: `Closes` only for finished work, else `Refs` + "Still open" list; README update.
+See `.uncle/docs/CHANGE_REQUEST.md`: uncle must not edit `.gitignore` (or any tracked file) after the code is committed / PR pushed; any `.gitignore` edit must be pre-commit, planned and in the diff; a test must show the post-push phase leaves `.gitignore` byte-identical.
 
 ## 2. Repository architecture
-Shell/Python workflow driver. `scripts/lib/change-pr.sh` embeds Python that builds and publishes the PR from a journal `j`. `scripts/lib/attestation.py` embeds the attestation block into the body.
+Bash drivers (`scripts/stagegate.sh` new-app, `scripts/change-workflow.sh`, `scripts/from-issue.sh`) plus Python helpers in `scripts/lib/`. `scripts/lib/uncle_gitignore.py` owns uncle's managed ignore block. `scripts/lib/change-pr.sh` (embedded Python) binds, commits and pushes the audited change. `uncle_tui.py` is the UI.
 
 ## 3. Relevant code paths
-- `scripts/lib/change-pr.sh:1781-1825` body assembly; Closes appended at 1823-1825.
-- `change-pr.sh:1785-1808` banners (release_skipped, unattended waiver, override record via `override_record()` :995).
-- `change-pr.sh:1882` draft decision.
-- `change-pr.sh:464` `blocking_findings()` parses FINAL_AUDIT.md table rows where last cell is YES.
-- `change-pr.sh:525` `release_blocked_reason`.
-- `scripts/lib/attestation.py:318-335` `attach_body` strips trailing lines starting `Closes ` as a trailer.
-- `scripts/README.md:405-413` documents Closes.
-- Acceptance tables: `## Acceptance delivery` (IMPLEMENTATION_NOTES.md, cols ID|Status|...) and `## Acceptance gate` (VERIFICATION_REPORT.md, cols ID|Required|Status|Evidence); see `scripts/tests/acceptance-test.sh:20`, `plan-executability-test.py:321`.
+| Where | What |
+|---|---|
+| `scripts/lib/uncle_gitignore.py:80` `ensure()` + `:250` CLI main | Rewrites/creates tracked `<root>/.gitignore` (the only tracked-file writer of uncle's block) |
+| `scripts/lib/uncle_gitignore.py:191` `ensure_exclude()` | Writes `.git/info/exclude` only; untracked, safe |
+| `scripts/lib/worktrees.sh:130` | `ensure` CLI at worktree creation (also on `--reuse-branch` reruns) |
+| `scripts/lib/change-pr.sh:2097-2098` (`bind`) | `ensure('.')` in linked worktrees, before commit tree is bound |
+| `scripts/lib/change-pr.sh:1963` | `git push` of the intended head (end of publish) |
+| `scripts/stagegate.sh:483` (`build_attest_completed`, called `:7147`) | `ensure` CLI at completion, before `worktree_merge_finish_all` commit |
+| `scripts/from-issue.sh:391-405` | `git add -A` + commit in worktree finalize (sweeps any `.gitignore` edit into the commit) |
+| `uncle_tui.py:301-321,1980` | Calls `ensure_exclude` only; does not touch tracked file |
+| `prompts/project-plan-investigate.md:263-279`, `docs/plan-duties.md` | New-app plan `.gitignore` duty (pre-implementation, in `Owns:`); change flow has none (`change_plan_duties.py:13`) |
+
+The request's 'step that writes .gitignore after the push' was NOT located: no call site executes strictly after the push. Callers run at worktree creation (incl. reruns after a push), at `bind` (pre-commit) and at completion (pre-merge-commit). A bare `.uncle` line appended to `.gitignore` by an unidentified concurrent process is documented in `uncle_gitignore.py:59`; this worktree currently shows exactly that (`git diff .gitignore`: `+.uncle`).
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Publish with bound origin, any verdict | body ends `Closes owner/repo#N` | change-pr.sh:1823 | Only when finished |
-| B-2 | Publish without origin | no Closes line | change-pr.sh:1823, README:412 | Yes |
-| B-3 | Failing audit/override | banners + draft PR | :1785-1808, :1882 | Yes |
-| B-4 | attach_body with trailing Closes | block inserted before trailer | attestation.py:325, attestation-test.py:310 | Yes |
+| B-1 | Worktree created for a run | Tracked `.gitignore` normalized to canonical block | `worktrees.sh:130` | Yes |
+| B-2 | `change-pr.sh bind` in linked worktree | `.gitignore` normalized before commit tree bound | `change-pr.sh:2097` | Yes |
+| B-3 | New-app completion | `.gitignore` normalized, then attested and merged | `stagegate.sh:483` | Yes (pre-commit) |
+| B-4 | Rerun/reuse of a worktree after push | Normalization may rewrite tracked `.gitignore` again, leaving uncommitted change | `worktrees.sh:63,130`; this worktree status | No (the bug) |
+| B-5 | TUI start | Only `.git/info/exclude` written | `uncle_tui.py:314` | Yes |
+| B-6 | Snapshots/guards | Tolerate managed-line-only `.gitignore` diffs | `only_adds_managed` `uncle_gitignore.py:56`; `change-pr.sh:1003-1015` | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Attestation block precedes trailer lines | attestation.py:325 | attestation-test.py:310,413 | High |
-| I-2 | Creating PR never closes issue / writes issue-closed | README:405 | not located | Medium |
+| I-1 | Only worktree creation (and bind in linked worktree) runs `ensure` | grep-based caller enumeration | `gitignore-clean-end-test.py` `CallerEnumeration` | Medium (stagegate.sh:483 looks like an offender under its regex; baseline run is authority) |
+| I-2 | TUI never edits tracked `.gitignore` | TUI uses `ensure_exclude` | `gitignore-clean-end-test.py` `TuiHelper` | High |
+| I-3 | Publish/completion guard refuses unaudited tracked edits | `assert_tree_matches_attested` `change-pr.sh:24` | `gitignore-clean-end-test.py` `Guard` | High |
 
-## 6. Interface contracts
-PR body text only; journal `j` fields origin (tab-separated repo, number, ...), release_skipped, body. No schema change.
+## 6. Interfaces
+`python3 scripts/lib/uncle_gitignore.py [root]` CLI; `ensure(root)->bool`, `ensure_exclude(root)->bool`. No schema/API consumers outside the repo.
 
 ## 7. Existing automated-test coverage
-attestation-test.py and attestation-statement-test.py cover Closes trailer. pr-auto-publish-test.sh, pr-publish-reason-test.sh, pr-verdict-binding-test.sh drive publish with a fixture origin (`pr-auto-publish-test.sh:13`). Shell runner and Python runner use separate temp dirs and no shared ports, so they can run in parallel (documented in task contract).
+`scripts/tests/uncle-gitignore-test.sh`, `gitignore-tolerance-test.py`, `gitignore-clean-end-test.py`, `pr-snapshot-managed-ignore-test.py`, `snapshot-excludes-history-test.sh`, `worktree-run-test.sh`. No test covers the post-push phase. Shell and Python runners use separate temp dirs and share no ports, so they form one parallel group.
 
 ## 9. Baseline test results
-Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (existing). No results produced here; driver baseline in `.uncle/workflow/green-check.baseline.tsv` is authority. Some Python suites may already fail on clean checkout per Uncle convention.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (repo-mandated runners, per workflow instructions). Not executed here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is the authority. Some Python suites are documented to fail on a clean checkout.
+
+## 10. Existing failures
+None documented in repo for this area. Possible pre-existing failure: `CallerEnumeration` vs `stagegate.sh:483` (unverified).
 
 ## 12. Likely change surface
-`scripts/lib/change-pr.sh` (1823-1825), `scripts/lib/attestation.py` (325), `scripts/README.md` (405-413), new shell test, `scripts/tests/attestation-test.py`, `scripts/tests/critical-suites.txt`.
+`scripts/lib/uncle_gitignore.py`, `scripts/lib/change-pr.sh`, `scripts/from-issue.sh`, `scripts/stagegate.sh`, new test, `docs/plan-duties.md`.
 
 ## 13. Regression-sensitive components
-attach_body trailer handling; unattended publish path; PR body re-reading by attestation verification.
+Worktree creation normalization (B-1) that prevents tracked `.uncle/workflow-history` leakage; PR snapshot/commit-tree binding in `change-pr.sh`.
 
 ## 14. Outside the change
-Audit verdict computation, release gating, draft logic, reopening #235/#236 (manual post-fix action).
+`ensure_exclude`, TUI, plan-stage `.gitignore` duty in new-app flow, `only_adds_managed`/`strip_managed`, self-hosted `.uncle/.gitignore`.
 
-## 15. Unknowns and assumptions
-- Verdict source for READY vs READY_WITH_NON_BLOCKING_ISSUES vs NOT_READY at body time: assumed derivable from FINAL_AUDIT.md verdict text and release_skipped; to be confirmed during implementation by inspecting how `waived_stages`/verdict_run are read.
-- Unparseable/missing acceptance tables treated as not blocked only if no table exists.
+## 15. Unknowns
+U-1: exact post-push writer unidentified (see section 3); U-2: source of stray bare `.uncle` line unknown.
 
 ## 16. Risk
-Medium-low: small localized change; risk is false `Refs` on READY work (safe direction) or false `Closes` if parsing misses BLOCKED rows.
+Medium: `.gitignore` handling guards against a past 2379-file leak; freezing too early could skip needed normalization.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
+bash scripts/run-python-tests.sh -- gitignore-post-push
 ```
 

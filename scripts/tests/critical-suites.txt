@@ -128,3 +128,6 @@ headless-preview-open
 
 # Check record: the machine-checkable green-check record and its snapshot-backed rerun.
 check-record
+
+# Freeze: no uncle edit to the tracked .gitignore after push/commit.
+gitignore-post-push

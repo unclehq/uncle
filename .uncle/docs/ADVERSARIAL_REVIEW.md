@@ -1,128 +1,96 @@
-## AR-001: Plan does not say what happens when a command has both an allowlisted basename and an argv-only client.
+## AR-001: Optional recording hooks conflict with the requirement to fingerprint every passing stage, leaving stages outside select
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1: 'print `file` if any basename is ...'; Risks s22 says misclassification loses the prompt.
-- Failure: Plan does not say what happens when a command has both an allowlisted basename and an argv-only client. The helper prints `file` if ANY element matches, so a wrapper around an argv client would misclassify and drop the prompt. Decide: match any element, or only client_cmd[0] and the interpreter's first script argument.
+- References: CHANGE_PLAN.json §21 permits cutting record hooks beyond PLAN/ADVERSARIAL_REVIEW/IMPLEMENT, while CHANGE_SPEC.json AC-1 and RB-1 require records for each passing stage. With D-2 skipping unrecorded stages, cutting these hooks silently omits completed stages from revalidation.
+- Failure: Optional recording hooks conflict with the requirement to fingerprint every passing stage, leaving stages outside selective verification. Add: "Record input fingerprints on every stage's successful completion; hooks beyond PLAN, ADVERSARIAL_REVIEW, and IMPLEMENT are required scope."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Stagegate D1 ORs the retained python3-first rule with the helper, yet AC-1/I3 say the helper alone decides.
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC I3 vs CHANGE_PLAN s1 D1; AC-2 says both drivers call the helper.
-- Failure: Stagegate D1 ORs the retained python3-first rule with the helper, yet AC-1/I3 say the helper alone decides. Decide: python3 always yields `file` in stagegate, while change-workflow uses only the helper.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-003: Empty or unset client_cmd is unspecified at the call sites.
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC AC-1 lists 'empty' as argv, but the plan does not cover empty-array expansion in either driver.
-- Failure: Empty or unset client_cmd is unspecified at the call sites. Decide: `reviewer_prompt_kind` with no arguments, or only empty strings, prints `argv` and returns 0, and an empty `"${client_cmd[@]}"` expansion under bash 3.2 `set -u` must not abort.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-004: The guard boundary (exactly 120000 bytes) and mixed race candidates (wrapper plus argv-only) are unspecified.
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC B6 says the race path is unchanged and B3 covers 'candidates 2' only manually; the boundary is not stated in B4/B5.
-- Failure: The guard boundary (exactly 120000 bytes) and mixed race candidates (wrapper plus argv-only) are unspecified. Decide: kind is computed per candidate command, and the guard refuses only when the prompt is strictly over 120000 bytes.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-005: The helper scans every element, so an argv-only client with an argument whose basename is self_hosted.py, native_stage.p
+## AR-002: D-2 does not distinguish never-run stages from legacy stages that ran without fingerprint records.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s1: "loop over elements, strip dirs, and print file if any basename is..."; risk s22 relies only on the exact basename allowlist.
-- Failure: The helper scans every element, so an argv-only client with an argument whose basename is self_hosted.py, native_stage.py or reviewer-self-hosted.sh is classified file and loses its prompt. Decide: only element 0, or element 1 when element 0 is an interpreter (python3, bash, sh), counts.
+- References: CHANGE_PLAN.json §9 D-2 says an unrecorded stage is skipped and only a previously recorded stage without inputs is changed. CHANGE_SPEC.json RB-9 requires stages that previously ran without a recorded hash/pass to count as changed; AC-7 separately prohibits execution when no recorded passes exist.
+- Failure: D-2 does not distinguish never-run stages from legacy stages that ran without fingerprint records. Add: "Skip only stages with no execution history; stages with prior execution but missing fingerprints are changed and must rerun when at least one recorded pass exists."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Under D1, stagegate sends a python3 client as file even if the helper says argv, and the plan does not say which wins.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1 D1 vs CHANGE_SPEC I3; AC-6 negative tests have no python3 case.
-- Failure: Under D1, stagegate sends a python3 client as file even if the helper says argv, and the plan does not say which wins. Decide: the python3 clause wins in stagegate, and I3 is amended to say so.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-007: B6 calls the race path unchanged, but the plan never says how a wrapper in a two-candidate list is classified.
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC B6 "code unchanged; existing candidate test"; CHANGE_PLAN s18 checks candidates 2 only manually.
-- Failure: B6 calls the race path unchanged, but the plan never says how a wrapper in a two-candidate list is classified. Decide: it is classified file, and an automated test covers it.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: The plan does not say what the helper does with zero arguments, or whether expanding an unset client_cmd array is safe u
-
-- Severity: LOW
-- References: CHANGE_SPEC AC-1 "empty"; CHANGE_PLAN R-3 and s1 call form "${client_cmd[@]}".
-- Failure: The plan does not say what the helper does with zero arguments, or whether expanding an unset client_cmd array is safe under set -u on bash 3.2. Decide: expand with a guard, and the helper prints argv for zero arguments.
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: The plan does not say where the --prompt-file is created, its permissions, or when it is deleted.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s6 says the prompt flows by file path; no file lifecycle or permissions are stated, and the prompt-file code is listed as unchanged.
-- Failure: The plan does not say where the --prompt-file is created, its permissions, or when it is deleted. Moving the prompt from argv to a file is a new exposure. Settle it with: 'Prompt files are created mode 0600 in a per-run private directory and removed on exit, including on failure.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-010: The allowlist matches any element of the command.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN s1: 'if any basename is'; AC-1: 'any command element'. The negative tests in s16 cover only codex, claude and reviewer-kimi.sh.
-- Failure: The allowlist matches any element of the command. An argv-only client with an argument ending in self_hosted.py, native_stage.py or reviewer-self-hosted.sh would be classed as file and skip the guard. Settle it with: 'Only client_cmd[0], or the script argument after an interpreter, is matched.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-011: The wrapper is trusted by basename alone.
-
-- Severity: LOW
-- References: CHANGE_PLAN s1 and AC-1 match by basename after directories are stripped.
-- Failure: The wrapper is trusted by basename alone. Another script named reviewer-self-hosted.sh, found via PATH or a configured runner, would receive --prompt-file. Settle it with: 'The wrapper is recognized only when its resolved path is under UNCLE_RUNTIME_ROOT/scripts.'
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-012: Plan does not say how 'fails on current tree' is proven for tests 2-4, yet steps 2,3,4 are called parallel-safe.
+## AR-003: Excluding all Markdown from app/test inputs can reuse stages after actual application or test inputs change.
 
 - Severity: HIGH
-- References: CHANGE_PLAN s16 'Failing-before' and Step 4 'written first against current tree' versus 'Steps 2, 3 and 4 are parallel-safe'.
-- Failure: Plan does not say how 'fails on current tree' is proven for tests 2-4, yet steps 2,3,4 are called parallel-safe. Say: 'Step 4 records tests 2-4 failing by assertion on the unmodified tree before steps 2-3 land.'
+- References: CHANGE_PLAN.json §9 D-1 says Markdown files are never app/test inputs. CHANGE_SPEC.json AC-3 exempts README-only changes, while AC-1, AC-4, and RI-1 require fingerprinting actual inputs and rerunning their consumers; Markdown fixtures and application content expose the conflict.
+- Failure: Excluding all Markdown from app/test inputs can reuse stages after actual application or test inputs change. Add: "Exclude the root README.md from stage inputs, but fingerprint other Markdown files whenever they are application, test, protected, or approved-document inputs."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: No boundary tests for the 120000-byte limit or an empty command.
+## AR-004: Resuming the driver at the first invalidated stage does not specify how later reusable stages avoid execution.
+
+- Severity: HIGH
+- References: CHANGE_PLAN.json §1-3 specifies resuming at the first invalidated stage via UNCLE_REVALIDATE_RESUME, but gives no execution contract for subsequent reusable stages. CHANGE_SPEC.json AC-4 requires exactly the changed stages and their dependents to rerun, with all others reused.
+- Failure: Resuming the driver at the first invalidated stage does not specify how later reusable stages avoid execution. Add: "Pass the complete per-stage action plan to the resumed driver; execute only stages marked run, skip reused and unrecorded stages, and stop before any needs-review stage or reopened gate."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-005: Flag exclusivity can be read as rejecting explicitly supported modifiers.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s16 test (5) uses only a 200000-byte prompt; AC-1 lists empty as argv but test (1) does not enumerate it.
-- Failure: No boundary tests for the 120000-byte limit or an empty command. Say: 'A 120000-byte argv prompt is allowed, 120001 is refused, and an empty command prints argv.'
+- References: CHANGE_SPEC.json §2-4 explicitly supports --revalidate [--noui] [--attended] [--dry-run], while RB-12 says --revalidate is exclusive with other startup options. CHANGE_PLAN.json step 2 calls for flag exclusivity without resolving which modifiers remain legal, allowing incompatible CLI implementations and tests.
+- Failure: Flag exclusivity can be read as rejecting explicitly supported modifiers. Add: "Allow --revalidate with --noui, --attended, and --dry-run; reject other startup modes, and reject --dry-run without --revalidate."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-014: Test 6 does not name the forbidden patterns, so a reworded case would pass.
+## AR-006: D-1 excludes all Markdown from app/test inputs, allowing changes to Markdown application content or test fixtures to reu
+
+- Severity: HIGH
+- References: CHANGE_PLAN.json §9 D-1 excludes Markdown categorically, while CHANGE_SPEC.json AC-1, AC-4 and RI-1 require fingerprints for consumed inputs and reruns when those inputs change. AC-3 grants the README-only exception, not an exception for all Markdown.
+- Failure: D-1 excludes all Markdown from app/test inputs, allowing changes to Markdown application content or test fixtures to reuse stale results. Replace it with: "Exclude only the project-root README.md from app/test inputs; hash other Markdown files whenever a stage consumes them, including protected verification files."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-007: Resuming the existing driver at the first invalidated stage does not specify how later reusable stages remain skipped, r
+
+- Severity: HIGH
+- References: CHANGE_PLAN.json §1–3 specifies first-invalidated-stage resume via UNCLE_REVALIDATE_RESUME, but provides no per-stage execution filter; §4 also limits change-workflow.sh edits to record hooks while the impact table requires resume and gate changes. CHANGE_SPEC.json AC-4 requires exactly the affected stages and dependents to rerun, and AC-9 prohibits approval/attestation writes.
+- Failure: Resuming the existing driver at the first invalidated stage does not specify how later reusable stages remain skipped, risking unnecessary model calls, tests and reopened gates. Add: "During revalidation, the driver executes only stages marked run in the computed plan, skips reusable and unrecorded stages, and stops before any approval or attestation write."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-008: Optional record hooks combined with skipping unrecorded stages can leave completed workflow stages permanently outside r
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s16 test (6); CHANGE_SPEC AC-2.
-- Failure: Test 6 does not name the forbidden patterns, so a reworded case would pass. Say: 'The grep test asserts change-workflow.sh has no case over native_stage.py or self_hosted.py basenames and contains reviewer_prompt_kind.'
+- References: CHANGE_PLAN.json §21 allows cutting hooks beyond PLAN/ADVERSARIAL_REVIEW/IMPLEMENT, and §9 D-2 says an unrecorded stage is skipped without distinguishing missing fingerprints from stages never run. CHANGE_SPEC.json AC-1 requires each passing stage to record inputs, and RB-9 requires previously run stages lacking hashes to count as changed.
+- Failure: Optional record hooks combined with skipping unrecorded stages can leave completed workflow stages permanently outside revalidation. Add: "Record every passing stage in scope; when a stage previously ran but lacks a fingerprint, classify it as changed using existing workflow history, and reserve skip for stages that never ran."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-015: A python3-first client with a non-allowlisted script is file in stagegate but argv in change-workflow, contradicting I3
+## AR-009: Snapshot comparison detects approval or attestation writes only after they occur, leaving RI-5 unenforced if a resumed s
+
+- Severity: HIGH
+- References: CHANGE_PLAN.json §Restrictions R-5 specifies “snapshot compare + gate stop exit 75”; §4 excludes approval/attestation writers from modification. CHANGE_SPEC.json AC-9 and RI-5 prohibit all such writes, so the plan must identify a pre-write enforcement point that also covers resumed stages which write without reopening a gate.
+- Failure: Snapshot comparison detects approval or attestation writes only after they occur, leaving RI-5 unenforced if a resumed stage invokes a writer before reaching a gate. Add: “Revalidation must prevent approval and attestation writes before invoking any resumed stage; snapshot comparison is only a secondary check.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-010: The Markdown exclusion makes the required input-change tests contradictory for Markdown documents and protected tests.
+
+- Severity: HIGH
+- References: CHANGE_PLAN.json §9 D-1 excludes all Markdown from app/test inputs, while CHANGE_SPEC.json AC-1 requires hashing docs and protected paths and RI-1 requires every input to remain byte-identical. Specify this boundary so tests cannot pass by excluding a Markdown input that a stage actually reads.
+- Failure: The Markdown exclusion makes the required input-change tests contradictory for Markdown documents and protected tests. Add: “Exclude only the root README.md from app/test inputs; hash all declared document and protected inputs regardless of extension.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-011: Missing-record tests lack a defined way to distinguish never-run stages from legacy stages whose fingerprints are absent
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN s1 D1 versus CHANGE_SPEC I3; no test in s16 covers the divergence.
-- Failure: A python3-first client with a non-allowlisted script is file in stagegate but argv in change-workflow, contradicting I3 and untested. Say: 'python3-first classifies file in stagegate and argv in change-workflow; the test table pins both.'
+- References: CHANGE_PLAN.json §9 D-2 says an unrecorded stage is skipped but a previously recorded stage without inputs is changed; CHANGE_SPEC.json RB-9 instead covers previously run stages without a hash/pass. Define the evidence for this distinction and test both cases alongside AC-7, or legacy-stage fixtures can support incompatible expected results.
+- Failure: Missing-record tests lack a defined way to distinguish never-run stages from legacy stages whose fingerprints are absent. Add: “Skip a stage with no fingerprint only when workflow history proves it never ran; otherwise treat it as changed, subject to the no-recorded-passes exit rule.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-016: Hosted test 4 does not say whether it fails or skips when the wrapper is not resolved, or if it needs network.
+## AR-012: Stub call counts cannot settle whether resuming the driver executes unchanged downstream stages.
 
-- Severity: LOW
-- References: CHANGE_PLAN s16 test (4); s21 lists AC-5 as the first scope cut.
-- Failure: Hosted test 4 does not say whether it fails or skips when the wrapper is not resolved, or if it needs network. Say: 'The hosted test runs offline and fails, not skips, if the wrapper is not resolved.'
+- Severity: HIGH
+- References: CHANGE_PLAN.json §§1–3 resumes the driver at the first invalidated stage, while §16–17 specifies stub-runner counts and a two-pass resume test without defining whether the driver runs. CHANGE_SPEC.json AC-4 requires exactly the changed stage and its dependents; require this integration boundary so helper-only tests cannot conceal execution beyond the printed plan.
+- Failure: Stub call counts cannot settle whether resuming the driver executes unchanged downstream stages. Add: “An integration test must resume the real driver with model and test commands stubbed and assert that only stages marked run execute, while stages marked reused or skip execute no commands.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 232
+Issue 243
 
-Seeded from [unclehq/uncle#232](https://github.com/unclehq/uncle/issues/232).
+Seeded from [unclehq/uncle#243](https://github.com/unclehq/uncle/issues/243).
 
 ## Change Type
 
@@ -10,76 +10,87 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Reviewer prompts over 120 KB still fail in hosted runs after #214: the self-hosted reviewer starts through reviewer-self-hosted.sh, which the prompt-file check does not recognize
+Add 'uncle --revalidate': re-check a project and re-run only the stages whose inputs changed
 
 ## Motivation
 
 ## Summary
 
-The fix for #214 (PR #222) gives a reviewer its prompt as a file only when the reviewer command starts with `python3`. Hosted runs use the self-hosted runner, and its reviewer command is the wrapper `scripts/reviewer-self-hosted.sh`. The wrapper runs `self_hosted.py`, which reads `--prompt-file`, but `stagegate.sh` doesn't recognize it. The prompt stays a single command-line argument, and the new size guard refuses it.
+Add `uncle --revalidate`: re-check a project that Uncle already built, and run only the stages whose inputs changed since they last passed. Stages with unchanged inputs are reused, with the reason shown.
 
-The result is the same as #214: every adversarial-review lens fails before any reviewer starts, and the build exits 1. Only the message changed.
+## Why
 
-## What happened (2026-11-10, UTC)
+Today the only ways to get a project checked again are to resume a run at its parked state, or to start over. Both are blunt:
 
-A headless hosted run (`UNCLE_HOSTED=1`, self-hosted runner, Linux sandbox) built a small app: one cabal program, `base` as the only dependency, three modules. The build included PR #222, since the guard message below first appears in `a1d6abcf`. The project plan was written and approved. At `ADVERSARIAL_REVIEW`, all four lenses (requirements, regression, security and testability) and their retries failed the same way:
+- A resume re-runs from wherever the run stopped. It can't tell that, say, only `src/style.css` changed since the last green check.
+- Starting over spends a full build, and discards the reviews and approvals already done.
+- After a hand edit, a merge, or an Uncle upgrade, there is no way to ask "is this project still good, and what needs redoing?"
+- `uncle verify` checks the attestation (signature, approvals, tree match). It doesn't re-run anything.
 
-```
-Reviewer adversarial-review-worker-requirements: prompt is 148103 bytes, over Linux's 131,072-byte per-argument limit (guard 120000); this reviewer command cannot read the prompt from a file. Shorten the prompt or use a file-capable reviewer (self_hosted.py / native_stage.py).
-Adversarial-review worker failed validation; stopping the panel.
-uncle --noui: driver exited with status 1
-```
+Seen on a real build: a fix to the mutation runner meant only the mutation step and test review needed redoing, but the options were resume-and-hope or rebuild everything.
 
-**Shortening the plan doesn't get under the limit.** This three-module plan still produced a 148,103-byte review prompt, close to the 150,668 bytes in #214's larger run. So most of the prompt is fixed text, and nearly every hosted build will hit this. A headless run also can't act on the message's advice.
+## Proposed behavior
 
-## Code paths (main `5a5cd30`)
+`uncle --revalidate [--noui] [--attended]`, run from a project root that has `.uncle/` state.
 
-Blame is `git blame -w`.
+1. **Fingerprint each stage's inputs.** For every stage, record a hash of what it read (the approved documents, the files it owns or checks, the protected verification paths, the stage's prompts or runner version, its config). Store it with the stage's result when the stage passes.
+2. **Compare on `--revalidate`.** Recompute each stage's input hash. A stage whose hash matches its recorded passing hash is skipped and reported `unchanged (last passed <time>)`. A stage whose hash differs is re-run, and so is everything downstream of it.
+3. **Print a plan first.** List which stages will re-run and why (which input changed) and which are reused. `--dry-run` stops there.
+4. **Keep the human gates honest.** A re-run that changes an approved document or the diff reopens the gate. Revalidation never records an approval itself.
+5. **Report.** End with per-stage results (`reused`, `passed`, `failed`) and a non-zero exit if anything failed.
 
-| Where | What it does | Last changed in |
-|---|---|---|
-| `scripts/lib/stage-config.sh:47-49` | Hosted mode makes `self-hosted` the default runner. | `688d2194` 2026-11-09 (#211) |
-| `scripts/lib/stage-config.sh:241-243` | A reviewer on `aider`, `opencode` or `self-hosted` runs `scripts/reviewer-self-hosted.sh`. | `b122fc32` 2026-09-10 |
-| `scripts/stagegate.sh:2259-2268` | `client_cmd=("$cmd")`. It is replaced with `python3 native_stage.py` only when the runner is **not** `self-hosted` (`:2264`). For self-hosted, `client_cmd[0]` stays the wrapper's path. | `ceae3faa` 2026-09-15, `cc340817` 2026-09-12 |
-| `scripts/reviewer-self-hosted.sh:8` | `exec python3 "$ROOT/scripts/lib/self_hosted.py" reviewer "$@"`, which passes every argument through, including `--prompt-file`. | `4b8f4b6e` 2026-09-09 |
-| `scripts/lib/self_hosted.py:452-492` | Parses and checks `--prompt-file` for the reviewer. So the wrapper's target can already take the prompt as a file. | `a1d6abcf` 2026-11-09 (#214), `ade8195a`, `4b8f4b6e` |
-| `scripts/stagegate.sh:2355-2363` | **The gap.** `prompt_kind=file` only if `client_cmd[0] == python3`. The wrapper fails that test, so the prompt goes as one argument (`prompt_kind=argv`). | `a1d6abcf` 2026-11-09 (#214) |
-| `scripts/stagegate.sh:2364-2367` | Runs the guard. On failure it writes the message to the lens log and sets `status=1`. The retry fails the same way. | `a1d6abcf` 2026-11-09 (#214) |
-| `scripts/lib/reviewer-prompt.sh:11-17, 36-39` | `reviewer_prompt_guard` refuses an argument prompt over 120,000 bytes. That is correct for real argument-only clients; here the client was classified wrong. | `a1d6abcf` 2026-11-09 (#214) |
-| `scripts/change-workflow.sh:2595-2597` | Same gap in the change workflow. It matches `*self_hosted.py*` or `*native_stage.py*` anywhere in the command, or a basename of `self_hosted.py` or `native_stage.py`. `reviewer-self-hosted.sh` matches none of these. | `a1d6abcf` 2026-11-09 (#214) |
-| `scripts/stagegate.sh:2343-2350`, `:2157-2159` | The only reviewer path that already passes `--prompt-file` on self-hosted: the candidate race, used when more than one candidate is configured. The count defaults to 1 (`:1345`), so a default hosted run takes the single-reviewer path above. | `61633718` 2026-09-28, `a1d6abcf` 2026-11-09 |
-| `scripts/tests/reviewer-prompt-file-test.py:204, 220, 240` | The tests set `client_cmd=(python3 "<fake runner>")` directly. None of them launches through `reviewer-self-hosted.sh`, so the hosted path is untested. | `a1d6abcf` 2026-11-09 (#214) |
+### Required example: a documentation-only change
 
-**Provenance.** #214 was closed by PR #222 (merged 2026-11-10 00:03 UTC). The PR's own audit verdict was "NOT READY". Its finding FA-004 says the Linux check and the stage-level guard behavior were never run (no Linux host, and the new Linux CI workflow had not run yet). Only helper-level tests and grep checks of the wiring were in place, which is how a launch path the tests don't cover got through.
+A change to `README.md` (or any file no stage reads as an input) must revalidate **without a full run**:
 
-## Fix
+- `uncle --revalidate` fingerprints the project, sees that only `README.md` differs from the last passing state, and re-runs only the stages whose inputs include it. If no stage reads it, nothing re-runs.
+- It still checks the things a README edit does affect: the head tree no longer matches the attested release artifact, so the attestation has to be refreshed or the change recorded, and any stage that does read `README.md` (for example a docs or acceptance check) runs.
+- It does **not** re-run the plan, the adversarial review, the test review, the unit or browser tests, or the mutation checks. They are reported `unchanged`.
+- The output says why: `README.md changed; 0 stages read it; 9 stages reused`.
 
-1. **Decide file mode by what the command runs, in one shared place.** Add a helper to `scripts/lib/reviewer-prompt.sh`, for example `reviewer_prompt_kind CMD...`. It returns `file` for `python3 … self_hosted.py|native_stage.py` and for `scripts/reviewer-self-hosted.sh`, which only `exec`s `self_hosted.py reviewer "$@"`. Everything else gets `argv`. Call it from `stagegate.sh:2358-2363` and `change-workflow.sh:2595-2597` instead of the two separate checks, so they can't drift apart again.
-2. **Keep the guard as it is** for real argument-only clients (`codex`, `claude`, `reviewer-kimi.sh`, `reviewer-claude.sh`).
-3. **Tests that use the real wrapper.** Point `UNCLE_RUNTIME_ROOT` at a temporary root that contains the real `scripts/reviewer-self-hosted.sh` and a fake `scripts/lib/self_hosted.py` that records its arguments. With a 200,000-byte prompt, in both `stagegate.sh` and `change-workflow.sh`, check that:
-   - the fake receives `--prompt-file <path>`;
-   - no argument is over 120,000 bytes;
-   - the guard message never appears.
-4. **An end-to-end case for hosted mode:** `UNCLE_HOSTED=1` with no runner in `.uncle/config`, so the default runner resolution (`stage-config.sh:47-49` → `:243` → `stagegate.sh:2264`) is covered, not only a hand-set `client_cmd`.
-5. **Run these in the Linux CI workflow added by #222,** where the per-argument limit actually applies.
+This is the acceptance case for the whole feature. If a README edit triggers a full run, the stage input hashes are too coarse.
 
-## Checks after the fix
+## Existing pieces to build on
 
-- A hosted run on Linux (`UNCLE_HOSTED=1`, no runner config) whose review prompts are over 128 KB. Each lens log shows `Launching reviewer (.../reviewer-self-hosted.sh)`, there is no `prompt is N bytes` line, every lens writes its packet, and the panel finishes.
-- The same run with two candidates (`self-hosted.candidates 2`) still passes, so the race path is unchanged.
+- `green-check.fingerprint` already skips an unchanged green check in `change-workflow.sh`.
+- `verification.manifest` and the protected-path hashes already detect changed tests.
+- Approval records already store a `.sha256` of what was approved.
+- `uncle verify` already compares the attested tree to `HEAD`.
 
-Related: #214 (closed by PR #222), #230, #231.
+## Invariants
 
+- **R-1:** a stage is reused only if every input it reads is byte-identical to the last passing run. When unsure, re-run.
+- **R-2:** a changed protected verification file is reported as a change needing review, never silently re-baselined.
+- **R-3:** a reused stage never turns a failed or blocked stage into a pass. Only stages with a recorded pass can be reused.
+- **R-4:** changing an input re-runs that stage and every stage after it.
+- **R-5:** `--revalidate` writes no approval and no attestation. Those stay with the gates and the existing publish step.
 
-### Comment from taariq
+## Failure behavior
 
-Seen again on 2026-11-10 at 18:39 UTC in a hosted run. The plan step finished and was approved. Then all four reviewers (requirements, regression, security and testability) and their retries were refused with:
+- No `.uncle/` state or no recorded passing runs: say so and exit non-zero without running anything.
+- A stage with no recorded input hash (older runs): treat as changed and re-run it, saying why.
+- A model or credit failure mid-run: stop cleanly, keep the reused results, and make the next `--revalidate` pick up where this one stopped.
 
-> prompt is 146375 bytes, over Linux's 131,072-byte per-argument limit (guard 120000); this reviewer command cannot read the prompt from a file.
+## Verification
 
-That's the second hosted build that day to fail this way, after the 148,103-byte case in this report. One other build that day did get past review, so whether a build fails seems to depend on how large the reviewer prompt turns out. Each failed attempt spends several dollars of model calls on planning before the panel stops it.
+- Unit tests for the fingerprint function: same inputs give the same hash, and each kind of input (file, document, prompt, config) changes it.
+- A fixture project with recorded passes: edit one source file and assert exactly the dependent stages re-run.
+- A defect-injection check: change a protected test file and assert it is flagged, not skipped.
+- `--dry-run` prints the plan and changes nothing on disk.
+- **README acceptance test:** on a fixture project with recorded passes, change only `README.md` and assert zero model calls, zero test-command runs, and every stage reported `unchanged`, with the tree-mismatch reported separately. Then change a file a stage does read and assert exactly that stage and its dependents re-run.
 
-Hosted builds can't get through review reliably until this is fixed. Could it be prioritized?
+## Open questions
+
+- Which inputs define each stage's hash, and how are downstream dependencies declared?
+- Should an Uncle version change count as a changed input for every stage, or only for stages whose prompts or runners changed?
+- How does this interact with attended mode: does a re-run stage always re-open its human gate?
+- Should `--revalidate` also offer a one-shot fix mode for known driver-supplied files (for example the mutation runner)?
+
+## Non-goals
+
+- Replacing `uncle verify`.
+- Rebuilding or rewriting code.
+- Editing approved documents or approvals.
 
 ## Observed Current Behavior
 

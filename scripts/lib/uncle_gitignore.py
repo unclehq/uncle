@@ -77,8 +77,60 @@ def strip_managed(text):
     return '\n'.join(line for line in text.splitlines() if line.strip() not in MANAGED)
 
 
+FREEZE_ENV = 'UNCLE_GITIGNORE_FROZEN'
+_FROZEN_ROOTS = set()
+
+
+def _marker_path(project_root):
+    return os.path.join(project_root, '.uncle', 'workflow', 'gitignore-frozen')
+
+
+def _root_key(project_root):
+    return os.path.realpath(project_root)
+
+
+def is_frozen(project_root):
+    """True when .gitignore must no longer be written: env guard, in-process record, or marker file."""
+    if os.environ.get(FREEZE_ENV) == '1':
+        return True
+    if _root_key(project_root) in _FROZEN_ROOTS:
+        return True
+    return os.path.lexists(_marker_path(project_root))
+
+
+def freeze(project_root):
+    """Freeze .gitignore handling for this project root (after publish, before the final commit).
+
+    Always records the freeze in-process so ensure() stays read-only even when the marker cannot be persisted (fail closed).
+    Returns True when the marker exists as a regular file afterwards; False when it could not be written (a symlink at
+    .uncle, workflow or the marker, or any OSError). Never follows links, never truncates, never writes outside the root."""
+    _FROZEN_ROOTS.add(_root_key(project_root))
+    try:
+        uncle_dir = os.path.join(project_root, '.uncle')
+        wf_dir = os.path.join(uncle_dir, 'workflow')
+        marker = _marker_path(project_root)
+        for part in (uncle_dir, wf_dir):
+            if os.path.islink(part):
+                return False
+        os.makedirs(wf_dir, exist_ok=True)
+        for part in (uncle_dir, wf_dir):
+            if os.path.islink(part):
+                return False
+        try:
+            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o644)
+        except FileExistsError:
+            import stat
+            return stat.S_ISREG(os.lstat(marker).st_mode)
+        os.close(fd)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def ensure(project_root):
     """Normalize <project_root>/.gitignore. Returns True when it was changed."""
+    if is_frozen(project_root):
+        return False
     path = os.path.join(project_root, ".gitignore")
     try:
         with open(path, encoding="utf-8") as fh:

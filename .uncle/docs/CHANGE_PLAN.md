@@ -1,120 +1,128 @@
-# Change plan: Issue 254
+# Change plan: issue 260
 
-Seeded from [unclehq/uncle#254](https://github.com/unclehq/uncle/issues/254).
+Seeded from [unclehq/uncle#260](https://github.com/unclehq/uncle/issues/260).
+Issue 260
 
-Issue 254
-
-Omitted sections: Schema/persistence (none); Migration (none); Concurrency (none); Feature flag (none)
+Omitted sections: Schema/persistence (only an untracked marker file), Concurrency (single marker write), Migration (none), Feature flag (none), Observability (none)
 
 ## 1. Selected technical approach
 
-Add a pure Python helper `closing_trailer(j, origin)` in the embedded Python of `scripts/lib/change-pr.sh`, replacing the unconditional append at :1823-1825. It returns `Closes repo#N` when finished, else `Refs repo#N` followed by a `Still open` list. Inputs: `j.get('release_skipped')`; `override_record()` matching the verdict run (same condition as :1805); verdict parsed from FINAL_AUDIT.md (Verdict line, must be READY or READY_WITH_NON_BLOCKING_ISSUES); BLOCKED rows from `## Acceptance delivery` in IMPLEMENTATION_NOTES.md and `## Acceptance gate` in VERIFICATION_REPORT.md (Status cell BLOCKED*, and for the gate table Required cell YES); FINAL_AUDIT lines containing "not closed"/"stays open" with their finding IDs. Verdict authority (decision D-1): FINAL_AUDIT.md is the sole verdict authority. Journal state (including any verdict recorded in the journal `j`) is never consulted to decide closure; a missing, unreadable, or ambiguous audit verdict (no Verdict line, more than one conflicting Verdict line, or an unrecognized value) yields Refs regardless of journal state. Verdict parsing reuses whatever helper the file already uses for verdicts if one exists (inspect `verdict_run` use near :1805) provided it reads FINAL_AUDIT.md; otherwise a regex over FINAL_AUDIT.md. Any read/parse failure that prevents determining the verdict yields Refs (SI-3). Acceptance-evidence rule: Closes requires positive evidence that no required acceptance row is BLOCKED. If either acceptance document (IMPLEMENTATION_NOTES.md `## Acceptance delivery` or VERIFICATION_REPORT.md `## Acceptance gate`) is missing, unreadable, or malformed (section absent, table header or Status column not recognised, or a row that cannot be parsed), the helper emits Refs even when the verdict is READY or READY_WITH_NON_BLOCKING_ISSUES, and Still open carries a fixed-label evidence-unavailable entry naming the unavailable document. Unparseable or absent evidence is never treated as 'no blockers'; Closes is emitted only when both documents were positively parsed with no blocking row. Tests (in pr-closes-refs-test.sh) cover journal/audit disagreement in both directions (journal says READY while FINAL_AUDIT.md says NOT_READY -> Refs; journal says NOT_READY while FINAL_AUDIT.md says READY with no blockers -> Closes), missing, unreadable, and ambiguous FINAL_AUDIT.md verdict -> Refs, and each acceptance-evidence failure independently (missing notes, missing report, malformed notes table, malformed report table) -> Refs.
+Decision D-1: add a per-project freeze marker `<root>/.uncle/workflow/gitignore-frozen`. `uncle_gitignore.ensure()` returns False without touching `.gitignore` when the marker exists. New `uncle_gitignore.freeze(root)` writes the marker and returns a bool. Refusal rule: freeze() refuses symlinks at every component of the marker path (`<root>/.uncle`, `<root>/.uncle/workflow`, and the `gitignore-frozen` leaf), checked with lstat without following links. It creates the marker without following links or truncating an existing target (open with O_CREAT|O_EXCL|O_NOFOLLOW; an already-existing regular-file marker counts as frozen, an existing symlink is refused) and never writes outside the project root. Fail-closed rule: if freeze persistence fails (permission error, refused symlink, read-only filesystem), the failure must NOT restore normalization. `freeze()` records the freeze in-process (module-level frozen-roots set) so later `ensure()` calls in the same process stay read-only, and call sites emit a visible warning and set a non-writing guard (env `UNCLE_GITIGNORE_FROZEN=1`, inherited by child processes and resumed steps in that run). `ensure()` honors the marker, the in-process record, and the env guard, so inability to persist the marker never resumes tracked-file writes. Freeze is invoked (a) after `git push` succeeds in `change-pr.sh`, (b) before the commit in `from-issue.sh` finalize, (c) before the merge commit in `stagegate.sh`. Pre-freeze normalization (worktree creation, bind, completion) is unchanged, so it stays in the committed diff.
+Decision D-2: no existing test is edited; freeze calls use `python3 -c 'import ...'` / in-Python `uncle_gitignore.freeze(` so the `CallerEnumeration` regex (only matches `.ensure(` and `python3 ... uncle_gitignore.py`) is not tripped.
 
-Still open rendering rule (AR-007, binding): every Still open entry is built only from (a) an ID that fully matches a strict allowlist pattern (acceptance/finding IDs such as `AC-[0-9]+`, `AR-[0-9]+`, `[A-Z]{1,6}-[0-9]{1,4}`; anything else is dropped, not sanitized) and (b) a fixed reason label chosen from a closed set in the helper (e.g. `required acceptance row BLOCKED`, `audit finding: issue stays open`, `release skipped`, `override recorded`). Repository-derived prose, table cell text, finding titles and arbitrary ID text are never copied into the trailer, so source text such as `Fixes owner/repo#123`, `Closes #1` or `Resolves ...` cannot reach the PR body. Adversarial fixture (in pr-closes-refs-test.sh): BLOCKED rows and FINAL_AUDIT 'stays open' lines whose text and ID cells contain `Fixes unclehq/uncle#123`, `closes #5` and embedded newlines; assert the body contains exactly one closing-keyword line (the origin trailer), that no emitted Still open line contains a closing keyword or a `#N` reference other than the origin, and that non-matching IDs are omitted.
+Decision D-3: scope of the guarantee. The enforced guarantee is that no uncle code path writes `.gitignore` after the freeze boundary (guarded in `ensure()`). During implementation, inventory every uncle writer of tracked files reachable after finalize/publish (grep scripts and lib for writes outside `.uncle/`), and record the inventory in `IMPLEMENTATION_NOTES.md`. Any writer found that targets a tracked file other than `.gitignore` is either made to check the freeze marker (read-only when frozen) or listed there as a stated limit (U-1). No broader write-blocking layer is added.
 
-## 2. Alternatives
-A: change nothing in the driver, rely on GitHub keywords by hand (rejected: this is the bug). B: strip Closes at merge time (rejected: no hook). C: always Refs (rejected: breaks READY auto-close).
+## 2-3. Alternatives and rationale
 
-## 3. Why preferred
-Smallest surface, fail-safe, local to body assembly.
+| Alt | Why not |
+|---|---|
+| Stop all tracked `.gitignore` writes; use `info/exclude` only | Legacy tracked bare `.uncle` beats `info/exclude`, re-hiding `.uncle/docs` and re-opening the 2379-file leak (see `uncle_gitignore.py:20-30`) |
+| Restore `.gitignore` to HEAD after push | Is itself a post-push write |
+
+Selected: freeze marker, fail-closed. Minimal, testable, keeps pre-commit behavior. A marker-write failure keeps ensure() read-only via the in-process record and inherited env guard rather than restoring normalization. Stated limit (U-1): writers outside uncle's code, and a separate later process with neither marker nor inherited guard, are not covered.
 
 ## 4. Components to modify
 See change-impact table.
 
-## 5. Not to modify
-Audit/verdict computation, release_blocked_reason, draft logic at :1882, envelopes.
+## 5. Not modified
+`ensure_exclude`, `uncle_tui.py`, plan prompts, `change_plan_duties.py`, existing tests.
 
-## 6. Data flow
-Final audit/notes files -> helper -> trailer appended after `attach_body`. Banners unchanged.
+## 6-7. Data flow / state
 
-## 8. Interface
+New state: marker file present => ignore handling frozen for this project root. Set once and never cleared by uncle on success; creating fresh run state on the same project root preserves it (AR-004). The only removal is rollback of a marker created by a failed finalize/merge commit attempt (a pre-existing marker is always preserved).
 
-Body trailer is `Closes o/r#N` or `Refs o/r#N` then optionally `\nStill open:\n- ...`. attach_body treats trailing lines beginning `Closes ` or `Refs ` (and Still open content following them) as trailer. Since attach_body runs before the trailer is appended in change-pr.sh, the attestation.py change matters for re-reading/legacy paths (tests at attestation-test.py:310,413). Decision D-2 (atomic recognition): attach_body moves trailing content only after recognizing a complete origin trailer, i.e. a line that fully matches `Closes <owner>/<repo>#<digits>` or `Refs <owner>/<repo>#<digits>`, optionally followed by a `Still open:` header and only `- ` bullet lines (blank lines allowed between). Anything else is preserved verbatim before the attestation: ordinary trailing bullet lists, a `Still open:` heading with no valid Closes/Refs line, and prose that merely begins with `Refs ` or `Closes ` (not matching the full origin-reference pattern) are never moved or altered.
+## 8. Interfaces
+New `uncle_gitignore.freeze(project_root)->bool`; `ensure()` unchanged signature. CLI unchanged.
 
 ## 10. Compatibility
-No-origin runs unchanged; stored prepared bodies unchanged.
+No marker => identical behavior.
 
 ## 12. Error and recovery
-Parsing is wrapped in try/except returning Refs; never blocks publish.
 
-## 14. Rollback
-Revert the commit; no data migration. Published PRs unaffected.
+Marker write failure fails closed: freeze() still sets the in-process flag and the call site sets the inherited env guard, so ensure() stays read-only; a warning is emitted and freeze() returns False. It never degrades to current write behavior. A failed finalize/merge commit removes only the marker that attempt created.
+
+## 14. Rollback plan
+Revert the commit. Stale markers are inert.
 
 ## 16. Automated-test strategy
 
-New `scripts/tests/pr-closes-refs-test.sh` modeled on `pr-auto-publish-test.sh` fixture (origin file `unclehq/uncle\t107\tgh`): cases NOT_READY+override -> Refs (AC-1), READY_WITH_NON_BLOCKING + BLOCKED row -> Refs + Still open (AC-2), READY with all acceptance rows passing but a FINAL_AUDIT finding stating "not closed" or "stays open" and NO BLOCKED rows -> Refs with that finding ID in Still open (AC-2, standalone audit-only test; precedence rule: any such finding forces Refs regardless of an otherwise eligible verdict, and this behavior cannot be cut), READY -> Closes, no-origin -> neither (AC-3). Evidence-unavailable cases, each run independently with a READY verdict and otherwise-clean fixtures, all expecting Refs: (a) IMPLEMENTATION_NOTES.md missing; (b) IMPLEMENTATION_NOTES.md unreadable; (c) IMPLEMENTATION_NOTES.md `## Acceptance delivery` section absent or table malformed; (d) VERIFICATION_REPORT.md missing; (e) VERIFICATION_REPORT.md unreadable; (f) VERIFICATION_REPORT.md `## Acceptance gate` section absent or table malformed. Add suite name to `scripts/tests/critical-suites.txt`. Add cases to `scripts/tests/attestation-test.py` for Refs and Still open trailers (AC-4). Explicit run of new suite: `bash scripts/run-shell-tests.sh -- pr-closes-refs`. Regression tests that fail before fix: the NOT_READY case and the evidence-unavailable cases.
+New `scripts/tests/gitignore-post-push-test.py` (name uses hyphen): fixtures use `git -c commit.gpgsign=false -c tag.gpgsign=false`, `--no-gpg-sign`, repo-local signing off. Cases: frozen ensure with initially absent `.gitignore` asserts it still does not exist after API and CLI calls (existence check, no hashing); frozen ensure with canonical, legacy and bare `.uncle` files asserts bytes equal the pre-invocation snapshot; CLI frozen no-op; unfrozen still normalizes; freeze refusal with symlinked `.uncle`, symlinked `workflow`, and symlinked `gitignore-frozen` leaf (link targets untouched); unwritable marker location: freeze returns False and later/resumed ensure calls (in-process and via inherited env guard) leave `.gitignore` byte-identical; marker survives fresh run state creation on a frozen root; failed-commit retry (marker created by the failed attempt removed and retry normalizes; pre-existing marker preserved); non-git root; execution tests running each freeze call site (change-pr.sh post-push, from-issue.sh finalize, stagegate.sh merge) in disposable fixtures with mocked publishing and signing, asserting the target root is frozen and a failed push creates no marker; source-order checks only as a secondary supplement. Regression test that fails before the fix: frozen-ensure case (before: file rewritten).
 
-AC-4 atomic-recognition regressions in `scripts/tests/attestation-test.py` (each fails if attach_body scans backward without requiring a complete Closes/Refs origin trailer): (a) body ending in an ordinary bullet list; (b) body ending in a `Still open:` heading and bullets with no Closes/Refs line; (c) body ending in a prose line beginning `Refs ` that is not `Refs owner/repo#N`. In each, the trailing content must appear verbatim before the attestation block.
+## 17. Regression strategy
+Existing gitignore suites unchanged.
 
 ## 18. Manual verification
-Post-fix: publish an unattended all-BLOCKED run and confirm `Refs #N` plus list; reopen/link #235 and #236 (human action, outside code).
+M-1: in a throwaway repo with tracked legacy `.gitignore`, call freeze then the CLI; `git status` clean.
 
-## 19. Observability
-None beyond PR body.
+## Verification commands
+- `bash scripts/run-shell-tests.sh`
+- `bash scripts/run-python-tests.sh`
+- `bash scripts/run-python-tests.sh -- gitignore-post-push` (runs the new suite explicitly; not in the default tier)
+
+Protected verification paths: `scripts/tests/` (existing files unchanged; only the new file is added), `scripts/tests/critical-suites.txt` edited by step 3.
 
 ## Restrictions
 
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST Fix 1-2 | AC-1..3 | Closes only for finished work | closing_trailer helper | smallest local change | CAP-BODY | CODING |
-| R-2 | REPOSITORY | change-pr.sh:1805 | AC-1 | override matches verdict_run | reuse override_record condition | consistency | CAP-BODY | CODING |
-| R-3 | DESIGN | SI-3 | AC-1 | fail-safe to Refs: any unreadable verdict or missing/unreadable/malformed acceptance evidence yields Refs even when the verdict is READY | try/except plus explicit evidence-available check before Closes; evidence-unavailable entry in Still open | avoid false close when evidence cannot be established | CAP-BODY | CODING |
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
+|---|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST Expected | AC-1, AC-3 | No uncle edit of `.gitignore` after commit/push; other tracked-file writers after that boundary are inventoried and guarded or recorded as limits (D-3) | Freeze marker + ensure guard (DESIGN, revisable) + post-freeze writer inventory (D-3) | Smallest change preserving pre-commit normalization | CAP-PY3 | Inspected `uncle_gitignore.py:80-128`, `change-pr.sh:1963`; AC-3 is verified by executing each call site in disposable fixtures, not by source order alone | CODING |
+| R-2 | USER | CHANGE_REQUEST AC-3 | AC-5 | Any change is planned, pre-commit | Doc note; edits remain pre-freeze | Keeps diff honest | CAP-PY3 | `plan-duties.md:7` | CODING |
+| R-3 | REPOSITORY | CLAUDE.md signing rules | AC-1 | Tests disable signing | Fixture flags | Never touch user signer | CAP-GIT | Pattern in `gitignore-clean-end-test.py:15-30` | CODING |
 
-Feasibility: inspected change-pr.sh:1781-1825, attestation.py:318-335; no live credentials needed. Live check (human, post-merge): publish an all-BLOCKED run; no secrets prerequisite.
+No live-verification-only prerequisites; no credentials needed.
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/lib/change-pr.sh` | closing_trailer helper; replace :1823-1825 | core fix | Medium: body assembly | pr-closes-refs-test.sh, pr-auto-publish-test.sh |
-| `scripts/lib/attestation.py` | attach_body strips a complete Closes/Refs origin trailer (with optional Still-open bullets) atomically; unrecognized trailing content is left verbatim | AC-4 | Low | attestation-test.py |
-| `scripts/README.md` | document Closes vs Refs | AC-5 | None | inspection |
-| `scripts/tests/pr-closes-refs-test.sh` | new suite | AC-1..3 | None | self |
-| `scripts/tests/attestation-test.py` | add Refs and Still-open trailer cases plus atomic-recognition regressions: ordinary trailing bullet list preserved, unmatched `Still open:` heading preserved, prose beginning `Refs ` preserved | AC-4 | None | self |
-| `scripts/tests/critical-suites.txt` | list new suite | ensure default run executes it | None | runner |
+| `scripts/lib/uncle_gitignore.py` | Add `freeze()`, guard in `ensure()`. `freeze()` sets a process-level frozen flag BEFORE attempting to persist the marker (refusing symlinks at `.uncle`, `workflow`, and the marker leaf); `ensure()` returns False without writing if the flag is set or the marker exists. If persisting the marker fails (permissions, refused symlink), the flag still keeps this process read-only, a warning is logged, and `freeze()` returns False; call sites must not fall back to normalization. Inability to persist never restores tracked-file writes. | Enforce V-1 | Low | `gitignore-post-push` (incl. unwritable `.uncle/workflow` and symlinked marker path: `ensure()` after failed `freeze()` leaves `.gitignore` bytes/absence unchanged in-process), `uncle-gitignore-test.sh` |
+| `scripts/lib/change-pr.sh` | Call `uncle_gitignore.freeze` after push at ~1963 | Post-push freeze | Medium (embedded Python in publish path) | `gitignore-post-push` order check, `gitignore-clean-end` |
+| `scripts/from-issue.sh` | Freeze before `git add -A`/commit (~391); if the commit attempt fails, remove the marker created by that attempt (preserve a pre-existing one) | Finalize commit | Low | `close-flow-test.sh`, new order check |
+| `scripts/stagegate.sh` | Freeze before `worktree_merge_finish_all` (~7152); if the merge commit attempt fails, remove the marker created by that attempt (preserve a pre-existing one) | Merge commit | Low | shell suites, new order check |
+| `scripts/tests/gitignore-post-push-test.py` | New | AC-1..4 | None | itself |
+| `scripts/tests/critical-suites.txt` | Add `gitignore-post-push` | Run in default tier | None | runner |
+| `docs/plan-duties.md` | Note: no post-commit ignore edits | AC-5 | None | review |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1: A PR is published over a NOT_READY/overridden verdict, release skip, or ineligible or unavailable verdict -> body trailer is Refs, never Closes. Also: if either acceptance document (IMPLEMENTATION_NOTES.md `## Acceptance delivery`, VERIFICATION_REPORT.md `## Acceptance gate`) is missing, unreadable, or malformed, emit Refs even when the FINAL_AUDIT verdict is READY; unknown acceptance status is never treated as no blockers. Every Refs trailer includes a Still open list: available blocker IDs plus one single-line fixed-label reason for each applicable cause (override, release skip, ineligible verdict, unavailable verdict, missing/unreadable/malformed acceptance document), even when no IDs exist. Tests assert Still open is present and non-empty for each Refs cause, including override-only and release-skip-only cases. | SB-1 | SI-1, SI-3 | change-pr.sh | pr-closes-refs-test.sh: NOT_READY+override -> Refs, Still open non-empty, pr-closes-refs-test.sh: release skip only -> Refs, Still open non-empty, pr-closes-refs-test.sh: override only -> Refs, Still open non-empty, pr-closes-refs-test.sh: READY with IMPLEMENTATION_NOTES.md missing -> Refs, pr-closes-refs-test.sh: READY with VERIFICATION_REPORT.md missing -> Refs, pr-closes-refs-test.sh: READY with unreadable acceptance file -> Refs, pr-closes-refs-test.sh: READY with malformed Acceptance delivery table -> Refs, pr-closes-refs-test.sh: READY with malformed Acceptance gate table -> Refs | all-BLOCKED publish |
-| AC-2: a PR whose acceptance is unfinished gets `Refs repo#N` and a Still open list naming the blocking row/finding IDs, never Closes. Unfinished means either (a) a required BLOCKED acceptance row, or (b) a FINAL_AUDIT finding stating the origin issue is "not closed" or "stays open". READY_WITH_NON_BLOCKING_ISSUES with a required BLOCKED row yields Refs plus Still open. Only required BLOCKED rows prevent closure on the table side: requiredness is read from the Required cell in both the Acceptance delivery and Acceptance gate tables, and an absent or unrecognized value is treated as required; an optional (Required=NO) BLOCKED row does not prevent Closes. An audit-only not-closed/stays-open finding forces Refs by itself, even when the verdict is READY or READY_WITH_NON_BLOCKING_ISSUES and no row is BLOCKED. This rule is not cuttable and takes precedence over verdict eligibility. | SB-2 | SI-1 | change-pr.sh | pr-closes-refs-test.sh (required BLOCKED-row case), pr-closes-refs-test.sh (optional Required=NO BLOCKED row does not prevent Closes), pr-closes-refs-test.sh (standalone audit-only still-open finding with READY verdict and no BLOCKED rows -> Refs + finding ID in Still open) | same |
-| AC-3: READY verdict with no required BLOCKED acceptance row yields Closes (an optional Required=NO BLOCKED row in either table does not prevent it); a run with no origin emits neither Closes nor Refs. | SB-3, SB-4 | SI-1 | change-pr.sh | pr-closes-refs-test.sh, pr-auto-publish-test.sh | none |
-| AC-4 | SB-5 | SI-2 | attestation.py | attestation-test.py: Refs trailer and Refs + Still open trailer handled, attestation-test.py: ordinary trailing bullet list preserved verbatim before attestation, attestation-test.py: unmatched `Still open:` heading with no valid Closes/Refs line preserved verbatim, attestation-test.py: prose beginning `Refs ` (not a full origin reference) preserved verbatim | none |
-| AC-5 | SB-6 | none | README.md | none | read README |
-| AC-6 | all | all | all | driver commands | none |
+| AC-1: with the freeze marker present, `ensure()` and the CLI never modify `.gitignore`. For an initially absent `.gitignore`, assert it remains absent (existence check, no hashing) after each frozen API and CLI invocation. For an existing `.gitignore` (canonical, legacy, bare `.uncle`), compare its bytes against the unchanged pre-invocation snapshot. | S-2, S-6 | V-1 | uncle_gitignore.py | gitignore-post-push: missing-file case asserts `.gitignore` still does not exist after frozen ensure() and CLI, gitignore-post-push: existing-file cases (canonical, legacy, bare `.uncle`) assert bytes equal the pre-invocation snapshot after frozen ensure() and CLI, gitignore-post-push: marker survives creation of fresh run state on the same project root | M-1 |
+| AC-2 | S-4 | EXISTING | uncle_gitignore.py | uncle-gitignore-test.sh | - |
+| AC-3 | S-1, S-3 | V-1 | change-pr.sh, from-issue.sh, stagegate.sh | gitignore-post-push execution tests: disposable-fixture integration tests run each freeze call site (change-pr.sh post-push, from-issue.sh finalize, stagegate.sh merge) with mocked publishing and signing, assert the target root's marker exists afterward, and assert a failed push creates no marker, gitignore-post-push source-order checks (secondary, supplementary only) | - |
+| AC-4 | S-1 | V-2 | uncle_gitignore.py | gitignore-post-push (incl. symlinked `.uncle`, symlinked `workflow`, and symlinked `gitignore-frozen` leaf cases: freeze returns False, symlink target outside the root is unchanged and not created/truncated) | - |
+| AC-5 | - | - | docs/plan-duties.md | - | diff review |
+| AC-6; also: if a finalize (from-issue.sh) or merge (stagegate.sh) commit attempt fails, the freeze marker created by that attempt is removed so retries still normalize; a marker that existed before the attempt is preserved. | S-4, S-5 | V-3, V-4 | all | shell+python runners, gitignore-post-push failed-commit retry regression: failed commit removes the attempt's marker and retry normalizes; pre-existing marker preserved | - |
 
 ## Implementation sequence
-
-1. Trailer detection in attach_body plus its tests. This step owns the shared trailer grammar: a complete trailer is a line fully matching `Closes <owner>/<repo>#<digits>` or `Refs <owner>/<repo>#<digits>`, optionally followed by a `Still open:` header and `- ` bullet lines. Step 2 must emit exactly this format. Step 1 also owns the atomic-recognition regression cases in attestation-test.py (ordinary trailing bullet list, unmatched `Still open:` heading, prose beginning `Refs `), each asserting verbatim preservation before the attestation.
-   Owns: `scripts/lib/attestation.py`, `scripts/tests/attestation-test.py`
-2. closing_trailer helper and call site, new shell suite, suite listing. The helper emits the exact trailer grammar defined in step 1, rendering Still open entries only from allowlisted IDs and fixed reason labels. pr-closes-refs-test.sh (owned here) must contain: the adversarial closing-keyword injection fixture (Fixes/Closes/Resolves owner/repo#123 in row and finding text and IDs); the standalone audit-only 'stays open' case (READY, no BLOCKED rows -> Refs plus finding ID); per-document missing/unreadable/malformed evidence cases under READY; Required=YES/NO/absent/unrecognized fixtures in both acceptance tables; Still open presence for each Refs cause including no-ID cases; and journal/audit verdict disagreement cases.
-   Owns: `scripts/lib/change-pr.sh`, `scripts/tests/pr-closes-refs-test.sh`, `scripts/tests/critical-suites.txt`
-   Depends on: 1
-3. README update
-   Owns: `scripts/README.md`
-   Depends on: 2
+1. Core freeze: add `freeze()` and the `ensure()` guard; keep CLI. Decisions D-1. Owns: `scripts/lib/uncle_gitignore.py`
+2. Call sites: add freeze after push in `change-pr.sh`, before commit in `from-issue.sh` and `stagegate.sh` (each file edited once; builds on step 1's `freeze` API). Owns: `scripts/lib/change-pr.sh`, `scripts/from-issue.sh`, `scripts/stagegate.sh` — Depends on: 1
+3. Tests: new suite plus critical-suites entry (independent of step 2 files; written against the step 1 API contract `freeze(root)`). Owns: `scripts/tests/gitignore-post-push-test.py`, `scripts/tests/critical-suites.txt` — Depends on: 1
+4. Docs note. Owns: `docs/plan-duties.md`
 
 ## Scope cuts under time pressure
 
-Cut first: Still open list formatting polish; then BLOCKED-row ID extraction detail, only after the items below are preserved. Never cut the Refs-vs-Closes decision, the fail-safe, the extraction of FINAL_AUDIT findings marked 'not closed'/'stays open' (they force Refs and appear by ID in Still open, with their standalone test), or the Still open allowlist-ID/fixed-label rendering rule and its adversarial fixture (AR-007).
+The finalize (`from-issue.sh`) and merge (`stagegate.sh`) freeze calls and the `docs/plan-duties.md` note are required deliverables (AC-3, AC-5) and cannot be cut without first revising the approved acceptance criteria. If time expires, cut first: extra edge-case fixtures beyond the AC-1..4 minimum, then the manual M-1 walkthrough write-up; the `ensure()` guard and the push-site freeze are never cut.
 
 ## Risks and unresolved questions
 
-- Verdict parsing format of FINAL_AUDIT.md must be confirmed at implementation; FINAL_AUDIT.md is the sole verdict authority and the fallback for any missing, unreadable, or ambiguous verdict is Refs (safe), regardless of journal state. None blocks starting.
-- Reopening #235/#236 is a human action outside this change.
+| ID | Risk | Mitigation |
+|---|---|---|
+| U-1 | The literal post-push writer was not located; may be external | Guard uncle's own writers; state limit in `IMPLEMENTATION_NOTES.md` |
+| U-2 | `CallerEnumeration` may already fail at baseline for `stagegate.sh:483` | Baseline run is authority; do not edit that test |
+
+U-3 decision (AR-004): a new run on the same project root preserves the freeze marker; creating fresh run state must not remove it. Uncle never clears the marker, so a reused worktree after push stays frozen (S-6). Any wording elsewhere that a fresh run state resets the marker is superseded by this rule.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | The plan only guaranteed Refs when the verdict was undeterminable; a READY verdict with unavailable acceptance evidence was undefined and could close unfinished work. | Section 1 and R-3 now state that missing, unreadable or malformed acceptance evidence yields Refs even on READY, with an evidence-unavailable reason in Still open. |
-| AR-002 | Accepted | Real gap: audit open-finding extraction was both required and cuttable, with no closure precedence; an explicit still-open audit finding must force Refs. | Add standalone audit-only test case to s11.1 and AC-2 tests/requirement, and state the non-cuttable precedence rule. |
-| AR-003 | Accepted | Optional BLOCKED rows must not prevent closure; requiredness must be determined uniformly, failing safe to required when absent or unrecognized. | AC-1, AC-2 and AC-3 traceability requirements state that only required BLOCKED rows (Required cell, absent/unrecognized treated as required, in both tables) prevent closure. |
-| AR-004 | Accepted | A Refs trailer with no Still open content leaves code and tests free to disagree on whether a bare Refs satisfies the spec. | Traceability AC-1 requirement now states every Refs trailer carries a Still open list with fixed single-line reason labels, even with no IDs. |
-| AR-005 | Accepted | A readable READY verdict with missing or malformed acceptance evidence was undefined; unknown status must never read as no blockers. | Traceability AC-1 requirement/tests now state Refs for READY with missing/unreadable/malformed acceptance docs, tested independently per file. |
-| AR-006 | Accepted | Backward scanning without atomic recognition could move ordinary trailing bullets or prose into the trailer area and alter body content. | s7.1 makes trailer recognition atomic (only a complete Closes/Refs origin trailer is moved); s11.1 and AC-4 add regression cases. |
-| AR-007 | Accepted | Single-line sanitization still lets repository prose like `Fixes owner/repo#123` into the body; emitting only validated IDs and fixed labels removes that path. | s1.1 gains a Still open rendering rule (validated IDs, fixed labels, adversarial fixture); s18.1 forbids cutting it. |
-| AR-008 | Accepted | A readable READY verdict with missing, unreadable or malformed acceptance evidence must not close the issue; the plan only covered verdict-determination failures. | Section 1 now emits Refs when either acceptance document is missing, unreadable or malformed even if READY; section 16 tests each failure independently. |
-| AR-009 | Accepted | Audit-only open findings need a defined closure oracle, and the plan both required and allowed cutting their extraction. | Edit AC-2, s11.1 and s18.1: not-closed/stays-open findings force Refs with their IDs, are uncuttable, and get a standalone test. |
-| AR-010 | Accepted | Two verdict authorities would let identical inputs produce Closes or Refs; a single authority makes the test oracle unambiguous. | s1.1 names FINAL_AUDIT.md as sole verdict authority (Refs if missing/unreadable/ambiguous, journal ignored); s19.1.i1 updated; journal/audit disagreement test added. |
+| AR-001 | Accepted | Restoring normalization on marker-write failure reopens the original defect after a successful commit or push, contradicting the guarantee. | D-1 now makes ensure() fail closed when the marker is present or its persistence failed, and s2 records the limit. |
+| AR-002 | Partially accepted | The tracked-file guarantee exceeded the .gitignore-only guard; an inventory of uncle writers after the freeze boundary is needed, but a general write-blocking layer is out of scope. | Narrowed R-1 to .gitignore and added an implementation inventory of post-freeze tracked-file writers in s1 (D-3). |
+| AR-003 | Accepted | AC-3 and AC-5 are approved acceptance criteria, so the scope-cut list must not remove their deliverables. | Section 18 now lists only non-required work as cuttable and states the finalize/merge freeze calls and docs note are required. |
+| AR-004 | Accepted | The reset boundary was ambiguous; a reused root must stay frozen (S-6), so fresh run state must not clear the marker. | Risk U-3 now states a new run on the same project root preserves the marker; AC-1 traceability adds a preservation test. |
+| AR-005 | Accepted | A failed finalize/merge commit must not leave normalization disabled; removing the marker that attempt created restores retry behavior while preserving pre-existing markers. | Add AC-6 failed-commit rollback criterion and a failed-commit retry regression test to the traceability rows. |
+| AR-006 | Accepted | Symlink refusal must cover the whole marker path so the write cannot be redirected outside the project. | s1.1 D-1 now defines refusal at .uncle, workflow and gitignore-frozen with a no-follow, no-truncate create; AC-4 gains a test. |
+| AR-007 | Accepted | A failed marker write must not restore tracked-file writes after publish; the guard has to fail closed in-process and for later processes. | Edit s15.1 uncle_gitignore.py row: ensure() read-only after freeze(), including in-process flag and failed persistence; add test coverage. |
+| AR-008 | Accepted | Source-order checks cannot prove a call site is reachable, targets the right root, or is skipped on push failure; execution tests can. | AC-3 and R-1 now require disposable-fixture execution tests of each freeze call site (mocked publish/signing, root frozen, failed push leaves no marker); source-order checks become secondary. |
+| AR-009 | Accepted | SHA-256 of an absent path is undefined and empty-bytes treatment would miss erroneous empty-file creation, so existence and content assertions must be separate. | AC-1 traceability row now requires: absent .gitignore stays absent after frozen API and CLI calls; existing files compared byte-for-byte to a pre-invocation snapshot. |

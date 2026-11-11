@@ -9,3 +9,10 @@ must not make unrelated edits to an existing repository. The fix is a patch appl
 fail-open (a model that fails leaves the plan as it was, with the findings shown at the approval gate). `WORKFLOW_PLAN_DUTIES=0` turns it
 off, and `change-plan-stage-duties.runner|model|effort` configure it (default: the `change-plan` stage's).
 
+## No post-commit ignore edits
+
+Plan duties and the other pre-commit stages may edit `.gitignore` only before the repository's ignore rules are frozen. Once a
+change is committed or pushed, the `.uncle/workflow/gitignore-frozen` marker is written (`uncle_gitignore.py freeze`) and
+`ensure()` stops normalizing `.gitignore`, so no ignore edit is made after the commit. Any change to the ignore rules must be
+planned and made before the freeze point, so the committed diff stays honest.
+

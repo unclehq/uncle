@@ -7152,9 +7152,17 @@ PY
                         if [[ -s "$GREEN_OVERRIDE_FILE" || -s "$AUDIT_OVERRIDE_FILE" ]]; then
                             echo "Not merging: the build completed over an override; branch $(git branch --show-current) is kept."
                             extras_reason=local-merge-failed merge_failed=1
-                        elif worktree_merge_finish_all "uncle: $(git branch --show-current | sed 's|^[^/]*/||; s|-| |g')"; then
+                        elif
+                            # Freeze .gitignore handling before the merge commit; a failed attempt removes only a marker it created.
+                            fz_marker="$PROJECT_ROOT/.uncle/workflow/gitignore-frozen" fz_new=0
+                            [[ -e "$fz_marker" || -L "$fz_marker" ]] || fz_new=1
+                            PYTHONPATH="$ROOT/scripts/lib" python3 -c 'import sys, uncle_gitignore; sys.exit(0 if uncle_gitignore.freeze(sys.argv[1]) else 1)' "$PROJECT_ROOT" 2>/dev/null \
+                                || { echo "Warning: could not record the .gitignore freeze marker; .gitignore stays read-only for this run."; export UNCLE_GITIGNORE_FROZEN=1; }
+                            worktree_merge_finish_all "uncle: $(git branch --show-current | sed 's|^[^/]*/||; s|-| |g')"
+                        then
                             extras_reason=merged-local
                         else
+                            [[ "$fz_new" == 1 && -f "$fz_marker" && ! -L "$fz_marker" ]] && rm -f "$fz_marker"
                             echo "Not merged: $WORKTREE_MERGE_FAILURE."
                             extras_reason=local-merge-failed merge_failed=1
                         fi

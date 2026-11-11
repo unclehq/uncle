@@ -1965,6 +1965,15 @@ def handoff(j):
             raise ValueError('Published SHA mismatch; rerun FINAL_AUDIT.')
         j['phase'] = 'published'
         save(j)
+        # Published: freeze .gitignore handling so later uncle runs cannot dirty the tree the PR holds.
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import uncle_gitignore
+            if not uncle_gitignore.freeze('.'):
+                raise OSError('marker not written')
+        except Exception as exc:
+            os.environ['UNCLE_GITIGNORE_FROZEN'] = '1'
+            print('Warning: could not record the .gitignore freeze marker (' + str(exc) + '); .gitignore stays read-only.', file=sys.stderr)
     validate(j)
     if remote_sha(j) != j['intended_head']:
         raise ValueError('Remote changed before PR creation; rerun FINAL_AUDIT.')

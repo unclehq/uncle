@@ -397,7 +397,15 @@ finalize_no_pr_worktree() {
     git -C "$dir" reset -q -- .uncle/workflow >/dev/null 2>&1 || true
     if ! git -C "$dir" diff --cached --quiet; then
         nfiles="$(git -C "$dir" diff --cached --name-only | wc -l | tr -d ' ')"
+        # Freeze .gitignore handling before the commit; remember whether this attempt created the marker so a failed commit can undo it.
+        fz_marker="$dir/.uncle/workflow/gitignore-frozen" fz_new=0
+        [[ -e "$fz_marker" || -L "$fz_marker" ]] || fz_new=1
+        if ! PYTHONPATH="$ROOT/scripts/lib" python3 -c 'import sys, uncle_gitignore; sys.exit(0 if uncle_gitignore.freeze(sys.argv[1]) else 1)' "$dir" 2>/dev/null; then
+            echo "Warning: could not record the .gitignore freeze marker in $dir; .gitignore stays read-only for this run."
+            export UNCLE_GITIGNORE_FROZEN=1
+        fi
         if ! git -C "$dir" commit -q -m "uncle: issue ${ISSUE_NUM:-0} change"; then
+            [[ "$fz_new" == 1 && -f "$fz_marker" && ! -L "$fz_marker" ]] && rm -f "$fz_marker"
             echo "Commit failed in $dir; nothing was removed."
             no_pr_report "$branch" kept "not switched" "$dir"; return 0
         fi

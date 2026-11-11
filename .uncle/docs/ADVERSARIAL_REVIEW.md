@@ -1,80 +1,72 @@
-## AR-001: A readable READY verdict with unreadable or malformed acceptance evidence has no defined outcome.
+## AR-001: Ignored marker failures contradict the unconditional post-commit protection.
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json §1 limits its explicit fallback to failures preventing verdict determination; §12 broadly promises Refs on parsing failure. CHANGE_SPEC.json §8 repeats the verdict-dependent condition. Implementations could silently treat unavailable acceptance rows as no blockers and close unfinished work.
-- Failure: A readable READY verdict with unreadable or malformed acceptance evidence has no defined outcome. Add: "Missing, unreadable, or malformed acceptance evidence yields Refs even when the verdict is READY, with an evidence-unavailable reason in Still open."
+- References: CHANGE_SPEC.json §4 forbids writes after finalize/publish, but §8 and CHANGE_PLAN.json §12 explicitly restore today's behavior on marker-write failure. This permits the original defect after a successful commit or push; resolve the guarantee versus best-effort conflict in both artifacts.
+- Failure: Ignored marker failures contradict the unconditional post-commit protection. Add: "If recording the freeze fails, subsequent and resumed workflow operations must suppress .gitignore writes rather than resume normalization."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: An explicit still-open audit finding has no clear precedence when acceptance rows pass.
+## AR-002: The tracked-file guarantee exceeds the planned .gitignore guard.
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json §1 includes audit findings saying "not closed" or "stays open", but its scope cuts permit removing that extraction. CHANGE_SPEC.json AC-2 requires those findings in the list, while SI-1 omits them from closure conditions. The same audit could therefore yield either Closes or Refs.
-- Failure: An explicit still-open audit finding has no clear precedence when acceptance rows pass. Add: "Any FINAL_AUDIT finding stating that the origin issue remains open forces Refs and appears in Still open, regardless of an otherwise eligible verdict; this behavior cannot be cut."
+- References: CHANGE_SPEC.json §4 says no uncle code path writes '.gitignore or any tracked file'; CHANGE_PLAN.json R-1 repeats this scope, while D-1 only guards uncle_gitignore.ensure(). Without additional coverage, implementation and verification can satisfy the mechanism while violating the stated requirement.
+- Failure: The tracked-file guarantee exceeds the planned .gitignore guard. Add: "Inventory every uncle writer of tracked files reachable after finalize or publish, and prevent those writes after that boundary."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Optional BLOCKED delivery rows can either prevent closure or be ignored under the current wording.
+## AR-003: Permitted scope cuts remove mandatory acceptance behavior.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 collects every BLOCKED row from Acceptance delivery but filters Acceptance gate rows to Required=YES. CHANGE_SPEC.json SI-1 and SB-2 specify required BLOCKED rows. This difference changes whether optional unfinished work prevents automatic closure.
-- Failure: Optional BLOCKED delivery rows can either prevent closure or be ignored under the current wording. Add: "Only required BLOCKED acceptance rows prevent closure; determine requiredness from the Required cell, treating an absent or unrecognized value as required in either table."
+- References: CHANGE_PLAN.json §18 permits cutting documentation and the stagegate.sh/from-issue.sh freeze calls. CHANGE_SPEC.json AC-3 requires both call sites and AC-5 requires the documentation; the scope-cut instructions and acceptance checklist cannot both govern completion.
+- Failure: Permitted scope cuts remove mandatory acceptance behavior. Add: "The finalize and merge freeze calls and the documentation update are required deliverables and cannot be cut without revising the approved acceptance criteria."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Refs caused solely by an override, release skip, or ineligible verdict has no defined Still open content.
+## AR-004: The reset boundary is undefined for a reused root, making preservation and renewed normalization ambiguous.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json §4 and SB-1 require a Still open list for unfinished work; CHANGE_PLAN.json §8 makes that section optional. Neither defines entries when there are no BLOCKED rows or extracted finding IDs. Code and tests could disagree on whether a bare Refs trailer satisfies the requirement.
-- Failure: Refs caused solely by an override, release skip, or ineligible verdict has no defined Still open content. Add: "Every Refs trailer includes Still open with available blocker IDs and a single-line reason for each applicable override, release skip, ineligible verdict, or unavailable verdict, even when no IDs exist."
+- References: CHANGE_PLAN.json §6-7 says the marker is 'never cleared by uncle' but also that fresh run state resets it; U-3 relies on that reset. CHANGE_SPEC.json S-6 requires reused worktrees after push to remain frozen, so starting a fresh run could either preserve protection or re-enable the prohibited write.
+- Failure: The reset boundary is undefined for a reused root, making preservation and renewed normalization ambiguous. Add: "A new run on the same project root preserves the freeze marker; creating fresh run state must not remove it."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: A readable READY verdict with missing or malformed acceptance evidence has no defined outcome, allowing parsers to mista
-
-- Severity: HIGH
-- References: CHANGE_PLAN.json §1 limits its explicit failure fallback to failures preventing verdict determination, while §12 broadly says parsing failures return Refs; CHANGE_SPEC.json SI-1 requires no required BLOCKED row. Resolve this difference and test READY with missing files and malformed tables so parsing changes cannot silently enable issue closure.
-- Failure: A readable READY verdict with missing or malformed acceptance evidence has no defined outcome, allowing parsers to mistake unknown status for no blockers. Add: “Missing, unreadable, or malformed acceptance evidence yields Refs even when the verdict is READY.”
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-006: Backward trailer scanning does not define what happens when trailing bullets or a Still open heading lack a valid refere
+## AR-005: A failed finalize or merge commit leaves normalization permanently disabled, changing retry behavior before any commit s
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §8, decision D-2, walks backward over blank lines, bullets and the Still open header before finding a reference line; CHANGE_SPEC.json AC-4 requires preservation. Specify atomic recognition and add regression cases for ordinary trailing lists, an unmatched Still open heading, and prose beginning “Refs ”.
-- Failure: Backward trailer scanning does not define what happens when trailing bullets or a Still open heading lack a valid reference trailer, risking changes to ordinary body content. Add: “Move trailing content only after recognizing a complete Closes/Refs origin trailer; otherwise preserve it verbatim before the attestation.”
+- References: CHANGE_PLAN.json §1 freezes before finalize/merge commits, while §6–7 says the marker is never cleared; CHANGE_SPEC.json S-4 preserves pre-freeze normalization. Neither defines commit failure or cancellation, so a rejected commit can suppress normalization on subsequent retries. Specify recovery and add a failed-commit retry regression test.
+- Failure: A failed finalize or merge commit leaves normalization permanently disabled, changing retry behavior before any commit succeeds. Add: "If a commit attempt fails, remove the freeze marker created by that attempt; preserve any marker that existed beforehand."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Newline stripping allows repository-derived Still open text to introduce closing keywords, defeating the Refs decision.
+## AR-006: Symlink refusal does not specify ancestor directories or the marker itself, allowing implementations that write outside
 
 - Severity: HIGH
-- References: CHANGE_SPEC.json §10 requires only single-line sanitization; CHANGE_PLAN.json §1 takes acceptance rows and FINAL_AUDIT findings into the Still open list. A source entry containing `Fixes owner/repo#123` remains single-line and can introduce an unintended issue-closing instruction into the PR body; constrain emitted entries and add an adversarial fixture.
-- Failure: Newline stripping allows repository-derived Still open text to introduce closing keywords, defeating the Refs decision. Add: "Render Still open entries using validated acceptance/finding IDs and fixed reason labels only; never copy repository-derived prose or arbitrary ID text into the trailer."
+- References: CHANGE_SPEC.json §10 explicitly refuses only symlinked `.uncle/workflow`, whereas AC-4 requires writes only inside that directory; CHANGE_PLAN.json D-1 merely says "refuses symlinks." A symlinked `.uncle` ancestor or marker leaf can redirect the write, so the plan must define refusal for the entire marker path.
+- Failure: Symlink refusal does not specify ancestor directories or the marker itself, allowing implementations that write outside the project. Add: "freeze() refuses symlinks at .uncle, workflow, and gitignore-frozen, and creates the marker without following links or truncating an existing target."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The READY verdict plus unreadable acceptance evidence case has no unambiguous test oracle.
-
-- Severity: HIGH
-- References: CHANGE_PLAN.json §1 limits fallback to failures preventing verdict determination, while §12 says parsing exceptions return Refs; CHANGE_SPEC.json §8 repeats the verdict qualification. A parser that silently ignores malformed tables could therefore pass the listed tests and emit Closes without establishing that required acceptance is complete.
-- Failure: The READY verdict plus unreadable acceptance evidence case has no unambiguous test oracle. Add: "If either acceptance document is missing, unreadable, or malformed, emit Refs even when the verdict is READY; test each failure independently."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: Audit-only open findings lack a defined closure oracle, and their extraction is both required and removable.
-
-- Severity: HIGH
-- References: CHANGE_PLAN.json §1 includes audit open-finding inputs, but 'Scope cuts under time pressure' permits removing their extraction; CHANGE_SPEC.json AC-2 requires those findings in the list while SI-1 omits them from closure conditions. The planned combined BLOCKED-row test cannot establish whether an audit-only open finding prevents Closes.
-- Failure: Audit-only open findings lack a defined closure oracle, and their extraction is both required and removable. Add: "A FINAL_AUDIT finding explicitly marked not closed or stays open forces Refs and inclusion of its ID, even without BLOCKED rows; this behavior cannot be cut and requires a standalone test."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-010: Conflicting journal and audit verdicts have no defined expected result for tests.
+## AR-007: An unwritable marker leaves post-publish tracked-file writes enabled despite the stated security guarantee.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json §15 allows the verdict from FINAL_AUDIT.md or journal state, whereas CHANGE_PLAN.json §1 specifies parsing FINAL_AUDIT.md and leaves helper selection to implementation. Independent implementers and test authors could choose different authorities and disagree about whether identical inputs should produce Closes.
-- Failure: Conflicting journal and audit verdicts have no defined expected result for tests. Add: "FINAL_AUDIT.md is the sole verdict authority; a missing, unreadable, or ambiguous audit verdict yields Refs regardless of journal state, with tests covering journal/audit disagreement."
+- References: CHANGE_SPEC.json §4 promises no uncle tracked-file writes after finalize/publish, but §8 and CHANGE_PLAN.json §12 explicitly restore today's behavior on marker-write failure. Permission errors or a refused symlink therefore bypass the protection; revise the failure policy and specify how subsequent processes preserve it.
+- Failure: An unwritable marker leaves post-publish tracked-file writes enabled despite the stated security guarantee. Add: "If freeze persistence fails, later ensure calls must remain read-only; inability to persist the marker must not restore tracked-file writes."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-008: Source-order checks cannot establish that publishing or finalizing actually freezes the correct root.
+
+- Severity: HIGH
+- References: .uncle/workflow/documents/CHANGE_PLAN.json §16 and CHANGE_SPEC.json AC-3 prescribe source-order checks plus a separate freeze()/ensure() fixture. Those checks can pass for unreachable calls, incorrect roots, or calls executed after failed pushes; replace source ordering as the primary AC-3 oracle with execution tests.
+- Failure: Source-order checks cannot establish that publishing or finalizing actually freezes the correct root. Add: "Disposable-fixture integration tests execute each freeze call site with mocked publishing and signing, verify the target root is frozen, and verify a failed push creates no marker."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: The missing-file case has no valid SHA-256 oracle, and the plan leaves its assertion ambiguous.
+
+- Severity: MEDIUM
+- References: .uncle/workflow/documents/CHANGE_SPEC.json AC-1 includes missing-file cases but specifies before/after SHA-256 comparisons; CHANGE_PLAN.json §16 likewise promises SHA-256 equality for missing files. Hashing an absent path fails, while treating absence as empty bytes can miss erroneous creation of an empty file; define separate existence and content assertions.
+- Failure: The missing-file case has no valid SHA-256 oracle, and the plan leaves its assertion ambiguous. Add: "For an initially absent .gitignore, assert it remains absent after each frozen API and CLI invocation; for existing files, compare bytes against the unchanged pre-invocation snapshot."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

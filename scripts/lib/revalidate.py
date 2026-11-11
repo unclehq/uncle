@@ -263,6 +263,11 @@ def write_plan(root, rows):
     os.replace(tmp, p)
 
 
+def driver_mode_flag(env):
+    """The one mode flag the change driver accepts for this run: --attended only when the launcher resolved an attended run."""
+    return '--attended' if env.get('UNCLE_ATTENDED') == '1' else '--unattended'
+
+
 def default_runner(stage, root):
     """Resume the change driver at STAGE with approval/attestation writers disabled.
     Returns 'pass', 'failed' or 'blocked'."""
@@ -270,21 +275,39 @@ def default_runner(stage, root):
     # Hand-off contract for the driver: UNCLE_REVALIDATE_RESUME=<stage to resume at> and
     # UNCLE_REVALIDATE_PLAN=<path to JSON {"rows":[{stage,action,reason}]}>; driver runs only
     # stages whose action is 'run', skips 'reuse'/'skip', stops (exit 75) at 'needs-review'.
+    # No-UI is an environment setting, not a driver flag: the driver rejects `--noui` as an unknown argument. The mode flag is
+    # the one the launcher resolved (`--attended` sets UNCLE_ATTENDED); the driver accepts only these two.
     env = dict(os.environ, UNCLE_REVALIDATE='1', UNCLE_REVALIDATE_STAGE=stage, UNCLE_REVALIDATE_RESUME=stage,
-               UNCLE_REVALIDATE_PLAN=str(plan_path(root)))
+               UNCLE_REVALIDATE_PLAN=str(plan_path(root)), UNCLE_NOUI='1')
     driver = Path(__file__).resolve().parent.parent / 'change-workflow.sh'
     before = _snapshot(root)
     try:
         state.write_text(stage + '\n')
-        rc = subprocess.run(['bash', str(driver), '--noui'], cwd=root, env=env).returncode
+        rc = subprocess.run(['bash', str(driver), driver_mode_flag(env)], cwd=root, env=env).returncode
     except OSError:
         return 'failed'
     if _snapshot(root) != before:
         print('revalidate: approval/attestation files changed during %s (violation)' % stage, file=sys.stderr)
         return 'failed'
     if rc == 0:
-        return 'pass'
+        # Exit 0 alone is not a pass: the driver also exits 0 after reopening a gate whose approval no longer matches ("re-run the
+        # driver to review it"), having run nothing. It empties revalidate-pending.txt only as each run-marked stage finishes, so
+        # the stage passed only if that file exists and no longer lists it.
+        return 'pass' if _stage_completed(stage, root) else 'failed'
     return 'blocked' if rc == 3 else 'failed'
+
+
+def _stage_completed(stage, root):
+    pending = Path(root) / '.uncle' / 'workflow' / 'revalidate-pending.txt'
+    try:
+        remaining = [line.strip() for line in pending.read_text().splitlines() if line.strip()]
+    except OSError:
+        return False        # the driver never reached the revalidation hand-off: nothing says the stage ran
+    if stage in remaining:
+        print('revalidate: the driver stopped before running %s (a gate was reopened or an approval is missing)' % stage,
+              file=sys.stderr)
+        return False
+    return True
 
 
 def run(root, dry_run=False, runner=None, out=sys.stdout):
@@ -330,9 +353,13 @@ def _attestation_line(root, out):
     """Informational only: never affects reuse and never writes."""
     verify = Path(__file__).resolve().parent.parent / 'uncle-verify.py'
     try:
-        r = subprocess.run([sys.executable, '-B', str(verify), str(root)], capture_output=True, text=True, timeout=120)
+        # From the project's own directory: a positional argument to the verifier names a PR, not a path.
+        r = subprocess.run([sys.executable, '-B', str(verify)], cwd=str(root), capture_output=True, text=True, timeout=120)
         lines = (r.stdout or r.stderr).strip().splitlines()
-        print('attestation: ' + (lines[-1] if lines else 'exit %d' % r.returncode), file=out)
+        # The verdict is a line of its own; the verifier may print an explanation after it, so the last line is not it.
+        verdict = next((l.strip() for l in reversed(lines)
+                        if l.strip() in ('VERIFIED', 'NOT VERIFIED', 'NOT HUMAN VERIFIED') or l.startswith('INTEGRITY ONLY')), None)
+        print('attestation: ' + (verdict or (lines[-1] if lines else 'exit %d' % r.returncode)), file=out)
     except Exception as e:
         print('attestation: unavailable (%s)' % e, file=out)
 

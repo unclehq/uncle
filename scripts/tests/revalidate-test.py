@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -173,6 +174,114 @@ class RevalidateApi(unittest.TestCase):
             self.assertNotIn('NOT_A_STAGE', self._rows(root))
             with self.assertRaises(Exception):
                 rv.fingerprint('NOT_A_STAGE', root)
+
+
+class DefaultRunnerArguments(unittest.TestCase):
+    """default_runner started the driver with `--noui`, which change-workflow.sh rejects as an unknown argument, so the first stage
+    that actually had to run failed before doing anything (found by the PR's own manual check). A stub runner never sees the
+    driver's parser; these feed the runner's real arguments to it."""
+    DRIVER = Path(__file__).resolve().parents[1]/'change-workflow.sh'
+
+    def argv_used(self, env_extra):
+        from unittest import mock
+        captured = {}
+
+        def fake(argv, **kwargs):
+            captured['argv'], captured['env'] = argv, kwargs.get('env', {})
+            return subprocess.CompletedProcess(argv, 0)
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            with mock.patch.object(rv.subprocess, 'run', side_effect=fake), \
+                    mock.patch.dict(rv.os.environ, env_extra, clear=False):
+                rv.default_runner('PLAN', root)
+        return captured['argv'], captured['env']
+
+    def test_the_driver_accepts_every_argument_default_runner_passes(self):
+        argv, _ = self.argv_used({'UNCLE_ATTENDED': ''})
+        self.assertNotIn('--noui', argv)
+        # The driver parses its arguments in order, so a trailing --help proves every earlier one was accepted.
+        # Run it inside a throwaway project with the run policy off: the driver acts on its working directory before it parses.
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            env = {k: v for k, v in os.environ.items() if not k.startswith(('UNCLE_', 'WORKFLOW_'))}
+            env.update(UNCLE_PROJECT_ROOT=str(root), UNCLE_RUN_POLICY='off', UNCLE_NOUI='1')
+            done = subprocess.run(['bash', str(self.DRIVER), *argv[2:], '--help'], cwd=root, env=env,
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn('Unknown argument', done.stderr)
+
+    def test_no_ui_travels_in_the_environment(self):
+        _, env = self.argv_used({})
+        self.assertEqual(env.get('UNCLE_NOUI'), '1')
+
+    def test_an_attended_run_passes_attended_and_otherwise_unattended(self):
+        self.assertEqual(self.argv_used({'UNCLE_ATTENDED': '1'})[0][2:], ['--attended'])
+        self.assertEqual(self.argv_used({'UNCLE_ATTENDED': ''})[0][2:], ['--unattended'])
+
+
+class DriverExitIsNotAPass(unittest.TestCase):
+    """The driver exits 0 after reopening a gate whose approval no longer matches, having run nothing; default_runner recorded
+    that as a pass. A stage passed only if the driver's own pending list no longer names it."""
+
+    def run_with_pending(self, pending_text):
+        from unittest import mock
+
+        def fake(argv, **kwargs):
+            if pending_text is not None:
+                (Path(kwargs['cwd'])/'.uncle/workflow/revalidate-pending.txt').write_text(pending_text)
+            return subprocess.CompletedProcess(argv, 0)
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            with mock.patch.object(rv.subprocess, 'run', side_effect=fake):
+                return rv.default_runner('PLAN', root)
+
+    def test_exit_0_with_the_stage_still_pending_is_a_failure(self):
+        self.assertEqual(self.run_with_pending('PLAN\n'), 'failed')
+
+    def test_only_this_stage_being_listed_as_pending_makes_it_a_failure(self):
+        self.assertEqual(self.run_with_pending('IMPLEMENT\n'), 'pass')
+
+    def test_exit_0_with_the_pending_list_emptied_is_a_pass(self):
+        self.assertEqual(self.run_with_pending(''), 'pass')
+
+    def test_exit_0_when_the_driver_never_wrote_a_pending_list_is_a_failure(self):
+        self.assertEqual(self.run_with_pending(None), 'failed')
+
+
+class AttestationLine(unittest.TestCase):
+    """The attestation line reports the verifier's verdict, not whatever line it printed last (it prints an explanation after
+    a NOT VERIFIED verdict, which used to surface as `attestation: then run uncle verify again.`)."""
+
+    def line(self, stdout, returncode=1):
+        import io
+        from unittest import mock
+        done = subprocess.CompletedProcess([], returncode, stdout=stdout, stderr='')
+        out = io.StringIO()
+        with mock.patch.object(rv.subprocess, 'run', return_value=done):
+            rv._attestation_line('.', out)
+        return out.getvalue().strip()
+
+    def test_verdict_before_an_explanation_block_is_the_one_reported(self):
+        text = ('UNCLE CHANGE VERIFICATION\n\n\u2717 head tree does not match\n\nNOT VERIFIED\n\n'
+                'This change could not be verified.\nReasons:\n  - head tree does not match\n\n'
+                'Fix the failed checks listed above, then run uncle verify again.')
+        self.assertEqual(self.line(text), 'attestation: NOT VERIFIED')
+
+    def test_each_verdict_form_is_recognised(self):
+        for verdict in ('VERIFIED', 'NOT HUMAN VERIFIED', 'INTEGRITY ONLY \u2014 SIGNATURE PRESENT BUT UNTRUSTED'):
+            self.assertEqual(self.line('checks\n\n%s\n' % verdict, 0), 'attestation: ' + verdict)
+
+    def test_output_with_no_verdict_falls_back_to_its_last_line(self):
+        self.assertEqual(self.line('something odd\nlast words'), 'attestation: last words')
+
+    def test_the_real_verifier_run_in_a_project_prints_a_verdict(self):
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            root = make_project(d)
+            out = io.StringIO()
+            rv._attestation_line(root, out)
+            self.assertRegex(out.getvalue(), r'^attestation: (NOT VERIFIED|NOT HUMAN VERIFIED|VERIFIED|INTEGRITY ONLY|[A-Za-z]).*')
+            self.assertNotIn('then run uncle verify again', out.getvalue())
 
 
 class RevalidateAudit(unittest.TestCase):

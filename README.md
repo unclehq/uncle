@@ -199,6 +199,7 @@ In attended mode, Uncle shows you the audited diff and asks for approval before 
 
 * [Quickstart](docs/quickstart.md) and [Prerequisites](PREREQUISITES.md)
 * [Verifying a change](docs/verify.md): `uncle verify`, signing, checks and exit codes
+* [Revalidating a change](docs/revalidate.md): `uncle --revalidate`, which stages can be reused after an edit
 * [Running without the TUI](docs/noui.md): `--noui`, exit codes, signals
 * [Supervision and recovery](docs/supervision.md): supervision settings, triage, the home chat agent, stdin input
 * [Two issues on one project](docs/worktrees.md): git worktrees

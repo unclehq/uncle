@@ -70,6 +70,7 @@ Usage: uncle [-h|--help|--performance|--runs] [--attended] [--noui]
        uncle --issue [ISSUE] [--attended]
        uncle --change-request [--attended] < request.md
        uncle --audit [BRANCH]
+       uncle --revalidate [--attestation PATH] [--tree TREE] [--dry-run]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -132,6 +133,10 @@ a gate or needs a signed commit; 130/143 interrupted by SIGINT/SIGTERM.
 UNCLE_SKIP_UPGRADE=1 skips the interactive startup upgrade check.
 verify runs the standalone attestation verifier (scripts/uncle-verify.py) in
 the directory you invoked uncle from; exit 0 only for VERIFIED.
+--revalidate compares the project with its attestation and reports, per stage,
+whether it can be reused or must be re-run (a README-only change re-runs nothing).
+It reads and reports only: exit 0 every stage reusable; 1 something must be re-run;
+2 no attestation to compare with.
 EOF
 }
 
@@ -241,7 +246,7 @@ for _a in "$@"; do
         if [[ -n "$_a" && "$_a" != -* ]]; then continue; fi
     fi
     case "$_a" in
-        -h|--help|verify|--performance|--runs)
+        -h|--help|verify|--revalidate|--performance|--runs)
             if [[ "$_audit_n" -eq 0 ]]; then break; fi
             _audit_other=$((_audit_other + 1)) ;;
         --audit) _audit_n=$((_audit_n + 1)); _skip=1 ;;
@@ -269,6 +274,8 @@ while [[ $# -gt 0 ]]; do
         -h|--help)     usage; exit 0 ;;
         # The verifier reads the caller's checkout, not the install dir.
         verify)        shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/uncle-verify.py" "$@" ;;
+        # Reads the caller's checkout and attestation; never starts a driver, a model call or the TUI.
+        --revalidate)  shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/lib/revalidate.py" "$@" ;;
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
         --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
         --audit)
@@ -383,7 +390,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request --audit verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request --audit --revalidate verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else

@@ -1,75 +1,61 @@
 # Baseline report
 
-Omitted sections: Reproduction result (the live failure is chat-side and outside this repo; not reproducible here); Existing failures (none documented in-repo beyond the Python-suite note below)
+Omitted sections: Reproduction (live-only, recorded in CHANGE_REQUEST.md); Current API/schema contracts (none touched); Existing failures (none documented in repo, driver baseline is authority)
 
 ## 1. Change-request summary
-Issue 251 (CHANGE_REQUEST.md). Hosted builds give no preview link because three parts live OUTSIDE this repository: (a) the release's script-publisher grant for `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, (b) the build script's link request / sandbox keep (#207, #208, #235 step 3), (c) the end-to-end live proof (#235 checks 1-5). Host side already works; `UNCLE_PREVIEW_HOST` default stays `127.0.0.1`.
+See `.uncle/docs/CHANGE_REQUEST.md` (Issue 252): hosted chat agent says previews are impossible because no rule says a hosted build ends with a preview link.
 
 ## 2. Repository architecture
-Shell drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) source `scripts/lib/host_preview_hook.sh`, which calls Python `scripts/lib/host_preview.py`. Skill text for the hosted chat Employee lives in `skills/uncle-build/SKILL.md`.
+Chat skill is a Markdown file `skills/uncle-build/SKILL.md` (front matter + numbered rules). Its text is checked by a pure-function checker in `scripts/tests/chat-skill-test.py`. The release's own chat instructions live outside this repo.
 
 ## 3. Relevant code paths
-- `scripts/lib/stage-config.sh:47-51` hosted mode defaults `UNCLE_PREVIEW_MODE=host`.
-- `scripts/stagegate.sh:7076`, `scripts/change-workflow.sh:5124` call `uncle_host_preview_hook` at COMPLETE.
-- `scripts/lib/host_preview_hook.sh:7-17` stops live preview, runs `host_preview.py serve`, ignores failures.
-- `scripts/lib/host_preview.py:217` binds `UNCLE_PREVIEW_HOST` (default 127.0.0.1); `:290-301` `serve` prints `UNCLE_PREVIEW_PORT=<n>`, exits 0.
-- `skills/uncle-build/SKILL.md` rules 1-6 (relay `Preview:` line; warning-page rule is rule 6).
-- `grep signed-preview-url` over the repo (excluding .git/.uncle) finds no file: no grant, release definition or link code exists here.
+- `skills/uncle-build/SKILL.md:3` description says link is reported *after* the build script.
+- `skills/uncle-build/SKILL.md:8-17` rules 1-6, all post-build.
+- `scripts/tests/chat-skill-test.py:17-32` `REQUIRED` patterns; `:85-86` requires rules numbered exactly 1-6; `:31` warning-page regex anchors on `^6\.`; `:185-188` and `:190-204` repeat the 1-6 assumption; `:13` MAX_BODY_LINES=60 (body now ~8 lines).
+- `scripts/tests/chat-skill-test.py:1` suite is not in the default tier (run with `-- chat-skill`); `:99-102` asserts it stays out of `critical-suites.txt`.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | COMPLETE in hosted mode | host_preview serve starts app, prints `UNCLE_PREVIEW_PORT=<n>`, exit 0 | host_preview.py:290-301 | Yes |
-| B-2 | Host preview failure | Ignored; run completes | host_preview_hook.sh:15-16 | Yes |
-| B-3 | Non-host mode | Hook does nothing | host_preview_hook.sh:9 | Yes |
-| B-4 | Default bind | 127.0.0.1 | host_preview.py:217 | Yes |
-| B-5 | Build output has `Preview:` line | Skill tells Employee to relay verbatim as plain/Markdown link | SKILL.md rules 1-6 | Yes |
-| B-6 | Hosted hire asked for preview link | No link possible; no grant/script change shipped | CHANGE_REQUEST live test | No (fixed outside repo) |
+| B-1 | Person asks for preview link before any build | Agent says previews are not possible, requires GitHub repo | CHANGE_REQUEST.md live test | No (the bug) |
+| B-2 | Build output has `Preview:` line | Rules 1-5 relay link plain, with expiry, no tab promise | SKILL.md:12-16 | Yes |
+| B-3 | Host warning page | Rule 6 tells person to continue past it | SKILL.md:17 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Host preview hook never fails the driver run | `|| true`, `return 0` in hook | shell suites for host preview (not enumerated; driver baseline) | Medium |
-| I-2 | Host mode only on exact lowercase `UNCLE_PREVIEW_MODE=host` | host_preview.py mode-check | same | Medium |
-| I-3 | Preview link is relayed only from the build output, http(s) only | SKILL.md rules 4-5 | two tests from PR #241 | Medium |
-
-## 6. Current API, schema, interface contracts
-`host_preview.py serve <dir>` stdout `UNCLE_PREVIEW_PORT=<n>`; `.uncle/preview.json`; env `UNCLE_PREVIEW_HOST/PORT/MODE`. Daytona signed-link API (external, observed in the issue): `expiresInSeconds` integer 1-3600 else 400; expire endpoint exists.
+| I-1 | Skill passes all REQUIRED patterns, only placeholder URLs, none in code formatting | `check()` chat-skill-test.py:57 | `test_real_skill_passes_every_rule` | High |
+| I-2 | No forbidden promise phrases (tab opens automatically etc.) | FORBIDDEN list :35 | `test_forbidden_promises_absent` | High |
+| I-3 | Body <= 60 lines; front matter has name and description | :67, :64 | `test_front_matter_and_length` | High |
+| I-4 | Rules numbered 1-6 in order; rule 6 is the warning-page rule | :84-86, :31 | `test_warning_rule_is_rule_6_and_body_within_cap` | High |
 
 ## 7. Existing automated-test coverage
-Shell suites via `scripts/run-shell-tests.sh` (default tier `scripts/tests/critical-suites.txt`); Python suites `scripts/tests/*-test.py` via `scripts/run-python-tests.sh`. Groups 1 and 2 use separate temp dirs and bind no shared ports (per runner guidance), so they run in parallel. Command 3 runs the new suite explicitly; it does not exist before the change and is expected to fail at baseline.
+`chat-skill-test.py` has file-text checks and defect-injection variants. It checks text only, not that a chat agent follows it. No chat-level test exists. The Python suite and shell suites use separate temp dirs.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (both exist). No results produced here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Known: some Python suites already fail on a clean checkout.
+Commands from CLAUDE.md-style Uncle conventions: `scripts/run-python-tests.sh` and `scripts/run-shell-tests.sh` exist. Default Python tier excludes chat-skill, so it is listed explicitly. No results run here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout.
 
 ## 12. Likely change surface
-In-repo: a new pure release-grant checker plus its test and a short handoff doc. Out-of-repo (not changeable here): release definition, build script.
+`skills/uncle-build/SKILL.md`; `scripts/tests/chat-skill-test.py`. Release instructions (external) need a matching edit.
 
 ## 13. Regression-sensitive components
-`host_preview.py`, `host_preview_hook.sh`, `skills/uncle-build/SKILL.md`, `critical-suites.txt`.
+Rule numbering (checker hardcodes 1-6, rule 6 regex); FORBIDDEN phrases (new wording must avoid 'will open', 'opens a tab' etc.); non-placeholder URL check (no real URLs in the skill).
 
 ## 14. Outside the change
-Host preview code, hook, SKILL.md, `UNCLE_PREVIEW_HOST` default, Daytona host, chat-side repo-request gap (filed separately).
+Build script, preview hosting, release grant (#251), warning-page behavior, Python/shell suites other than chat-skill.
 
 ## 15. Unknowns and assumptions
-- U-1 Release definition format is unknown and not in repo; checker must be format-tolerant (walk JSON for matching objects). UNRESOLVED until a real definition is supplied.
-- U-2 Build script repository and release publishing need access this workflow lacks.
-- U-3 Live checks need a real hosted build.
+- Release instructions are not in this repo; their edit and publish cannot be verified here.
+- Decision 3(a) vs (b) from the request is not yet confirmed by the human.
 
 ## 16. Initial risk assessment
-High: the issue's real fixes cannot be performed or verified from this repo; completing in-repo work must not be read as closing the issue. Low: regression risk to existing code (additive files only).
+Low code risk (text + test). Medium behavioral risk: skill text may not override release instructions that say every build ends in a PR.
 
 ## Exact build and test commands executed
 
 ```sh
-bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- release-grants
-```
-
-## Parallel verification groups
-
-```text
-1 2
+bash scripts/run-python-tests.sh -- chat-skill
+bash scripts/run-shell-tests.sh
 ```
 

@@ -1,64 +1,64 @@
-## AR-001: The scope-cut policy permits dropping tests that AC-2 explicitly requires, allowing completion without required verifica
+## AR-001: The unconditional PR delivery promise conflicts with sandbox builds and optional publishing.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §21 allows cutting negative cases beyond missing grant/require_approval. CHANGE_SPEC.json AC-2 requires each listed case to assert nonzero exit and reason text, including wrong publisher/method/path, invalid JSON, and missing file.
-- Failure: The scope-cut policy permits dropping tests that AC-2 explicitly requires, allowing completion without required verification. Replace it with: “All AC-2 cases remain mandatory; time pressure may defer completion but must not remove their verification.”
+- References: CHANGE_PLAN.json step-2 requires saying 'a pull request and a link to try the app' while deferring PRs for builds without a repository; CHANGE_SPEC.json AC-2 and AC-3 repeat these competing requirements. The user's publishing instruction makes PR creation optional, so repository selection alone cannot make a PR a guaranteed deliverable.
+- Failure: The unconditional PR delivery promise conflicts with sandbox builds and optional publishing. Add: "Describe a build as providing a link to try the app; promise a pull request only when a repository is named and the user separately authorizes publishing."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: The preservation check does not specify evidence covering pre-existing changes and untracked files.
+## AR-002: The scope-cut policy permits dropping mandatory acceptance behavior.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json traceability AC-4 uses a “git diff check,” and implementation step 3 merely says to confirm no edits outside the table. The binding user instructions require file snapshots including untracked files; Git diff alone cannot establish preservation relative to the starting workspace.
-- Failure: The preservation check does not specify evidence covering pre-existing changes and untracked files. Add: “Snapshot protected inputs before changes and protected test paths immediately before checks, using hashes and path inventories including untracked files; compare afterward without refreshing either snapshot.”
+- References: CHANGE_PLAN.json section 'Scope cuts under time pressure' permits cutting SB-2 wording, but CHANGE_SPEC.json AC-2 requires that wording and its removal variant to be rejected. Following the cut would leave implementation and acceptance checks enforcing different scopes.
+- Failure: The scope-cut policy permits dropping mandatory acceptance behavior. Add: "SB-2 wording and all tests required by AC-1 through AC-5 remain mandatory under time pressure; defer completion rather than remove them."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Malformed JSON has no unambiguous exit code: it can mean invalid grant input or unreadable input.
+## AR-003: The new unconditional link promise conflicts with preserved failure handling.
 
-- Severity: MEDIUM
-- References: CHANGE_PLAN.json §8 assigns exit 1 to “grant missing/invalid” and exit 2 to “usage/unreadable,” without assigning JSON parse failures. CHANGE_SPEC.json AC-2 and §8 require only a nonzero result, leaving implementation and tests free to choose different classifications.
-- Failure: Malformed JSON has no unambiguous exit code: it can mean invalid grant input or unreadable input. Add: “Malformed JSON exits 2 with a sanitized one-line stderr reason; syntactically valid JSON without a matching grant exits 1.”
+- Severity: HIGH
+- References: CHANGE_PLAN.json step-2 says to end no-repository builds with the link; section 7 preserves the no-link rule. CHANGE_SPEC.json SB-4 and section 8 preserve handling when no link is produced. Without explicit precedence, the new first rule can regress truthful reporting on failed or malformed output.
+- Failure: The new unconditional link promise conflicts with preserved failure handling. Add: "If a sandbox or hosted build produces no valid Preview line, the existing no-link and malformed-output rules take precedence; never invent a link or promise that this run produced one."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: The regression checks do not define immutable file evidence, so Git diff can miss changes to untracked protected inputs.
+## AR-004: Line-removal tests cannot independently protect three behaviors placed on one new rule line.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §17 specifies pre/post suite comparison, §Implementation sequence step 3 says to confirm no edits outside the table, and CHANGE_SPEC.json AC-4 uses Git diff as preservation evidence. These omit the required snapshot procedure and leave implementation and review free to use different preservation checks; adopt the proposed sentence to make regression evidence reproducible.
-- Failure: The regression checks do not define immutable file evidence, so Git diff can miss changes to untracked protected inputs. Add: "Snapshot protected inputs before implementation and protected test paths immediately before checks, using hashes and inventories including untracked files; compare afterward without refreshing either snapshot."
+- References: CHANGE_PLAN.json sections 1 and 10 place SB-1..SB-3 in rule 1 but specify defect tests that drop lines by needle. Removing that shared line erases all three behaviors, so redundant or overly broad patterns can pass the defect tests while accepting an individual behavior's removal.
+- Failure: Line-removal tests cannot independently protect three behaviors placed on one new rule line. Add: "For each new REQUIRED ID, mutate only its corresponding clause while preserving the other two clauses and numbering, and assert rejection naming that ID."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Duplicate JSON keys have no defined handling, so conflicting approval values could pass the checker while another consum
+## AR-005: The time-pressure cuts permit dropping required behavior and its regression protection.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §8 and R-1 specify JSON input and recursive matching but no duplicate-key policy; CHANGE_SPEC.json I-5 requires exact matching. An object containing both require_approval:true and require_approval:false can be accepted or rejected depending on parser precedence, undermining the pre-publish security check.
-- Failure: Duplicate JSON keys have no defined handling, so conflicting approval values could pass the checker while another consumer interprets them differently. Add: “Reject duplicate keys in every JSON object with a nonzero exit and a fixed diagnostic that contains no input values.”
+- References: CHANGE_PLAN.json section 16 permits cutting the previews-impossible defect test and then SB-2 wording, while section 10 requires that test. CHANGE_SPEC.json AC-2 requires the PR-and-link wording and SI-3 prohibits denying preview availability; the cuts allow implementation and verification to target different requirements.
+- Failure: The time-pressure cuts permit dropping required behavior and its regression protection. Add: "SB-2 wording and the previews-impossible defect test are mandatory and may not be cut without revising and reapproving the specification."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: The planned cases do not distinguish JSON false from Python-equal values such as 0, allowing a checker that violates exa
+## AR-006: Whole-line deletion removes all three new requirements together, leaving partial omissions untested.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json I-5 requires every field to match exactly; CHANGE_PLAN.json §16 tests require_approval true and absent but no other types. These cases are necessary to detect an implementation using equality with False rather than a boolean identity check.
-- Failure: The planned cases do not distinguish JSON false from Python-equal values such as 0, allowing a checker that violates exact matching to pass. Add: “Tests must reject require_approval values 0, null, "false", arrays, and objects; only JSON boolean false qualifies.”
+- References: CHANGE_PLAN.json §10 specifies dropping lines by needle; implementation step 2 puts all three behaviors in rule 1. These mutations cannot establish that the checker rejects omission of expiry, the preview-request response, sandbox execution, or the deferred PR offer individually.
+- Failure: Whole-line deletion removes all three new requirements together, leaving partial omissions untested. Add: “Independently mutate each required clause of AC-1 through AC-3 while preserving the other clauses, and assert rejection by its corresponding requirement ID.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: The scope-cut rule permits dropping tests explicitly required by AC-2, so completion has conflicting test requirements.
+## AR-007: The description change has no specified behavioral assertion.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §21 permits cutting negative cases beyond missing grant/require_approval, while CHANGE_SPEC.json AC-2 requires verification of wrong publisher/method/path, invalid JSON, and missing file, with each case asserting nonzero status and reason text. Following the cut rule would remove required defect witnesses.
-- Failure: The scope-cut rule permits dropping tests explicitly required by AC-2, so completion has conflicting test requirements. Replace it with: “All AC-1 and AC-2 cases are mandatory and cannot be cut under time pressure.”
+- References: CHANGE_SPEC.json SB-6 and AC-4 require expanding the description, but CHANGE_PLAN.json §10 and step 1 specify no corresponding checker change. The supplied scripts/tests/chat-skill-test.py:107–111 only checks that description is nonempty, so the original description would still pass.
+- Failure: The description change has no specified behavioral assertion. Add: “Check that the description covers offering a preview before a build and reporting it afterward; reject a variant restoring the original after-only description.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Invalid JSON has no unambiguous exit-code classification, and nonzero-only assertions cannot enforce the CLI contract.
+## AR-008: Sequential numbering does not prove the preview-offer rule occupies rule 1.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §8 assigns 1 to missing/invalid grants and 2 to usage/unreadable input without classifying malformed JSON; §12 requires one-line stderr reasons. CHANGE_SPEC.json SB-1 requires OK output, but AC-2 specifies only nonzero status and reason text, leaving incompatible CLI implementations able to satisfy the planned checks.
-- Failure: Invalid JSON has no unambiguous exit-code classification, and nonzero-only assertions cannot enforce the CLI contract. Add: “Malformed JSON exits 2; parsed JSON without a qualifying grant exits 1; tests assert exact exit codes, OK on successful stdout, and one-line failure reasons on stderr.”
+- References: CHANGE_SPEC.json SI-2 explicitly requires the new offer-preview rule to be rule 1. CHANGE_PLAN.json §10 specifies numbering 1–7 and a rule-7 warning regex, but no rule-1 content anchor; the supplied checker at scripts/tests/chat-skill-test.py:76–78 searches REQUIRED patterns anywhere in the body.
+- Failure: Sequential numbering does not prove the preview-offer rule occupies rule 1. Add: “Require the offer-preview content within numbered rule 1 and reject a variant that swaps it with another rule while retaining sequential numbering.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

@@ -201,9 +201,12 @@ def new_watch_state():
     return {"seen_preview": None, "emitted_app_urls": set(), "launch_printed": False}
 
 
-def _scan_announcements(root, state):
-    """Return new 'Preview:'/'App:' lines from the driver's state files (read-only)."""
+def _scan_announcements(root, state, env=None):
+    """Return new 'Local preview:'/'App:' lines from the driver's state files (read-only).
+
+    In a hosted run the loopback preview is never announced; the host's signed link is the only Preview line."""
     lines = []
+    hosted = headless_preview.hosted_run(env)
     try:
         base = os.path.join(root, ".uncle", "workflow")
         for name in ("preview-server", "app-server", "preview-vite"):
@@ -213,9 +216,11 @@ def _scan_announcements(root, state):
             if not url:
                 continue
             if name == "preview-server":
+                if hosted:
+                    continue
                 if url != state["seen_preview"]:
                     state["seen_preview"] = url
-                    lines.append("Preview: %s\n" % _one_line(url))
+                    lines.append("Local preview: %s\n" % _one_line(url))
             elif url not in state["emitted_app_urls"]:
                 state["emitted_app_urls"].add(url)
                 lines.append("App: %s\n" % _one_line(url))
@@ -473,7 +478,7 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
         preview.poll()
         if now >= next_scan and writer.at_start and not acc:
             next_scan = now + POLL_SECONDS
-            announce(_scan_announcements(root, watch))
+            announce(_scan_announcements(root, watch, env))
         if eof and eof_err and (not stdin_open or proc.poll() is not None):
             break
     # reap, still honoring a late signal; ignore repeats
@@ -491,7 +496,7 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
     after = []
     if classify_exit(rc, received[0] if received else 0, completed) == 0:
         after = preview.finish()
-    final = _scan_announcements(root, watch) + after
+    final = _scan_announcements(root, watch, env) + after
     launch = _launch_line(root, watch)
     if launch:
         final.append(launch)

@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 248
+Issue 253
 
-Seeded from [unclehq/uncle#248](https://github.com/unclehq/uncle/issues/248).
+Seeded from [unclehq/uncle#253](https://github.com/unclehq/uncle/issues/253).
 
 ## Change Type
 
@@ -10,42 +10,58 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Record the exact command, environment and output with each verification result, and let review rerun it
+--noui prints its own Preview: lines with 127.0.0.1 links in hosted builds, and the chat rules tell the agent to relay them
 
 ## Motivation
 
-## Problem
+## Summary
 
-Uncle's attestation says *what* each verification command returned, but not enough to show the result came from the command and tree it names, or to let a reviewer confirm it without trusting our word. A captured test run can show `exit=0` that is really the exit code of a `tail` or `tee` the output was piped through, and the record looks the same whether the tests passed or not. Uncle should make that class of mistake impossible to miss and cheap to check.
+Since #246 (PR #247) and `e3b0967`, both merged on 2026-11-11, a `--noui` build prints its own `Preview:` lines. One holds a local `http://127.0.0.1:<port>/` address; another reads "the server (pid N) keeps running …; stop it earlier with: kill N". Neither checks hosted mode.
 
-## What Uncle does today (read at `main`)
+In a hosted build, `Preview:` is the line the chat agent relays to the person. `skills/uncle-build/SKILL.md` rule 1 says to relay every `Preview:` line, and rule 5 allows any `http` link. So if a hosted `--noui` build's output reaches the chat, the person gets a `127.0.0.1` link that can't open on their computer, next to (or instead of) the real signed link. The same check also starts a second preview server, besides the one host mode already left running.
 
-- `scripts/lib/green-check.sh` runs each approved command as `bash -o pipefail -c "$cmd"`, then writes `<status>\t<command>` to `green-check.tsv`. Good. But the command is wrapped by `shell_syntax.py` and `run_check.py` first, and the pipefail guarantee is only visible in `shell_syntax.py`'s own branch. Nothing tests that a piped command such as `false | tail` fails through the wrappers.
-- `scripts/lib/build_attestation.py` writes a stage as `unavailable`, never `pass`, when it has no record. Good, and this is the rule worth keeping. It does not cover a check that ran but whose exit status is not trustworthy.
-- The `verification` envelope records a summary string (`N commands: X pass, Y pre-existing, Z regressed`), the tree hash as `inputs.artifact`, and a digest of `green-check.tsv` plus `AUTOMATED_TEST_REPORT.md`.
-- `verification` is a driver-written claim. `uncle verify` checks the signature and hashes; it does not run the commands again.
+## How it happens
 
-## Gaps
+1. Hosted mode sets `UNCLE_PREVIEW_MODE=host` (`scripts/lib/stage-config.sh:47-51`). The finished app is served by `host_preview.py serve`, and the build script asks the host for a signed link to that port (#206, #207).
+2. With `--noui`, `uncle_headless.py` polls the driver's state files and turns the preview server's URL into `Preview: <url>` (`scripts/lib/uncle_headless.py:204-224`). The only URLs it accepts are loopback ones: `_URL_RE` is `^https?://(127\.0\.0\.1|localhost|\[::1\])…` (`:144`).
+3. When the build finishes, `HeadlessPreview.finish()` (`scripts/lib/headless_preview.py:175-190`) starts another preview server, unless the driver's own `preview-server` is still alive. That check doesn't look at `.uncle/preview.json`, where host mode records its app. It then prints `Preview: the server (pid N) keeps running for M minutes; stop it earlier with: kill N`.
+4. `enabled()` (`scripts/lib/headless_preview.py:39-42`) turns this off only through `UNCLE_NOUI_PREVIEW` or `WORKFLOW_PREVIEW_OPEN_BROWSER`, not in hosted mode. `host_preview_hook.sh` sets `WORKFLOW_PREVIEW_OPEN_BROWSER=0` only inside its own subshell (`scripts/lib/host_preview_hook.sh:12-15`), so the `--noui` runner never sees it.
+5. Chat rules: "When the output has a Preview: line, copy its URL … If there are several Preview: lines, relay all of them" (`skills/uncle-build/SKILL.md:12`). "Relay only http or https links" (`:16`).
 
-1. **No environment record.** The envelope has no OS, architecture, tool versions (node, python, npm, browsers), no relevant environment variables, no working directory, no timeout in force and no per-command duration. Two runs of the same command on the same tree hash can differ in ways the record cannot show.
-2. **The commands ran on a copy, not the attested tree.** `isolated_verify.py` runs them in a private copy with the project's port moved. The envelope's `inputs.artifact` is the real tree's hash. The record doesn't say the commands ran on a modified copy, or how it differed.
-3. **Output is not bound to the result.** `green-check.tsv` has the status and command only. The captured output log is not digested into the envelope, so a status can't be matched to the output it came from.
-4. **No cross-check of the exit status.** Nothing records whether a command's status came from its own process or from a wrapper, and nothing flags a command whose pipeline masks failures.
-5. **Review reads the record.** The reviewing step trusts `green-check.tsv`. It does not rerun the suite itself.
+## Code paths (main `b27e23c`)
 
-## Proposal
+Blame is `git blame`.
 
-1. **Per-command record** in a new `green-check.json` (kept next to `.tsv`): exact command string, argv as run (after wrappers), cwd, exit status, `PIPESTATUS`/pipefail setting in force, start time, duration, timeout, and a sha256 of that command's captured output. Digest this file as envelope evidence, not just the `.tsv`.
-2. **Environment block** in the `verification` envelope: OS and architecture, versions of the tools the commands invoke (at least node, npm, python3, bash, git and any browser driver), the allow-listed environment variables Uncle sets or unsets, and the config values that change behaviour (`WORKFLOW_CHECK_TIMEOUT_SECONDS`, the CPU jobs count).
-3. **Say what tree ran.** When `isolated_verify.py` runs commands in a copy, record that, with the tree hash of the copy and the list of rewrites (the moved port). A hash that differs from `inputs.artifact` is stated, not hidden.
-4. **Unavailable, not pass, for untrustworthy status.** If a command's status can't be tied to its own process (wrapper failed to start, output log missing, status file missing), the stage is `unavailable` with the reason, never `pass`. Add a test that `false | tail` and `false | tee file` fail through every wrapper.
-5. **Independent rerun at review.** Add `uncle verify --rerun`: check out the attested tree, run the recorded commands with the recorded environment constraints, and compare status and output digest against the record. Report a mismatch (including environment differences) instead of passing. The final-audit stage should use it rather than reading the transcript.
-6. **Tests.** Each new field gets a test that fails when the field is removed, in the style of the existing `host-preview-test.py` and `headless-preview-open-test.py`.
+| Where | What it does | Last changed in |
+|---|---|---|
+| `scripts/lib/uncle_headless.py:144` | `_URL_RE` accepts only `127.0.0.1`, `localhost` and `[::1]` URLs. | `140a309` 2026-11-11 (#246, PR #247) |
+| `scripts/lib/uncle_headless.py:204-224` (`_scan_announcements`) | Prints `Preview: <loopback url>` for the preview server and `App: <url>` for app servers. | `140a309` 2026-11-11 (#246, PR #247) |
+| `scripts/lib/uncle_headless.py:490-501` | After a completed build, runs `preview.finish()` and prints the final `Preview:`/`App:` lines. | `e3b0967` 2026-11-11 (`:490-494`), `140a309` 2026-11-11 (`:495-501`) |
+| `scripts/lib/headless_preview.py:39-42` (`enabled`) | Off switches: `UNCLE_NOUI_PREVIEW`, `WORKFLOW_PREVIEW_OPEN_BROWSER`. No hosted-mode check. | `e3b0967` 2026-11-11 |
+| `scripts/lib/headless_preview.py:175-190` (`finish`) | Starts a second preview server and prints `Preview: the server (pid N) … kill N`. | `e3b0967` 2026-11-11 |
+| `scripts/lib/host_preview_hook.sh:12-15` | Sets `WORKFLOW_PREVIEW_OPEN_BROWSER=0` only in a subshell around `host_preview.py serve`. | `bd3cde0` 2026-11-09 (#206) |
+| `skills/uncle-build/SKILL.md:12`, `:16` | Relay every `Preview:` line; allow any http/https link. | `274a636` 2026-11-09 (#210, PR #220) |
 
-## Questions
+## Fix
 
-- Which environment variables are safe to record? Anything that can hold a credential must be excluded by allow-list, not filtered after the fact.
-- Should `--rerun` be part of `uncle verify` by default for builds Anya Sharp opens pull requests for, so a hirer can see the rerun result in the pull request?
+1. **In hosted mode, `--noui` prints no `Preview:` lines and starts no preview server.** Have `headless_preview.enabled()` return False, and `_scan_announcements` skip `Preview:`, when `host_preview.is_host_mode()` is true (or `UNCLE_HOSTED=1`). Host mode already serves the finished app. In hosted runs, `Preview:` is reserved for the host's signed link.
+2. **Say local addresses plainly.** Outside hosted mode, label the local address `Local preview:` rather than `Preview:`, so the two meanings never share a prefix.
+3. **Chat rule.** In `skills/uncle-build/SKILL.md` rule 5, relay only `https` links and never a `localhost`, `127.0.0.1` or `[::1]` address. If the only `Preview:` lines are local, say no link was provided.
+
+## Tests
+
+- `uncle_headless` with `UNCLE_PREVIEW_MODE=host` and a live `preview-server` state file: no `Preview:` line is printed, and `HeadlessPreview.finish()` starts nothing.
+- Without host mode: the local address prints as `Local preview: http://127.0.0.1:…/`, unchanged otherwise.
+- `scripts/tests/chat-skill-test.py`: a pattern requiring the rule against local addresses, and a bad variant that fails without it.
+
+## Checks after the fix
+
+1. A hosted `--noui` build of a small web app prints exactly one `Preview:` line, the host's `https://` signed link, and the chat relays only that one.
+2. A local `--noui` build still shows its local preview, as `Local preview:`.
+
+## Related
+
+#206, #207, #210, #235, #246, #251; PR #247.
 
 ## Observed Current Behavior
 

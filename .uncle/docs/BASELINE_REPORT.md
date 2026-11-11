@@ -1,79 +1,71 @@
-# Baseline report — Issue 248
+# Baseline report
 
-Omitted sections: Reproduction result (not a bug; a feature gap)
+Omitted sections: Current API/schema contracts (no schema change; line formats covered in behaviors); Reproduction (read-only analysis, described in B-1); Migration (none)
 
 ## 1. Change-request summary
-See CHANGE_REQUEST.md (Issue 248): record per-command command/env/output evidence in `green-check.json`, an environment block in the `verification` envelope, the tree that ran, `unavailable` for untrustworthy status, and `uncle verify --rerun`.
+Issue 253 (CHANGE_REQUEST.md): in hosted builds `--noui` prints loopback `Preview:` lines and starts a second preview server; chat rules relay every `Preview:` line. Fix: suppress in hosted mode, label local address `Local preview:`, tighten chat rule 5 to https only.
 
 ## 2. Repository architecture
-Bash drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) source `scripts/lib/green-check.sh` and call `green_run`. Python helpers in `scripts/lib/` run commands, build the attestation envelopes and the standalone verifier `scripts/uncle-verify.py` (dispatched by `uncle verify`, `uncle` line 303).
+Shell driver + Python libs under `scripts/lib`. `uncle_headless.py` is the `--noui` runner; `headless_preview.py` serves the finished app after a build; `host_preview.py` decides host mode and serves/records the host app (`.uncle/preview.json`). `skills/uncle-build/SKILL.md` gives chat-agent relay rules, checked by `scripts/tests/chat-skill-test.py`.
 
 ## 3. Relevant code paths
-- `scripts/lib/green-check.sh:260-342` `green_run`: serial loop; wraps `bash -o pipefail -c` → `shell_syntax.py --command-file` (line 321) → `run_check.py` (326); appends `<status>\t<cmd>` to the tsv (331).
-- `scripts/lib/green-check.sh:278-300`: parallel path delegating to `scripts/lib/parallel_checks.py` (`record` at 209, results.tsv write at 365).
-- `scripts/lib/shell_syntax.py:49-60`: the only place `-o pipefail` is applied (execv).
-- `scripts/lib/run_check.py:1-66`: timeout (`check_timeout`), output spool copied to stdout.
-- `scripts/lib/build_attestation.py:42-84`: `green_result` reads only the tsv; `write_stages` writes the `verification` envelope with evidence tsv + AUTOMATED_TEST_REPORT.md.
-- `scripts/lib/envelope.py:343-390`: `write_envelope(..., inputs, evidence, extra)`.
-- `scripts/lib/isolated_verify.py:64-139`: `prepare` copies project to a private dir and rewrites the port; used by `scripts/lib/background-verify.sh:175`.
-- `scripts/uncle-verify.py:~590-680`: `main` runs checks 1-9 on an attestation; no command rerun.
+- `scripts/lib/uncle_headless.py:144` `_URL_RE` loopback-only; `:204-224` `_scan_announcements` prints `Preview: <url>` (preview-server) and `App: <url>`; `:490-494` calls `preview.finish()`; `:494` appends final scan.
+- `scripts/lib/headless_preview.py:39-42` `enabled()`; `:155-173` `poll()`; `:175-190` `finish()` (lines `Preview: could not start...`, `Preview: the server did not report...`, `Preview: the server (pid N) keeps running...`).
+- `scripts/lib/host_preview.py:34` `is_host_mode(env)` (exactly `host`); `scripts/lib/hosted.py:9-11` UNCLE_HOSTED==`1`.
+- `skills/uncle-build/SKILL.md` rules 1 (relay every Preview:), 5 (http or https).
+- Tests: `scripts/tests/headless-preview-test.py` (lines 83,103-104,127,293 assert `Preview: http://127.0.0.1...`), `headless-preview-open-test.py:292-293`, `chat-skill-test.py:12-40,150-200` (REQUIRED patterns incl. `http-https-verbatim`).
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | green_run command | tsv row `status\tcommand`; log has output | green-check.sh:331 | Yes |
-| B-2 | piped command failing | pipefail applied via shell_syntax.py | shell_syntax.py:57 | Yes |
-| B-3 | no tsv | verification `unavailable` | build_attestation.py:48 | Yes |
-| B-4 | tsv present | summary string `N commands: X pass...` | build_attestation.py:52-56 | Yes |
-| B-5 | `uncle verify` | checks signature/hashes, no rerun | uncle-verify.py main | Yes |
-| B-6 | timeout | status 124 and log line | run_check.py | Yes |
+| B-1 | `--noui` hosted build, live preview-server state | prints `Preview: http://127.0.0.1:P/` | uncle_headless.py:218 | No (MODIFY) |
+| B-2 | `--noui` local build, live preview-server state | prints `Preview: <loopback url>` | :218; headless-preview-test.py:83 | Content yes, label changes |
+| B-3 | completed app build, no live driver server | finish() starts server, prints `Preview: the server (pid N)...kill N` | headless_preview.py:175-190 | Content yes locally; label changes; none hosted |
+| B-4 | UNCLE_NOUI_PREVIEW=0 or WORKFLOW_PREVIEW_OPEN_BROWSER=0 | no early/final server | enabled() | Yes |
+| B-5 | `App: <url>` for app-server/preview-vite, `App: launch ...` | printed | :221,:248 | Yes |
+| B-6 | non-loopback or oversize URL in state file | rejected, no line | _URL_RE, :181; test :218 | Yes |
+| B-7 | chat sees Preview: lines | rule 1 relays all; rule 5 allows http/https | SKILL.md | Rule 5 changes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Missing record is `unavailable`, never `pass` | build_attestation.green_result | build-attestation-test.py | High |
-| I-2 | Only REGRESSION fails the check | green_result | build-attestation-test.py | Medium |
-| I-3 | Attestation bytes canonical and signed | uncle-verify.py check_1/2 | attestation-test.py | High |
-| I-4 | Commands run with pipefail | shell_syntax.py | None through wrappers | Low |
-
-## 6. Interface contracts
-`green-check.tsv` (`status\tcommand`) is consumed by classification, baseline comparison and attestation: format must not change. Envelope `evidence` entries are digests of listed files; `extra` merges extra keys into the body. `uncle verify [<pr>] [--attestation PATH] [--tree SHA]`.
+| I-1 | Only loopback URLs are announced from state files | _URL_RE | headless-preview-test.py:218 | High |
+| I-2 | A driver-owned live server is never duplicated | server_alive() in poll/finish | headless-preview-test.py | High |
+| I-3 | Skill body <=60 lines and every REQUIRED rule present, forbidden phrases absent | chat-skill-test check() | chat-skill-test.py | High |
+| I-4 | Announcements are read-only on state files | _scan_announcements try/except | headless-preview-test.py | Medium |
 
 ## 7. Existing automated-test coverage
-Shell: green-check, green-check-vacuous, green-defer-mutation, tree-attested-final-audit. Python: build-attestation, attestation, attestation-statement, revalidate-attestation, host-preview. The shell and Python suites use separate temp dirs and share no ports, so they run as one parallel group. `scripts/tests/critical-suites.txt` selects the default tier.
+Python suites `headless-preview`, `chat-skill` (hyphenated `-test.py`) and shell suite `headless-preview-open` (in critical-suites.txt:126). Runners: `scripts/run-python-tests.sh`, `scripts/run-shell-tests.sh`. Tests share temp dirs per case; no groups declared (serial) to avoid reliance on unmeasured independence.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (the documented runners). Not run here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites are known to fail on a clean checkout.
+Not run in this stage (driver baseline authoritative: `.uncle/workflow/green-check.baseline.tsv`). Commands derived from CLAUDE.md-mandated runners and scripts/ listing. Some Python suites are known to fail on a clean checkout per runner docs; unlisted here which.
 
 ## 10. Existing failures
-None established by this stage; see the driver baseline.
+UNRESOLVED: none known to this stage beyond the generic note in section 9.
 
 ## 12. Likely change surface
-`green-check.sh`, `run_check.py`, `parallel_checks.py`, `build_attestation.py`, `uncle-verify.py`, `isolated_verify.py`/`background-verify.sh` (tree-ran note), new `scripts/lib/check_record.py`, new tests, `scripts/tests/critical-suites.txt`, `scripts/README.md`.
+`headless_preview.py`, `uncle_headless.py`, `SKILL.md`, and tests `headless-preview-test.py`, `headless-preview-open-test.py`, `chat-skill-test.py`.
 
 ## 13. Regression-sensitive components
-The tsv format and exit semantics, parallel_checks performance, canonical attestation bytes (new evidence changes the digest set), uncle-verify exit codes (0/1/2/3).
+Local `--noui` flow (early page poll, final finish), driver-owned server de-dup, chat skill checker patterns.
 
-## 14. Outside the change
-Signing, approval gates, tsv classification, check selection, PR creation flow.
+## 14. Explicitly outside the change
+host_preview.py, host_preview_hook.sh, stage-config.sh, `App:` line behavior, the driver's `preview_server.py`, TUI.
 
 ## 15. Unknowns and assumptions
-- Assumption: green-check.json goes in the same state dir as the tsv, next to `green-check.tsv`.
-- Whether `isolated_verify.py` is used for the main green check is UNRESOLVED from reading: it is only called from background-verify.sh:175; the record must capture whichever applies.
+- Assumption: hosted == `UNCLE_PREVIEW_MODE=host` or `UNCLE_HOSTED=1` (per request).
+- `App:` loopback lines in hosted mode are also unreachable but chat rules do not relay them; left unchanged.
+- Existing tests assert the old `Preview:` loopback label; they must be updated per request item 2.
 
 ## 16. Initial risk assessment
-Medium: touches the central check runner (both serial and parallel paths); a bug could mask failures. Secret leakage via environment capture is the main security risk.
+Low. Risk: missed `Preview:` literal in a test or doc expecting the old label; chat-skill checker pattern coupling to rule wording.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-```
-
-## Parallel verification groups
-
-```text
-1 2
+bash scripts/run-python-tests.sh -- headless-preview
+bash scripts/run-python-tests.sh -- chat-skill
 ```
 

@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "lib"))
 sys.path.insert(0, HERE)
 import uncle_headless as H  # noqa: E402
+import headless_preview as HP  # noqa: E402
 
 PRELUDE = r"""
 import os, sys, time, json
@@ -46,7 +47,16 @@ class Timed(io.StringIO):
         return super().write(s)
 
 
-def drive(body, setup=None):
+def local_env():
+    env = dict(os.environ)
+    env.pop("UNCLE_HOSTED", None)
+    env.pop("UNCLE_PREVIEW_MODE", None)
+    env.pop("UNCLE_NOUI_PREVIEW", None)
+    env.pop("WORKFLOW_PREVIEW_OPEN_BROWSER", None)
+    return env
+
+
+def drive(body, setup=None, env=None):
     root = tempfile.mkdtemp()
     os.makedirs(os.path.join(root, ".uncle", "workflow"), exist_ok=True)
     if setup:
@@ -55,7 +65,8 @@ def drive(body, setup=None):
     script = PRELUDE + body
     cmd = [sys.executable, "-c", script, root]
     t0 = time.monotonic()
-    code = H.run(cmd, root, out=out, err=err, install_signals=False)
+    code = H.run(cmd, root, env=env if env is not None else local_env(),
+                 out=out, err=err, install_signals=False)
     return code, out, err.getvalue(), root, t0
 
 
@@ -78,14 +89,15 @@ class Preview(unittest.TestCase):
             "pub('preview-server', 'http://127.0.0.1:5173/')\n"
             "time.sleep(2.5)\nsay('driver done\\n')\n")
         self.assertEqual(code, 0 if code == 0 else code)
-        pl = announced(out, "Preview")
+        pl = announced(out, "Local preview")
         self.assertEqual(len(pl), 1, out.getvalue())
-        self.assertTrue(pl[0].rstrip().endswith("Preview: http://127.0.0.1:5173/"))
+        self.assertTrue(pl[0].rstrip().endswith("Local preview: http://127.0.0.1:5173/"))
+        self.assertEqual(announced(out, "Preview"), [], out.getvalue())
         text = out.getvalue()
-        self.assertLess(text.index("Preview:"), text.index("driver done"))
+        self.assertLess(text.index("Local preview:"), text.index("driver done"))
         # appeared while the driver was still sleeping, within tolerance
         for ts, s in out.marks:
-            if "Preview:" in s:
+            if "Local preview:" in s:
                 self.assertLess(ts - t0, 2.3)
                 break
         else:
@@ -99,9 +111,9 @@ class Preview(unittest.TestCase):
             "time.sleep(1.2)\n"
             "pub('preview-server', 'http://127.0.0.1:6000/')\n"
             "time.sleep(1.8)\n")
-        pl = [body_of(l) for l in announced(out, "Preview")]
-        self.assertEqual(pl, ["Preview: http://127.0.0.1:5000/",
-                              "Preview: http://127.0.0.1:6000/"], out.getvalue())
+        pl = [body_of(l) for l in announced(out, "Local preview")]
+        self.assertEqual(pl, ["Local preview: http://127.0.0.1:5000/",
+                              "Local preview: http://127.0.0.1:6000/"], out.getvalue())
 
     def test_dead_pid_and_foreign_host_rejected(self):
         code, out, _, _, _ = drive(
@@ -110,8 +122,89 @@ class Preview(unittest.TestCase):
             "put('app-server.pid', str(os.getpid()))\n"
             "put('app-server.url', 'http://example.com/')\n"
             "time.sleep(1.5)\n")
-        self.assertNotIn("Preview:", out.getvalue())
+        self.assertNotIn("review:", out.getvalue())
         self.assertNotIn("App:", out.getvalue())
+
+
+class HostedRun(unittest.TestCase):
+    """AC-1/AC-2: hosted runs print no preview line and start no server."""
+    FLAGS = [{"UNCLE_PREVIEW_MODE": "host"}, {"UNCLE_HOSTED": "1"}]
+
+    def hosted_env(self, flag):
+        env = local_env()
+        env.update(flag)
+        return env
+
+    def test_hosted_announces_no_preview_line(self):
+        for flag in self.FLAGS:
+            code, out, _, _, _ = drive(
+                "pub('preview-server', 'http://127.0.0.1:5173/')\n"
+                "time.sleep(2.5)\nsay('driver done\\n')\n",
+                env=self.hosted_env(flag))
+            text = out.getvalue()
+            self.assertIn("driver done", text)
+            self.assertNotIn("review:", text, repr(flag) + text)
+
+    def prepare(self):
+        root = tempfile.mkdtemp()
+        wf = os.path.join(root, ".uncle", "workflow")
+        os.makedirs(wf)
+        with open(os.path.join(wf, "family"), "w") as f:
+            f.write("app")
+        state = sorted(HP.EARLY_STATES)[0]
+        with open(os.path.join(wf, "state"), "w") as f:
+            f.write(state)
+        with open(os.path.join(root, "index.html"), "w") as f:
+            f.write("<html>page</html>")
+        return root
+
+    def make(self, env):
+        root = self.prepare()
+        calls = []
+        hp = HP.HeadlessPreview(root, env=env, start=lambda ttl=None: calls.append(ttl) or 4242,
+                                wait=lambda: True)
+        return hp, calls
+
+    def test_hosted_enabled_false_and_nothing_started(self):
+        for flag in self.FLAGS:
+            env = self.hosted_env(flag)
+            self.assertFalse(HP.enabled(env), repr(flag))
+            hp, calls = self.make(env)
+            self.assertFalse(hp.poll())
+            self.assertEqual(hp.finish(), [])
+            self.assertEqual(calls, [], repr(flag))
+
+    def test_non_hosted_control_still_starts(self):
+        env = local_env()
+        hp, calls = self.make(env)
+        self.assertTrue(hp.poll())
+        self.assertEqual(len(calls), 1)
+        hp2, calls2 = self.make(env)
+        lines2 = hp2.finish()
+        self.assertEqual(len(calls2), 1)
+        self.assertEqual(len(lines2), 1)
+        self.assertTrue(lines2[0].startswith("Local preview: "), lines2)
+
+
+class FinalLines(unittest.TestCase):
+    """AC-3: the final server lines carry the Local preview: prefix."""
+    def make(self, start, wait):
+        return HostedRun.make(HostedRun(), local_env()) if False else None
+
+    def run_finish(self, start, wait):
+        root = HostedRun.prepare(HostedRun())
+        hp = HP.HeadlessPreview(root, env=local_env(), start=start, wait=wait)
+        return hp.finish()
+
+    def test_could_not_start(self):
+        got = self.run_finish(lambda ttl=None: None, lambda: True)
+        self.assertEqual(len(got), 1)
+        self.assertTrue(got[0].startswith("Local preview: could not start"), got)
+
+    def test_no_address(self):
+        got = self.run_finish(lambda ttl=None: 77, lambda: False)
+        self.assertEqual(len(got), 1)
+        self.assertTrue(got[0].startswith("Local preview: the preview server did not report"), got)
 
 
 class Framing(unittest.TestCase):
@@ -124,10 +217,10 @@ class Framing(unittest.TestCase):
             "time.sleep(1.5)\n")
         text = out.getvalue()
         self.assertIn("partial-start rest-of-line\n", text)
-        self.assertIn("Preview: http://127.0.0.1:5173/", text)
-        self.assertGreater(text.index("Preview:"), text.index("rest-of-line\n"))
+        self.assertIn("Local preview: http://127.0.0.1:5173/", text)
+        self.assertGreater(text.index("Local preview:"), text.index("rest-of-line\n"))
         for l in lines(out):
-            if "Preview:" in l:
+            if "Local preview:" in l:
                 self.assertNotIn("partial-start", l)
 
     def test_final_flush_forces_newline_before_announcement(self):
@@ -136,10 +229,10 @@ class Framing(unittest.TestCase):
             "pub('preview-server', 'http://127.0.0.1:5173/')\n"
             "time.sleep(2)\n")
         text = out.getvalue()
-        if "Preview:" in text:
-            before = text[:text.index("Preview:")]
+        if "Local preview:" in text:
+            before = text[:text.index("Local preview:")]
             self.assertIn("unterminated\n", before)
-        self.assertNotIn("unterminated" + "Preview", text.replace(" ", ""))
+        self.assertNotIn("unterminated" + "Localpreview", text.replace(" ", ""))
 
     def test_driver_bytes_preserved(self):
         driver = "say('alpha\\n')\nsay('beta\\n')\ntime.sleep(.3)\nsay('gamma\\n')\n"
@@ -147,7 +240,7 @@ class Framing(unittest.TestCase):
         _, with_url, _, _, _ = drive(
             "pub('preview-server', 'http://127.0.0.1:5173/')\n" + driver)
         keep = lambda o: [body_of(l) for l in lines(o)
-                          if l and not re.search(r"(Preview|App): ", l)]
+                          if l and not re.search(r"(Local preview|App): ", l)]
         self.assertEqual(keep(plain), keep(with_url))
         self.assertEqual(keep(with_url), ["alpha", "beta", "gamma"])
 
@@ -215,7 +308,7 @@ class Sanitization(unittest.TestCase):
             url = "http://127.0.0.1:5173/a%sb" % bad
             code, out, _, _, _ = drive(
                 "pub('preview-server', %r)\ntime.sleep(1.3)\n" % url)
-            self.assertNotIn("Preview:", out.getvalue(), repr(bad))
+            self.assertNotIn("review:", out.getvalue(), repr(bad))
             self.assertNotIn("\x1b", out.getvalue())
 
     def test_launch_metadata_emitted_clean_single_line(self):
@@ -248,7 +341,7 @@ class BoundedReads(unittest.TestCase):
         self.assertLess(time.monotonic() - t, 15)
         self.assertEqual(code, 3)  # no completion banner: same as without announcements
         self.assertIn("still going", out.getvalue())
-        self.assertNotIn("Preview:", out.getvalue())
+        self.assertNotIn("review:", out.getvalue())
         self.assertNotIn("App: http", out.getvalue())
 
     def test_fifo_url_file(self):
@@ -277,7 +370,7 @@ class BoundedReads(unittest.TestCase):
             "put('app-server.pid', str(os.getpid()))\ntime.sleep(1.5)\nsay('ok\\n')\n", prep)
         self.assertLess(time.monotonic() - t, 15)
         self.assertEqual(code, 3)
-        self.assertNotIn("Preview:", out.getvalue())
+        self.assertNotIn("review:", out.getvalue())
 
 
 class ExitCodeAndDocs(unittest.TestCase):

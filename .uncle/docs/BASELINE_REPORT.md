@@ -1,74 +1,75 @@
-# Baseline: Issue 246 (--noui shows preview and app)
+# Baseline report
 
-Omitted sections: Reproduction (feature, not a bug); Areas outside change folded into 12
+Omitted sections: Reproduction result (the live failure is chat-side and outside this repo; not reproducible here); Existing failures (none documented in-repo beyond the Python-suite note below)
 
 ## 1. Change-request summary
-See `.uncle/docs/CHANGE_REQUEST.md` (Issue 246): `--noui` builds must print the preview and app locations/status while building, as the TUI shows them, without curses and without changing exit codes.
+Issue 251 (CHANGE_REQUEST.md). Hosted builds give no preview link because three parts live OUTSIDE this repository: (a) the release's script-publisher grant for `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, (b) the build script's link request / sandbox keep (#207, #208, #235 step 3), (c) the end-to-end live proof (#235 checks 1-5). Host side already works; `UNCLE_PREVIEW_HOST` default stays `127.0.0.1`.
 
 ## 2. Repository architecture
-- `uncle` launcher dispatches `--noui` / `UNCLE_NOUI=1` to `scripts/lib/uncle_headless.py` (493 lines), which spawns the driver (`stagegate.sh`, `change-workflow.sh`) with piped stdout/stderr and streams filtered, redacted, `[+HH:MM:SS]`-prefixed text.
-- The TUI (`uncle_tui.py`, 9659 lines) polls for a previewable page and opens it itself; the driver also owns a preview server.
-- Driver-side preview: `scripts/lib/preview-build.sh:48-57` starts `preview_server.py start` which writes `.uncle/workflow/preview-server.pid` and `.url` (`preview_server.py:209-271`), updating the URL on static-to-Vite handoff, and removing both at shutdown. `existing_development_url` (`preview_server.py:405`) reads `app-server.{pid,url}` / `preview-vite.{pid,url}`.
-- App launch metadata: `.uncle/launch.json` read by `completion_preview.launch_spec` (`completion_preview.py:232`).
+Shell drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) source `scripts/lib/host_preview_hook.sh`, which calls Python `scripts/lib/host_preview.py`. Skill text for the hosted chat Employee lives in `skills/uncle-build/SKILL.md`.
 
 ## 3. Relevant code paths
-- `uncle_headless.py:139-176` `run`; `:185-377` `_stream` select loop (stdout/stderr/stdin), `_Writer.emit` (`:125-136`), `redact` (`:100`), post-reap tail (`:344-377`), `_record_skipped` (`:380`).
-- `uncle_tui.py:2908-3095` early-preview polling (`_poll_early_preview`, `_previewable_page`, `_show_early_preview`); `:2740` completion preview; `:197` `_workflow_family`.
-- `docs/noui.md` documents `--noui`.
+- `scripts/lib/stage-config.sh:47-51` hosted mode defaults `UNCLE_PREVIEW_MODE=host`.
+- `scripts/stagegate.sh:7076`, `scripts/change-workflow.sh:5124` call `uncle_host_preview_hook` at COMPLETE.
+- `scripts/lib/host_preview_hook.sh:7-17` stops live preview, runs `host_preview.py serve`, ignores failures.
+- `scripts/lib/host_preview.py:217` binds `UNCLE_PREVIEW_HOST` (default 127.0.0.1); `:290-301` `serve` prints `UNCLE_PREVIEW_PORT=<n>`, exits 0.
+- `skills/uncle-build/SKILL.md` rules 1-6 (relay `Preview:` line; warning-page rule is rule 6).
+- `grep signed-preview-url` over the repo (excluding .git/.uncle) finds no file: no grant, release definition or link code exists here.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `--noui` build runs | Only driver stdout/stderr lines are streamed; no preview URL or app status line is added by the headless runner | `uncle_headless.py:185-377` has no preview/launch handling | Modify (add lines) |
-| B-2 | Driver exit/signal/gate | Exit 0/1/2/3/128+n per `docs/noui.md`; precedence signal>gate>driver>0 | `classify_exit` `:109`, docs table | Yes |
-| B-3 | Output redaction and escape filtering | KEY/TOKEN/SECRET/PASSWORD env values masked; no escape sequences | `redact` `:100`, `EscapeFilter` `:39` | Yes |
-| B-4 | `--noui` never reads stdin unless `--attended` | stdin DEVNULL | `run` `:166` | Yes |
-| B-5 | Under `--noui` desktop launch | Skipped, `desktop-launch.json` decision=skipped reason=noui | `_record_skipped` | Yes |
-| B-6 | UI (TUI) build | Opens browser tab on preview; driver preview server writes `preview-server.url` | `uncle_tui.py:2952`, `preview_server.py:216-219` | Yes (unchanged) |
+| B-1 | COMPLETE in hosted mode | host_preview serve starts app, prints `UNCLE_PREVIEW_PORT=<n>`, exit 0 | host_preview.py:290-301 | Yes |
+| B-2 | Host preview failure | Ignored; run completes | host_preview_hook.sh:15-16 | Yes |
+| B-3 | Non-host mode | Hook does nothing | host_preview_hook.sh:9 | Yes |
+| B-4 | Default bind | 127.0.0.1 | host_preview.py:217 | Yes |
+| B-5 | Build output has `Preview:` line | Skill tells Employee to relay verbatim as plain/Markdown link | SKILL.md rules 1-6 | Yes |
+| B-6 | Hosted hire asked for preview link | No link possible; no grant/script change shipped | CHANGE_REQUEST live test | No (fixed outside repo) |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Headless never imports/starts curses | module imports only stdlib | `headless-run-test.py` | Medium |
-| I-2 | Exit-code mapping/precedence unchanged | `classify_exit` | `headless-run-test.py`, `launcher-noui-test.sh` | High |
-| I-3 | No escape sequences or unmasked secrets in output | `EscapeFilter`, `redact` | `headless-run-test.py` | High |
-| I-4 | Output line framing: elapsed prefix at line start only | `_Writer` | `headless-run-test.py` | Medium |
-| I-5 | Process group fully reaped on exit/signal | `_killpg` | `headless-run-test.py` | High |
+| I-1 | Host preview hook never fails the driver run | `|| true`, `return 0` in hook | shell suites for host preview (not enumerated; driver baseline) | Medium |
+| I-2 | Host mode only on exact lowercase `UNCLE_PREVIEW_MODE=host` | host_preview.py mode-check | same | Medium |
+| I-3 | Preview link is relayed only from the build output, http(s) only | SKILL.md rules 4-5 | two tests from PR #241 | Medium |
 
-## 6. Interface contracts
-`uncle_headless.run(cmd, root, attended, env, out, err, stdin_fd, grace, idle, install_signals, desktop_decision)` returns int exit code. State files under `<root>/.uncle/workflow/` and `.uncle/launch.json` are driver-owned and read-only here.
+## 6. Current API, schema, interface contracts
+`host_preview.py serve <dir>` stdout `UNCLE_PREVIEW_PORT=<n>`; `.uncle/preview.json`; env `UNCLE_PREVIEW_HOST/PORT/MODE`. Daytona signed-link API (external, observed in the issue): `expiresInSeconds` integer 1-3600 else 400; expire endpoint exists.
 
 ## 7. Existing automated-test coverage
-`scripts/tests/headless-run-test.py` (fake drivers via `run()`), `launcher-noui-test.sh`, `repl-session-test.py`, `home-preload-test.py`. Both are in `critical-suites.txt` (headless-run line 95, launcher-noui line 86). Shell and Python runners use separate temp dirs and share no ports, so they run as one parallel group.
+Shell suites via `scripts/run-shell-tests.sh` (default tier `scripts/tests/critical-suites.txt`); Python suites `scripts/tests/*-test.py` via `scripts/run-python-tests.sh`. Groups 1 and 2 use separate temp dirs and bind no shared ports (per runner guidance), so they run in parallel. Command 3 runs the new suite explicitly; it does not exist before the change and is expected to fail at baseline.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (CLAUDE.md/stage rules). Not run here; the driver baseline in `.uncle/workflow/green-check.baseline.tsv` is authoritative. No repository-documented failures were found by inspection; some Python suites may already fail on a clean tree.
-
-## 10. Existing failures, warnings, flaky behavior
-None recorded beyond the possible pre-existing Python failures noted above.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (both exist). No results produced here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Known: some Python suites already fail on a clean checkout.
 
 ## 12. Likely change surface
-`scripts/lib/uncle_headless.py` (new watcher inside `_stream`), `docs/noui.md`, one new test suite `scripts/tests/headless-preview-test.py`.
+In-repo: a new pure release-grant checker plus its test and a short handoff doc. Out-of-repo (not changeable here): release definition, build script.
 
 ## 13. Regression-sensitive components
-`_stream` select loop and `_Writer` line framing; end-of-run output ordering (finished-build block printed after reap); exit classification.
+`host_preview.py`, `host_preview_hook.sh`, `skills/uncle-build/SKILL.md`, `critical-suites.txt`.
 
 ## 14. Outside the change
-TUI code (`uncle_tui.py`), driver shell scripts, `preview_server.py`, `completion_preview.py`, launcher, exit codes, `--attended`, `--noinput`.
+Host preview code, hook, SKILL.md, `UNCLE_PREVIEW_HOST` default, Daytona host, chat-side repo-request gap (filed separately).
 
 ## 15. Unknowns and assumptions
-- A1: Reading driver state files is sufficient; the headless runner will not start its own servers.
-- A2: "App" status = the driver's app/dev server URL while building and the `.uncle/launch.json` spec at the end.
-- A3: Change-request runs do not run preview-build, so they typically show nothing unless state files exist; acceptable.
+- U-1 Release definition format is unknown and not in repo; checker must be format-tolerant (walk JSON for matching objects). UNRESOLVED until a real definition is supplied.
+- U-2 Build script repository and release publishing need access this workflow lacks.
+- U-3 Live checks need a real hosted build.
 
 ## 16. Initial risk assessment
-Low-medium: interleaving extra lines mid-partial-line; stale state files from earlier runs being announced.
+High: the issue's real fixes cannot be performed or verified from this repo; completing in-repo work must not be read as closing the issue. Low: regression risk to existing code (additive files only).
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- headless-preview
+bash scripts/run-python-tests.sh -- release-grants
+```
+
+## Parallel verification groups
+
+```text
+1 2
 ```
 

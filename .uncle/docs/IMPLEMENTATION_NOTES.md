@@ -2,20 +2,17 @@
 
 ## Step 1
 
-### Files changed
-
-- `scripts/lib/uncle_headless.py` — Written by isolated step 1; 1
-
 ## Step 2
 
 ### Files changed
 
-- `scripts/tests/headless-preview-test.py` — Written by isolated step 2; 2
+- `scripts/lib/check_release_grants.py` — Written by isolated step 2; 2
+- `scripts/tests/release-grants-test.py` — Written by isolated step 2; 2
 
 ## Step 3
 
 ### Files changed
 
-- `docs/noui.md` — Written by isolated step 3; 3
+- `docs/preview-link-release.md` — Written by isolated step 3; 3
 
 ## Step 4

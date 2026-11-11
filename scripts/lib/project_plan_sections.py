@@ -483,7 +483,9 @@ def contract(name, directory, json_mode=False):
         lines += ['', 'Also fill `trace` (kinds: %s): one entry per requirement and kind, `requirement` being a requirement ID from '
                   '%s, nothing else, and `ids` the IDs of yours that cover it. The driver builds '
                   'the traceability table from `trace`, and a worker that leaves it empty makes a whole extra model call '
-                  'necessary: map every requirement to at least one of your IDs.' % (TRACE_KINDS[name], requirement_source(name))]
+                  'necessary: map every requirement to at least one of your IDs. A requirement none of your IDs covers gets no entry: '
+                  'leave it out, never send an entry with an empty `ids`, which rejects the whole packet.'
+                  % (TRACE_KINDS[name], requirement_source(name))]
     elif name in TRACE_KINDS:
         lines += ['', 'End your file with one line per kind (%s), after the last section, exactly in this form: ' % TRACE_KINDS[name]]
         lines += ['`%s`' % example for example in TRACE_EXAMPLES[name]]
@@ -639,7 +641,8 @@ def block_contract(name, directory):
         lines += ['', 'Also fill `trace` (kinds: %s): one entry per requirement and kind, `requirement` being a requirement ID '
                   'from %s, nothing else, and `ids` the IDs of yours that cover it. The driver '
                   'builds the traceability table from `trace`: map every requirement to at least one of your '
-                  'IDs.' % (TRACE_KINDS[name], requirement_source(name))]
+                  'IDs. A requirement none of your IDs covers gets no entry: leave it out, never send an entry with an '
+                  'empty `ids`, which rejects the whole packet.' % (TRACE_KINDS[name], requirement_source(name))]
     lines += ['', SPECIFIC[name], '', length_note(name), '']
     return '\n'.join(lines)
 

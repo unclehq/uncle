@@ -121,3 +121,6 @@ revalidate
 revalidate-integration
 revalidate-planner
 revalidate-attestation
+
+# uncle --noui opens the preview tab like the screen: the early page and the finished app (a duplicate or a leaked server).
+headless-preview-open

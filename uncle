@@ -127,7 +127,9 @@ passes. It cannot be combined with other startup options or --audit.
 --unattended is passed to the driver you pick: it runs every human gate
 without a person, records what nobody reviewed, and reports that at the end.
 --noui (or UNCLE_NOUI=1) runs a startup action headlessly: no curses, plain
-text progress on stdout; driver errors go to stderr. With one of --application, --issue or
+text progress on stdout; driver errors go to stderr. A new-application build
+opens its preview in a browser as the screen does, and the finished app when it
+completes (UNCLE_NOUI_PREVIEW=0 turns that off; see docs/noui.md). With one of --application, --issue or
 --change-request it runs that action; on its own it starts a plain-text
 interactive REPL (chat with the home agent, /help for commands).
 It cannot be combined with --noinput. Unlike --noinput (the TUI's

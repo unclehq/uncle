@@ -20,6 +20,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import headless_preview  # noqa: E402
 
 try:
     import run_duties as _duties
@@ -313,6 +314,7 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
     tail = collections.deque(maxlen=20)  # redacted diagnostic lines; never replayed
     watch = new_watch_state()
     next_scan = 0.0
+    preview = headless_preview.HeadlessPreview(root, env)   # the screen's early page and finished-app tab, without the screen
 
     def announce(lines):
         for text in lines:
@@ -468,6 +470,7 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
             except (BrokenPipeError, OSError):
                 stdin_open = False
         now = time.monotonic()
+        preview.poll()
         if now >= next_scan and writer.at_start and not acc:
             next_scan = now + POLL_SECONDS
             announce(_scan_announcements(root, watch))
@@ -484,7 +487,11 @@ def _stream(proc, env, root, attended, out, err, stdin_fd, start, received,
         time.sleep(0.02)
     _killpg(proc, signal.SIGKILL)  # no surviving descendants
     rc = proc.returncode
-    final = _scan_announcements(root, watch)
+    # The driver stops its own preview server when it exits, so a completed build is left with nothing showing the result.
+    after = []
+    if classify_exit(rc, received[0] if received else 0, completed) == 0:
+        after = preview.finish()
+    final = _scan_announcements(root, watch) + after
     launch = _launch_line(root, watch)
     if launch:
         final.append(launch)

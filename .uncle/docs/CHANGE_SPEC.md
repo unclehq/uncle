@@ -1,68 +1,59 @@
-# Change spec
+# Change spec — Issue 253
 
-Omitted sections: Performance (none); Migration (none); Prototype isolation (not a prototype)
+Omitted sections: Performance, Security (beyond S below), Migration, Prototype isolation (not applicable)
 
 ## 1. Change type
-Bug fix spanning three repositories/systems; only the verification tooling and handoff are changeable in this repo.
+Bug fix.
 
 ## 2. Problem statement
-Hosted builds cannot give a preview link: release grant, build-script link request/sandbox keep, and live proof never shipped (see CHANGE_REQUEST.md, baseline sec. 1).
+Hosted `--noui` builds print a loopback `Preview:` line and start a redundant preview server; chat rules would relay the unusable link.
 
-## 3. Current behavior
-Baseline B-1..B-6. No in-repo artifact detects a missing signed-link grant.
-
-## 4. Desired behavior
-Release grants include publisher `daytona`, `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, `require_approval` false; build script prints `Preview: <url> (works until HH:MM UTC)` with expiry <= 3600 s and sandbox kept; a pre-publish check proves the grant is present; live checks 1-5 recorded on the issue.
+## 3-4. Current / desired behavior
+See B-1..B-7 in baseline. Desired: hosted prints no `Preview:` from this runner and starts no server; local prints `Local preview:`; chat relays only https links.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| SB-1 | ADD | Run grant checker on a release definition containing the signed-link grant | No checker | Exit 0, prints OK | python test AC-1 |
-| SB-2 | ADD | Checker on definition missing the grant, or with it but `require_approval` true, wrong publisher/method/path, or unparseable/missing file | n/a | Nonzero exit, names the missing/invalid element | python test AC-2 |
-| SB-3 | PRESERVE | Host preview hook / serve / default bind | See B-1..B-4 | Unchanged | existing suites AC-4 |
-| SB-4 | PRESERVE | SKILL.md relay rules | B-5 | Unchanged | existing tests AC-4 |
-| SB-5 | ADD | Release published with grant (external) | No grant | Revision recorded on issue | manual AC-5 |
-| SB-6 | ADD | Build script run (external) | No link | `Preview:` line, expiry <=3600 s, autoStop >= lifetime, autoDelete 0, kept sandbox; 400/403 gives reason and no `Preview:` | external-repo tests AC-6 |
-| SB-7 | ADD | Live hosted build | none | Checks 1-5 pass | manual AC-7 |
+| SB-1 | MODIFY | `--noui`, host mode (UNCLE_PREVIEW_MODE=host or UNCLE_HOSTED=1), live preview-server state | `Preview: <loopback>` | no `Preview:` or `Local preview:` line | headless-preview-test |
+| SB-2 | MODIFY | same, build completes | finish() starts server, prints kill line | finish() returns [] and starts nothing; poll() starts nothing | headless-preview-test |
+| SB-3 | MODIFY | local, live preview-server | `Preview: http://127.0.0.1:P/` | `Local preview: http://127.0.0.1:P/` | headless-preview-test |
+| SB-4 | MODIFY | local, finish() starts server | `Preview: the server (pid N) ... kill N` and its two failure lines | same text prefixed `Local preview:` | headless-preview-open-test, headless-preview-test |
+| SB-5 | PRESERVE | UNCLE_NOUI_PREVIEW=0 / WORKFLOW_PREVIEW_OPEN_BROWSER=0; B-5; B-6 | as baseline | unchanged | existing tests |
+| SB-6 | MODIFY | chat rule 5 | relay http or https | relay only https; never localhost/127.0.0.1/[::1]; if only local Preview: lines, say no link was provided | chat-skill-test |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| I-1 | EXISTING | Host preview hook never fails the run | hook | host_preview_hook.sh | existing suites |
-| I-2 | EXISTING | Host mode only on exact `host` | host_preview.py | mode-check | existing suites |
-| I-3 | EXISTING | Only build-output http(s) Preview links are relayed | SKILL.md | rules 4-5 | existing tests |
-| I-4 | NEW | Printed end time never later than link expiry; expiry <=3600 s | build script (external) | build script | AC-6 |
-| I-5 | NEW | Checker never reports OK unless every grant field matches exactly | checker | checker | AC-1/AC-2 |
-No RELAXED or REMOVED invariants.
+| SI-1 | NEW | Hosted runs: `--noui` runner emits no preview line and starts no preview server | uncle_headless/headless_preview | `enabled()` and scan guard | headless-preview-test |
+| SI-2 | NEW | `Preview:` prefix never precedes a loopback address from this runner | headless output | label change | headless tests |
+| SI-3 | NEW | Skill rule forbids relaying local addresses | SKILL.md | chat-skill checker | chat-skill-test + bad variant |
+| SI-4 | EXISTING | I-1..I-4 | baseline | unchanged | existing tests |
+
+No RELAXED or REMOVED invariants. Note rule 5 narrows from http/https to https (stricter).
 
 ## 7. Compatibility
-Additive only; no existing file's behavior changes.
+Any consumer parsing `Preview: http://127.0.0.1` from local `--noui` output must read `Local preview:`; required by request.
 
-## 8. Error behavior
-Checker: missing/unreadable/invalid-JSON input or no matching grant exits nonzero with a reason; never silently passes.
-
-## 10. Security
-Link is a bearer credential; checker and docs must not print or store tokens. Grant is read-only GET without approval, as requested.
+## 8. Failure behavior
+Host-mode detection failure defaults to non-hosted behavior (env absent). No new exceptions.
 
 ## 12. Rollback
-Delete the added files; external release can be republished without the grant.
+Revert the commit; no persisted state.
 
 ## 14. Non-goals
-Editing host preview code, hook, SKILL.md, UNCLE_PREVIEW_HOST default, chat-side repo-request gap, and any out-of-repo change performed by this workflow.
+Changing `App:` lines, host_preview.py, hook scripts, TUI, or host signed-link production.
 
-## 15. Assumptions and unresolved questions
-- Release definition format unknown (UNRESOLVED): checker accepts any JSON where an object has `publisher`=daytona, `method`=GET, `path` equal to the signed-link path, `require_approval`=false (key names may also be nested under a grants list).
-- AC-5..AC-7 cannot be performed in this repo; they are LIVE_VERIFICATION and remain open, not PASS.
+## 15. Assumptions
+Hosted check = `UNCLE_PREVIEW_MODE=='host'` or `UNCLE_HOSTED=='1'`. Existing tests asserting the old label are intentionally updated (requirement-based: request item 2).
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | A checker (`scripts/lib/check_release_grants.py <file>`) exits 0 for a release definition JSON containing a grant object with publisher daytona, method GET, path `/sandbox/{sandboxId}/ports/{port}/signed-preview-url`, require_approval false. | bash scripts/run-python-tests.sh -- release-grants |
-| AC-2 | The checker exits nonzero with a reason for: missing grant, require_approval true or absent, wrong publisher/method/path, invalid JSON, missing file. | bash scripts/run-python-tests.sh -- release-grants (each case asserts nonzero and reason text) |
-| AC-3 | A handoff doc `docs/preview-link-release.md` states the grant, build-script requirements (expiresInSeconds<=3600, autoStopInterval>=lifetime minutes, autoDeleteInterval 0, Preview line format, keep/delete rules) and live checks 1-5, and says they are not done by this repo. | manual read; test asserts file exists and names the grant path |
-| AC-4 | Existing host preview behavior, hook, default bind and SKILL.md are unmodified and existing suites show no regression versus baseline. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh vs baseline; git diff shows no change to those files |
-| AC-5 | Release grant published and revision number recorded on issue 251 (external, LIVE_VERIFICATION). | manual: run checker on the release definition before publish; record revision |
-| AC-6 | Build script (external repo) meets SB-6/I-4 with mocked-publisher tests. | external repository tests; reported, not run here |
-| AC-7 | Checks 1-5 of the issue pass on a real hosted build and are posted on the issue. | manual live run; unperformed unless a human supplies it |
+| AC-1 | With UNCLE_PREVIEW_MODE=host (and separately UNCLE_HOSTED=1) and a live preview-server state file, uncle_headless prints no line starting `Preview:` or `Local preview:` for it. | headless-preview-test new cases |
+| AC-2 | In host mode HeadlessPreview.enabled() is False, poll() and finish() start nothing and finish() returns []. | headless-preview-test new case with a start spy |
+| AC-3 | Without host mode, the loopback address prints as `Local preview: http://127.0.0.1:P/`; final server lines (started, could-not-start, no-address) start with `Local preview:`. | headless-preview-test, headless-preview-open-test |
+| AC-4 | UNCLE_NOUI_PREVIEW=0, WORKFLOW_PREVIEW_OPEN_BROWSER=0, App: lines and URL rejection behavior are unchanged. | existing headless-preview tests |
+| AC-5 | SKILL.md rule 5 relays only https links, never localhost/127.0.0.1/[::1], and says no link was provided when only local Preview: lines exist; chat-skill-test requires this via a new pattern and a bad variant lacking it is rejected. | chat-skill-test |
+| AC-6 | Full shell and Python suites show no new failures versus baseline. | driver verification commands |
 

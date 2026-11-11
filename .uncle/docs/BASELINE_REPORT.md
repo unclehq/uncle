@@ -1,75 +1,71 @@
 # Baseline report
 
-Omitted sections: Reproduction result (the live failure is chat-side and outside this repo; not reproducible here); Existing failures (none documented in-repo beyond the Python-suite note below)
+Omitted sections: Current API/schema contracts (no schema change; line formats covered in behaviors); Reproduction (read-only analysis, described in B-1); Migration (none)
 
 ## 1. Change-request summary
-Issue 251 (CHANGE_REQUEST.md). Hosted builds give no preview link because three parts live OUTSIDE this repository: (a) the release's script-publisher grant for `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, (b) the build script's link request / sandbox keep (#207, #208, #235 step 3), (c) the end-to-end live proof (#235 checks 1-5). Host side already works; `UNCLE_PREVIEW_HOST` default stays `127.0.0.1`.
+Issue 253 (CHANGE_REQUEST.md): in hosted builds `--noui` prints loopback `Preview:` lines and starts a second preview server; chat rules relay every `Preview:` line. Fix: suppress in hosted mode, label local address `Local preview:`, tighten chat rule 5 to https only.
 
 ## 2. Repository architecture
-Shell drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) source `scripts/lib/host_preview_hook.sh`, which calls Python `scripts/lib/host_preview.py`. Skill text for the hosted chat Employee lives in `skills/uncle-build/SKILL.md`.
+Shell driver + Python libs under `scripts/lib`. `uncle_headless.py` is the `--noui` runner; `headless_preview.py` serves the finished app after a build; `host_preview.py` decides host mode and serves/records the host app (`.uncle/preview.json`). `skills/uncle-build/SKILL.md` gives chat-agent relay rules, checked by `scripts/tests/chat-skill-test.py`.
 
 ## 3. Relevant code paths
-- `scripts/lib/stage-config.sh:47-51` hosted mode defaults `UNCLE_PREVIEW_MODE=host`.
-- `scripts/stagegate.sh:7076`, `scripts/change-workflow.sh:5124` call `uncle_host_preview_hook` at COMPLETE.
-- `scripts/lib/host_preview_hook.sh:7-17` stops live preview, runs `host_preview.py serve`, ignores failures.
-- `scripts/lib/host_preview.py:217` binds `UNCLE_PREVIEW_HOST` (default 127.0.0.1); `:290-301` `serve` prints `UNCLE_PREVIEW_PORT=<n>`, exits 0.
-- `skills/uncle-build/SKILL.md` rules 1-6 (relay `Preview:` line; warning-page rule is rule 6).
-- `grep signed-preview-url` over the repo (excluding .git/.uncle) finds no file: no grant, release definition or link code exists here.
+- `scripts/lib/uncle_headless.py:144` `_URL_RE` loopback-only; `:204-224` `_scan_announcements` prints `Preview: <url>` (preview-server) and `App: <url>`; `:490-494` calls `preview.finish()`; `:494` appends final scan.
+- `scripts/lib/headless_preview.py:39-42` `enabled()`; `:155-173` `poll()`; `:175-190` `finish()` (lines `Preview: could not start...`, `Preview: the server did not report...`, `Preview: the server (pid N) keeps running...`).
+- `scripts/lib/host_preview.py:34` `is_host_mode(env)` (exactly `host`); `scripts/lib/hosted.py:9-11` UNCLE_HOSTED==`1`.
+- `skills/uncle-build/SKILL.md` rules 1 (relay every Preview:), 5 (http or https).
+- Tests: `scripts/tests/headless-preview-test.py` (lines 83,103-104,127,293 assert `Preview: http://127.0.0.1...`), `headless-preview-open-test.py:292-293`, `chat-skill-test.py:12-40,150-200` (REQUIRED patterns incl. `http-https-verbatim`).
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | COMPLETE in hosted mode | host_preview serve starts app, prints `UNCLE_PREVIEW_PORT=<n>`, exit 0 | host_preview.py:290-301 | Yes |
-| B-2 | Host preview failure | Ignored; run completes | host_preview_hook.sh:15-16 | Yes |
-| B-3 | Non-host mode | Hook does nothing | host_preview_hook.sh:9 | Yes |
-| B-4 | Default bind | 127.0.0.1 | host_preview.py:217 | Yes |
-| B-5 | Build output has `Preview:` line | Skill tells Employee to relay verbatim as plain/Markdown link | SKILL.md rules 1-6 | Yes |
-| B-6 | Hosted hire asked for preview link | No link possible; no grant/script change shipped | CHANGE_REQUEST live test | No (fixed outside repo) |
+| B-1 | `--noui` hosted build, live preview-server state | prints `Preview: http://127.0.0.1:P/` | uncle_headless.py:218 | No (MODIFY) |
+| B-2 | `--noui` local build, live preview-server state | prints `Preview: <loopback url>` | :218; headless-preview-test.py:83 | Content yes, label changes |
+| B-3 | completed app build, no live driver server | finish() starts server, prints `Preview: the server (pid N)...kill N` | headless_preview.py:175-190 | Content yes locally; label changes; none hosted |
+| B-4 | UNCLE_NOUI_PREVIEW=0 or WORKFLOW_PREVIEW_OPEN_BROWSER=0 | no early/final server | enabled() | Yes |
+| B-5 | `App: <url>` for app-server/preview-vite, `App: launch ...` | printed | :221,:248 | Yes |
+| B-6 | non-loopback or oversize URL in state file | rejected, no line | _URL_RE, :181; test :218 | Yes |
+| B-7 | chat sees Preview: lines | rule 1 relays all; rule 5 allows http/https | SKILL.md | Rule 5 changes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Host preview hook never fails the driver run | `|| true`, `return 0` in hook | shell suites for host preview (not enumerated; driver baseline) | Medium |
-| I-2 | Host mode only on exact lowercase `UNCLE_PREVIEW_MODE=host` | host_preview.py mode-check | same | Medium |
-| I-3 | Preview link is relayed only from the build output, http(s) only | SKILL.md rules 4-5 | two tests from PR #241 | Medium |
-
-## 6. Current API, schema, interface contracts
-`host_preview.py serve <dir>` stdout `UNCLE_PREVIEW_PORT=<n>`; `.uncle/preview.json`; env `UNCLE_PREVIEW_HOST/PORT/MODE`. Daytona signed-link API (external, observed in the issue): `expiresInSeconds` integer 1-3600 else 400; expire endpoint exists.
+| I-1 | Only loopback URLs are announced from state files | _URL_RE | headless-preview-test.py:218 | High |
+| I-2 | A driver-owned live server is never duplicated | server_alive() in poll/finish | headless-preview-test.py | High |
+| I-3 | Skill body <=60 lines and every REQUIRED rule present, forbidden phrases absent | chat-skill-test check() | chat-skill-test.py | High |
+| I-4 | Announcements are read-only on state files | _scan_announcements try/except | headless-preview-test.py | Medium |
 
 ## 7. Existing automated-test coverage
-Shell suites via `scripts/run-shell-tests.sh` (default tier `scripts/tests/critical-suites.txt`); Python suites `scripts/tests/*-test.py` via `scripts/run-python-tests.sh`. Groups 1 and 2 use separate temp dirs and bind no shared ports (per runner guidance), so they run in parallel. Command 3 runs the new suite explicitly; it does not exist before the change and is expected to fail at baseline.
+Python suites `headless-preview`, `chat-skill` (hyphenated `-test.py`) and shell suite `headless-preview-open` (in critical-suites.txt:126). Runners: `scripts/run-python-tests.sh`, `scripts/run-shell-tests.sh`. Tests share temp dirs per case; no groups declared (serial) to avoid reliance on unmeasured independence.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (both exist). No results produced here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Known: some Python suites already fail on a clean checkout.
+Not run in this stage (driver baseline authoritative: `.uncle/workflow/green-check.baseline.tsv`). Commands derived from CLAUDE.md-mandated runners and scripts/ listing. Some Python suites are known to fail on a clean checkout per runner docs; unlisted here which.
+
+## 10. Existing failures
+UNRESOLVED: none known to this stage beyond the generic note in section 9.
 
 ## 12. Likely change surface
-In-repo: a new pure release-grant checker plus its test and a short handoff doc. Out-of-repo (not changeable here): release definition, build script.
+`headless_preview.py`, `uncle_headless.py`, `SKILL.md`, and tests `headless-preview-test.py`, `headless-preview-open-test.py`, `chat-skill-test.py`.
 
 ## 13. Regression-sensitive components
-`host_preview.py`, `host_preview_hook.sh`, `skills/uncle-build/SKILL.md`, `critical-suites.txt`.
+Local `--noui` flow (early page poll, final finish), driver-owned server de-dup, chat skill checker patterns.
 
-## 14. Outside the change
-Host preview code, hook, SKILL.md, `UNCLE_PREVIEW_HOST` default, Daytona host, chat-side repo-request gap (filed separately).
+## 14. Explicitly outside the change
+host_preview.py, host_preview_hook.sh, stage-config.sh, `App:` line behavior, the driver's `preview_server.py`, TUI.
 
 ## 15. Unknowns and assumptions
-- U-1 Release definition format is unknown and not in repo; checker must be format-tolerant (walk JSON for matching objects). UNRESOLVED until a real definition is supplied.
-- U-2 Build script repository and release publishing need access this workflow lacks.
-- U-3 Live checks need a real hosted build.
+- Assumption: hosted == `UNCLE_PREVIEW_MODE=host` or `UNCLE_HOSTED=1` (per request).
+- `App:` loopback lines in hosted mode are also unreachable but chat rules do not relay them; left unchanged.
+- Existing tests assert the old `Preview:` loopback label; they must be updated per request item 2.
 
 ## 16. Initial risk assessment
-High: the issue's real fixes cannot be performed or verified from this repo; completing in-repo work must not be read as closing the issue. Low: regression risk to existing code (additive files only).
+Low. Risk: missed `Preview:` literal in a test or doc expecting the old label; chat-skill checker pattern coupling to rule wording.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- release-grants
-```
-
-## Parallel verification groups
-
-```text
-1 2
+bash scripts/run-python-tests.sh -- headless-preview
+bash scripts/run-python-tests.sh -- chat-skill
 ```
 

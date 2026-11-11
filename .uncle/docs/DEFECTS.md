@@ -1,22 +1,8 @@
 # Defects
 
-## None
+## Announced local preview URL includes the `/index.html` suffix instead of the bare `http://127.0.0.1:P/` the check expects. Not yet logged in DEFECTS.md (workers may not edit it); the driver or reconciler should record it.
 
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** The checklist row says to record BLOCKED-HUMAN when hosted access is unavailable. No hosted build, chat relay, or preview link was observed.
-- **Expected result:** Build output contains `Preview: <url> (works until HH:MM UTC)`, the chat relays the same HTTP(S) link, and opening it displays the built application.
-- **Actual result:** Not performed. A real hosted build and chat session need a person with hosted-service access.
-
-## None
-
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** The checklist row itself says to record BLOCKED-HUMAN when controlled live failure responses are unavailable. No hosted environment or operator was provided to this worker.
-- **Expected result:** Each build reports the link-request failure with a reason and emits no `Preview:` line or fabricated preview link.
-- **Actual result:** Not performed. The check needs an isolated hosted test environment where an operator controls the signed-link service responses (HTTP 400 and HTTP 403). None was available to this worker.
-
-## None
-
-- **Status:** BLOCKED-HUMAN
-- **Evidence:** The checklist row's own expected result prescribes BLOCKED-HUMAN when hosted-service access or a real Preview link is missing. No hosted-service credentials or Preview link were provided to this worker.
-- **Expected result:** The sandbox stays running and is not stopped or deleted before the advertised end time. The preview stays usable after the build finishes. Without hosted-service access or a real Preview link, record BLOCKED-HUMAN rather than PASS.
-- **Actual result:** Not performed. This check needs a dedicated real hosted build, observation of its sandbox in the hosting service through the advertised link lifetime, and a reopen shortly before the advertised UTC end time. This worker has no hosted-service access and no real Preview link.
+- **Status:** FAIL
+- **Evidence:** Probe stdout: `finish: ['Local preview: the server (pid 98724) keeps running for 2 minutes; stop it earlier with: kill 98724\n']`, `scan: ['Local preview: http://127.0.0.1:53137/index.html\n']`, `re match False`. urlopen of the announced URL returned `<html><body><h1>MC101 hello</h1></body></html>` plus the preview reload script. The announcement comes from the preview-server.url file via scripts/lib/uncle_headless.py (_scan_announcements, around line 223). Limits: this was a library-level probe, not a full build, and no real browser rendering was observed.
+- **Expected result:** The loopback address is announced as `Local preview: http://127.0.0.1:P/`, and the browser displays the application. Any final server lifetime message starts with `Local preview:` and includes its duration and stop instruction.
+- **Actual result:** The final lifetime message matches: `Local preview: the server (pid 98724) keeps running for 2 minutes; stop it earlier with: kill 98724`. The server served the application's HTML (`MC101 hello`) over HTTP, plus the reload script. The announced address does NOT match the expected form: it was `Local preview: http://127.0.0.1:53137/index.html`, with an `/index.html` path suffix rather than a bare `/`. My check that the line fully matches `Local preview: http://127.0.0.1:\d+/` returned False. The loopback prefix is correct and the page is served, but the announced URL's exact form deviates from the expected text.

@@ -2,31 +2,15 @@
 
 ## Findings
 
-### MC-100
+### MC-901
 
-- **Action:** Read the checklist row. Did not request a hosted build. This worker has no access to the hosted chat or hosting service, and the driver supplied no hosted URL.
-- **Expected result:** Build output contains `Preview: <url> (works until HH:MM UTC)`, the chat relays the same HTTP(S) link, and opening it displays the built application.
-- **Actual result:** Not performed. A real hosted build and chat session need a person with hosted-service access.
-- **Defects:** None
-
-### MC-102
-
-- **Action:** Read the checklist row. No action was taken against a hosted environment because none was supplied.
-- **Expected result:** Each build reports the link-request failure with a reason and emits no `Preview:` line or fabricated preview link.
-- **Actual result:** Not performed. The check needs an isolated hosted test environment where an operator controls the signed-link service responses (HTTP 400 and HTTP 403). None was available to this worker.
-- **Defects:** None
-
-### MC-300
-
-- **Action:** Read the MC-300 checklist row. Did not run a hosted build, because that needs access to the real hosting service and a real Preview link, and none was supplied in this environment.
-- **Expected result:** The sandbox stays running and is not stopped or deleted before the advertised end time. The preview stays usable after the build finishes. Without hosted-service access or a real Preview link, record BLOCKED-HUMAN rather than PASS.
-- **Actual result:** Not performed. This check needs a dedicated real hosted build, observation of its sandbox in the hosting service through the advertised link lifetime, and a reopen shortly before the advertised UTC end time. This worker has no hosted-service access and no real Preview link.
-- **Defects:** None
+- **Action:** Built a temporary harness (/tmp/mc901/h.py, outside the project) that extracts the real closing_trailer helper and the real body-assembly lines of handoff() from scripts/lib/change-pr.sh (override banner, attestation.attach_body, then body += closing_trailer). gh, git, publication and attest/seal were not run: the sealed attestation was mocked as {issue: owner/repo#123}, override_record was mocked, and attach_body and render come from the real scripts/lib/attestation.py. Audits were produced by the application's own renderer, artifact_json.render_final_audit (findings table, then a bare final verdict line such as READY, with no 'Verdict:' prefix). Ran four cases with origin owner/repo#123 (READY with valid passing tables; NOT READY with a matching override record; READY WITH NON-BLOCKING ISSUES with notes row AC-2 BLOCKED; READY with only non-blocking finding AR-3 'stays open') and the same four with no origin.
+- **Expected result:** READY case ends with 'Closes owner/repo#123'. Unfinished cases contain 'Refs owner/repo#123' and a nonempty Still open list naming the applicable reasons and blocker IDs, with no closing trailer. The attestation precedes the trailer. The originless case has neither trailer nor Still open section.
+- **Actual result:** Partly met. The originless cases are correct: no trailer and no Still open section in all four. The attestation precedes the trailer, and the NOT_READY+override, AC-2 and AR-3 cases give Refs with the right reasons. The finished READY case is wrong. With the emitted audit (bare final line 'READY') it produced 'Refs owner/repo#123 / Still open: - audit verdict unavailable' instead of 'Closes owner/repo#123'. The cause is _SO_VERDICT in closing_trailer, which requires the word 'verdict' followed by ':' or '-'. The emitted format has no such line, so every real audit is read as 'verdict unavailable' and the issue never auto-closes. The other cases carry the spurious 'audit verdict unavailable' entry too: the override case lists 'override recorded' and 'audit verdict unavailable' but not 'audit verdict not ready', and the AC-2 case lists 'audit verdict unavailable' and 'AC-2: required acceptance row BLOCKED'. scripts/tests/pr-closes-refs-test.sh only passes because it uses a hand-written 'Verdict: READY' line.
+- **Defects:** New defect: closing_trailer's verdict parser (_SO_VERDICT in scripts/lib/change-pr.sh) does not recognise the application's emitted FINAL_AUDIT.md format (bare final line READY / READY WITH NON-BLOCKING ISSUES / NOT READY), so a finished change never gets 'Closes' and always shows 'audit verdict unavailable'. Not yet recorded in DEFECTS.md (worker may not edit it).
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-100 | YES | BLOCKED-HUMAN | The checklist row says to record BLOCKED-HUMAN when hosted access is unavailable. No hosted build, chat relay, or preview link was observed. |
-| MC-102 | YES | BLOCKED-HUMAN | The checklist row itself says to record BLOCKED-HUMAN when controlled live failure responses are unavailable. No hosted environment or operator was provided to this worker. |
-| MC-300 | YES | BLOCKED-HUMAN | The checklist row's own expected result prescribes BLOCKED-HUMAN when hosted-service access or a real Preview link is missing. No hosted-service credentials or Preview link were provided to this worker. |
+| MC-901 | YES | FAIL | Captured bodies came from running python3 -I /tmp/mc901/h.py. Fixtures: FINAL_AUDIT.md rendered by artifact_json.render_final_audit, e.g. '## Findings\n\nREADY\n' and a table row '/ AR-3 / low / Issue #235 stays open until follow-up / Not stated / follow up / NO /' followed by 'READY'. IMPLEMENTATION_NOTES 'Acceptance delivery' tables (with and without the AC-2 BLOCKED row) and a VERIFICATION_REPORT 'Acceptance gate' table with MC-1 YES PASS. Per-case Still open results with origin: ready -> [audit verdict unavailable]; notready_override -> [override recorded, audit verdict unavailable]; rwnbi_blocked_AC2 -> [audit verdict unavailable, AC-2: required acceptance row BLOCKED]; ready_AR3 -> [audit verdict unavailable, AR-3: audit finding: issue stays open]. All four originless bodies end with the closing ``` of the attestation block. scripts/lib/change-pr.sh _SO_VERDICT (about line 485) and scripts/lib/artifact_json.py:328-332 (render_final_audit appends the bare verdict) are the two sides of the mismatch. Limitation: the full handoff() was not run end to end; only its assembly lines were exercised with the mocks listed above. |

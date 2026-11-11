@@ -1,18 +1,5 @@
 # Implementation notes
 
-## Step 1
+### Deviations
 
-## Step 2
-
-### Files changed
-
-- `scripts/lib/check_release_grants.py` — Written by isolated step 2; 2
-- `scripts/tests/release-grants-test.py` — Written by isolated step 2; 2
-
-## Step 3
-
-### Files changed
-
-- `docs/preview-link-release.md` — Written by isolated step 3; 3
-
-## Step 4
+- `.gitignore`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.

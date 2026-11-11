@@ -478,6 +478,112 @@ def blocking_findings():
     return rows
 
 
+# BEGIN closing_trailer
+_SO_ID = re.compile(r'[A-Z]{1,6}-[0-9]{1,4}')
+_SO_STAYS = re.compile(r'not closed|stays? open', re.I)
+_SO_VERDICT = re.compile(r'^[#>\s*_-]*(?:final\s+)?verdict\b[*_\s]*[:\-][*_\s`]*([A-Z][A-Z_]*)', re.I | re.M)
+_SO_READY = ('READY', 'READY_WITH_NON_BLOCKING_ISSUES')
+
+
+def _so_cells(line):
+    return [c.strip() for c in line.strip().strip('|').split('|')]
+
+
+def _so_acceptance(path, heading, notes):
+    """(blocked_ids, ok): ok only when the table was positively parsed. Never raises."""
+    try:
+        text = Path(path).read_text()
+    except Exception:
+        return [], False
+    try:
+        at = [i for i, l in enumerate(text.splitlines()) if l.strip().lower() == '## ' + heading.lower()]
+        if len(at) != 1:
+            return [], False
+        rows, header, blocked, seen = text.splitlines()[at[0] + 1:], None, [], 0
+        for line in rows:
+            if line.startswith('## '):
+                break
+            if not line.strip().startswith('|'):
+                continue
+            cells = _so_cells(line)
+            if header is None:
+                low = [c.lower() for c in cells]
+                if 'status' not in low or 'id' not in low:
+                    return [], False
+                header = low
+                continue
+            if set(''.join(cells)) <= set('-: '):
+                continue
+            if len(cells) != len(header):
+                return [], False
+            row = dict(zip(header, cells))
+            seen += 1
+            if row['status'].strip('*` ').upper().startswith('BLOCKED') and row.get('required', 'YES').strip('*` ').upper() != 'NO':
+                rid = row['id'].strip('*` ')
+                blocked.append(rid if _SO_ID.fullmatch(rid) else '')
+        return blocked, header is not None and seen > 0
+    except Exception:
+        return [], False
+
+
+def closing_trailer(j, origin):
+    """`Closes o/r#N` only on positive evidence the work is finished; else `Refs` plus a Still open list.
+
+    Entries are a closed set of labels plus IDs that fully match an allowlist; repository text is never copied.
+    Never raises: any doubt resolves to Refs.
+    """
+    ref = origin[0] + '#' + origin[1]
+    entries = []
+    try:
+        if j.get('release_skipped'):
+            entries.append('release skipped')
+        try:
+            record = override_record()
+            if len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash']:
+                entries.append('override recorded')
+        except Exception:
+            entries.append('override status unavailable')
+        audit = ''
+        try:
+            audit = Path('.uncle/docs/FINAL_AUDIT.md').read_text(errors='replace')
+        except Exception:
+            entries.append('audit verdict unavailable')
+        if audit:
+            verdicts = {m.upper() for m in _SO_VERDICT.findall(audit)}
+            if len(verdicts) != 1:
+                entries.append('audit verdict unavailable')
+            elif not verdicts <= set(_SO_READY):
+                entries.append('audit verdict not ready')
+            for line in audit.splitlines():
+                if _SO_STAYS.search(line):
+                    found = ''
+                    if line.strip().startswith('|'):
+                        first = _so_cells(line)[0].strip('*` ')
+                        found = first if _SO_ID.fullmatch(first) else ''
+                    else:
+                        m = re.search(r'(?<![A-Za-z0-9-])([A-Z]{1,6}-[0-9]{1,4})(?![A-Za-z0-9-])', line)
+                        found = m.group(1) if m else ''
+                    entries.append((found + ': ' if found else '') + 'audit finding: issue stays open')
+        for name, path, heading in (('IMPLEMENTATION_NOTES.md', '.uncle/docs/IMPLEMENTATION_NOTES.md', 'Acceptance delivery'),
+                                    ('VERIFICATION_REPORT.md', '.uncle/docs/VERIFICATION_REPORT.md', 'Acceptance gate')):
+            blocked, ok = _so_acceptance(path, heading, name)
+            if not ok:
+                entries.append('acceptance evidence unavailable: ' + name)
+            for rid in blocked:
+                entries.append((rid + ': ' if rid else '') + 'required acceptance row BLOCKED')
+    except Exception:
+        entries.append('closing status undetermined')
+    if not entries:
+        return 'Closes ' + ref
+    seen, out = set(), []
+    for e in entries:
+        if e not in seen:
+            seen.add(e)
+            out.append(e)
+    return 'Refs ' + ref + '\nStill open:\n' + '\n'.join('- ' + e for e in out[:20])
+# END closing_trailer
+
+
 def blocked_gate(reason):
     """Show why publication is refused, and let the operator read the findings.
 
@@ -1822,7 +1928,7 @@ def handoff(j):
         body = attestation().attach_body(body, sealed)
         if j['origin']:
             origin = j['origin'].strip().split('\t')
-            body += '\nCloses ' + origin[0] + '#' + origin[1] + '\n'
+            body += '\n' + closing_trailer(j, origin) + '\n'
         j.update(phase='prepared', title=title, body=body)
         save(j)  # Consent and mutation intent precede commit creation.
     if j['phase'] == 'prepared':

@@ -315,15 +315,27 @@ def render(sealed):
     return '```text\n' + '\n'.join(lines) + '\n```\n'
 
 
+TRAILER_RE = re.compile(r'(?:Closes|Refs) [^/\s#]+/[^/\s#]+#[0-9]+')
+
+
 def attach_body(body, sealed):
-    """Insert the block after the operator's sections and before any `Closes` trailer."""
+    """Insert the block after the operator's sections and before any `Closes`/`Refs` origin trailer (plus its `Still open:` list)."""
     body = body or ''
     if MARKER in body:
         return body
     lines = body.rstrip('\n').split('\n')
-    trailer = []
-    while lines and (not lines[-1].strip() or lines[-1].startswith('Closes ')):
-        trailer.insert(0, lines.pop())
+    end = len(lines)
+    start = end
+    # Optional `Still open:` block counts only when a complete origin trailer precedes it.
+    k = end
+    while k and lines[k - 1].startswith('- '):
+        k -= 1
+    if k and lines[k - 1] == 'Still open:' and k >= 2 and TRAILER_RE.fullmatch(lines[k - 2]):
+        start = k - 1
+    while start and (TRAILER_RE.fullmatch(lines[start - 1]) or not lines[start - 1].strip()):
+        start -= 1
+    trailer = lines[start:]
+    del lines[start:]
     text = '\n'.join(lines).rstrip('\n')
     text = (text + '\n\n' if text else '') + render(sealed)
     trailer = [line for line in trailer if line.strip()]

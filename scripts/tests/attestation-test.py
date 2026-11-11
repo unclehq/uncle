@@ -311,6 +311,30 @@ class T4Secrets(Fixture):
         self.assertTrue(body.rstrip().endswith('Closes owner/repo#38'))
         self.assertLess(body.index('UNCLE CHANGE ATTESTATION'), body.index('Closes'))
 
+    def _preserved(self, tail):
+        body = attestation.attach_body('## Work summary\n\nx\n\n' + tail, self.seal())
+        return body
+
+    def test_attach_keeps_refs_and_still_open_trailer(self):
+        tail = 'Refs owner/repo#38\nStill open:\n- AC-1\n- AR-2\n'
+        body = self._preserved(tail)
+        self.assertTrue(body.endswith('\n' + tail))
+        self.assertLess(body.index('UNCLE CHANGE ATTESTATION'), body.index('Refs owner'))
+
+    def test_attach_ordinary_bullet_list_not_trailer(self):
+        tail = '- one\n- two\n'
+        body = self._preserved(tail)
+        self.assertIn('x\n\n' + tail.rstrip('\n') + '\n\n', body.replace('\n\n\n', '\n\n'))
+        self.assertLess(body.index('- two'), body.index('UNCLE CHANGE ATTESTATION'))
+
+    def test_attach_unmatched_still_open_not_trailer(self):
+        body = attestation.attach_body('## Work summary\n\nx\n\nStill open:\n- a\n', self.seal())
+        self.assertLess(body.index('- a'), body.index('UNCLE CHANGE ATTESTATION'))
+
+    def test_attach_prose_starting_refs_not_trailer(self):
+        body = attestation.attach_body('## Work summary\n\nRefs are handled elsewhere\n', self.seal())
+        self.assertLess(body.index('Refs are handled'), body.index('UNCLE CHANGE ATTESTATION'))
+
     def test_attach_is_idempotent(self):
         once = attestation.attach_body('## Work summary\n\nx\n', self.seal())
         self.assertEqual(once, attestation.attach_body(once, self.seal()))

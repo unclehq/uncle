@@ -119,3 +119,4 @@ reviewer-prompt-kind
 # Stage fingerprint revalidation (uncle --revalidate): a wrong reuse skips a stage that should rerun.
 revalidate
 revalidate-integration
+revalidate-planner

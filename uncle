@@ -70,7 +70,7 @@ Usage: uncle [-h|--help|--performance|--runs] [--attended] [--noui]
        uncle --issue [ISSUE] [--attended]
        uncle --change-request [--attended] < request.md
        uncle --audit [BRANCH]
-       uncle --revalidate [--noui] [--attended] [--dry-run]
+       uncle --revalidate [--noui] [--attended] [--dry-run] [--no-supervisor]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -267,14 +267,14 @@ _help_seen=""
 for _a in "$@"; do
     case "$_a" in
         --revalidate) _reval_n=$((_reval_n + 1)) ;;
-        --dry-run) _dry_n=$((_dry_n + 1)) ;;
+        --dry-run|--no-supervisor) _dry_n=$((_dry_n + 1)) ;;
         -h|--help) _help_seen=1 ;;
         --application|--application=*|--issue|--change-request|--audit|--audit=*) _reval_other=$((_reval_other + 1)) ;;
     esac
 done
 if [[ -z "$_help_seen" ]]; then
     if [[ "$_dry_n" -gt 0 && "$_reval_n" -eq 0 ]]; then
-        printf 'Error: --dry-run is only valid with --revalidate\n' >&2
+        printf 'Error: --dry-run and --no-supervisor are only valid with --revalidate\n' >&2
         exit "$UNCLE_REFUSE_CODE"
     fi
     if [[ "$_reval_n" -gt 1 || ( "$_reval_n" -gt 0 && "$_reval_other" -gt 0 ) ]]; then
@@ -330,17 +330,18 @@ while [[ $# -gt 0 ]]; do
             _reval_args=(run)
             for _a in "$@"; do
                 [[ "$_a" != --dry-run ]] || _reval_args+=(--dry-run)
+                [[ "$_a" != --no-supervisor ]] || _reval_args+=(--no-supervisor)
                 [[ "$_a" != --noui ]] || export UNCLE_NOUI=1
                 [[ "$_a" != --attended ]] || export UNCLE_ATTENDED=1
             done
             for _a in "$@"; do
                 case "$_a" in
-                    --revalidate|--dry-run|--noui|--attended|--unattended|--noinput) ;;
+                    --revalidate|--dry-run|--no-supervisor|--noui|--attended|--unattended|--noinput) ;;
                     *) printf 'Unknown argument: %s\n' "$_a" >&2; exit "$UNCLE_REFUSE_CODE" ;;
                 esac
             done
             cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/lib/revalidate.py" "${_reval_args[@]}" ;;
-        --dry-run)     shift ;;
+        --dry-run|--no-supervisor) shift ;;
         --unattended)  UNCLE_FLAG_UNATTENDED=1; shift ;;
         --attended)    UNCLE_FLAG_ATTENDED=1; shift ;;
         --noui)        UNCLE_FLAG_NOUI=1; shift ;;

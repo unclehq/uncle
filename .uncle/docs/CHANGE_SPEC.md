@@ -1,68 +1,69 @@
-# Change spec
+# Change spec — Issue 248
 
-Omitted sections: Performance (none); Migration (none); Prototype isolation (not a prototype)
+Omitted sections: Performance (negligible), Migration (additive), Prototype isolation (n/a)
 
 ## 1. Change type
-Bug fix spanning three repositories/systems; only the verification tooling and handoff are changeable in this repo.
+Feature (security/verifiability).
 
 ## 2. Problem statement
-Hosted builds cannot give a preview link: release grant, build-script link request/sandbox keep, and live proof never shipped (see CHANGE_REQUEST.md, baseline sec. 1).
+A verification result does not show it came from the named command, environment and tree, and review cannot reproduce it. See CHANGE_REQUEST.md gaps 1-5.
 
-## 3. Current behavior
-Baseline B-1..B-6. No in-repo artifact detects a missing signed-link grant.
-
-## 4. Desired behavior
-Release grants include publisher `daytona`, `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, `require_approval` false; build script prints `Preview: <url> (works until HH:MM UTC)` with expiry <= 3600 s and sandbox kept; a pre-publish check proves the grant is present; live checks 1-5 recorded on the issue.
+## 3-4. Current / desired behavior
+See baseline B-1..B-6. Desired: each result carries a record; the attested tree and environment are stated; untrustworthy status is `unavailable`; `uncle verify --rerun` reproduces and compares.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| SB-1 | ADD | Run grant checker on a release definition containing the signed-link grant | No checker | Exit 0, prints OK | python test AC-1 |
-| SB-2 | ADD | Checker on definition missing the grant, or with it but `require_approval` true, wrong publisher/method/path, or unparseable/missing file | n/a | Nonzero exit, names the missing/invalid element | python test AC-2 |
-| SB-3 | PRESERVE | Host preview hook / serve / default bind | See B-1..B-4 | Unchanged | existing suites AC-4 |
-| SB-4 | PRESERVE | SKILL.md relay rules | B-5 | Unchanged | existing tests AC-4 |
-| SB-5 | ADD | Release published with grant (external) | No grant | Revision recorded on issue | manual AC-5 |
-| SB-6 | ADD | Build script run (external) | No link | `Preview:` line, expiry <=3600 s, autoStop >= lifetime, autoDelete 0, kept sandbox; 400/403 gives reason and no `Preview:` | external-repo tests AC-6 |
-| SB-7 | ADD | Live hosted build | none | Checks 1-5 pass | manual AC-7 |
+| SB-1 | PRESERVE | green_run | tsv `status\tcommand` | Unchanged format and statuses | existing green-check tests |
+| SB-2 | ADD | green_run, any path | no per-command record | `green-check.json` with command, argv, cwd, exit status, pipefail flag, start, duration, timeout, output sha256 | check-record-test.py |
+| SB-3 | ADD | attestation build | none | `verification` envelope carries environment block and digests green-check.json as evidence | check-record-test.py, build-attestation-test.py |
+| SB-4 | ADD | commands ran in a copy | not stated | Envelope records ran-in-copy, copy tree hash, rewrites; differing hash stated | check-record-test.py |
+| SB-5 | MODIFY | status not tied to own process | could be `pass` | `unavailable` with reason | check-record-test.py |
+| SB-6 | ADD | `false \| tail`, `false \| tee f` | untested | Fail through every wrapper | check-record-test.py |
+| SB-7 | ADD | `uncle verify --rerun` | none | Checks out attested tree, reruns recorded commands, compares status and output digest, reports mismatch incl. env differences | check-record-test.py |
+| SB-8 | MODIFY | final audit | reads transcript | Audit input includes the rerun result | tree-attested-final-audit-test.sh |
+| SB-9 | PRESERVE | `uncle verify` without `--rerun` | no rerun | Unchanged output and exit codes | attestation tests |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| I-1 | EXISTING | Host preview hook never fails the run | hook | host_preview_hook.sh | existing suites |
-| I-2 | EXISTING | Host mode only on exact `host` | host_preview.py | mode-check | existing suites |
-| I-3 | EXISTING | Only build-output http(s) Preview links are relayed | SKILL.md | rules 4-5 | existing tests |
-| I-4 | NEW | Printed end time never later than link expiry; expiry <=3600 s | build script (external) | build script | AC-6 |
-| I-5 | NEW | Checker never reports OK unless every grant field matches exactly | checker | checker | AC-1/AC-2 |
-No RELAXED or REMOVED invariants.
+| SI-1 | STRENGTHENED | A stage is never `pass` when a command's status is untrustworthy | verification envelope | build_attestation.green_result | check-record-test.py |
+| SI-2 | NEW | Environment capture uses an allow-list; no non-listed variable is ever read into the record | green-check.json, envelope | check_record.py | test with secret-named var |
+| SI-3 | NEW | Record output digest equals sha256 of that command's captured output | green-check.json | check_record.py | test mutating output |
+| SI-4 | NEW | Every command runs with pipefail | all wrappers | shell_syntax/run_check/parallel_checks | SB-6 tests |
+| SI-5 | EXISTING | tsv format unchanged | consumers | green_run | existing tests |
+
+No invariant is RELAXED or REMOVED.
 
 ## 7. Compatibility
-Additive only; no existing file's behavior changes.
+Attestations without the new fields still verify; `--rerun` on one reports `unavailable (no record)`, not failure of the base verification.
 
 ## 8. Error behavior
-Checker: missing/unreadable/invalid-JSON input or no matching grant exits nonzero with a reason; never silently passes.
+Missing record/output/status → `unavailable` with reason. Rerun mismatch → nonzero exit with the differing fields. Rerun cannot check out tree → exit with message.
 
 ## 10. Security
-Link is a bearer credential; checker and docs must not print or store tokens. Grant is read-only GET without approval, as requested.
+Allow-listed environment variables only (PATH excluded value? no: record names of Uncle-set variables and values for an explicit list). Rerun runs recorded commands from a signed record: it only runs after the existing verification checks pass, in a temp checkout, with timeout, and states what it is about to run.
 
 ## 12. Rollback
-Delete the added files; external release can be republished without the grant.
+Revert the commit; new files are additive, old attestations remain valid.
 
 ## 14. Non-goals
-Editing host preview code, hook, SKILL.md, UNCLE_PREVIEW_HOST default, chat-side repo-request gap, and any out-of-repo change performed by this workflow.
+Changing signing, running browsers in the rerun, making `--rerun` default for PRs (the question is answered: opt-in; defer).
 
-## 15. Assumptions and unresolved questions
-- Release definition format unknown (UNRESOLVED): checker accepts any JSON where an object has `publisher`=daytona, `method`=GET, `path` equal to the signed-link path, `require_approval`=false (key names may also be nested under a grants list).
-- AC-5..AC-7 cannot be performed in this repo; they are LIVE_VERIFICATION and remain open, not PASS.
+## 15. Assumptions
+A1: allow-list = Uncle-set variables plus WORKFLOW_CHECK_TIMEOUT_SECONDS, CI, LANG, TZ, NODE_ENV, UNCLE_PREVIEW_HOST/PORT. A2: tool versions come from `--version` of node, npm, python3, bash, git, playwright when present.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | A checker (`scripts/lib/check_release_grants.py <file>`) exits 0 for a release definition JSON containing a grant object with publisher daytona, method GET, path `/sandbox/{sandboxId}/ports/{port}/signed-preview-url`, require_approval false. | bash scripts/run-python-tests.sh -- release-grants |
-| AC-2 | The checker exits nonzero with a reason for: missing grant, require_approval true or absent, wrong publisher/method/path, invalid JSON, missing file. | bash scripts/run-python-tests.sh -- release-grants (each case asserts nonzero and reason text) |
-| AC-3 | A handoff doc `docs/preview-link-release.md` states the grant, build-script requirements (expiresInSeconds<=3600, autoStopInterval>=lifetime minutes, autoDeleteInterval 0, Preview line format, keep/delete rules) and live checks 1-5, and says they are not done by this repo. | manual read; test asserts file exists and names the grant path |
-| AC-4 | Existing host preview behavior, hook, default bind and SKILL.md are unmodified and existing suites show no regression versus baseline. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh vs baseline; git diff shows no change to those files |
-| AC-5 | Release grant published and revision number recorded on issue 251 (external, LIVE_VERIFICATION). | manual: run checker on the release definition before publish; record revision |
-| AC-6 | Build script (external repo) meets SB-6/I-4 with mocked-publisher tests. | external repository tests; reported, not run here |
-| AC-7 | Checks 1-5 of the issue pass on a real hosted build and are posted on the issue. | manual live run; unperformed unless a human supplies it |
+| AC-1 | green_run (serial and parallel paths) writes green-check.json with one entry per command containing command, argv, cwd, exit status, pipefail setting, start time, duration, timeout and sha256 of its captured output, and green-check.tsv is unchanged in format. | scripts/tests/check-record-test.py; removing any field fails it; existing green-check tests pass |
+| AC-2 | The verification envelope includes an environment block (OS, arch, tool versions, allow-listed variables, WORKFLOW_CHECK_TIMEOUT_SECONDS, jobs) and digests green-check.json as evidence. | check-record-test.py and build-attestation-test.py |
+| AC-3 | When commands ran in an isolated copy, the record states it with the copy's tree hash and the list of rewrites; a hash differing from inputs.artifact is stated. | check-record-test.py with an isolated_verify fixture |
+| AC-4 | If a command's status, output log or status file is missing or its record is inconsistent, the verification stage is unavailable with a reason, never pass. | check-record-test.py negative cases |
+| AC-5 | `false \| tail` and `false \| tee file` fail through shell_syntax.py, run_check.py and the parallel runner. | check-record-test.py |
+| AC-6 | No environment variable outside the allow-list appears in green-check.json or the envelope, including variables with credential-like names. | check-record-test.py sets SECRET_TOKEN and asserts absence |
+| AC-7 | `uncle verify --rerun` checks out the attested tree, reruns the recorded commands under recorded constraints, compares status and output digest, reports mismatches and environment differences with a nonzero exit, and passes only on full match; without --rerun behavior is unchanged. | check-record-test.py match and mismatch cases; attestation tests unchanged |
+| AC-8 | The final-audit stage is given the rerun result as input instead of relying on the transcript. | tree-attested-final-audit-test.sh extended |
+| AC-9 | The new suite is in scripts/tests/critical-suites.txt and existing shell and Python suites do not regress. | bash scripts/run-shell-tests.sh; bash scripts/run-python-tests.sh |
 

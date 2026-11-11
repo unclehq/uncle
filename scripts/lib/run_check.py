@@ -9,7 +9,10 @@ same limit (WORKFLOW_CHECK_TIMEOUT_SECONDS, default 900) and the same way of
 ending it: the command's whole process tree is terminated and the result is exit
 status 124 with a plain line in the log saying so.
 """
+import hashlib
+import json
 import os
+import time
 import subprocess
 import sys
 import tempfile
@@ -19,6 +22,31 @@ import signal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from process_tree import check_timeout, finish_check, start_check, wait_check, kill_tree
 from browser_install import prepare
+
+
+def emit_sidecar(command, status, started, output):
+    """Write <UNCLE_CHECK_RECORD_DIR>/<n>.json; cwd is relative to the executed root."""
+    directory = os.environ.get('UNCLE_CHECK_RECORD_DIR')
+    if not directory:
+        return
+    try:
+        output.flush()
+        output.seek(0)
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: output.read(65536), b''):
+            digest.update(chunk)
+        root = os.environ.get('UNCLE_EXECUTED_ROOT') or os.getcwd()
+        index = os.environ.get('UNCLE_CHECK_INDEX') or str(os.getpid())
+        record = dict(argv=command, cwd=os.path.relpath(os.getcwd(), root), status=status,
+                      pipefail=True, start=started, duration=round(time.time() - started, 6),
+                      timeout=check_timeout(), output_sha256=digest.hexdigest())
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, index + '.json')
+        with open(path + '.tmp', 'w', encoding='utf-8') as out:
+            json.dump(record, out)
+        os.replace(path + '.tmp', path)
+    except (OSError, ValueError):
+        pass  # The record is evidence; its absence is flagged by assemble, never a check result.
 
 
 def main(argv):
@@ -40,12 +68,15 @@ def main(argv):
     try:
         # A regular spool also supports idle detection when stdout is a pipe.
         with tempfile.TemporaryFile() as output:
+            started = time.time()
+            status = 126
             try:
                 with prepare(shell_command, output, env):
                     output.flush()
                     child = start_check(command, env=env, stdout=output, stderr=subprocess.STDOUT)
                     try:
-                        return wait_check(child, check_timeout(), output)
+                        status = wait_check(child, check_timeout(), output)
+                        return status
                     finally:
                         kill_tree(child)
                         child.wait()
@@ -54,6 +85,7 @@ def main(argv):
                 output.write((str(error) + '\n').encode())
                 return 126
             finally:
+                emit_sidecar(command, status, started, output)
                 output.seek(0)
                 shutil.copyfileobj(output, sys.stdout.buffer)
                 sys.stdout.flush()

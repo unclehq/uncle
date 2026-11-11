@@ -1,70 +1,74 @@
-# Baseline report
+# Baseline report — Issue 248
 
-Omitted sections: Reproduction result (the live failure is chat-side and outside this repo; not reproducible here); Existing failures (none documented in-repo beyond the Python-suite note below)
+Omitted sections: Reproduction result (not a bug; a feature gap)
 
 ## 1. Change-request summary
-Issue 251 (CHANGE_REQUEST.md). Hosted builds give no preview link because three parts live OUTSIDE this repository: (a) the release's script-publisher grant for `GET /sandbox/{sandboxId}/ports/{port}/signed-preview-url`, (b) the build script's link request / sandbox keep (#207, #208, #235 step 3), (c) the end-to-end live proof (#235 checks 1-5). Host side already works; `UNCLE_PREVIEW_HOST` default stays `127.0.0.1`.
+See CHANGE_REQUEST.md (Issue 248): record per-command command/env/output evidence in `green-check.json`, an environment block in the `verification` envelope, the tree that ran, `unavailable` for untrustworthy status, and `uncle verify --rerun`.
 
 ## 2. Repository architecture
-Shell drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) source `scripts/lib/host_preview_hook.sh`, which calls Python `scripts/lib/host_preview.py`. Skill text for the hosted chat Employee lives in `skills/uncle-build/SKILL.md`.
+Bash drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) source `scripts/lib/green-check.sh` and call `green_run`. Python helpers in `scripts/lib/` run commands, build the attestation envelopes and the standalone verifier `scripts/uncle-verify.py` (dispatched by `uncle verify`, `uncle` line 303).
 
 ## 3. Relevant code paths
-- `scripts/lib/stage-config.sh:47-51` hosted mode defaults `UNCLE_PREVIEW_MODE=host`.
-- `scripts/stagegate.sh:7076`, `scripts/change-workflow.sh:5124` call `uncle_host_preview_hook` at COMPLETE.
-- `scripts/lib/host_preview_hook.sh:7-17` stops live preview, runs `host_preview.py serve`, ignores failures.
-- `scripts/lib/host_preview.py:217` binds `UNCLE_PREVIEW_HOST` (default 127.0.0.1); `:290-301` `serve` prints `UNCLE_PREVIEW_PORT=<n>`, exits 0.
-- `skills/uncle-build/SKILL.md` rules 1-6 (relay `Preview:` line; warning-page rule is rule 6).
-- `grep signed-preview-url` over the repo (excluding .git/.uncle) finds no file: no grant, release definition or link code exists here.
+- `scripts/lib/green-check.sh:260-342` `green_run`: serial loop; wraps `bash -o pipefail -c` → `shell_syntax.py --command-file` (line 321) → `run_check.py` (326); appends `<status>\t<cmd>` to the tsv (331).
+- `scripts/lib/green-check.sh:278-300`: parallel path delegating to `scripts/lib/parallel_checks.py` (`record` at 209, results.tsv write at 365).
+- `scripts/lib/shell_syntax.py:49-60`: the only place `-o pipefail` is applied (execv).
+- `scripts/lib/run_check.py:1-66`: timeout (`check_timeout`), output spool copied to stdout.
+- `scripts/lib/build_attestation.py:42-84`: `green_result` reads only the tsv; `write_stages` writes the `verification` envelope with evidence tsv + AUTOMATED_TEST_REPORT.md.
+- `scripts/lib/envelope.py:343-390`: `write_envelope(..., inputs, evidence, extra)`.
+- `scripts/lib/isolated_verify.py:64-139`: `prepare` copies project to a private dir and rewrites the port; used by `scripts/lib/background-verify.sh:175`.
+- `scripts/uncle-verify.py:~590-680`: `main` runs checks 1-9 on an attestation; no command rerun.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | COMPLETE in hosted mode | host_preview serve starts app, prints `UNCLE_PREVIEW_PORT=<n>`, exit 0 | host_preview.py:290-301 | Yes |
-| B-2 | Host preview failure | Ignored; run completes | host_preview_hook.sh:15-16 | Yes |
-| B-3 | Non-host mode | Hook does nothing | host_preview_hook.sh:9 | Yes |
-| B-4 | Default bind | 127.0.0.1 | host_preview.py:217 | Yes |
-| B-5 | Build output has `Preview:` line | Skill tells Employee to relay verbatim as plain/Markdown link | SKILL.md rules 1-6 | Yes |
-| B-6 | Hosted hire asked for preview link | No link possible; no grant/script change shipped | CHANGE_REQUEST live test | No (fixed outside repo) |
+| B-1 | green_run command | tsv row `status\tcommand`; log has output | green-check.sh:331 | Yes |
+| B-2 | piped command failing | pipefail applied via shell_syntax.py | shell_syntax.py:57 | Yes |
+| B-3 | no tsv | verification `unavailable` | build_attestation.py:48 | Yes |
+| B-4 | tsv present | summary string `N commands: X pass...` | build_attestation.py:52-56 | Yes |
+| B-5 | `uncle verify` | checks signature/hashes, no rerun | uncle-verify.py main | Yes |
+| B-6 | timeout | status 124 and log line | run_check.py | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Host preview hook never fails the driver run | `|| true`, `return 0` in hook | shell suites for host preview (not enumerated; driver baseline) | Medium |
-| I-2 | Host mode only on exact lowercase `UNCLE_PREVIEW_MODE=host` | host_preview.py mode-check | same | Medium |
-| I-3 | Preview link is relayed only from the build output, http(s) only | SKILL.md rules 4-5 | two tests from PR #241 | Medium |
+| I-1 | Missing record is `unavailable`, never `pass` | build_attestation.green_result | build-attestation-test.py | High |
+| I-2 | Only REGRESSION fails the check | green_result | build-attestation-test.py | Medium |
+| I-3 | Attestation bytes canonical and signed | uncle-verify.py check_1/2 | attestation-test.py | High |
+| I-4 | Commands run with pipefail | shell_syntax.py | None through wrappers | Low |
 
-## 6. Current API, schema, interface contracts
-`host_preview.py serve <dir>` stdout `UNCLE_PREVIEW_PORT=<n>`; `.uncle/preview.json`; env `UNCLE_PREVIEW_HOST/PORT/MODE`. Daytona signed-link API (external, observed in the issue): `expiresInSeconds` integer 1-3600 else 400; expire endpoint exists.
+## 6. Interface contracts
+`green-check.tsv` (`status\tcommand`) is consumed by classification, baseline comparison and attestation: format must not change. Envelope `evidence` entries are digests of listed files; `extra` merges extra keys into the body. `uncle verify [<pr>] [--attestation PATH] [--tree SHA]`.
 
 ## 7. Existing automated-test coverage
-Shell suites via `scripts/run-shell-tests.sh` (default tier `scripts/tests/critical-suites.txt`); Python suites `scripts/tests/*-test.py` via `scripts/run-python-tests.sh`. Groups 1 and 2 use separate temp dirs and bind no shared ports (per runner guidance), so they run in parallel. Command 3 runs the new suite explicitly; it does not exist before the change and is expected to fail at baseline.
+Shell: green-check, green-check-vacuous, green-defer-mutation, tree-attested-final-audit. Python: build-attestation, attestation, attestation-statement, revalidate-attestation, host-preview. The shell and Python suites use separate temp dirs and share no ports, so they run as one parallel group. `scripts/tests/critical-suites.txt` selects the default tier.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (both exist). No results produced here; the driver baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Known: some Python suites already fail on a clean checkout.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (the documented runners). Not run here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites are known to fail on a clean checkout.
+
+## 10. Existing failures
+None established by this stage; see the driver baseline.
 
 ## 12. Likely change surface
-In-repo: a new pure release-grant checker plus its test and a short handoff doc. Out-of-repo (not changeable here): release definition, build script.
+`green-check.sh`, `run_check.py`, `parallel_checks.py`, `build_attestation.py`, `uncle-verify.py`, `isolated_verify.py`/`background-verify.sh` (tree-ran note), new `scripts/lib/check_record.py`, new tests, `scripts/tests/critical-suites.txt`, `scripts/README.md`.
 
 ## 13. Regression-sensitive components
-`host_preview.py`, `host_preview_hook.sh`, `skills/uncle-build/SKILL.md`, `critical-suites.txt`.
+The tsv format and exit semantics, parallel_checks performance, canonical attestation bytes (new evidence changes the digest set), uncle-verify exit codes (0/1/2/3).
 
 ## 14. Outside the change
-Host preview code, hook, SKILL.md, `UNCLE_PREVIEW_HOST` default, Daytona host, chat-side repo-request gap (filed separately).
+Signing, approval gates, tsv classification, check selection, PR creation flow.
 
 ## 15. Unknowns and assumptions
-- U-1 Release definition format is unknown and not in repo; checker must be format-tolerant (walk JSON for matching objects). UNRESOLVED until a real definition is supplied.
-- U-2 Build script repository and release publishing need access this workflow lacks.
-- U-3 Live checks need a real hosted build.
+- Assumption: green-check.json goes in the same state dir as the tsv, next to `green-check.tsv`.
+- Whether `isolated_verify.py` is used for the main green check is UNRESOLVED from reading: it is only called from background-verify.sh:175; the record must capture whichever applies.
 
 ## 16. Initial risk assessment
-High: the issue's real fixes cannot be performed or verified from this repo; completing in-repo work must not be read as closing the issue. Low: regression risk to existing code (additive files only).
+Medium: touches the central check runner (both serial and parallel paths); a bug could mask failures. Secret leakage via environment capture is the main security risk.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- release-grants
 ```
 
 ## Parallel verification groups

@@ -3698,6 +3698,11 @@ run_final_audit_panel() {
     python3 -B "$ROOT/scripts/lib/final_audit_packets.py" . || return 1
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"; cp "$ROOT/prompts/final-audit.md" "$FINAL_AUDIT_PROMPT"
     printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/FINAL_AUDIT_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$FINAL_AUDIT_PROMPT"
+    # Rerun result (D-5): structured, never inferred. Unless a requested rerun left its own
+    # result, record "not requested"; the audit must not launch a rerun or infer a pass.
+    local rerun_result="$STATE_DIR/documents/RERUN_RESULT.json"
+    [[ -s "$rerun_result" ]] || printf '{"status":"unavailable","reason":"not requested"}\n' > "$rerun_result"
+    printf '\n## Rerun result (binding)\n\nRead `%s`. Its status is passed, mismatch, or unavailable. Do not launch a rerun and do not infer a rerun pass from any transcript.\n' "$rerun_result" >> "$FINAL_AUDIT_PROMPT"
 }
 
 # Parallel implementation steps run in isolation: a worker writing one file

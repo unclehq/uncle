@@ -17,6 +17,7 @@ Exit: 0 attestation written, for every build. It attests that the procedure was 
 verdict and stage results as `outcomes`; it does not attest that the build is correct or ready.
 """
 import argparse
+import json
 from pathlib import Path
 import sys
 
@@ -55,6 +56,19 @@ def green_result(state, enabled):
     return 'pass', reason
 
 
+def load_record(path):
+    """(record, problem): the assembled green-check.json, or why it cannot be used. Absent is (None, '')."""
+    if not exists(path):
+        return None, ''
+    try:
+        data = json.loads(Path(path).read_text(errors='replace'))
+    except ValueError:
+        return None, 'green-check.json is not valid JSON'
+    if not isinstance(data, dict):
+        return None, 'green-check.json is not an object'
+    return data, ''
+
+
 def write_stages(state, artifact, verdict, green_enabled):
     plan = DOCS / 'UPDATED_PROJECT_PLAN.md'
     review = DOCS / 'ADVERSARIAL_REVIEW.md'
@@ -80,8 +94,27 @@ def write_stages(state, artifact, verdict, green_enabled):
           evidence=present(DOCS / 'IMPLEMENTATION_NOTES.md', DOCS / 'AUTOMATED_TEST_REPORT.md'),
           producer_stage='implementation', producer_kind='agent')
     result, reason = green_result(state, green_enabled)
+    record_path = Path(state) / 'green-check.json'
+    record, record_problem = load_record(record_path)
+    extra = {}
+    if record is not None:
+        extra['command_record'] = {
+            'digest': env.sha256_file(record_path),
+            'commands': len(record.get('commands') or []),
+            'environment': record.get('environment') or {},
+            'snapshot_digest': record.get('snapshot_digest') or '',
+        }
+        untrusted = [str(c.get('n', i)) for i, c in enumerate(record.get('commands') or [])
+                     if isinstance(c, dict) and c.get('trusted') is False]
+        if untrusted and result == 'pass':
+            result, reason = 'unavailable', reason + '; untrustworthy command records: ' + ', '.join(untrusted)
+    elif record_problem:
+        # A record that exists but cannot be read is never a pass; a missing one leaves the legacy rows to decide.
+        if result == 'pass':
+            result, reason = 'unavailable', reason + '; ' + record_problem
     env.write_envelope(state, 'verification', result, reason=reason, inputs={'artifact': artifact},
-                       evidence=present(Path(state) / 'green-check.tsv', DOCS / 'AUTOMATED_TEST_REPORT.md'))
+                       evidence=present(Path(state) / 'green-check.tsv', record_path, DOCS / 'AUTOMATED_TEST_REPORT.md'),
+                       extra=extra or None)
     # An audit that left no document, or no verdict, did not run; one that ran and said NOT_READY ran and found problems.
     ran = exists(DOCS / 'FINAL_AUDIT.md') and bool(verdict)
     audit = ('pass' if verdict in READY else 'fail') if ran else 'unavailable'

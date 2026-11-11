@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 252
+Issue 248
 
-Seeded from [unclehq/uncle#252](https://github.com/unclehq/uncle/issues/252).
+Seeded from [unclehq/uncle#248](https://github.com/unclehq/uncle/issues/248).
 
 ## Change Type
 
@@ -10,68 +10,42 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Asked for a preview link, the hosted chat agent says previews aren't possible: no rule tells her a hosted build ends with a link
+Record the exact command, environment and output with each verification result, and let review rerun it
 
 ## Motivation
 
-## Summary
+## Problem
 
-When a person asks the hosted build Employee for a preview link, she says she can't make one. Nothing in her chat instructions says a hosted build ends with a link to the running app. The only preview rules, in `skills/uncle-build/SKILL.md`, cover what to do with a `Preview:` line after a build has already run. So before a build she says her work "always goes through a GitHub pull request". With no repository, no build starts and no link can exist.
+Uncle's attestation says *what* each verification command returned, but not enough to show the result came from the command and tree it names, or to let a reviewer confirm it without trusting our word. A captured test run can show `exit=0` that is really the exit code of a `tail` or `tee` the output was piped through, and the record looks the same whether the tests passed or not. Uncle should make that class of mistake impossible to miss and cheap to check.
 
-## What happens today
+## What Uncle does today (read at `main`)
 
-**Live test, 2026-11-11 17:29 UTC,** on a fresh hire running release revision 41. The message was:
+- `scripts/lib/green-check.sh` runs each approved command as `bash -o pipefail -c "$cmd"`, then writes `<status>\t<command>` to `green-check.tsv`. Good. But the command is wrapped by `shell_syntax.py` and `run_check.py` first, and the pipefail guarantee is only visible in `shell_syntax.py`'s own branch. Nothing tests that a piped command such as `false | tail` fails through the wrappers.
+- `scripts/lib/build_attestation.py` writes a stage as `unavailable`, never `pass`, when it has no record. Good, and this is the rule worth keeping. It does not cover a check that ran but whose exit status is not trustworthy.
+- The `verification` envelope records a summary string (`N commands: X pass, Y pre-existing, Z regressed`), the tree hash as `inputs.artifact`, and a digest of `green-check.tsv` plus `AUTOMATED_TEST_REPORT.md`.
+- `verification` is a driver-written claim. `uncle verify` checks the signature and hashes; it does not run the commands again.
 
-> Build a one-page website in plain HTML (no framework) that shows the heading "Preview link test" and a short paragraph. I don't need a pull request yet. I want to see it running first, so please send me the preview link to the running app.
+## Gaps
 
-The reply came after 8 seconds, with no tool calls:
+1. **No environment record.** The envelope has no OS, architecture, tool versions (node, python, npm, browsers), no relevant environment variables, no working directory, no timeout in force and no per-command duration. Two runs of the same command on the same tree hash can differ in ways the record cannot show.
+2. **The commands ran on a copy, not the attested tree.** `isolated_verify.py` runs them in a private copy with the project's port moved. The envelope's `inputs.artifact` is the real tree's hash. The record doesn't say the commands ran on a modified copy, or how it differed.
+3. **Output is not bound to the result.** `green-check.tsv` has the status and command only. The captured output log is not digested into the envelope, so a status can't be matched to the output it came from.
+4. **No cross-check of the exit status.** Nothing records whether a command's status came from its own process or from a wrapper, and nothing flags a command whose pipeline masks failures.
+5. **Review reads the record.** The reviewing step trusts `green-check.tsv`. It does not rerun the suite itself.
 
-> I can build this and open a pull request for it — that's how I work. I don't have a way to run or host a live preview app outside of that; my process always goes through a GitHub pull request, not a standalone running preview link.
->
-> Once the PR is open, you'll be able to review the file directly on GitHub (it'll render fine as a static HTML file preview there), or pull the branch locally to open it in a browser.
->
-> So: which repository should I work in? If it's a brand-new site, please create an empty repository first and give me its name, and I'll build the one-page HTML file and open the PR.
+## Proposal
 
-Three things are wrong:
+1. **Per-command record** in a new `green-check.json` (kept next to `.tsv`): exact command string, argv as run (after wrappers), cwd, exit status, `PIPESTATUS`/pipefail setting in force, start time, duration, timeout, and a sha256 of that command's captured output. Digest this file as envelope evidence, not just the `.tsv`.
+2. **Environment block** in the `verification` envelope: OS and architecture, versions of the tools the commands invoke (at least node, npm, python3, bash, git and any browser driver), the allow-listed environment variables Uncle sets or unsets, and the config values that change behaviour (`WORKFLOW_CHECK_TIMEOUT_SECONDS`, the CPU jobs count).
+3. **Say what tree ran.** When `isolated_verify.py` runs commands in a copy, record that, with the tree hash of the copy and the list of rewrites (the moved port). A hash that differs from `inputs.artifact` is stated, not hidden.
+4. **Unavailable, not pass, for untrustworthy status.** If a command's status can't be tied to its own process (wrapper failed to start, output log missing, status file missing), the stage is `unavailable` with the reason, never `pass`. Add a test that `false | tail` and `false | tee file` fail through every wrapper.
+5. **Independent rerun at review.** Add `uncle verify --rerun`: check out the attested tree, run the recorded commands with the recorded environment constraints, and compare status and output digest against the record. Report a mismatch (including environment differences) instead of passing. The final-audit stage should use it rather than reading the transcript.
+6. **Tests.** Each new field gets a test that fails when the field is removed, in the style of the existing `host-preview-test.py` and `headless-preview-open-test.py`.
 
-1. She says previews don't exist. The preview path (#206–#210, #235) exists to give exactly this person a link.
-2. Even for the pull-request path, she offers only "review the file on GitHub" or "pull the branch locally". She never mentions that the build ends with a link.
-3. The listing promises "Builds a working web app from one sentence", but with no repository she won't start.
+## Questions
 
-## Code paths (main `b27e23c`)
-
-Blame is `git blame`.
-
-| Where | What it does | Last changed in |
-|---|---|---|
-| `skills/uncle-build/SKILL.md:3` | The skill's description: "How to report the preview link **after** running the uncle build script in chat." | `274a636` 2026-11-09 (#210, PR #220) |
-| `skills/uncle-build/SKILL.md:8-16` | Rules 1–5 cover only relaying a `Preview:` line already in the build output. None tells the agent that a hosted build ends with a link, that it may offer one, or what to answer when asked for a preview before a build. | `274a636` 2026-11-09 (#210, PR #220) |
-| `skills/uncle-build/SKILL.md:17` | Rule 6: the warning-page note. It also applies only after a build. | `72902f2` 2026-11-10 (#235, PR #241) |
-| `scripts/tests/chat-skill-test.py:17-31` (`REQUIRED`) | Pattern checks for the rules above (`preview-line`, `why-when-no-link`, `warning-page`, and others). None checks that the agent offers a preview. | PR #220, PR #241 |
-| The release's own instructions (not in this repository) | Evidently say every build ends in a pull request: she quoted that as "that's how I work". | |
-
-## Fix
-
-1. **Tell her the link exists.** Add a rule at the top of `skills/uncle-build/SKILL.md`: a finished hosted build ends with a link to the running app, valid for up to an hour. When someone asks to see the app running, say a build gives them that link, and never say previews aren't possible. Make the same change in the release's instructions, so the two don't contradict each other.
-2. **Mention the link on the pull-request path too.** When she describes what a build delivers, say "a pull request and a link to try the app", not only the pull request.
-3. **A build with no repository. Decision needed.**
-   - (a) Recommended: build in the sandbox without a repository, end with the link, and offer a pull request once the person names a repository. This matches "Builds a working web app from one sentence".
-   - (b) Ask for a repository first, but say the build will end with a link.
-4. **Publish** a release with the new instructions.
-
-## Tests
-
-- `scripts/tests/chat-skill-test.py`: add an `offer-preview` pattern requiring the new rule, and a bad variant without it that must fail.
-- A chat-level check against the published release: ask for "a preview link to the running app" with no repository. The reply must not say previews are impossible. Under 3(a), she starts a build. Under 3(b), she asks for a repository and says the build ends with a link.
-
-## Checks after the fix
-
-1. Send the message above to a fresh hire. She doesn't say she can't make a preview link.
-2. Under 3(a), the run ends with a clickable `Preview:` link that opens the page (needs the release grant, #251).
-
-## Related
-
-#206, #207, #208, #209, #210, #235, #236, and #251 (the release grant and build script).
+- Which environment variables are safe to record? Anything that can hold a credential must be excluded by allow-list, not filtered after the fact.
+- Should `--rerun` be part of `uncle verify` by default for builds Anya Sharp opens pull requests for, so a hirer can see the rerun result in the pull request?
 
 ## Observed Current Behavior
 

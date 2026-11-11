@@ -1,64 +1,112 @@
-## AR-001: The unconditional PR delivery promise conflicts with sandbox builds and optional publishing.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN.json step-2 requires saying 'a pull request and a link to try the app' while deferring PRs for builds without a repository; CHANGE_SPEC.json AC-2 and AC-3 repeat these competing requirements. The user's publishing instruction makes PR creation optional, so repository selection alone cannot make a PR a guaranteed deliverable.
-- Failure: The unconditional PR delivery promise conflicts with sandbox builds and optional publishing. Add: "Describe a build as providing a link to try the app; promise a pull request only when a repository is named and the user separately authorizes publishing."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-002: The scope-cut policy permits dropping mandatory acceptance behavior.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN.json section 'Scope cuts under time pressure' permits cutting SB-2 wording, but CHANGE_SPEC.json AC-2 requires that wording and its removal variant to be rejected. Following the cut would leave implementation and acceptance checks enforcing different scopes.
-- Failure: The scope-cut policy permits dropping mandatory acceptance behavior. Add: "SB-2 wording and all tests required by AC-1 through AC-5 remain mandatory under time pressure; defer completion rather than remove them."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-003: The new unconditional link promise conflicts with preserved failure handling.
+## AR-001: The replay source is ambiguous when executed files include untracked changes or copy rewrites, so replay can test differ
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json step-2 says to end no-repository builds with the link; section 7 preserves the no-link rule. CHANGE_SPEC.json SB-4 and section 8 preserve handling when no link is produced. Without explicit precedence, the new first rule can regress truthful reporting on failed or malformed output.
-- Failure: The new unconditional link promise conflicts with preserved failure handling. Add: "If a sandbox or hosted build produces no valid Preview line, the existing no-link and malformed-output rules take precedence; never invent a link or promise that this run produced one."
+- References: CHANGE_PLAN.json §2-3 D-4 selects git archive; CHANGE_SPEC.json AC-7 selects the attested tree, while AC-3 permits the executed copy's hash to differ from inputs.artifact. These do not define reproduction of the actual checked files; adopt the snapshot rule and bind its digest to the record.
+- Failure: The replay source is ambiguous when executed files include untracked changes or copy rewrites, so replay can test different inputs. Add: “Rerun restores the immutable executed-file snapshot, including untracked files and recorded rewrites, without requiring a project commit or clean working tree.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Line-removal tests cannot independently protect three behaviors placed on one new rule line.
+## AR-002: The environment allow-list is not finite: “Uncle-set variables” could include credentials, contradicting the no-credenti
 
-- Severity: MEDIUM
-- References: CHANGE_PLAN.json sections 1 and 10 place SB-1..SB-3 in rule 1 but specify defect tests that drop lines by needle. Removing that shared line erases all three behaviors, so redundant or overly broad patterns can pass the defect tests while accepting an individual behavior's removal.
-- Failure: Line-removal tests cannot independently protect three behaviors placed on one new rule line. Add: "For each new REQUIRED ID, mutate only its corresponding clause while preserving the other two clauses and numbering, and assert rejection naming that ID."
+- Severity: HIGH
+- References: CHANGE_SPEC.json §15 A1 includes all Uncle-set variables, while §10 leaves PATH handling unresolved; CHANGE_PLAN.json R-1 promises no credential recorded. Specify the complete list and whether PATH is omitted so implementation and absence tests enforce the same boundary.
+- Failure: The environment allow-list is not finite: “Uncle-set variables” could include credentials, contradicting the no-credential restriction. Add: “Capture values only for explicitly enumerated variable names; prefixes and setter provenance never grant inclusion, and credential-bearing variables are excluded.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: The time-pressure cuts permit dropping required behavior and its regression protection.
+## AR-003: Final audit requires a rerun result although rerun is optional, leaving ordinary completion undefined.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json section 16 permits cutting the previews-impossible defect test and then SB-2 wording, while section 10 requires that test. CHANGE_SPEC.json AC-2 requires the PR-and-link wording and SI-3 prohibits denying preview availability; the cuts allow implementation and verification to target different requirements.
-- Failure: The time-pressure cuts permit dropping required behavior and its regression protection. Add: "SB-2 wording and the previews-impossible defect test are mandatory and may not be cut without revising and reapproving the specification."
+- References: CHANGE_SPEC.json AC-8 and SB-8 require the rerun result as audit input, but §14 and CHANGE_PLAN.json D-2 make rerun opt-in. Define the absent-result state and its audit treatment rather than letting audit wiring silently make rerun mandatory.
+- Failure: Final audit requires a rerun result although rerun is optional, leaving ordinary completion undefined. Add: “When rerun was not requested, final audit receives a structured not-requested result and may complete without executing rerun; requested reruns supply their actual outcome.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Whole-line deletion removes all three new requirements together, leaving partial omissions untested.
+## AR-004: Replaying every recorded command conflicts with excluding browsers when a recorded check launches one.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §10 specifies dropping lines by needle; implementation step 2 puts all three behaviors in rule 1. These mutations cannot establish that the checker rejects omission of expiry, the preview-request response, sandbox execution, or the deferred PR offer individually.
-- Failure: Whole-line deletion removes all three new requirements together, leaving partial omissions untested. Add: “Independently mutate each required clause of AC-1 through AC-3 while preserving the other clauses, and assert rejection by its corresponding requirement ID.”
+- References: CHANGE_SPEC.json AC-7 requires rerunning recorded commands and passing only on full match, while §14 excludes running browsers in rerun. Define how browser-dependent commands are identified and handled so implementations cannot silently skip them and report success.
+- Failure: Replaying every recorded command conflicts with excluding browsers when a recorded check launches one. Add: “If any recorded command requires browser execution, rerun reports unavailable with a nonzero exit and does not claim a full match.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: The description change has no specified behavioral assertion.
+## AR-005: The archive-based rerun does not specify how modified and untracked verified files enter the replay tree, risking stale
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC.json SB-6 and AC-4 require expanding the description, but CHANGE_PLAN.json §10 and step 1 specify no corresponding checker change. The supplied scripts/tests/chat-skill-test.py:107–111 only checks that description is nonempty, so the original description would still pass.
-- Failure: The description change has no specified behavioral assertion. Add: “Check that the description covers offering a preview before a build and reporting it afterward; reject a variant restoring the original after-only description.”
+- Severity: HIGH
+- References: CHANGE_PLAN.json §2-3, D-4 selects `git archive` of the tree; CHANGE_SPEC.json AC-7 requires replaying the attested tree. The user's binding instructions require file hashes and inventories including untracked files, but the plan supplies no mapping from that snapshot to the archived tree.
+- Failure: The archive-based rerun does not specify how modified and untracked verified files enter the replay tree, risking stale inputs or a new commit prerequisite. Add: “Capture and replay a file snapshot including modified and untracked inputs; verification never requires a project commit or clean working tree.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Sequential numbering does not prove the preview-offer rule occupies rule 1.
+## AR-006: Mandatory final-audit rerun input conflicts with opt-in reruns unless the absent-result case is defined, potentially blo
+
+- Severity: HIGH
+- References: CHANGE_PLAN.json D-2 makes rerun opt-in, while CHANGE_SPEC.json AC-8 and SB-8 require its result as final-audit input. Neither defines audit behavior when no rerun exists; this leaves implementations free to require reruns or treat their absence as failure.
+- Failure: Mandatory final-audit rerun input conflicts with opt-in reruns unless the absent-result case is defined, potentially blocking existing workflows. Add: “When rerun was not requested, final audit receives an explicit not-requested result and retains its existing completion behavior without executing a rerun.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-007: Browser checks have no defined rerun behavior: replaying every command can launch browsers, while skipping them cannot e
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json SI-2 explicitly requires the new offer-preview rule to be rule 1. CHANGE_PLAN.json §10 specifies numbering 1–7 and a rule-7 warning regex, but no rule-1 content anchor; the supplied checker at scripts/tests/chat-skill-test.py:76–78 searches REQUIRED patterns anywhere in the body.
-- Failure: Sequential numbering does not prove the preview-offer rule occupies rule 1. Add: “Require the offer-preview content within numbered rule 1 and reject a variant that swaps it with another rule while retaining sequential numbering.”
+- References: CHANGE_SPEC.json AC-7 requires rerunning recorded commands and passing only on full match, but §14 excludes running browsers in rerun. The plan defines neither browser-check handling nor an unavailable outcome for this combination, risking unexpected browser launches or false successful replay.
+- Failure: Browser checks have no defined rerun behavior: replaying every command can launch browsers, while skipping them cannot establish a full match. Add: “If a recorded check requires a browser, rerun reports unavailable with a nonzero exit before executing commands; ordinary verification remains unchanged.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-008: Rerun environment inheritance is unspecified, so recorded commands could receive the reviewer's credentials despite the
+
+- Severity: HIGH
+- References: CHANGE_PLAN.json §4 says rerun needs “no live credentials”; CHANGE_SPEC.json SI-2 limits environment capture, while §10 specifies only a temporary checkout and timeout for execution. Capture filtering does not prevent subprocesses from inheriting secrets; adopt a separate execution-environment policy.
+- Failure: Rerun environment inheritance is unspecified, so recorded commands could receive the reviewer's credentials despite the capture allow-list. Add: “Launch reruns with a fresh environment containing only explicitly permitted execution variables; never inherit credential variables.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: Recorded cwd has no relocation or containment rule, allowing replay to run outside its temporary checkout.
+
+- Severity: HIGH
+- References: CHANGE_SPEC.json AC-1 requires recording cwd, and AC-7 requires rerunning commands in the attested tree; CHANGE_PLAN.json D-4 selects a temporary directory. Neither defines how an original absolute cwd or an escaping path is handled, risking execution against the reviewer's real checkout or other directories; specify containment.
+- Failure: Recorded cwd has no relocation or containment rule, allowing replay to run outside its temporary checkout. Add: “Store cwd relative to the executed root, resolve it inside the rerun root, and reject absolute paths, traversal, or symlink resolution outside that root before executing any command.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-010: “Uncle-set variables” leaves credential capture open to incompatible interpretations.
+
+- Severity: HIGH
+- References: CHANGE_SPEC.json §15 A1 defines the allow-list as “Uncle-set variables plus” named variables, whereas CHANGE_PLAN.json R-1 promises “no credential recorded” and D-3 specifies a constant. A prefix or provenance interpretation could admit future Uncle credentials; replace the open-ended category with an explicit list.
+- Failure: “Uncle-set variables” leaves credential capture open to incompatible interpretations. Add: “Enumerate every permitted environment-variable name in the constant; do not select variables by prefix or provenance, and exclude credential-bearing variables even when Uncle sets them.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-011: Environment comparison lacks a defined oracle, so match and env-diff tests can enforce incompatible behavior.
+
+- Severity: HIGH
+- References: CHANGE_SPEC.json AC-2, AC-7 and assumptions A1–A2 require environment capture and mismatch reporting, but do not define comparison fields, normalization, or whether execution proceeds after a difference. CHANGE_PLAN.json §16–17 promises match/mismatch/env-diff tests; specify this decision before implementing those assertions.
+- Failure: Environment comparison lacks a defined oracle, so match and env-diff tests can enforce incompatible behavior. Add: "Compare every recorded environment field exactly before execution; missing tools or differing values produce a nonzero environment-mismatch result without running commands."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: The rerun timeout option has no precedence rule against recorded timeouts, leaving timeout tests without a single expect
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN.json §8 introduces --rerun-timeout S, while CHANGE_SPEC.json AC-7 requires recorded constraints and AC-1 records each command's timeout. Neither document defines overrides or invalid values; adopt an explicit rule and test omitted, shorter, longer, zero, negative, and malformed values.
+- Failure: The rerun timeout option has no precedence rule against recorded timeouts, leaving timeout tests without a single expected result. Add: "The effective timeout is the lesser of the recorded timeout and a positive --rerun-timeout value; omission preserves the recorded timeout, and invalid values fail before execution."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-013: Legacy attestations have no specified rerun exit code, so compatibility tests can accept contradictory CLI behavior.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC.json §7 says legacy --rerun reports unavailable, not failure of base verification; AC-7 says rerun passes only on full match, and §8 specifies nonzero only for mismatches. Define the process exit separately from base-verification status and assert both in the legacy fixture.
+- Failure: Legacy attestations have no specified rerun exit code, so compatibility tests can accept contradictory CLI behavior. Add: "For a valid legacy attestation without a command record, --rerun reports unavailable and exits nonzero while preserving the successful base-verification result."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-014: Final-audit tests lack an expected input when rerun was not requested.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC.json AC-8/SB-8 require the rerun result as audit input, but §14 and CHANGE_PLAN.json D-2 make rerun opt-in. Neither specifies the ordinary no-rerun case; settle that state and cover it in tree-attested-final-audit-test.sh.
+- Failure: Final-audit tests lack an expected input when rerun was not requested. Add: "When rerun is not requested, final audit receives a structured unavailable result with reason 'not requested'; it must not infer a rerun pass from the transcript or launch rerun implicitly."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

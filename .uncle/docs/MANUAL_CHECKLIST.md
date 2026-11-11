@@ -3,7 +3,31 @@
 ### MC-100
 - Exclusive resources: none
 - Depends on: none
-- Exact action: After the separately authorized release is available with grant #251, start a fresh hosted hire and send: “I have no repository; build a simple counter app in the sandbox and give me a preview link so I can try it; explain what the build delivers, and do not publish anything.” Observe the response and completed build, then click the returned Preview: link.
-- Expected result: The agent explains that the build provides a preview valid up to an hour, builds without requiring a repository, and offers a pull request only after a repository is named and publishing is separately authorized. For a successful build with valid Preview: output, the reply contains a clickable link and expiry matching that output, the link displays the running counter app, and the agent never says previews are impossible or promises automatic tab opening.
+- Exact action: Using the driver's valid attestation and matching replay environment, set ATTESTATION to its supplied path and interactively run `./uncle verify --attestation "$ATTESTATION"`, then `./uncle verify --attestation "$ATTESTATION" --rerun`. Observe the terminal output and exit status of each invocation.
+- Expected result: Ordinary verification succeeds without replaying commands; the explicit rerun announces each command before execution and reports per-command matches. Rerun exits zero only when all recorded statuses and output digests match.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-101
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Using the driver's valid attestation with recorded TZ=UTC, set ATTESTATION to its supplied path and interactively run `TZ=Pacific/Honolulu ./uncle verify --attestation "$ATTESTATION" --rerun`. Observe the diagnostic and exit status.
+- Expected result: Rerun reports an environment mismatch identifying TZ and exits nonzero before executing any recorded command. It does not claim a full match.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-400
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Using the driver's valid current-file attestation, invoke `./uncle verify --attestation "$ATTESTATION_PATH"` without requesting rerun. Observe the terminal interaction through completion.
+- Expected result: Ordinary verification succeeds with exit status 0 and retains its existing verification reporting. No recorded commands are replayed or presented as having passed a rerun.
+- Actual result: 
+- Status: NOT RUN
+
+### MC-401
+- Exclusive resources: none
+- Depends on: none
+- Exact action: Using a driver-provided valid legacy attestation without a command record, invoke `./uncle verify --attestation "$LEGACY_ATTESTATION_PATH"`, then invoke the same CLI with `--rerun`. Observe both results.
+- Expected result: Ordinary verification succeeds with exit status 0. The explicit rerun reports unavailable because no command record exists and exits nonzero, while clearly preserving the successful base-verification result.
 - Actual result: 
 - Status: NOT RUN

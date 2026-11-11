@@ -1,61 +1,79 @@
-# Baseline report
+# Baseline report — Issue 248
 
-Omitted sections: Reproduction (live-only, recorded in CHANGE_REQUEST.md); Current API/schema contracts (none touched); Existing failures (none documented in repo, driver baseline is authority)
+Omitted sections: Reproduction result (not a bug; a feature gap)
 
 ## 1. Change-request summary
-See `.uncle/docs/CHANGE_REQUEST.md` (Issue 252): hosted chat agent says previews are impossible because no rule says a hosted build ends with a preview link.
+See CHANGE_REQUEST.md (Issue 248): record per-command command/env/output evidence in `green-check.json`, an environment block in the `verification` envelope, the tree that ran, `unavailable` for untrustworthy status, and `uncle verify --rerun`.
 
 ## 2. Repository architecture
-Chat skill is a Markdown file `skills/uncle-build/SKILL.md` (front matter + numbered rules). Its text is checked by a pure-function checker in `scripts/tests/chat-skill-test.py`. The release's own chat instructions live outside this repo.
+Bash drivers (`scripts/stagegate.sh`, `scripts/change-workflow.sh`) source `scripts/lib/green-check.sh` and call `green_run`. Python helpers in `scripts/lib/` run commands, build the attestation envelopes and the standalone verifier `scripts/uncle-verify.py` (dispatched by `uncle verify`, `uncle` line 303).
 
 ## 3. Relevant code paths
-- `skills/uncle-build/SKILL.md:3` description says link is reported *after* the build script.
-- `skills/uncle-build/SKILL.md:8-17` rules 1-6, all post-build.
-- `scripts/tests/chat-skill-test.py:17-32` `REQUIRED` patterns; `:85-86` requires rules numbered exactly 1-6; `:31` warning-page regex anchors on `^6\.`; `:185-188` and `:190-204` repeat the 1-6 assumption; `:13` MAX_BODY_LINES=60 (body now ~8 lines).
-- `scripts/tests/chat-skill-test.py:1` suite is not in the default tier (run with `-- chat-skill`); `:99-102` asserts it stays out of `critical-suites.txt`.
+- `scripts/lib/green-check.sh:260-342` `green_run`: serial loop; wraps `bash -o pipefail -c` → `shell_syntax.py --command-file` (line 321) → `run_check.py` (326); appends `<status>\t<cmd>` to the tsv (331).
+- `scripts/lib/green-check.sh:278-300`: parallel path delegating to `scripts/lib/parallel_checks.py` (`record` at 209, results.tsv write at 365).
+- `scripts/lib/shell_syntax.py:49-60`: the only place `-o pipefail` is applied (execv).
+- `scripts/lib/run_check.py:1-66`: timeout (`check_timeout`), output spool copied to stdout.
+- `scripts/lib/build_attestation.py:42-84`: `green_result` reads only the tsv; `write_stages` writes the `verification` envelope with evidence tsv + AUTOMATED_TEST_REPORT.md.
+- `scripts/lib/envelope.py:343-390`: `write_envelope(..., inputs, evidence, extra)`.
+- `scripts/lib/isolated_verify.py:64-139`: `prepare` copies project to a private dir and rewrites the port; used by `scripts/lib/background-verify.sh:175`.
+- `scripts/uncle-verify.py:~590-680`: `main` runs checks 1-9 on an attestation; no command rerun.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Person asks for preview link before any build | Agent says previews are not possible, requires GitHub repo | CHANGE_REQUEST.md live test | No (the bug) |
-| B-2 | Build output has `Preview:` line | Rules 1-5 relay link plain, with expiry, no tab promise | SKILL.md:12-16 | Yes |
-| B-3 | Host warning page | Rule 6 tells person to continue past it | SKILL.md:17 | Yes |
+| B-1 | green_run command | tsv row `status\tcommand`; log has output | green-check.sh:331 | Yes |
+| B-2 | piped command failing | pipefail applied via shell_syntax.py | shell_syntax.py:57 | Yes |
+| B-3 | no tsv | verification `unavailable` | build_attestation.py:48 | Yes |
+| B-4 | tsv present | summary string `N commands: X pass...` | build_attestation.py:52-56 | Yes |
+| B-5 | `uncle verify` | checks signature/hashes, no rerun | uncle-verify.py main | Yes |
+| B-6 | timeout | status 124 and log line | run_check.py | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Skill passes all REQUIRED patterns, only placeholder URLs, none in code formatting | `check()` chat-skill-test.py:57 | `test_real_skill_passes_every_rule` | High |
-| I-2 | No forbidden promise phrases (tab opens automatically etc.) | FORBIDDEN list :35 | `test_forbidden_promises_absent` | High |
-| I-3 | Body <= 60 lines; front matter has name and description | :67, :64 | `test_front_matter_and_length` | High |
-| I-4 | Rules numbered 1-6 in order; rule 6 is the warning-page rule | :84-86, :31 | `test_warning_rule_is_rule_6_and_body_within_cap` | High |
+| I-1 | Missing record is `unavailable`, never `pass` | build_attestation.green_result | build-attestation-test.py | High |
+| I-2 | Only REGRESSION fails the check | green_result | build-attestation-test.py | Medium |
+| I-3 | Attestation bytes canonical and signed | uncle-verify.py check_1/2 | attestation-test.py | High |
+| I-4 | Commands run with pipefail | shell_syntax.py | None through wrappers | Low |
+
+## 6. Interface contracts
+`green-check.tsv` (`status\tcommand`) is consumed by classification, baseline comparison and attestation: format must not change. Envelope `evidence` entries are digests of listed files; `extra` merges extra keys into the body. `uncle verify [<pr>] [--attestation PATH] [--tree SHA]`.
 
 ## 7. Existing automated-test coverage
-`chat-skill-test.py` has file-text checks and defect-injection variants. It checks text only, not that a chat agent follows it. No chat-level test exists. The Python suite and shell suites use separate temp dirs.
+Shell: green-check, green-check-vacuous, green-defer-mutation, tree-attested-final-audit. Python: build-attestation, attestation, attestation-statement, revalidate-attestation, host-preview. The shell and Python suites use separate temp dirs and share no ports, so they run as one parallel group. `scripts/tests/critical-suites.txt` selects the default tier.
 
 ## 9. Baseline test results
-Commands from CLAUDE.md-style Uncle conventions: `scripts/run-python-tests.sh` and `scripts/run-shell-tests.sh` exist. Default Python tier excludes chat-skill, so it is listed explicitly. No results run here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (the documented runners). Not run here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites are known to fail on a clean checkout.
+
+## 10. Existing failures
+None established by this stage; see the driver baseline.
 
 ## 12. Likely change surface
-`skills/uncle-build/SKILL.md`; `scripts/tests/chat-skill-test.py`. Release instructions (external) need a matching edit.
+`green-check.sh`, `run_check.py`, `parallel_checks.py`, `build_attestation.py`, `uncle-verify.py`, `isolated_verify.py`/`background-verify.sh` (tree-ran note), new `scripts/lib/check_record.py`, new tests, `scripts/tests/critical-suites.txt`, `scripts/README.md`.
 
 ## 13. Regression-sensitive components
-Rule numbering (checker hardcodes 1-6, rule 6 regex); FORBIDDEN phrases (new wording must avoid 'will open', 'opens a tab' etc.); non-placeholder URL check (no real URLs in the skill).
+The tsv format and exit semantics, parallel_checks performance, canonical attestation bytes (new evidence changes the digest set), uncle-verify exit codes (0/1/2/3).
 
 ## 14. Outside the change
-Build script, preview hosting, release grant (#251), warning-page behavior, Python/shell suites other than chat-skill.
+Signing, approval gates, tsv classification, check selection, PR creation flow.
 
 ## 15. Unknowns and assumptions
-- Release instructions are not in this repo; their edit and publish cannot be verified here.
-- Decision 3(a) vs (b) from the request is not yet confirmed by the human.
+- Assumption: green-check.json goes in the same state dir as the tsv, next to `green-check.tsv`.
+- Whether `isolated_verify.py` is used for the main green check is UNRESOLVED from reading: it is only called from background-verify.sh:175; the record must capture whichever applies.
 
 ## 16. Initial risk assessment
-Low code risk (text + test). Medium behavioral risk: skill text may not override release instructions that say every build ends in a PR.
+Medium: touches the central check runner (both serial and parallel paths); a bug could mask failures. Secret leakage via environment capture is the main security risk.
 
 ## Exact build and test commands executed
 
 ```sh
-bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- chat-skill
 bash scripts/run-shell-tests.sh
+bash scripts/run-python-tests.sh
+```
+
+## Parallel verification groups
+
+```text
+1 2
 ```
 

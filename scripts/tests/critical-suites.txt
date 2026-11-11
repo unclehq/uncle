@@ -124,3 +124,6 @@ revalidate-attestation
 
 # uncle --noui opens the preview tab like the screen: the early page and the finished app (a duplicate or a leaked server).
 headless-preview-open
+
+# Check record: the machine-checkable green-check record and its snapshot-backed rerun.
+check-record

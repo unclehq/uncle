@@ -289,8 +289,8 @@ class EndToEnd(unittest.TestCase):
         urls = self.opened_urls()
         self.assertTrue(urls, 'the recorder (the browser) was never given a URL\n' + out + err)
         self.assertRegex(urls[-1], r'^http://127\.0\.0\.1:\d+/')
-        self.assertRegex(out, r'Preview: http://127\.0\.0\.1:\d+/')
-        self.assertRegex(out, r'Preview: the server \(pid \d+\) keeps running for 1 minutes; stop it earlier with: kill \d+')
+        self.assertRegex(out, r'Local preview: http://127\.0\.0\.1:\d+/')
+        self.assertRegex(out, r'Local preview: the server \(pid \d+\) keeps running for 1 minutes; stop it earlier with: kill \d+')
 
     def test_the_server_it_leaves_running_serves_the_page_then_expires(self):
         code, out, _ = self.run_driver('complete')

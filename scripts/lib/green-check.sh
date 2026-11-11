@@ -264,6 +264,18 @@ green_fold_commands() {
 # run them by hand. stdin is closed so a command that reads it cannot consume
 # the rest of the command list.
 green_run() {
+    # Per-command evidence (green-check.json) is written beside the tsv; the tsv format is unchanged.
+    local record_dir status=0
+    record_dir="$(dirname "$2")/green-check-records"
+    rm -rf "$record_dir"; mkdir -p "$record_dir"
+    UNCLE_CHECK_RECORD_DIR="$record_dir" UNCLE_EXECUTED_ROOT="$PWD" green_run_inner "$@" || status=$?
+    if [[ -f "$GREEN_LIB_DIR/check_record.py" ]] && command -v python3 >/dev/null 2>&1; then
+        python3 -B "$GREEN_LIB_DIR/check_record.py" assemble "$record_dir" "$(dirname "$2")/green-check.json" >/dev/null 2>&1 || true
+    fi
+    return "$status"
+}
+
+green_run_inner() {
     local cmds="$1" out="$2" log="$3"
     local cmd status guard="${4:-}"
     local groups="${5:-}" started port_note=""
@@ -303,7 +315,7 @@ green_run() {
     : > "$log"
     [[ -z "$port_note" ]] || printf '%s\n' "$port_note" >> "$log"
 
-    local command_line=0
+    local command_line=0 record_index=0
     while IFS= read -r cmd || [[ -n "$cmd" ]]; do
         command_line=$((command_line + 1))
         # CRLF is a line ending, not command text.
@@ -312,6 +324,7 @@ green_run() {
         [[ -n "$cmd" ]] || continue
         if [[ -n "$guard" ]]; then "$guard" || return 1; fi
 
+        record_index=$((record_index + 1))
         printf '\n$ %s\n' "$cmd" >> "$log"
 
         status=0
@@ -325,7 +338,7 @@ green_run() {
         if [[ -f "$GREEN_LIB_DIR/run_check.py" ]] && command -v python3 >/dev/null 2>&1; then
             check_command=(python3 -B "$GREEN_LIB_DIR/run_check.py" --config "${UNCLE_CONFIG:-$PWD/.uncle/config}" --shell-command "$cmd" -- "${check_command[@]}")
         fi
-        env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "${check_command[@]}" < /dev/null >> "$log" 2>&1 || status=$?
+        UNCLE_CHECK_INDEX="$record_index" env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "${check_command[@]}" < /dev/null >> "$log" 2>&1 || status=$?
         perf_record check "$cmd" "$((SECONDS-started))" "$status"
 
         printf '%s\t%s\n' "$status" "$cmd" >> "$out"

@@ -722,6 +722,18 @@ two drift. Checks 1-8, the output format, and the exit codes (0 `VERIFIED`,
 1 `NOT HUMAN VERIFIED`, 2 usage or missing required tool, 3 integrity only) are
 described in `GITHUB_INTEGRATION.md` under Attestation.
 
+`--rerun [--rerun-timeout S]` is opt-in. It delegates to
+`scripts/lib/check_record.py rerun`, which restores the recorded executed-file
+snapshot into a temp dir, checks its digest, compares the recorded environment
+exactly, and only then replays the recorded commands with a fresh allow-listed
+environment. `S` must be a positive finite number; the per-command timeout is
+the lesser of the recorded timeout and `S`. A legacy attestation without a
+command record, an environment or snapshot mismatch, or a recorded
+browser-requiring command makes the rerun report `unavailable`/`mismatch` and
+exit nonzero without executing anything; the base verification result is
+still printed. When no rerun was requested, the final audit receives
+`{"status":"unavailable","reason":"not requested"}` and its behavior is unchanged.
+
 ### agent-kimi.sh
 
 The default agent command is a shim, not a CLI. The drivers spawn one agent

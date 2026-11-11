@@ -4,6 +4,7 @@ from process_tree import bash_executable, cleanup_directory, finish_check, start
 
 import argparse
 import difflib
+import hashlib
 from concurrent.futures import ThreadPoolExecutor, wait
 import json
 import os
@@ -151,6 +152,26 @@ def _test_status(state):
         pass  # Display telemetry cannot change verification outcomes.
 
 
+def emit_sidecar(index, command, status, start, duration, timeout, log):
+    """Write <UNCLE_CHECK_RECORD_DIR>/<index+1>.json (tsv line order); cwd is relative to the executed root."""
+    directory = os.environ.get('UNCLE_CHECK_RECORD_DIR')
+    if not directory:
+        return
+    try:
+        digest = hashlib.sha256(Path(log).read_bytes()).hexdigest()
+        root = os.environ.get('UNCLE_EXECUTED_ROOT') or os.getcwd()
+        record = dict(argv=command, cwd=os.path.relpath(os.getcwd(), root), status=status,
+                      pipefail=True, start=start, duration=round(duration, 6),
+                      timeout=timeout, output_sha256=digest)
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        path = Path(directory) / f"{index + 1}.json"
+        temp = path.with_suffix('.json.tmp')
+        temp.write_text(json.dumps(record), encoding='utf-8')
+        os.replace(temp, path)
+    except (OSError, ValueError):
+        pass  # The record is evidence; its absence is flagged by assemble, never a check result.
+
+
 def run(args):
     _test_status('Running')
     try:
@@ -234,6 +255,7 @@ def _run_checks(args):
         command = commands[index]
         invoked = execution_command(command)
         started = time.monotonic()
+        started_wall = time.time()
         log = directory / str(index)
         with log.open("wb") as output:
             # Commands in the same declared group have already started and
@@ -294,6 +316,7 @@ def _run_checks(args):
                     b'return to implementation instead of treating this as a nonblocking test failure.\n')
         if status == 0 and not halted.is_set() and reuse_key == check_reuse.key(command):
             check_reuse.record(reuse_key, log)
+        emit_sidecar(index, invoked, status, started_wall, time.monotonic() - started, timeout, log)
         record(command, time.monotonic() - started, status, args.log)
         return status, log
 

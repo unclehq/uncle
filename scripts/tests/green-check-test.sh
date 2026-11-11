@@ -272,6 +272,10 @@ printf '%s\n' 'false | tee /dev/null' 'true | tee /dev/null' 'sh -c "exit 7" | c
 (cd "$TMP" && green_run "$TMP/pipe.commands" "$TMP/pipe.tsv" "$TMP/pipe.log") > /dev/null
 check_eq "pipefail: a failing command before tee fails the check" "1 0 7" "$(cut -f1 "$TMP/pipe.tsv" | tr '\n' ' ' | sed 's/ $//')"
 
+# green_run also writes green-check.json beside the tsv (one entry per command); the tsv is unchanged.
+rec="$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(" ".join("%s:%s:%s" % (c["index"], c["status"], c["trusted"]) for c in r["commands"]))' "$TMP/green-check.json" 2>&1)"
+check_eq "record: green-check.json has one trusted entry per command with its exit status" "1:1:True 2:0:True 3:7:True" "$rec"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "green-check-test.sh: $FAILED of $COUNT checks failed"
     exit 1

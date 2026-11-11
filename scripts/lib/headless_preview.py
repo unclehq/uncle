@@ -36,8 +36,16 @@ EARLY_TTL_SECONDS = 6 * 3600
 OFF = ('0', 'false', 'no', 'off')
 
 
+def hosted_run(env=None):
+    """True in a hosted run, where the host publishes the one signed preview link and no loopback preview is started."""
+    env = os.environ if env is None else env
+    return env.get('UNCLE_PREVIEW_MODE') == 'host' or env.get('UNCLE_HOSTED') == '1'
+
+
 def enabled(env=None):
     env = os.environ if env is None else env
+    if hosted_run(env):
+        return False
     return (str(env.get('UNCLE_NOUI_PREVIEW', '')).strip().lower() not in OFF
             and str(env.get('WORKFLOW_PREVIEW_OPEN_BROWSER', '')).strip().lower() not in OFF)
 
@@ -183,8 +191,8 @@ class HeadlessPreview:
         ttl = ttl_seconds(self.env)
         pid = self.start(ttl)
         if pid is None:
-            return ['Preview: could not start a preview server for the finished application\n']
+            return ['Local preview: could not start a preview server for the finished application\n']
         if not self.wait():
-            return ['Preview: the preview server did not report an address; see .uncle/workflow/logs/preview-server.log\n']
+            return ['Local preview: the preview server did not report an address; see .uncle/workflow/logs/preview-server.log\n']
         minutes = max(1, int(ttl // 60))
-        return ['Preview: the server (pid %d) keeps running for %d minutes; stop it earlier with: kill %d\n' % (pid, minutes, pid)]
+        return ['Local preview: the server (pid %d) keeps running for %d minutes; stop it earlier with: kill %d\n' % (pid, minutes, pid)]

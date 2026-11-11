@@ -1,71 +1,66 @@
-# Baseline report
+# Baseline: Issue 254
 
-Omitted sections: Current API/schema contracts (no schema change; line formats covered in behaviors); Reproduction (read-only analysis, described in B-1); Migration (none)
+Omitted sections: Reproduction (reproduced by code reading, not execution); Existing failures (driver baseline is authority)
 
 ## 1. Change-request summary
-Issue 253 (CHANGE_REQUEST.md): in hosted builds `--noui` prints loopback `Preview:` lines and starts a second preview server; chat rules relay every `Preview:` line. Fix: suppress in hosted mode, label local address `Local preview:`, tighten chat rule 5 to https only.
+See CHANGE_REQUEST.md (Issue 254). PR body always ends `Closes <origin>` for a bound issue, even over NOT_READY, override, or BLOCKED acceptance rows. Wanted: `Closes` only for finished work, else `Refs` + "Still open" list; README update.
 
 ## 2. Repository architecture
-Shell driver + Python libs under `scripts/lib`. `uncle_headless.py` is the `--noui` runner; `headless_preview.py` serves the finished app after a build; `host_preview.py` decides host mode and serves/records the host app (`.uncle/preview.json`). `skills/uncle-build/SKILL.md` gives chat-agent relay rules, checked by `scripts/tests/chat-skill-test.py`.
+Shell/Python workflow driver. `scripts/lib/change-pr.sh` embeds Python that builds and publishes the PR from a journal `j`. `scripts/lib/attestation.py` embeds the attestation block into the body.
 
 ## 3. Relevant code paths
-- `scripts/lib/uncle_headless.py:144` `_URL_RE` loopback-only; `:204-224` `_scan_announcements` prints `Preview: <url>` (preview-server) and `App: <url>`; `:490-494` calls `preview.finish()`; `:494` appends final scan.
-- `scripts/lib/headless_preview.py:39-42` `enabled()`; `:155-173` `poll()`; `:175-190` `finish()` (lines `Preview: could not start...`, `Preview: the server did not report...`, `Preview: the server (pid N) keeps running...`).
-- `scripts/lib/host_preview.py:34` `is_host_mode(env)` (exactly `host`); `scripts/lib/hosted.py:9-11` UNCLE_HOSTED==`1`.
-- `skills/uncle-build/SKILL.md` rules 1 (relay every Preview:), 5 (http or https).
-- Tests: `scripts/tests/headless-preview-test.py` (lines 83,103-104,127,293 assert `Preview: http://127.0.0.1...`), `headless-preview-open-test.py:292-293`, `chat-skill-test.py:12-40,150-200` (REQUIRED patterns incl. `http-https-verbatim`).
+- `scripts/lib/change-pr.sh:1781-1825` body assembly; Closes appended at 1823-1825.
+- `change-pr.sh:1785-1808` banners (release_skipped, unattended waiver, override record via `override_record()` :995).
+- `change-pr.sh:1882` draft decision.
+- `change-pr.sh:464` `blocking_findings()` parses FINAL_AUDIT.md table rows where last cell is YES.
+- `change-pr.sh:525` `release_blocked_reason`.
+- `scripts/lib/attestation.py:318-335` `attach_body` strips trailing lines starting `Closes ` as a trailer.
+- `scripts/README.md:405-413` documents Closes.
+- Acceptance tables: `## Acceptance delivery` (IMPLEMENTATION_NOTES.md, cols ID|Status|...) and `## Acceptance gate` (VERIFICATION_REPORT.md, cols ID|Required|Status|Evidence); see `scripts/tests/acceptance-test.sh:20`, `plan-executability-test.py:321`.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `--noui` hosted build, live preview-server state | prints `Preview: http://127.0.0.1:P/` | uncle_headless.py:218 | No (MODIFY) |
-| B-2 | `--noui` local build, live preview-server state | prints `Preview: <loopback url>` | :218; headless-preview-test.py:83 | Content yes, label changes |
-| B-3 | completed app build, no live driver server | finish() starts server, prints `Preview: the server (pid N)...kill N` | headless_preview.py:175-190 | Content yes locally; label changes; none hosted |
-| B-4 | UNCLE_NOUI_PREVIEW=0 or WORKFLOW_PREVIEW_OPEN_BROWSER=0 | no early/final server | enabled() | Yes |
-| B-5 | `App: <url>` for app-server/preview-vite, `App: launch ...` | printed | :221,:248 | Yes |
-| B-6 | non-loopback or oversize URL in state file | rejected, no line | _URL_RE, :181; test :218 | Yes |
-| B-7 | chat sees Preview: lines | rule 1 relays all; rule 5 allows http/https | SKILL.md | Rule 5 changes |
+| B-1 | Publish with bound origin, any verdict | body ends `Closes owner/repo#N` | change-pr.sh:1823 | Only when finished |
+| B-2 | Publish without origin | no Closes line | change-pr.sh:1823, README:412 | Yes |
+| B-3 | Failing audit/override | banners + draft PR | :1785-1808, :1882 | Yes |
+| B-4 | attach_body with trailing Closes | block inserted before trailer | attestation.py:325, attestation-test.py:310 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Only loopback URLs are announced from state files | _URL_RE | headless-preview-test.py:218 | High |
-| I-2 | A driver-owned live server is never duplicated | server_alive() in poll/finish | headless-preview-test.py | High |
-| I-3 | Skill body <=60 lines and every REQUIRED rule present, forbidden phrases absent | chat-skill-test check() | chat-skill-test.py | High |
-| I-4 | Announcements are read-only on state files | _scan_announcements try/except | headless-preview-test.py | Medium |
+| I-1 | Attestation block precedes trailer lines | attestation.py:325 | attestation-test.py:310,413 | High |
+| I-2 | Creating PR never closes issue / writes issue-closed | README:405 | not located | Medium |
+
+## 6. Interface contracts
+PR body text only; journal `j` fields origin (tab-separated repo, number, ...), release_skipped, body. No schema change.
 
 ## 7. Existing automated-test coverage
-Python suites `headless-preview`, `chat-skill` (hyphenated `-test.py`) and shell suite `headless-preview-open` (in critical-suites.txt:126). Runners: `scripts/run-python-tests.sh`, `scripts/run-shell-tests.sh`. Tests share temp dirs per case; no groups declared (serial) to avoid reliance on unmeasured independence.
+attestation-test.py and attestation-statement-test.py cover Closes trailer. pr-auto-publish-test.sh, pr-publish-reason-test.sh, pr-verdict-binding-test.sh drive publish with a fixture origin (`pr-auto-publish-test.sh:13`). Shell runner and Python runner use separate temp dirs and no shared ports, so they can run in parallel (documented in task contract).
 
 ## 9. Baseline test results
-Not run in this stage (driver baseline authoritative: `.uncle/workflow/green-check.baseline.tsv`). Commands derived from CLAUDE.md-mandated runners and scripts/ listing. Some Python suites are known to fail on a clean checkout per runner docs; unlisted here which.
-
-## 10. Existing failures
-UNRESOLVED: none known to this stage beyond the generic note in section 9.
+Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (existing). No results produced here; driver baseline in `.uncle/workflow/green-check.baseline.tsv` is authority. Some Python suites may already fail on clean checkout per Uncle convention.
 
 ## 12. Likely change surface
-`headless_preview.py`, `uncle_headless.py`, `SKILL.md`, and tests `headless-preview-test.py`, `headless-preview-open-test.py`, `chat-skill-test.py`.
+`scripts/lib/change-pr.sh` (1823-1825), `scripts/lib/attestation.py` (325), `scripts/README.md` (405-413), new shell test, `scripts/tests/attestation-test.py`, `scripts/tests/critical-suites.txt`.
 
 ## 13. Regression-sensitive components
-Local `--noui` flow (early page poll, final finish), driver-owned server de-dup, chat skill checker patterns.
+attach_body trailer handling; unattended publish path; PR body re-reading by attestation verification.
 
-## 14. Explicitly outside the change
-host_preview.py, host_preview_hook.sh, stage-config.sh, `App:` line behavior, the driver's `preview_server.py`, TUI.
+## 14. Outside the change
+Audit verdict computation, release gating, draft logic, reopening #235/#236 (manual post-fix action).
 
 ## 15. Unknowns and assumptions
-- Assumption: hosted == `UNCLE_PREVIEW_MODE=host` or `UNCLE_HOSTED=1` (per request).
-- `App:` loopback lines in hosted mode are also unreachable but chat rules do not relay them; left unchanged.
-- Existing tests assert the old `Preview:` loopback label; they must be updated per request item 2.
+- Verdict source for READY vs READY_WITH_NON_BLOCKING_ISSUES vs NOT_READY at body time: assumed derivable from FINAL_AUDIT.md verdict text and release_skipped; to be confirmed during implementation by inspecting how `waived_stages`/verdict_run are read.
+- Unparseable/missing acceptance tables treated as not blocked only if no table exists.
 
-## 16. Initial risk assessment
-Low. Risk: missed `Preview:` literal in a test or doc expecting the old label; chat-skill checker pattern coupling to rule wording.
+## 16. Risk
+Medium-low: small localized change; risk is false `Refs` on READY work (safe direction) or false `Closes` if parsing misses BLOCKED rows.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- headless-preview
-bash scripts/run-python-tests.sh -- chat-skill
 ```
 

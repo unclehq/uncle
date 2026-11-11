@@ -402,7 +402,12 @@ commit/publication consent. Blank title input accepts the shortened Summary
 from `CHANGE_REQUEST.md`. Publication commits that exact tree plus the audit,
 creates a feature branch when starting on the default branch, and pushes without
 force. The PR targets the base repository's default branch and includes
-`Closes owner/repo#issue` for an eligible bound origin. Creating the PR never closes
+`Closes owner/repo#issue` for an eligible bound origin only when the work is finished:
+the audit verdict is READY or READY_WITH_NON_BLOCKING_ISSUES, no override was
+recorded, release was not skipped, and no required acceptance row is BLOCKED. In
+every other case, including an unreadable verdict, the body carries
+`Refs owner/repo#issue` and a `Still open` list instead, so merging does not close
+unfinished work. Creating the PR never closes
 the issue or writes `issue-closed`; GitHub closes the linked issue on merge into
 the default branch. Originless runs (chat text or a hand-written
 `CHANGE_REQUEST.md`) derive the base repository from the remotes without a

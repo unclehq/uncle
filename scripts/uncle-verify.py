@@ -570,7 +570,21 @@ def main(argv):
     parser.add_argument('--allowed-signers', help='SSH trust root (default .uncle/allowed_signers)')
     parser.add_argument('--certificate-identity')
     parser.add_argument('--certificate-oidc-issuer')
+    parser.add_argument('--rerun', action='store_true', help='replay the recorded checks from the recorded snapshot (opt-in)')
+    parser.add_argument('--rerun-timeout', help='per-command timeout in seconds; the lesser of this and the recorded timeout applies')
     args = parser.parse_args(argv)
+    rerun_timeout = None
+    if args.rerun_timeout is not None:
+        if not args.rerun:
+            print('--rerun-timeout needs --rerun.')
+            return 1
+        try:
+            rerun_timeout = float(args.rerun_timeout)
+        except ValueError:
+            rerun_timeout = None
+        if rerun_timeout is None or rerun_timeout != rerun_timeout or rerun_timeout in (float('inf'), float('-inf')) or rerun_timeout <= 0:
+            print('--rerun-timeout must be a positive finite number of seconds; nothing was run.')
+            return 1
     if not shutil.which('git'):
         print('git is not installed; uncle verify needs it.')
         return 2
@@ -676,7 +690,36 @@ def main(argv):
         print_not_verified(reasons)
         return 1
     print(verdict)
-    return 0 if verdict == 'VERIFIED' else 3
+    base = 0 if verdict == 'VERIFIED' else 3
+    if args.rerun:
+        # The base verification result above is preserved; the rerun is reported
+        # separately and a rerun that cannot be completed exits nonzero.
+        status, detail = run_rerun(args, rerun_timeout)
+        print('RERUN ' + status.upper() + (': ' + detail if detail else ''))
+        if status != 'passed':
+            return base or 4
+    return base
+
+
+def run_rerun(args, timeout):
+    """Delegate to scripts/lib/check_record.py rerun; returns (status, reason)."""
+    module = Path(__file__).resolve().parent / 'lib' / 'check_record.py'
+    attestation = args.attestation or '.uncle/attestation.json'
+    if not module.is_file():
+        return 'unavailable', 'check_record.py is not installed'
+    command = [sys.executable, '-I', str(module), 'rerun', '--attestation', attestation]
+    if timeout is not None:
+        command += ['--rerun-timeout', repr(timeout)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    try:
+        outcome = json.loads(result.stdout.strip().splitlines()[-1])
+        status = str(outcome.get('status', 'unavailable'))
+        detail = str(outcome.get('reason', ''))
+    except (ValueError, IndexError, AttributeError):
+        return 'unavailable', (result.stderr.strip().splitlines() or ['rerun produced no result'])[-1]
+    if result.returncode != 0 and status == 'passed':
+        status = 'mismatch'
+    return status, detail
 
 
 if __name__ == '__main__':

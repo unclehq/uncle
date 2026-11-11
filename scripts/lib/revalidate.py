@@ -314,6 +314,21 @@ def run(root, dry_run=False, runner=None, out=sys.stdout, supervisor=True, ask=N
     """Returns the process exit code. `supervisor=False` (or --no-supervisor) uses the deterministic plan alone."""
     root = Path(root)
     why, rows = plan(root)
+    names, mode, info, statement = NAMES, 'fingerprints', None, None
+    if why == 'no-passes':
+        # No stage fingerprints were ever recorded (a project built before they existed). The attestation is the baseline instead.
+        try:
+            import revalidate_attestation as ra
+            statement = ra.load(root)[1]
+            info = ra.plan(root, statement)
+        except Exception as error:      # noqa: BLE001 - nothing to compare with is a refusal, never a traceback
+            detail = error.args[0] if error.args else error
+            detail = ' '.join(map(str, detail)) if isinstance(detail, (list, tuple)) else detail
+            print('revalidate: no recorded passes exist (no-passes) and there is no attestation to compare with (%s); no stage run'
+                  % detail, file=out)
+            return 2
+        rows, names, mode, why = info['rows'], list(ra.STAGES), 'attestation', None
+        print('baseline: the attestation (no stage fingerprints were recorded for this project)', file=out)
     if why:
         print('revalidate: no recorded passes exist (%s); no stage run' % why, file=out)
         return 2
@@ -321,14 +336,18 @@ def run(root, dry_run=False, runner=None, out=sys.stdout, supervisor=True, ask=N
     if supervisor:
         # The supervisor may only add stages to this plan; see revalidate_planner. Headless: one bounded model call.
         import revalidate_planner
-        rows, notes = revalidate_planner.refine(root, rows, NAMES, ask=ask)
+        rows, notes = revalidate_planner.refine(root, rows, names, ask=ask)
     for r in rows:
         print('%-18s %-12s %s' % (r['stage'], r['action'], r['reason']), file=out)
     for note in notes:
         print(note, file=out)
+    if mode == 'attestation':
+        return _finish_from_attestation(root, rows, info, statement, dry_run, out)
     cur_readme = _file(root / 'README.md')
     if any((_read(root, r['stage']) or {}).get('readme', cur_readme) != cur_readme for r in rows):
         print('README.md changed; 0 stages read it; %d stages reused' % sum(r['action'] == 'reuse' for r in rows), file=out)
+    if all(r['action'] == 'reuse' for r in rows):
+        _maybe_reissue(root, dry_run, out)
     _attestation_line(root, out)
     if dry_run:
         return 0 if all(r['action'] == 'reuse' for r in rows) else (1 if any(r['action'] == 'needs-review' for r in rows) else 0)
@@ -353,6 +372,55 @@ def run(root, dry_run=False, runner=None, out=sys.stdout, supervisor=True, ask=N
         else:
             print('%-18s %s' % (n, 'blocked' if result == 'blocked' else 'failed'), file=out)
             return 1
+    return 0
+
+
+def _maybe_reissue(root, dry_run, out):
+    """With every stage reusable, bring a stale attestation up to date when only documentation changed. Never raises."""
+    try:
+        import revalidate_attestation as ra
+        statement = ra.load(root)[1]
+        info = ra.plan(root, statement)
+        if ra.eligible(info):
+            _report_reissue(root, info, statement, dry_run, out)
+    except Exception:                   # noqa: BLE001 - no attestation, or none usable: nothing to refresh
+        return
+
+
+def _report_reissue(root, info, statement, dry_run, out):
+    import revalidate_attestation as ra
+    ok, message = ra.reissue(root, info, statement, dry_run=dry_run)
+    print('attestation: ' + message, file=out)
+    if ok and not dry_run:
+        print('  commit the changed files together with .uncle/attestation.json and .uncle/attestation.sig; `uncle verify` checks the '
+              'committed tree.', file=out)
+    return ok
+
+
+def _finish_from_attestation(root, rows, info, statement, dry_run, out):
+    """The tail of a revalidation planned from the attestation: report the change, re-issue the attestation if nothing the change
+    touches needs to run again, and say what is left. Exit 0 only when no stage must run."""
+    import revalidate_attestation as ra
+    changed = info['changed']
+    if changed:
+        print('changed since the attestation: %s%s' % (', '.join(changed[:8]), ' and %d more' % (len(changed) - 8) if len(changed) > 8 else ''),
+              file=out)
+    elif info['stale'] and changed is None:
+        print('changed since the attestation: cannot be listed (the attested tree is not in this repository)', file=out)
+    else:
+        print('no project file changed since the attestation', file=out)
+    info = dict(info, rows=rows)
+    if ra.eligible(info):
+        _report_reissue(root, info, statement, dry_run, out)
+    elif info['stale']:
+        print('attestation: stale (it covers tree %s; the project is now %s) and cannot be re-issued while a stage the change touches '
+              'must run again' % (info['short'](info['baseline']), info['short'](info['current'])), file=out)
+    pending = [r['stage'] for r in rows if r['action'] == 'run']
+    if pending:
+        print('%d stage(s) must run again: %s' % (len(pending), ', '.join(pending)), file=out)
+        print('This project was built without stage fingerprints, so revalidation cannot run its stages yet. `uncle --audit` re-runs only '
+              'the final audit; `uncle --change-request --attended` re-runs the full change flow.', file=out)
+        return 1
     return 0
 
 

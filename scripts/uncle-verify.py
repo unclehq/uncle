@@ -147,6 +147,43 @@ def excluded(path):
     return any(path.startswith(prefix) if prefix.endswith('/') else path == prefix for prefix in ARTIFACT_EXCLUDES)
 
 
+# What counts as documentation: files no stage reads as an input. Keep in step with scripts/lib/doc_files.py (a test asserts
+# the two agree); this verifier is standalone and imports nothing from the Uncle tree.
+DOC_EXTENSIONS = ('.md', '.markdown', '.rst')
+DOC_ASSETS = ('.png', '.jpg', '.jpeg', '.gif', '.svg')
+DOC_NAMES = ('README', 'LICENSE', 'LICENCE', 'NOTICE', 'CHANGELOG', 'CONTRIBUTING', 'CODE_OF_CONDUCT', 'AUTHORS')
+
+
+def is_documentation(path):
+    """Root-level documentation (README*, LICENSE*, *.md ...) or a documentation file under docs/. Anything else is not."""
+    parts = path.split('/')
+    name = parts[-1]
+    lower = name.lower()
+    if len(parts) == 1:
+        return lower.endswith(DOC_EXTENSIONS) or name.split('.')[0].upper() in DOC_NAMES
+    return parts[0] == 'docs' and (lower.endswith(DOC_EXTENSIONS) or lower.endswith(DOC_ASSETS))
+
+
+def rest_of(tree):
+    """The tree minus its documentation files: what must be unchanged for an attestation to be carried across a docs-only edit."""
+    fd, index = tempfile.mkstemp(prefix='uncle-verify-rest-')
+    os.close(fd)
+    os.unlink(index)
+    env = dict(os.environ, GIT_INDEX_FILE=index)
+    try:
+        git('read-tree', tree, env=env)
+        paths = [p for p in git('ls-tree', '-r', '-z', '--name-only', tree).decode('utf-8').split('\0') if p]
+        drop = [p for p in paths if is_documentation(p)]
+        if drop:
+            git('update-index', '--force-remove', '-z', '--stdin', env=env,
+                data=b''.join(p.encode('utf-8') + b'\0' for p in drop))
+        return git('write-tree', env=env).decode().strip()
+    finally:
+        for name in (index, index + '.lock'):
+            if os.path.exists(name):
+                os.unlink(name)
+
+
 def artifact_of(tree):
     """The tree minus ARTIFACT_EXCLUDES, rebuilt through a temporary index."""
     fd, index = tempfile.mkstemp(prefix='uncle-verify-index-')
@@ -416,6 +453,31 @@ def check_7(statement):
     return '; '.join(parts), bool(unattended)
 
 
+def check_9(statement, tree):
+    """'' when the attestation carries no revalidation claim. Otherwise the claim must hold: it says an earlier attested state was
+    carried across a change to documentation only, and that is checked here from the project itself, not taken on trust. Every file
+    named is documentation, and everything outside documentation is exactly what was recorded when the claim was made."""
+    claim = statement['predicate'].get('revalidation')
+    if claim is None:
+        return ''
+    files = claim.get('changed_files') if isinstance(claim, dict) else None
+    origin = digest_of((claim or {}).get('carried_forward_from'), 'gitTree') if isinstance(claim, dict) else ''
+    rest = digest_of((claim or {}).get('rest'), 'gitTree') if isinstance(claim, dict) else ''
+    sha1 = re.compile(r'[0-9a-f]{40}')
+    if (not isinstance(claim, dict) or claim.get('method') != 'documentation-only' or not isinstance(files, list) or not files
+            or not all(isinstance(f, str) and f for f in files) or not sha1.fullmatch(origin) or not sha1.fullmatch(rest)):
+        raise Refused(['revalidation claim is malformed'])
+    stray = [f for f in files if not is_documentation(f)]
+    if stray:
+        raise Refused(['revalidation claim names a file that is not documentation: ' + ', '.join(stray[:4])])
+    actual = rest_of(artifact_of(tree))
+    if actual != rest:
+        raise Refused(['revalidation claim does not hold: the project outside its documentation differs from what was carried forward',
+                       '  recorded: ' + rest, '  present:  ' + actual])
+    return 'revalidated: carried forward from %s across documentation only (%s)' % (
+        short(origin), ', '.join(files[:4]) + (' and %d more' % (len(files) - 4) if len(files) > 4 else ''))
+
+
 def check_8(statement, tree, release):
     subject = digest_of(statement['subject'][0], 'gitTree')
     actual = artifact_of(tree)
@@ -585,6 +647,11 @@ def main(argv):
         if unattended and verdict == 'VERIFIED':
             verdict = 'NOT HUMAN VERIFIED'
 
+    def revalidation():
+        line = check_9(statement, tree)
+        if line:
+            print('✓ ' + line)
+
     try:
         run('signature', signature)
         run('approvals', approved)
@@ -594,6 +661,7 @@ def main(argv):
         run('check 7', approvals_check)
         if 'release' in state:
             run('check 8', single(check_8, tree, state['release']))
+            run('revalidation', revalidation)
         else:
             print('○ check 8 skipped: it needs the release artifact, which check 4 did not establish')
             reasons.append('check 8 skipped: the release artifact was not established')

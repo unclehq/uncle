@@ -124,6 +124,13 @@ def port_in_use(host, port):
         return False
 
 
+def wait_port_free(host, port, seconds=5.0):
+    """Give a server that was just told to stop (the live preview) time to release the port."""
+    deadline = time.monotonic() + seconds
+    while port_in_use(host, port) and time.monotonic() < deadline:
+        time.sleep(0.1)
+
+
 def free_port(host):
     with socket.socket() as s:
         s.bind(('127.0.0.1' if host == 'localhost' else host, 0))
@@ -233,8 +240,10 @@ def serve(project, env=None):
             return reused
         if port is None:
             port = free_port(host)
-        elif port_in_use(host, port):
-            raise Failed('port already in use')
+        else:
+            wait_port_free(host, port)
+            if port_in_use(host, port):
+                raise Failed('port already in use')
         command, staged = build_command(project, spec, host, port)
         log = project / '.uncle' / 'preview.log'
         log.parent.mkdir(parents=True, exist_ok=True)

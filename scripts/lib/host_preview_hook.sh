@@ -7,6 +7,8 @@
 uncle_host_preview_hook() {
     local lib="${ROOT:?}/scripts/lib"
     python3 -B "$lib/host_preview.py" mode-check >/dev/null 2>&1 || return 0
+    # The live preview (the early page) may hold the preview port; stop it so the finished app takes the same one.
+    python3 -B "$lib/preview_server.py" stop "${STATE_DIR:-$PWD/.uncle/workflow}" >/dev/null 2>&1 || true
     (
         export WORKFLOW_PREVIEW_OPEN_BROWSER=0
         python3 -B "$lib/host_preview.py" serve "$PWD"

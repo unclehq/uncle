@@ -153,7 +153,7 @@ class PreviewServer:
     running build. `url` is None when it did not come up.
     """
 
-    def __init__(self, root, page='index.html', fallback_html=None):
+    def __init__(self, root, page='index.html', fallback_html=None, host='127.0.0.1', port=0):
         self.root = str(Path(root).resolve())
         self.url = None
         self.server = None
@@ -167,7 +167,7 @@ class PreviewServer:
         self.handler = handler
         try:
             self.server = ThreadingHTTPServer(
-                ('127.0.0.1', 0), partial(handler, directory=self.root))
+                (host, port), partial(handler, directory=self.root))
         except OSError:
             return
         self.server.daemon_threads = True
@@ -206,13 +206,57 @@ def _open_local_browser(url):
         return False
 
 
+def host_binding(env=None):
+    """(host, port) the preview must listen on when a host supplies the browser (UNCLE_PREVIEW_MODE=host), else None.
+
+    The host (a sandbox whose own proxy exposes one port) names UNCLE_PREVIEW_HOST and UNCLE_PREVIEW_PORT, the same ones
+    host_preview.py uses for the finished app, so one link covers the whole build. Anything invalid falls back to loopback
+    on a free port, as an unset value does."""
+    env = os.environ if env is None else env
+    if env.get('UNCLE_PREVIEW_MODE') != 'host':
+        return None
+    host = env.get('UNCLE_PREVIEW_HOST') or '127.0.0.1'
+    if not re.fullmatch(r'localhost|[0-9]{1,3}(\.[0-9]{1,3}){3}', host):
+        host = '127.0.0.1'
+    port = env.get('UNCLE_PREVIEW_PORT') or ''
+    port = int(port) if re.fullmatch('[0-9]+', port) and 1024 <= int(port) <= 65535 else 0
+    return host, port
+
+
+def record_host_preview(root, host, port):
+    """Write .uncle/preview.json the moment the live preview answers, so a host can show it while the build runs.
+    Same record host_preview.py writes for the finished app. Never raises."""
+    try:
+        import host_preview
+        start, cmd = host_preview.process_identity(os.getpid())
+        host_preview.write_record(root, status='running', kind='live', host=host, port=port,
+                                  url='http://127.0.0.1:%d/' % port, pid=os.getpid(), pid_start=start,
+                                  pid_cmd=cmd, reason=None)
+    except Exception:       # noqa: BLE001 - a record that cannot be written never disturbs the build
+        pass
+
+
+def clear_host_preview(root):
+    """Remove the record this process wrote (and only that one), when its server stops."""
+    path = Path(root) / '.uncle' / 'preview.json'
+    try:
+        if json.loads(path.read_text(encoding='utf-8')).get('pid') == os.getpid():
+            path.unlink()
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def serve_live_preview(root, state):
     """Serve the standalone preview, then hand off to Vite when it exists."""
     state = Path(state)
     state.mkdir(parents=True, exist_ok=True)
-    server = PreviewServer(root, fallback_html=state / 'preview/static-index.html')
+    binding = host_binding()
+    bind_host, bind_port = binding or ('127.0.0.1', 0)
+    server = PreviewServer(root, fallback_html=state / 'preview/static-index.html', host=bind_host, port=bind_port)
     if server.url is None:
         return 1
+    if binding:
+        record_host_preview(root, bind_host, server.server.server_address[1])
     pid_path, url_path = state / 'preview-server.pid', state / 'preview-server.url'
     pid_path.write_text(str(os.getpid()), encoding='utf-8')
     url_path.write_text(server.url, encoding='utf-8')
@@ -243,7 +287,8 @@ def serve_live_preview(root, state):
             if development is None:
                 reused = existing_development_url(state)
                 if reused:
-                    server.handoff(reused)
+                    if not binding:
+                        server.handoff(reused)
                     url_path.write_text(reused, encoding='utf-8')
                     handed_off = True
                     continue
@@ -267,11 +312,14 @@ def serve_live_preview(root, state):
             if not handed_off and development.ready() and development.rendered():
                 (state / 'preview-vite.pid').write_text(str(development.process.pid), encoding='utf-8')
                 (state / 'preview-vite.url').write_text(development.url, encoding='utf-8')
-                server.handoff(development.url)
+                if not binding:     # a host reaches one port only: never redirect to a loopback dev server
+                    server.handoff(development.url)
                 url_path.write_text(development.url, encoding='utf-8')
                 handed_off = True
     finally:
         signal.signal(signal.SIGTERM, previous)
+        if binding:
+            clear_host_preview(root)
         if server is not None:
             server.close()
         if development is not None:

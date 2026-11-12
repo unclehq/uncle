@@ -260,7 +260,9 @@ def serve_live_preview(root, state):
     pid_path, url_path = state / 'preview-server.pid', state / 'preview-server.url'
     pid_path.write_text(str(os.getpid()), encoding='utf-8')
     url_path.write_text(server.url, encoding='utf-8')
-    if not _open_local_browser(server.url):
+    # A host that supplies the browser (binding is set) names the address to bind and shows the link itself; in its
+    # container there is no browser to open, so opening one is skipped.
+    if not binding and not _open_local_browser(server.url):
         # Nothing else says so: the server is up and the tab never opened.
         print('preview: could not open a browser; open %s yourself' % server.url, flush=True)
     stopped = threading.Event()

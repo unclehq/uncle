@@ -62,6 +62,13 @@ def _heading_and_body(content):
     return match.group().rstrip(), stripped[match.end():].rstrip('\n')
 
 
+def section_heading(text):
+    """A heading as `split_sections` keeps it. Models copy a heading without its `## ` (plan JSON stores `7. Title`), so a
+    heading that begins with no `#` is taken to be the section heading with its marker left off."""
+    text = text.strip()
+    return text if text.startswith('#') else '## ' + text
+
+
 def item_lines(body):
     """[(id, line)] for every line of `body` that begins with a plan ID."""
     return [(match.group(1), line) for line in body.split('\n') for match in [ITEM_RE.match(line)] if match]
@@ -126,7 +133,7 @@ def apply_patch(narrative, patch):
     for edit in patch.get('edit_sections') or []:
         if not isinstance(edit, dict) or not edit.get('heading') or 'content' not in edit:
             raise ValueError('edit_sections entries need "heading" and "content"')
-        heading = edit['heading'].strip()
+        heading = section_heading(edit['heading'])
         if heading not in by_heading:
             raise ValueError('edit_sections: no existing section with heading %r' % heading)
         if heading in edited:
@@ -146,7 +153,7 @@ def apply_patch(narrative, patch):
         if (not isinstance(edit, dict) or not edit.get('heading') or not isinstance(edit.get('old'), str)
                 or not edit['old'] or not isinstance(edit.get('new'), str)):
             raise ValueError('replace_text entries need "heading", a non-empty "old" and a "new"')
-        heading = edit['heading'].strip()
+        heading = section_heading(edit['heading'])
         if heading not in by_heading:
             raise ValueError('replace_text: no existing section with heading %r' % heading)
         section = sections[by_heading[heading]]
@@ -167,8 +174,8 @@ def apply_patch(narrative, patch):
             raise ValueError('insert_sections: heading %r already exists; use edit_sections' % heading)
         before = insert.get('before')
         after = insert.get('after')
-        before = before.strip() if isinstance(before, str) else None
-        after = after.strip() if isinstance(after, str) else None
+        before = section_heading(before) if isinstance(before, str) and before.strip() else None
+        after = section_heading(after) if isinstance(after, str) and after.strip() else None
         if insert.get('position') == 'start':
             index = 0
         elif before:

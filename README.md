@@ -125,7 +125,7 @@ uncle verify          # the current checkout
 uncle verify 123      # a pull request
 ```
 
-`uncle verify` checks that the tree you have matches the attestation, that the review, verification and audit stages recorded a pass, and that required gates were approved by a person. The verifier is a single Python file that needs only `git`, so you can check a change without installing Uncle; see [docs/verify.md](docs/verify.md).
+`uncle verify` checks that the tree you have matches the attestation, that the review, verification and audit stages recorded a pass (for a new-application build, that the procedure was followed, with failed results printed rather than refused), and that required gates were approved by a person. The verifier is a single Python file that needs only `git`, so you can check a change without installing Uncle; see [docs/verify.md](docs/verify.md).
 
 Its result says four different things, and they should not be confused:
 
@@ -133,7 +133,7 @@ Its result says four different things, and they should not be confused:
 |---|---|---|
 | Artifact integrity | The tree is the one that was reviewed, verified and approved. | Yes |
 | Signature authenticity | A key you trust signed the attestation. | Only with a trust root you supply. Without one, the result is integrity only (exit 3). |
-| Review and verification evidence | The stages recorded a pass and people approved. | Yes, as a record of what Uncle observed. |
+| Review and verification evidence | The stages recorded a pass (or, for a new-application build, ran and were recorded) and people approved. | Yes, as a record of what Uncle observed. It is not a release decision. |
 | Software correctness | The code works and is secure. | No. |
 
 Exit codes at a glance: `0` verified, `1` not verified, `2` usage error, `3` integrity only. Signing, the full check list and the exit codes are in [docs/verify.md](docs/verify.md).

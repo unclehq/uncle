@@ -106,5 +106,100 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(self_hosted.redact_token('abc', ''), 'abc')
 
 
+class SchemaAnswerFinishTests(unittest.TestCase):
+    """The schema answer is a forced toolUse; it must read as a finished answer, not a pending tool call."""
+    RAW = {'output': {'message': {'content': [{'toolUse': {'toolUseId': '1', 'name': 'result', 'input': {'a': 1}}}]}},
+           'stopReason': 'tool_use', 'usage': {'inputTokens': 1, 'outputTokens': 1}}
+
+    def test_schema_answer_finishes_with_stop(self):
+        import self_hosted_http as h
+        choice = h._converse_result(self.RAW, 'result', 'm')['choices'][0]
+        self.assertEqual(choice['finish_reason'], 'stop')
+        self.assertEqual(json.loads(choice['message']['content']), {'a': 1})
+
+    def test_real_tool_call_still_reports_tool_calls(self):
+        import self_hosted_http as h
+        self.assertEqual(h._converse_result(self.RAW, None, 'm')['choices'][0]['finish_reason'], 'tool_calls')
+
+
+class AnyOfErrorFocusTests(unittest.TestCase):
+    SCHEMA = {'anyOf': [
+        {'type': 'object', 'properties': {'op': {'const': 'set_fields'}, 'id': {'enum': ['I-1', 'I-2']}}, 'required': ['op', 'id']},
+        {'type': 'object', 'properties': {'op': {'const': 'insert_row'}, 'target': {'const': 'x'}}, 'required': ['op', 'target']}]}
+
+    def message(self, value):
+        import self_hosted_http as h
+        with self.assertRaises(ValueError) as caught:
+            h.conforms(value, self.SCHEMA, '$.ops[1]')
+        return str(caught.exception)
+
+    def test_reports_only_the_form_the_value_meant_to_write(self):
+        text = self.message({'op': 'set_fields', 'id': 's10.4.r1'})
+        self.assertIn("$.ops[1].id must be one of 'I-1', 'I-2'", text)
+        self.assertNotIn('target', text)
+
+    def test_unknown_tag_still_reports_every_form(self):
+        text = self.message({'op': 'bogus'})
+        self.assertIn('missing required field id', text)
+        self.assertIn('missing required field target', text)
+
+
+class DroppedConnectionRetryTests(unittest.TestCase):
+    OK = {'output': {'message': {'content': [{'text': 'hi'}]}}, 'stopReason': 'end_turn', 'usage': {'inputTokens': 1, 'outputTokens': 1}}
+    VALUES = {'api_key': 'TOK', 'model': 'global.m', 'region': 'us-east-1'}
+    BODY = {'messages': [{'role': 'user', 'content': 'x'}], 'max_tokens': 10}
+
+    def run_with(self, results):
+        import self_hosted_http as h
+        calls = iter(results)
+
+        def fake(*args, **kwargs):
+            item = next(calls)
+            if isinstance(item, Exception):
+                raise item
+            return item
+        with mock.patch.object(h, '_request', fake), mock.patch('time.sleep'):
+            return h._bedrock_converse_post(self.VALUES, self.BODY, 5)
+
+    def test_dropped_connection_is_retried(self):
+        import self_hosted_http as h
+        out = self.run_with([h.NetworkLost('lost (timed out)'), self.OK])
+        self.assertEqual(out['choices'][0]['message']['content'], 'hi')
+
+    def test_gives_up_after_repeated_drops(self):
+        import self_hosted_http as h
+        with self.assertRaises(h.NetworkLost):
+            self.run_with([h.NetworkLost('lost')] * 5)
+
+
+class DailyQuotaTests(unittest.TestCase):
+    def error(self, message):
+        import io
+        from urllib.error import HTTPError
+        return HTTPError('u', 429, 'Too Many Requests', {}, io.BytesIO(json.dumps({'message': message}).encode()))
+
+    def post(self, errors):
+        import self_hosted_http as h
+        calls = []
+
+        def fake(*args, **kwargs):
+            calls.append(1)
+            raise errors[min(len(calls), len(errors)) - 1]
+        with mock.patch.object(h, '_request', fake), mock.patch('time.sleep'):
+            with self.assertRaises(ValueError) as caught:
+                h._bedrock_converse_post({'api_key': 'T', 'model': 'global.m', 'region': 'us-east-1'},
+                                         {'messages': [{'role': 'user', 'content': 'x'}], 'max_tokens': 10}, 5)
+        return len(calls), str(caught.exception)
+
+    def test_daily_quota_fails_fast_with_aws_message(self):
+        calls, text = self.post([self.error('Too many tokens per day, please wait before trying again.')])
+        self.assertEqual(calls, 1)
+        self.assertIn('Too many tokens per day', text)
+
+    def test_ordinary_throttle_is_still_retried(self):
+        calls, _ = self.post([self.error('Too many requests, please wait.')])
+        self.assertEqual(calls, 8)
+
+
 if __name__ == '__main__':
     unittest.main()

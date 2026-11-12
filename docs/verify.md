@@ -23,7 +23,7 @@ Options: `--attestation PATH` (default `.uncle/attestation.json`), `--tree REF`,
 
 ## What gets written
 
-When a change completes, the driver writes two files into the change. A new-application build does the same at completion (`scripts/lib/build_attestation.py`), from its own approval records, review and plan documents, green-check results and audit verdict, so the local merge carries them to the source branch. A build that completed over an override, or whose verification or audit did not pass, is not attested:
+When a change completes, the driver writes two files into the change. A new-application build does the same at completion (`scripts/lib/build_attestation.py`), from its own approval records, review and plan documents, green-check results and audit verdict, so the local merge carries them to the source branch. A new-application build is attested for every completed build, including one that completed over an override or whose verification or audit did not pass. What it attests is that the procedure was followed, not that the build is correct or ready: the stage results, the audit verdict and any override are recorded and printed by `uncle verify`, never judged. A `VERIFIED` result on such a record means it is authentic and bound to the tree, not that the change should be released, so do not treat it as release approval. A change made through the change workflow is stricter, as check 5 describes.
 
 * `.uncle/attestation.json`: an [in-toto](https://in-toto.io/) Statement (`https://in-toto.io/Statement/v1`) with predicate type `https://uncle.dev/attestation/v1`, serialized as RFC 8785 canonical JSON so its hash and signature are reproducible.
 * `.uncle/attestation.sig`: a DSSE envelope (payload type `application/vnd.in-toto+json`) over those exact bytes. Present only when a signer was available.
@@ -51,7 +51,7 @@ In order, and stopping at the first failure:
 | 2 | The signature, if any. A valid signature against a trust root you supply gives `VERIFIED`. With no signature, no trust root, or a missing `ssh-keygen`/`cosign`, the result is integrity only. A signature that is present but invalid fails. |
 | 3 | Each approved document's SHA-256 matches the copy committed in the tree (or the copy embedded in the attestation). |
 | 4 | The implementation, verification input and audit input all name the same Git tree as the release artifact. |
-| 5 | The review, verification and audit stages each recorded `pass`. |
+| 5 | For a change-workflow attestation, the review, verification and audit stages each recorded `pass`. For a new-application build (procedure attestation), every stage ran, each recorded `pass` or `fail`, and the build's procedure result is `pass`. Failed stage results, a `NOT_READY` verdict and an override are printed, not refused. |
 | 6 | Every blocking review finding has a recorded disposition. |
 | 7 | Every required gate was approved by a person, or was deliberately left to an unattended run. An `unattended` gate is reported (`○`, exit 3, not human verified) rather than refused; a gate approved by `supervisor:*` or `disabled:*` is refused. |
 | 8 | The head tree, minus Uncle's own working files, equals the release artifact and the attestation subject. |

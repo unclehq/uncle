@@ -280,10 +280,13 @@ def config_stage(stage, values):
     if stage == 'change-plan-stage-duties':
         return 'change-plan'     # the change-request counterpart resolves the planner's own profile
     if stage in ('requirements', 'requirements-investigate'):
-        # New-app requirements deliberately inherit the project-plan picker.
-        # The driver already resolves runner/model/effort that way; the
-        # adapter must use the same profile lookup or it rejects a configured
+        # New-app requirements inherit the project-plan picker unless the
+        # requirements row sets a runner, model or effort of its own.  The
+        # driver resolves runner/model/effort that way (uncle_requirements_config_stage);
+        # the adapter must use the same profile lookup or it rejects a configured
         # local model before making any request.
+        if any(values.get('requirements.' + key) for key in ('runner', 'model', 'effort')):
+            return 'requirements'
         return 'project-plan'
     if stage == 'preflight-investigate':
         return 'preflight'

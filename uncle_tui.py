@@ -1613,7 +1613,12 @@ class UncleTUI:
                 try:
                     refresh_bedrock_models(keys, connection["region"], connection["api_key"])
                 except ValueError as exc:
-                    # A failed discovery keeps the prior connection, region and catalog untouched.
+                    # A failed discovery leaves an existing connection and catalog untouched; with no
+                    # catalog yet, the typed values are saved so first-time setup is not lost.
+                    if not keys.get("__opencode_models__"):
+                        keys["__opencode_connection__"] = connection
+                        self.save_config()
+                        self._saved_despite_notice = True
                     self.notice = str(exc)
                     return
                 self.notice = ""
@@ -6630,6 +6635,13 @@ class UncleTUI:
         payload = bytes(data).replace(b'\x1b[200~', b'')
         if timed_out:
             self._paste_tail_until = time.monotonic() + 0.15
+        if self.state in ('issue', 'config_edit'):
+            # Single-line text field (API key, region, issue): insert the paste at the cursor.
+            text = ''.join(sanitize_paste(payload.decode('utf-8', errors='replace')).split())
+            cur = max(0, min(self.input_cur, len(self._input_buf)))
+            self._input_buf = self._input_buf[:cur] + text + self._input_buf[cur:]
+            self.input_cur = cur + len(text)
+            return
         if not self._plain_composing():
             return
         text = sanitize_paste(payload.decode('utf-8', errors='replace'))
@@ -8974,6 +8986,23 @@ class UncleTUI:
         if k == 3:  # Ctrl-C
             self._quit()
             return
+        if k == 27 and self.state in ("issue", "config_edit") and getattr(self, "stdscr", None) is not None:
+            # A bracketed paste arrives as ESC [200~ ...; it is text, not "go back".
+            screen = self.stdscr
+            saved = getattr(self, "input_timeout", 80)
+            try:
+                screen.timeout(30)  # the paste's "[" may trail the ESC by a few ms
+                follow = screen.getch()
+                if follow == ord("["):
+                    if self._read_csi(screen) is not None:
+                        return
+                elif isinstance(follow, int) and follow != -1:
+                    try:
+                        curses.ungetch(follow)
+                    except curses.error:
+                        pass
+            finally:
+                screen.timeout(saved)
         if k == 27:  # Esc
             if self.state == "notice":
                 self.state = getattr(self, "notice_destination", "config")
@@ -9153,9 +9182,14 @@ class UncleTUI:
             return
 
         if self.state in ("issue", "config_edit"):
-            if k in (10, 13):
+            now = time.monotonic()
+            if k in (10, 13) and (self._enter_is_burst(k) or now - getattr(self, "_text_key_at", 0) < 0.03):
+                pass  # a line break from pasted text (inside or trailing it): not a submit
+            elif k in (10, 13):
                 self._confirm_text()
             else:
+                if 32 <= k <= 126:
+                    self._text_key_at = now
                 self._edit_input(k)
             return
 
@@ -9240,8 +9274,9 @@ class UncleTUI:
                 self.notice = "enter a model id for %s" % runner
                 return
             self.notice = ""
+            self._saved_despite_notice = False
             self._set_field(self.picker_target, self.picker_kind, val)
-            if self.notice:
+            if self.notice and not self._saved_despite_notice:
                 return
             self.input_buf = ""
             if self.picker_target in ("!misc", "!supervision"):

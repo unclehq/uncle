@@ -121,6 +121,17 @@ uncle_classify_config_stage() {
     printf '%s' "${UNCLE_CLASSIFY_FALLBACK_STAGE:-project-plan}"
 }
 
+# The config stage the requirements pair (requirements, requirements-investigate) runs under: its own requirements.* when any of
+# runner, model or effort is set, otherwise project-plan, so a user who never touches the row still configures the coupled
+# early-planning pair once. The three keys move together so a runner and a model from different rows are never mixed.
+uncle_requirements_config_stage() {
+    if [[ -n "$(uncle_config_get requirements.runner)$(uncle_config_get requirements.model)$(uncle_config_get requirements.effort)" ]]; then
+        printf 'requirements'
+    else
+        printf 'project-plan'
+    fi
+}
+
 # Base and delta are executions of the configured checklist stage.
 uncle_config_stage() {
     case "$1" in
@@ -157,7 +168,7 @@ uncle_config_stage() {
         final-audit-investigate) printf 'final-audit' ;;
         project-plan-investigate|project-plan-section-*|project-plan-stage-duties) printf 'project-plan' ;;
         change-plan-stage-duties) printf 'change-plan' ;;
-        requirements-investigate) printf 'requirements' ;;
+        requirements|requirements-investigate) uncle_requirements_config_stage ;;
         preflight-investigate) printf 'preflight' ;;
         implementation-investigate) printf 'implementation' ;;
         repair-investigate) printf 'repair' ;;

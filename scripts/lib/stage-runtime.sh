@@ -8,13 +8,14 @@
 # the split only adds an extra call and an extra place to fail, so it is
 # gated on the stage's actually-configured runner rather than applied
 # unconditionally.
-# Requirements intentionally inherit the project-plan configuration so users
-# configure this coupled early-planning pair once.  Keep runner lookup aligned
-# with the existing model lookup; otherwise a local model reaches the default
+# Requirements inherit the project-plan configuration so users configure this
+# coupled early-planning pair once, unless the requirements row itself sets a
+# runner, model or effort (uncle_requirements_config_stage).  Keep runner lookup
+# aligned with the model lookup; otherwise a local model reaches the default
 # Claude command after the self-hosted paths are split.
 app_stage_runner_config_name() {
     case "$1" in
-        requirements|requirements-investigate) printf '%s\n' project-plan ;;
+        requirements|requirements-investigate) uncle_requirements_config_stage ;;
         preview-build-part-*) printf '%s\n' preview-build ;;
         tests|tests-*) printf '%s\n' implementation ;;
         *) printf '%s\n' "$1" ;;

@@ -1018,7 +1018,7 @@ stage_model() {
     local lookup_stage="$1"
     local fallback="$DEFAULT_MODEL"
     case "$1" in
-        requirements|requirements-investigate) lookup_stage="project-plan" ;;
+        requirements|requirements-investigate) lookup_stage="$(uncle_requirements_config_stage)" ;;
         preview-build-part-*) lookup_stage="preview-build" ;;
         tests|tests-*) lookup_stage="implementation" ;;
         execute-checklist) fallback="kimi" ;;

@@ -319,12 +319,26 @@ def _bedrock_converse_post(values, body, timeout):
         # Parallel workers share one account quota: throttling (429) and overload (503, 529) are retried with
         # backoff instead of failing the stage.
         import random, time
+        dropped = 0
         for tries in range(8):
             try:
                 return attempt_once(payload)
+            except NetworkLost as error:
+                # A timeout or reset mid-request is common while Bedrock is throttling; a few retries beat losing the stage.
+                dropped += 1
+                if dropped > 3 or tries == 7:
+                    raise
+                delay = min(30.0, 2.0 * (2 ** dropped)) * (0.5 + random.random() / 2)
+                print('Self hosted: AWS Bedrock connection lost (%s); retrying in %.0fs.' % (error, delay), file=sys.stderr, flush=True)
+                time.sleep(delay)
             except HTTPError as error:
                 if error.code not in (429, 503, 529) or tries == 7:
                     raise
+                if error.code == 429:
+                    # A daily token quota does not clear in a minute: waiting just burns the stage's time.
+                    note = error.aws_note = detail(error)
+                    if 'per day' in note.lower():
+                        raise
                 delay = min(60.0, 2.0 * (2 ** tries)) * (0.5 + random.random() / 2)
                 print('Self hosted: AWS Bedrock HTTP %d; retrying in %.0fs.' % (error.code, delay), file=sys.stderr, flush=True)
                 time.sleep(delay)
@@ -352,6 +366,8 @@ def _bedrock_converse_post(values, body, timeout):
 
     def detail(error):
         # AWS's own explanation (never the token: _request already redacted it), bounded.
+        if hasattr(error, 'aws_note'):
+            return error.aws_note  # already read once; the body is consumed
         try:
             message = json.loads(error.read() or b'{}').get('message', '')
         except (ValueError, AttributeError, OSError):
@@ -402,6 +418,10 @@ def _converse_result(raw, schema_name, model):
         message['tool_calls'] = [{'id': c['id'], 'type': 'function', 'function': {'name': c['name'], 'arguments': json.dumps(c['arguments'])}}
                                  for c in parsed['tool_calls']]
     u, reason = parsed['usage'], parsed['reason']
+    if schema_name and reason == 'tool_use' and parsed['text'] and not parsed['tool_calls']:
+        # The schema-constrained answer *is* a forced toolUse, so Bedrock stops with tool_use. With no other tool call
+        # pending that is a finished answer ('stop'); reporting 'tool_calls' made bounded writers reject a valid answer.
+        reason = 'end_turn'
     return {'choices': [{'message': message, 'finish_reason': _CONVERSE_REASONS.get(reason, reason)}],
             'usage': {'prompt_tokens': u['input'], 'completion_tokens': u['output'], 'total_tokens': u['input'] + u['output']}}
 
@@ -1439,14 +1459,20 @@ def add_usage(total, usage):
 def conforms(value, schema, path='$'):
     """Check the JSON-Schema subset these artifacts use; raises ValueError."""
     if 'anyOf' in schema:
-        problems = []
+        problems, intended = [], []
         for option in schema['anyOf']:
             try:
                 conforms(value, option, path)
                 return
             except ValueError as error:
                 problems.append(str(error))
-        raise ValueError('%s matches none of the allowed forms (%s)' % (path, '; '.join(problems)))
+                # An option whose constant tag (e.g. "op") the value carries is the form it meant to write; its
+                # complaint is the useful one. The other forms only say "wrong tag" or "missing field".
+                props = option.get('properties', {}) if isinstance(option, dict) else {}
+                if isinstance(value, dict) and any('const' in sub and key in value and value[key] == sub['const']
+                                                   for key, sub in props.items()):
+                    intended.append(str(error))
+        raise ValueError('%s matches none of the allowed forms (%s)' % (path, '; '.join(intended or problems)))
     kind = schema.get('type')
     if isinstance(kind, list):
         kinds = kind

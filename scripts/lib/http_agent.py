@@ -345,7 +345,7 @@ def _bash(policy, command, timeout):
 
 
 def _preflight_bash(policy, command, timeout, env):
-    from preflight_readonly import copy_project, probe_command, temp_parent, Violation
+    from preflight_readonly import copy_project, probe_command, temp_parent
     from process_tree import start_check, launch_command, kill_tree, finish_check
     if policy.preflight_scratch is None:
         parent = (policy.root.parent if policy.root.name == 'project' and
@@ -384,10 +384,15 @@ def _preflight_bash(policy, command, timeout, env):
             policy.shell_children.append(child)
         log.seek(0)
         output = log.read().decode('utf-8', errors='replace')
+    text = output[:OUTPUT_LIMIT].rstrip()
     if 'Operation not permitted' in output or 'Read-only file system' in output:
-        raise Violation('%s: read-only preflight refused probe write: %s' %
-                        (policy.preflight_worker, output[:1000]))
-    return '%s\n[%s: exit status %d]' % (output[:OUTPUT_LIMIT].rstrip(), policy.preflight_worker, status)
+        # The sandbox refused a write and nothing was written: that is the sandbox working, not the worker misbehaving. A
+        # probe that starts a browser or a tool (Chrome's crash reporter writing to ~/Library, `ps`) is refused the same way,
+        # and treating the refusal as a violation ended the whole run. Say so and let the worker carry on; a changed project
+        # is still caught by the snapshot check, and write_file/edit_file outside the delivery path still fail the stage.
+        text += ('\n[%s: the preflight sandbox is read-only outside this probe\'s scratch area; a write it refused did not '
+                 'happen. Report what this probe could not check instead of retrying it.]' % policy.preflight_worker)
+    return '%s\n[%s: exit status %d]' % (text, policy.preflight_worker, status)
 
 
 def run_tool(policy, name, arguments):

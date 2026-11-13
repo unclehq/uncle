@@ -246,6 +246,16 @@ class Profile(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Anthropic API requires a model name'):
                 self_hosted.settings(str(self.config), 'implementation')
 
+    def test_the_tests_authors_run_under_the_implementation_row(self):
+        # tests-harness, tests-unit, tests-mutation ... are one stage; the shell resolves them through `implementation`.
+        self.write('implementation.runner anthropic-api\nimplementation.model claude-sonnet-x\n',
+                   {'__opencode_connection__': {'api_key': KEY}, '__opencode_models__': {'claude-sonnet-x': {'api_key': KEY, 'model': 'claude-sonnet-x'}}})
+        for stage in ('tests', 'tests-harness', 'tests-unit', 'tests-mutation'):
+            values = self_hosted.settings(str(self.config), stage)
+            self.assertEqual((values['_profile'], values['base_url'], values['model']),
+                             ('anthropic-api', 'https://api.anthropic.com', 'claude-sonnet-x'), stage)
+            self.assertEqual(self_hosted.resolve_profile({'implementation.runner': 'aws-bedrock'}, stage), 'aws-bedrock')
+
     def test_self_hosted_stages_are_unchanged(self):
         self.write('implementation.runner self-hosted\nimplementation.model local/x\nimplementation.base_url http://localhost:8000/v1\n')
         with mock.patch.dict(os.environ, {'UNCLE_SELF_HOSTED_API_KEY': 'local'}):

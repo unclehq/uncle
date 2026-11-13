@@ -365,8 +365,8 @@ def config_stage(stage, values):
         return stage.split('-review-worker-', 1)[0]
     if '-worker-' in stage:
         return stage.split('-worker-', 1)[0]
-    if stage.startswith('implementation-step-'):
-        return 'implementation'
+    if stage.startswith('implementation-step-') or stage == 'tests' or stage.startswith('tests-'):
+        return 'implementation'     # the tests authors are one stage run under the implementation row (stage_model in stagegate.sh)
     if stage.startswith('preview-build-part-'):
         stage = 'preview-build'     # a part is the preview stage as far as its model goes
     if stage == 'preview-build' and not values.get('preview-build.model'):

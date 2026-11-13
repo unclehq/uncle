@@ -382,6 +382,7 @@ on_exit() {
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
     if declare -f manual_checklist_draft_cancel > /dev/null; then manual_checklist_draft_cancel; fi
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
+    if [[ -n "${PREVIEW_ANNOUNCE_PID:-}" ]]; then kill "$PREVIEW_ANNOUNCE_PID" 2>/dev/null || true; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
     python3 -B "$ROOT/scripts/lib/preview_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
@@ -5701,6 +5702,11 @@ finished_extras start
 export WORKFLOW_CHECK_REUSE=0
 rm -f "$STATE_DIR/green-check.fingerprint"
 green_background_recover
+
+# Say where the preview is -- local or not, static page or Vite -- in the driver's own output, so every way of running uncle shows it.
+# `command python3`: the per-run Python host (pyhost.sh) returns a helper's output only when it ends, and this one runs for the whole run.
+command python3 -B "$ROOT/scripts/lib/preview_announce.py" watch "$STATE_DIR" $$ &
+PREVIEW_ANNOUNCE_PID=$!
 
 while true; do
     preserve_requirements_source

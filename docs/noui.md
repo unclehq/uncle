@@ -42,6 +42,9 @@ Electron or Tauri, which are launched rather than browsed):
   `kill` sooner. A React or Svelte project is handed to its dev server once
   dependencies exist, and the page reloads itself.
 
+Whatever the run, the driver itself prints where the preview is: `Local preview: <url>` for a loopback address in a local run,
+`Preview (not local): <url>` for anything else (always for a hosted run), and a `(Vite)` form when the dev server takes over.
+
 Turn this off with the driver's own `WORKFLOW_PREVIEW_OPEN_BROWSER=0`. On a machine with no browser the server still
 starts and `.uncle/workflow/logs/preview-server.log` says the tab could not be
 opened.

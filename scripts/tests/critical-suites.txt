@@ -129,6 +129,9 @@ headless-preview-open
 # The preview build has no off switch, and the removed preview variables stay removed.
 preview-build-always-on
 
+# Every run says where the preview is: local or not, static page or Vite.
+preview-announce
+
 # A plan patch names a section with or without its `## ` marker.
 plan-patch-headings
 

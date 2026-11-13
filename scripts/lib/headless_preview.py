@@ -185,4 +185,12 @@ class HeadlessPreview:
         if not self.wait():
             return ['Local preview: the preview server did not report an address; see .uncle/workflow/logs/preview-server.log\n']
         minutes = max(1, int(ttl // 60))
-        return ['Local preview: the server (pid %d) keeps running for %d minutes; stop it earlier with: kill %d\n' % (pid, minutes, pid)]
+        lines = []
+        url = _read(workflow_dir(self.root) / 'preview-server.url')
+        if url:
+            if str(HERE) not in sys.path:
+                sys.path.insert(0, str(HERE))
+            import preview_announce
+            lines.append(preview_announce.line(url, is_hosted=hosted_run(self.env)) + '\n')
+        lines.append('Local preview: the server (pid %d) keeps running for %d minutes; stop it earlier with: kill %d\n' % (pid, minutes, pid))
+        return lines

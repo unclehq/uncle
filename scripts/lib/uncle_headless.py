@@ -202,26 +202,16 @@ def new_watch_state():
 
 
 def _scan_announcements(root, state, env=None):
-    """Return new 'Local preview:'/'App:' lines from the driver's state files (read-only).
+    """Return new 'App:' lines from the driver's state files (read-only).
 
-    In a hosted run the loopback preview is never announced; the host's signed link is the only Preview line."""
+    The preview's own address (Local preview: / Preview (not local):) is said by the driver itself
+    (preview_announce.py), so every way of running uncle shows it once."""
     lines = []
-    hosted = headless_preview.hosted_run(env)
     try:
         base = os.path.join(root, ".uncle", "workflow")
-        for name in ("preview-server", "app-server", "preview-vite"):
-            if not _alive(os.path.join(base, name + ".pid")):
-                continue
-            url = _valid_url(_read_state(os.path.join(base, name + ".url")))
-            if not url:
-                continue
-            if name == "preview-server":
-                if hosted:
-                    continue
-                if url != state["seen_preview"]:
-                    state["seen_preview"] = url
-                    lines.append("Local preview: %s\n" % _one_line(url))
-            elif url not in state["emitted_app_urls"]:
+        if _alive(os.path.join(base, "app-server.pid")):
+            url = _valid_url(_read_state(os.path.join(base, "app-server.url")))
+            if url and url not in state["emitted_app_urls"]:
                 state["emitted_app_urls"].add(url)
                 lines.append("App: %s\n" % _one_line(url))
     except Exception:

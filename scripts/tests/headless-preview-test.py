@@ -82,36 +82,14 @@ def announced(out, kind):
 
 
 class Preview(unittest.TestCase):
-    def test_preview_line_during_run_before_driver_line(self):
-        code, out, _, _, t0 = drive(
+    def test_the_runner_leaves_the_preview_address_to_the_driver(self):
+        # The driver says where the preview is (preview_announce.py), so every way of running uncle shows it once; the
+        # headless runner adds nothing of its own for the preview server.
+        code, out, _, _, _ = drive(
             "pub('preview-server', 'http://127.0.0.1:5173/')\n"
             "time.sleep(2.5)\nsay('driver done\\n')\n")
-        self.assertEqual(code, 0 if code == 0 else code)
-        pl = announced(out, "Local preview")
-        self.assertEqual(len(pl), 1, out.getvalue())
-        self.assertTrue(pl[0].rstrip().endswith("Local preview: http://127.0.0.1:5173/"))
-        self.assertEqual(announced(out, "Preview"), [], out.getvalue())
-        text = out.getvalue()
-        self.assertLess(text.index("Local preview:"), text.index("driver done"))
-        # appeared while the driver was still sleeping, within tolerance
-        for ts, s in out.marks:
-            if "Local preview:" in s:
-                self.assertLess(ts - t0, 2.3)
-                break
-        else:
-            self.fail("no Preview write")
-
-    def test_changed_url_new_line_unchanged_not_repeated(self):
-        code, out, _, _, _ = drive(
-            "pub('preview-server', 'http://127.0.0.1:5000/')\n"
-            "time.sleep(1.8)\n"
-            "pub('preview-server', 'http://127.0.0.1:5000/')\n"
-            "time.sleep(1.2)\n"
-            "pub('preview-server', 'http://127.0.0.1:6000/')\n"
-            "time.sleep(1.8)\n")
-        pl = [body_of(l) for l in announced(out, "Local preview")]
-        self.assertEqual(pl, ["Local preview: http://127.0.0.1:5000/",
-                              "Local preview: http://127.0.0.1:6000/"], out.getvalue())
+        self.assertEqual(announced(out, "Local preview"), [], out.getvalue())
+        self.assertIn("driver done", out.getvalue())
 
     def test_dead_pid_and_foreign_host_rejected(self):
         code, out, _, _, _ = drive(
@@ -206,7 +184,7 @@ class FinalLines(unittest.TestCase):
 
 
 class Framing(unittest.TestCase):
-    def test_partial_line_defers_announcement_without_newline(self):
+    def test_partial_line_is_not_split_by_other_output(self):
         code, out, _, _, _ = drive(
             "say('partial-start ')\n"
             "pub('preview-server', 'http://127.0.0.1:5173/')\n"
@@ -215,11 +193,7 @@ class Framing(unittest.TestCase):
             "time.sleep(1.5)\n")
         text = out.getvalue()
         self.assertIn("partial-start rest-of-line\n", text)
-        self.assertIn("Local preview: http://127.0.0.1:5173/", text)
-        self.assertGreater(text.index("Local preview:"), text.index("rest-of-line\n"))
-        for l in lines(out):
-            if "Local preview:" in l:
-                self.assertNotIn("partial-start", l)
+        self.assertNotIn("Local preview:", text)
 
     def test_final_flush_forces_newline_before_announcement(self):
         code, out, _, _, _ = drive(

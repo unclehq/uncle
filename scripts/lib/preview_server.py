@@ -255,8 +255,9 @@ def serve_live_preview(root, state):
     server = PreviewServer(root, fallback_html=state / 'preview/static-index.html', host=bind_host, port=bind_port)
     if server.url is None:
         return 1
+    actual_port = server.server.server_address[1]
     if binding:
-        record_host_preview(root, bind_host, server.server.server_address[1])
+        record_host_preview(root, bind_host, actual_port)
     pid_path, url_path = state / 'preview-server.pid', state / 'preview-server.url'
     pid_path.write_text(str(os.getpid()), encoding='utf-8')
     url_path.write_text(server.url, encoding='utf-8')
@@ -276,6 +277,7 @@ def serve_live_preview(root, state):
     previous = signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     development = None
     handed_off = False
+    vite_failed, vite_started = False, 0.0
     try:
         while not stopped.wait(.2):
             if expires is not None and time.monotonic() >= expires:
@@ -294,15 +296,31 @@ def serve_live_preview(root, state):
                     url_path.write_text(reused, encoding='utf-8')
                     handed_off = True
                     continue
-                spec = development_preview(root)
+                if binding and vite_failed:
+                    continue
+                spec = development_preview(root, bind_host, actual_port) if binding else development_preview(root)
                 if spec is None:
                     continue
+                if binding:
+                    server.close()      # frees the host's one port for Vite
+                    vite_started = time.monotonic()
                 development = DevelopmentPreview(root, spec)
+                continue
+            if binding and not handed_off and time.monotonic() - vite_started > VITE_START_SECONDS:
+                development.close()
+                development = None
+                vite_failed = True
+                server = PreviewServer(root, fallback_html=state / 'preview/static-index.html', host=bind_host, port=actual_port)
                 continue
             if development.process is None or development.process.poll() is not None:
                 development.close()
                 development = None
                 handed_off = False
+                if binding:
+                    # Vite never answered or died: put the static page back on the host's port and do not try again.
+                    vite_failed = True
+                    server = PreviewServer(root, fallback_html=state / 'preview/static-index.html',
+                                           host=bind_host, port=actual_port)
                 server.handoff('')
                 for name in ('preview-vite.pid', 'preview-vite.url'):
                     (state / name).unlink(missing_ok=True)
@@ -311,7 +329,8 @@ def serve_live_preview(root, state):
             # JSX import still fails. Require the entry module and, where the
             # project already has Playwright, an actual mounted browser DOM
             # before replacing the styled static preview.
-            if not handed_off and development.ready() and development.rendered():
+            # On the host's port nothing can fall back to a second page, so ready() (document and entry module served) decides.
+            if not handed_off and development.ready() and (binding or development.rendered()):
                 (state / 'preview-vite.pid').write_text(str(development.process.pid), encoding='utf-8')
                 (state / 'preview-vite.url').write_text(development.url, encoding='utf-8')
                 if not binding:     # a host reaches one port only: never redirect to a loopback dev server
@@ -348,7 +367,10 @@ def stop_live_preview(state):
         (state / name).unlink(missing_ok=True)
 
 
-def development_preview(root):
+VITE_START_SECONDS = 90
+
+
+def development_preview(root, host='127.0.0.1', port=None):
     """A local Vite preview spec for a React/Svelte source project, or None.
 
     Source modules cannot be served by the static preview server. Require the
@@ -381,19 +403,21 @@ def development_preview(root):
     if not vite.is_file() or any(not (root / 'node_modules' / name / 'package.json').is_file()
                                  for name in required_runtime):
         return None
-    with socket.socket() as sock:
-        sock.bind(('127.0.0.1', 0))
-        port = sock.getsockname()[1]
+    if port is None:
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0))
+            port = sock.getsockname()[1]
+    # A host that names the address (a sandbox's proxy reaches one port) has Vite listen there; readiness is still checked on loopback.
     if not isinstance(scripts.get('dev'), str):
         # A project that names its dev server something else (`start`, `serve`) still has a source index.html
         # that only a dev server can run -- served statically it is a blank page (noinit: `start` was Vite,
         # there was no `dev`).  The binary is already installed; run it directly with our own host and port.
         if 'vite' not in deps and 'vite' not in ' '.join(str(v) for v in scripts.values()):
             return None
-        return {'command': [str(vite), '--host', '127.0.0.1', '--port', str(port), '--strictPort'],
+        return {'command': [str(vite), '--host', host, '--port', str(port), '--strictPort'],
                 'url': 'http://127.0.0.1:%d' % port}
     manager = 'pnpm' if (root / 'pnpm-lock.yaml').is_file() else 'yarn' if (root / 'yarn.lock').is_file() else 'npm'
-    command = ([manager, 'run', 'dev', '--', '--host', '127.0.0.1', '--port', str(port), '--strictPort'])
+    command = ([manager, 'run', 'dev', '--', '--host', host, '--port', str(port), '--strictPort'])
     return {'command': command, 'url': 'http://127.0.0.1:%d' % port}
 
 
@@ -404,7 +428,11 @@ class DevelopmentPreview:
         self.root, self.url, self.process = str(Path(root).resolve()), spec['url'], None
         self.cancelled = threading.Event()
         try:
-            self.process = subprocess.Popen(launch_command(spec['command']), cwd=self.root,
+            env = dict(os.environ)
+            if env.get('UNCLE_PREVIEW_ALLOWED_HOSTS'):
+                # Vite refuses a Host header it does not know; a sandbox proxy's name is the host's to supply.
+                env['__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS'] = env['UNCLE_PREVIEW_ALLOWED_HOSTS']
+            self.process = subprocess.Popen(launch_command(spec['command']), cwd=self.root, env=env,
                                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                             stderr=subprocess.DEVNULL, **group_options())
         except OSError:

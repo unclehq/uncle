@@ -518,5 +518,58 @@ class CommandForParity(unittest.TestCase):
             self.assertIsNot(params[name].default, inspect.Parameter.empty)
 
 
+class LiveViteOnHostPort(Base):
+    """In hosted mode the live preview binds the host's one port: Vite takes it over from the placeholder, preview.json stays running."""
+    FAKE_VITE = ("#!/usr/bin/env python3\nimport sys,http.server\na=sys.argv\n"
+                 "class H(http.server.BaseHTTPRequestHandler):\n"
+                 "    def do_GET(s):\n        s.send_response(200); s.end_headers(); s.wfile.write(b'VITE')\n"
+                 "    def log_message(*x): pass\n"
+                 "http.server.HTTPServer((a[a.index('--host')+1],int(a[a.index('--port')+1])),H).serve_forever()\n")
+
+    def project_with_vite(self, vite_source):
+        p = self.project
+        (p / 'node_modules/.bin').mkdir(parents=True)
+        for name in ('react', 'react-dom'):
+            (p / 'node_modules' / name).mkdir()
+            (p / 'node_modules' / name / 'package.json').write_text('{}')
+        (p / 'package.json').write_text(json.dumps({'scripts': {'start': 'vite'},
+                                                    'dependencies': {'react': '1', 'react-dom': '1', 'vite': '1'}}))
+        vite = p / 'node_modules/.bin/vite'
+        vite.write_text(vite_source)
+        vite.chmod(0o755)
+        self.state = Path(self._tmp.name) / 'state'
+        (self.state / 'preview').mkdir(parents=True)
+        (self.state / 'preview/static-index.html').write_text('STATIC')
+        (p / 'index.html').write_text('STATIC')
+
+    def start(self, port):
+        e = dict(os.environ, UNCLE_HOSTED='1', UNCLE_PREVIEW_HOST='127.0.0.1', UNCLE_PREVIEW_PORT=str(port))
+        proc = subprocess.Popen([sys.executable, '-B', str(LIB / 'preview_server.py'), 'start', str(self.project), str(self.state)],
+                                env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        self.addCleanup(lambda: (proc.terminate(), proc.wait(10)))
+        return proc
+
+    def test_vite_serves_on_the_host_port_and_the_record_stays_running(self):
+        port = free_port()
+        self.project_with_vite(self.FAKE_VITE)
+        self.start(port)
+        end = time.time() + 15
+        body = None
+        while time.time() < end and body != b'VITE':
+            body = answers('http://127.0.0.1:%d/' % port, 1)
+        self.assertEqual(body, b'VITE')
+        rec = self.record()
+        self.assertEqual((rec['status'], rec['port']), ('running', port))
+
+    def test_a_vite_that_dies_leaves_the_static_page_on_the_port(self):
+        port = free_port()
+        self.project_with_vite('#!/bin/sh\nexit 1\n')
+        self.start(port)
+        time.sleep(3)
+        body = answers('http://127.0.0.1:%d/' % port, 5)
+        self.assertIn(b'STATIC', body or b'')
+        self.assertEqual(self.record()['status'], 'running')
+
+
 if __name__ == '__main__':
     unittest.main()

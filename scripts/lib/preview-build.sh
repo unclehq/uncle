@@ -144,12 +144,18 @@ preview_build_defer() {
 preview_existing_project() {
     [[ "${WORKFLOW_PREVIEW_EXISTING_PROJECT:-0}" != 1 ]] || return 1
     git rev-parse --verify -q HEAD > /dev/null 2>&1 || return 1
-    local tracked
+    local tracked=0 limit="${PREVIEW_EXISTING_FILES:-8}" f
     # Only files still on disk count: `git ls-files` also lists tracked files deleted from the working tree, so a
     # directory wiped to start over (history kept) would otherwise read as an existing project and get no preview.
-    tracked="$(git ls-files 2>/dev/null | grep -v -E '^(README|LICENSE|\.gitignore|\.uncle/)' \
-        | while IFS= read -r f; do [[ -e "$f" ]] && echo "$f"; done | head -n "${PREVIEW_EXISTING_FILES:-8}" | wc -l | tr -d ' ')"
-    [[ "${tracked:-0}" -ge "${PREVIEW_EXISTING_FILES:-8}" ]]
+    # Stop reading at the limit rather than piping into `head`: a large repository would otherwise leave the writer
+    # echoing into a closed pipe, one "Broken pipe" error per remaining file.
+    while IFS= read -r f; do
+        if [[ -e "$f" ]]; then
+            tracked=$((tracked + 1))
+            [[ "$tracked" -lt "$limit" ]] || break
+        fi
+    done < <(git ls-files 2>/dev/null | grep -v -E '^(README|LICENSE|\.gitignore|\.uncle/)')
+    [[ "$tracked" -ge "$limit" ]]
 }
 
 # preview_build_start — launch it, detached, and return immediately.

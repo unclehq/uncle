@@ -44,12 +44,13 @@ def classify(root='.'):
     root = Path(root)
     plan = ''
     for name in ('.uncle/docs/PROJECT_PLAN.md', '.uncle/docs/UPDATED_PROJECT_PLAN.md',
-                 'PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md'):
+                 'PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md', '.uncle/docs/CHANGE_PLAN.md'):
         if (root / name).is_file():
             plan = (root / name).read_text(errors='replace')
             break
     brief = ''
-    for name in ('.uncle/docs/REQUIREMENTS.md', 'REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS_INTERPRETATION.md'):
+    for name in ('.uncle/docs/REQUIREMENTS.md', 'REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS_INTERPRETATION.md',
+                 '.uncle/docs/CHANGE_REQUEST.md', '.uncle/docs/CHANGE_SPEC.md'):
         if (root / name).is_file():
             brief += (root / name).read_text(errors='replace')
     if not plan and not brief:

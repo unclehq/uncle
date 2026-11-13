@@ -40,6 +40,10 @@ fi
 PREVIEW_PID=""
 PREVIEW_STARTED=0
 
+# preview_run PROMPT STAGE — one model call for the preview. stagegate.sh's run_claude resolves model, effort and tools from the
+# stage name; a driver whose run_claude takes them as arguments (change-workflow.sh) defines its own preview_run before sourcing this.
+declare -f preview_run > /dev/null 2>&1 || preview_run() { run_claude "$@"; }
+
 # preview_open_page — serve the generated root page and open its loopback URL.
 # PreviewServer adds a reload snippet on the wire, so publishing the finished
 # index.html refreshes the tab that initially displayed the placeholder.
@@ -156,7 +160,8 @@ preview_build_start() {
         return 0
     fi
     if preview_build_defer; then return 0; fi
-    [[ -s .uncle/docs/PROJECT_PLAN.md || -s PROJECT_PLAN.md || -s "${DOCUMENT_BUDGET_SOURCE:-.uncle/docs/REQUIREMENTS.md}" || -s .uncle/docs/REQUIREMENTS.md || -s REQUIREMENTS.md ]] || return 0
+    [[ -s .uncle/docs/PROJECT_PLAN.md || -s PROJECT_PLAN.md || -s "${DOCUMENT_BUDGET_SOURCE:-.uncle/docs/REQUIREMENTS.md}" || -s .uncle/docs/REQUIREMENTS.md || -s REQUIREMENTS.md \
+        || -s .uncle/docs/CHANGE_REQUEST.md || -s .uncle/docs/CHANGE_SPEC.md ]] || return 0
 
     # Only a web application or a command line tool has anything to show this
     # early. A library, an API or a daemon would spend an implementation's worth
@@ -242,7 +247,7 @@ preview_build_start() {
         elif preview_build_use_oneshot && preview_build_oneshot; then
             echo "Preview built in one call."
         else
-            run_claude prompts/preview-build.md preview-build || status=$?
+            preview_run prompts/preview-build.md preview-build || status=$?
         fi
         wait "$vendor_pid" 2>/dev/null || true
         # Publish the staged page over the placeholder in one step, so the tab swaps pages once.
@@ -290,7 +295,7 @@ preview_build_oneshot() {
     python3 -B "$helper" prompt . > "$prompt" || return 1
     # Read is only a harmless allow-list entry: the prompt says no tools, and one retry turn is the limit.
     WORKFLOW_TOOLS_PREVIEW_BUILD=Read WORKFLOW_TURNS_PREVIEW_BUILD=2 \
-        run_claude "$prompt" preview-build || return 1
+        preview_run "$prompt" preview-build || return 1
     python3 -B "$helper" extract "$LOG_DIR/preview-build.jsonl" "$state/preview/index.html"
 }
 
@@ -339,7 +344,7 @@ preview_build_parallel() {
             prompt="$directory/prompts/$name.md"
             python3 -B "$helper" prompt "$name" "$directory" "$ROOT/prompts/preview-build.md" "$prompt" || { preview_build_parts_finish 1; return 1; }
             ( SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                run_claude "$prompt" "preview-build-part-$name" ) > "$LOG_DIR/preview-build-part-$name.log" 2>&1 &
+                preview_run "$prompt" "preview-build-part-$name" ) > "$LOG_DIR/preview-build-part-$name.log" 2>&1 &
             pids+=("$!"); names+=("$name")
         done
         failed=0

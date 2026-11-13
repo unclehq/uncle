@@ -18,7 +18,7 @@ from pathlib import Path
 import re
 import sys
 
-BRIEFS = ('REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS.md')
+BRIEFS = ('REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS.md', '.uncle/docs/CHANGE_REQUEST.md', '.uncle/docs/CHANGE_SPEC.md')
 INTERPRETATION = '.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json'
 HEX = re.compile(r'#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b')
 

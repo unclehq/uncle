@@ -447,6 +447,13 @@ CLAUDE_TOOLS="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
 # .uncle/workflow/state grammar, and the shared INV-3 close gate.
 . "$ROOT/scripts/lib/state.sh"
 . "$ROOT/scripts/lib/plan-scope.sh"
+# The preview build, shared with stagegate.sh. This driver's run_claude takes model, effort and turns as arguments, so the preview
+# model call goes through this wrapper (CLAUDE_TOOLS is read by run_claude).
+preview_run() {
+    local CLAUDE_TOOLS="${WORKFLOW_TOOLS_PREVIEW_BUILD:-Read,Write}"
+    run_claude "$1" "$2" "${WORKFLOW_MODEL_PREVIEW_BUILD:-}" "${WORKFLOW_EFFORT_PREVIEW_BUILD:-low}" "${WORKFLOW_TURNS_PREVIEW_BUILD:-8}"
+}
+. "$ROOT/scripts/lib/preview-build.sh"
 . "$ROOT/scripts/lib/progress.sh"
 . "$ROOT/scripts/lib/issue-close.sh"
 . "$ROOT/scripts/lib/change-pr.sh"
@@ -506,34 +513,49 @@ current_issue() {
 . "$ROOT/scripts/lib/terminal-title.sh"
 
 # change_preview_open — start the live preview server once and say so. $1 is its lifetime in seconds, $2 is `early` or `final`.
-# The change workflow has no model-built first look (that writes an index.html into the repo root, and a change usually runs in an
-# existing project); it serves what is there and the server reloads the tab as implementation lands, handing over to Vite once the
-# project has one. It starts for a project that already has a page, and for a greenfield one (nothing but .gitkeep/README/LICENSE):
-# the server waits for the application to appear. Hosted mode (UNCLE_HOSTED=1) starts the same server, which binds the host's
-# address and writes .uncle/preview.json for the host to show; there is no browser to open, and `final` does nothing because the
-# COMPLETE hook serves the finished app on that port. Off for a desktop app, when a server is already running, or with
-# UNCLE_CHANGE_OPEN_PREVIEW=0. Never fails the run.
+# It serves what the project already has and reloads the tab as implementation lands, handing over to Vite once the project has one.
+# It starts only when there is a page to serve, or when CHANGE_PREVIEW_EMPTY=1 (the server then waits for the application to appear).
+# Hosted mode (the shared hook decides; see host_preview_hook.sh) starts the same server, which binds the host's address and writes .uncle/preview.json for the host to
+# show; there is no browser to open, and `final` does nothing because the COMPLETE hook serves the finished app on that port. Off for
+# a desktop app, when a server is already running, or with UNCLE_CHANGE_OPEN_PREVIEW=0. Never fails the run.
 change_preview_open() {
     [[ "${UNCLE_CHANGE_OPEN_PREVIEW:-1}" != 0 ]] || return 0
-    [[ "${UNCLE_HOSTED:-0}" != 1 || "${2:-early}" == early ]] || return 0
     (
         export WORKFLOW_PREVIEW_OPEN_BROWSER=1
-        PYTHONPATH="$ROOT/scripts/lib" python3 -B - "$PWD" "${1:-3600}" <<'PY'
+        PYTHONPATH="$ROOT/scripts/lib" python3 -B - "$PWD" "${1:-3600}" "${2:-early}" <<'PY'
 import os
 import sys
 import headless_preview as h
-root, ttl = sys.argv[1], int(sys.argv[2])
-IGNORED = ('.git', '.uncle', '.gitkeep', '.gitignore', 'LICENSE', 'README', 'README.md')
-def greenfield(root):
-    return not [n for n in os.listdir(root) if n not in IGNORED]
+root, ttl, when = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 hosted = h.hosted_run()
+if hosted and when == 'final':
+    sys.exit(0)
 if (hosted or h.enabled()) and not h.desktop_app(root) and not h.server_alive(root) \
-        and (h.page_available(root) or greenfield(root)):
+        and (h.page_available(root) or os.environ.get('CHANGE_PREVIEW_EMPTY') == '1'):
     pid = h.start_live_preview(root, ttl=ttl)
     if pid and (hosted or h.wait_for_url(root)):
         print('Preview started (pid %d, expires in %d minutes; stop earlier with: kill %d)' % (pid, ttl // 60, pid))
 PY
     ) || true
+}
+
+# change_preview_build — when there is no project to serve, build a first look the way stagegate.sh does (preview_build_start: an
+# instant placeholder, then a model-built page from the change request, spec and plan, served and opened). It only runs in a directory
+# that holds no project of its own (preview_existing_project says no: a preview would write into an existing repo's root), and only
+# when the change describes a web or command line application. Joined by preview_build_wait before implementation touches the tree.
+# If nothing could be built, a greenfield project still gets the server, which waits for the application to appear.
+change_preview_build() {
+    [[ "${UNCLE_CHANGE_OPEN_PREVIEW:-1}" != 0 ]] || return 0
+    if [[ -s "$STATE_DIR/preview-server.pid" ]] && kill -0 "$(cat "$STATE_DIR/preview-server.pid" 2>/dev/null)" 2>/dev/null; then
+        return 0
+    fi
+    local saved="${WORKFLOW_PREVIEW_OPEN_BROWSER:-0}"
+    export WORKFLOW_PREVIEW_OPEN_BROWSER=1       # the driver holds it at 0 for everything else it starts
+    preview_build_start || true
+    export WORKFLOW_PREVIEW_OPEN_BROWSER="$saved"
+    if [[ "$PREVIEW_STARTED" != 1 ]] && ! preview_existing_project; then
+        CHANGE_PREVIEW_EMPTY=1 change_preview_open 21600 early
+    fi
 }
 
 # One EXIT hook for the whole run. The cleanup list used to be re-declared at
@@ -547,6 +569,7 @@ on_exit() {
     if declare -f progress_end > /dev/null; then progress_end; fi
     if declare -f cleanup_bg > /dev/null; then cleanup_bg; fi
     if declare -f change_checklist_draft_cancel > /dev/null; then change_checklist_draft_cancel; fi
+    if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if [[ -n "${PREFLIGHT_BG_PID:-}" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then kill "$PREFLIGHT_BG_PID" 2>/dev/null || true; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     if [[ "${CHANGE_PREVIEW_EARLY:-0}" == 1 ]]; then
@@ -4393,6 +4416,7 @@ while true; do
             if [[ "${CHANGE_PREVIEW_EARLY:-0}" != 1 ]]; then
                 CHANGE_PREVIEW_EARLY=1
                 change_preview_open 21600 early
+                change_preview_build
             fi
             if [[ "$PREFLIGHT_BLOCKING" != 1 ]]; then
                 : > "$STATE_DIR/preflight-backgrounded"
@@ -4429,6 +4453,8 @@ while true; do
             ;;
 
         IMPLEMENT)
+            # The preview build writes at the repository root: it must be finished before implementation reads or writes the tree.
+            preview_build_wait
             # Before a single line of code is written: the baseline only means
             # anything against the unmodified tree.
             wait_green_baseline_bg

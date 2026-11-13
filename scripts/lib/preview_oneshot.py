@@ -21,7 +21,7 @@ import sys
 
 LIMIT = 9000        # characters of each input; a preview needs the look, not every assumption
 
-BRIEFS = ('REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS.md')
+BRIEFS = ('REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS.md', '.uncle/docs/CHANGE_REQUEST.md', '.uncle/docs/CHANGE_SPEC.md')
 INTERPRETATION = '.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json'
 PLAN = '.uncle/workflow/documents/PROJECT_PLAN.json'
 

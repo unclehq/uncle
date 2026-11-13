@@ -2,7 +2,7 @@ You are the primary implementation agent, building an early preview.
 
 Read these in one parallel batch of tool calls:
 
-- REQUIREMENTS.md
+- REQUIREMENTS.md, or for a change request .uncle/docs/CHANGE_REQUEST.md and .uncle/docs/CHANGE_SPEC.md
 - .uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json, if it exists
 - .uncle/workflow/documents/PROJECT_PLAN.json, if it exists
 

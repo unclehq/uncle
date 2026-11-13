@@ -720,22 +720,53 @@ def owned_protected_paths(model, value):
     return '\n'.join(matching or candidates)
 
 
-def to_patch(old, new):
-    """The section-level patch (`edit_sections` and `insert_sections`) that turns `old` into `new`."""
+def heading_levels(narrative):
+    """{heading text: its `#` marks} for the headings of a Markdown plan, the first of each."""
+    levels = {}
+    for found in re.finditer(r'(?m)^(#{2,6})[ \t]+(.+?)[ \t]*$', narrative or ''):
+        levels.setdefault(found.group(2), found.group(1))
+    return levels
+
+
+def to_patch(old, new, narrative=None):
+    """The section-level patch (`edit_sections` and `insert_sections`) that turns `old` into `new`.
+
+    With the plan's `narrative`, a model section the Markdown holds one level down (the importer makes an implementation span
+    such as `### Implementation steps` under `## 12. Implementation order` its own section) is written back inside its
+    parent `##` section: the patch names only headings the Markdown has, and it never drops the nested text."""
+    levels = heading_levels(narrative)
     old_by_id = {s['id']: s for s in old['sections']}
     patch = {'edit_sections': [], 'insert_sections': [], 'replace_text': []}
-    previous = None
+    groups = []                                   # (the `##` section, the sections nested under it)
     for section in new['sections']:
-        body = '\n\n'.join(pm.render_block(b) for b in section['blocks'])
+        if groups and levels.get(section['heading'], '##') != '##':
+            groups[-1][1].append(section)
+        else:
+            groups.append((section, []))
+
+    def body_of(section):
+        return '\n\n'.join(pm.render_block(b) for b in section['blocks'])
+
+    def whole(parent, nested):
+        parts = [body_of(parent)] + ['%s %s%s' % (levels[n['heading']], n['heading'], '\n\n' + body_of(n) if n['blocks'] else '')
+                                     for n in nested]
+        return '\n\n'.join(part for part in parts if part)
+
+    previous = None
+    for section, nested in groups:
+        members = [section] + nested
         before = old_by_id.get(section['id'])
+        for member in members:
+            was = old_by_id.get(member['id'])
+            if was is not None and was['heading'] != member['heading']:
+                raise Conflict('section %s was renamed; ops do not rename sections' % member['id'])
         if before is None:
+            body = whole(section, nested)
             content = '## %s%s' % (section['heading'], '\n\n' + body if body else '')
             patch['insert_sections'].append({'content': content, 'after': '## ' + previous['heading']} if previous
                                             else {'content': content, 'position': 'start'})
-        elif before != section:
-            if before['heading'] != section['heading']:
-                raise Conflict('section %s was renamed; ops do not rename sections' % section['id'])
-            patch['edit_sections'].append({'heading': '## ' + section['heading'], 'content': body})
+        elif any(old_by_id.get(member['id']) != member for member in members):
+            patch['edit_sections'].append({'heading': '## ' + section['heading'], 'content': whole(section, nested)})
         previous = section
     gone = set(old_by_id) - {s['id'] for s in new['sections']}
     if gone:
@@ -917,7 +948,7 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
         paths = {owned_protected_paths(new_model, derived): 'driver'}
         print('updated-plan ops: no protected_verification_paths anywhere; derived %d from the plan\'s test files' % len(derived.splitlines()),
               file=sys.stderr)
-    patch = to_patch(model, new_model)
+    patch = to_patch(model, new_model, plan.get('narrative'))
     apply_patch(plan.get('narrative') or pm.render(model), patch)     # a patch that does not apply is a conflict
     contract_paths = next(iter(paths), base_paths)
     if not CHANGE and driver_contract:
@@ -1055,7 +1086,7 @@ def repair_plan(plan, model, operations):
                 record['owns'] = paths
     typed = [pm.typed_op(model, operation) for operation in ordinary]
     revised = pm.apply_ops(model, typed)
-    result = dict(plan, narrative=apply_patch(plan['narrative'], to_patch(model, revised)))
+    result = dict(plan, narrative=apply_patch(plan['narrative'], to_patch(model, revised, plan['narrative'])))
     # Stale embedded model records must never shadow repaired text.
     result.pop('sections', None)
     return result, revised

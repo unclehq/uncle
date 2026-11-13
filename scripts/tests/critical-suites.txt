@@ -150,6 +150,9 @@ preflight-denied-write
 # A retried one-finding updated-plan writer gets more answer room, and a response the schema refuses is kept for diagnosis.
 updated-plan-writer-retries
 
+# A plan section the model holds one level down (### Implementation steps) is patched inside its parent, so a step edit does not fail the merge.
+updated-plan-nested-section
+
 # A plan patch names a section with or without its `## ` marker.
 plan-patch-headings
 

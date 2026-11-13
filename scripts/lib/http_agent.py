@@ -1052,6 +1052,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         or inline_worker_schema_first(final_name, prompt)))
     exhausted = False
     warned = False
+    draft_nudges = 0
     for turn_number in range(0 if schema_first else turns):
         # Tell the model when its budget is nearly spent.  A repair stage ran all of its
         # 40 turns probing and ended with an empty message, so the file the driver needs was
@@ -1124,6 +1125,18 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             if not text.strip():
                 raise ValueError('Model returned no final text after one recovery attempt. No successful completion recorded; '
                                  'retry or select another model.')
+            missing = [path for path in policy.draft_checks if path not in policy.drafts and path not in policy.draft_errors]
+            if missing and draft_nudges < 2 and turn_number + 1 < turns:
+                # The task's own deliverable is a document that was never produced (the model ended on a summary of its
+                # work). Ask for it, in the format the task describes, instead of failing a stage whose work is done.
+                draft_nudges += 1
+                names = ', '.join(path.relative_to(policy.root).as_posix() for path in missing)
+                messages.extend([{'role': 'assistant', 'content': text},
+                                 {'role': 'user', 'content': 'The required document was not delivered: ' + names + '. Your last '
+                                  'message summarised the work instead. Reply now with that document in full as your final '
+                                  'message, exactly in the format the task describes (a Markdown heading, then every required '
+                                  'section), with no tool calls and no summary. Do not redo completed work.'}])
+                continue
             messages.append({'role': 'assistant', 'content': text})
             break
         history = {'role': 'assistant', 'content': text, 'tool_calls': calls}

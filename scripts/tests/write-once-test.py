@@ -84,6 +84,36 @@ class WriteOnce(unittest.TestCase):
         self.assertIn('draft already supplied', agent.run_tool(policy, 'write_file', {'path': path, 'content': good}))
         self.assertEqual((self.root / path).read_text(), good)
 
+    NOTES = ('# Implementation notes investigation\n\n## Changed files\n\n- `src/main.rs`: prints the greeting (step 1, B-1).\n\n'
+             '## Deviations\n\nNone.\n\n## Unresolved concerns\n\nNone.\n\n## Plan blockers\n\nNone.\n')
+
+    def test_a_summary_instead_of_the_required_notes_is_asked_for_again(self):
+        path = '.uncle/workflow/implementation-notes-investigation.md'
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE='implementation-investigate'):
+            prompt, policy, _, _, _, _ = hosted._http_setup('agent', {}, 'Build it.', self.root, True, None)
+            replies = [self.reply('The crate is built and every check passes.'), self.reply(self.NOTES)]
+            seen = []
+
+            def chat(*args):
+                seen.append(json.loads(json.dumps(args[2])))
+                return replies.pop(0)
+            with patch.object(agent, 'interruptible_chat', side_effect=chat):
+                agent.run_agent(self.values, prompt, policy, 4096)
+            policy.complete()
+        self.assertEqual(len(seen), 2)
+        self.assertIn('required document was not delivered', seen[1][-1]['content'])
+        self.assertIn(path, seen[1][-1]['content'])
+        self.assertEqual(policy.drafts[(self.root / path).resolve()].strip(), self.NOTES.strip())
+
+    def test_the_missing_notes_are_asked_for_only_twice(self):
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE='implementation-investigate'):
+            prompt, policy, _, _, _, _ = hosted._http_setup('agent', {}, 'Build it.', self.root, True, None)
+            replies = [self.reply('Done.'), self.reply('Still done.'), self.reply('Really done.')]
+            with patch.object(agent, 'interruptible_chat', side_effect=replies) as chat:
+                with self.assertRaisesRegex(ValueError, 'Required draft was not delivered'):
+                    agent.run_agent(self.values, prompt, policy, 4096)
+            self.assertEqual(chat.call_count, 3)   # the work, then two requests for the document
+
     def test_bad_planner_cannot_finish_or_replace_valid_delivery(self):
         path = '.uncle/workflow/project-plan-investigation.md'
         good = '# Project plan\n## Verification commands\n```sh\ntrue\n```\n'

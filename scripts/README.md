@@ -455,7 +455,7 @@ State files this contract depends on, all under the gitignored `.uncle/workflow/
 | `audit-override` | either driver in `WAIT_AUDIT_OVERRIDE` | `<utc>TAB<class>TAB<sha256 of .uncle/docs/FINAL_AUDIT.md>`; a human chose to finish over a failing audit, and the issue is never closed |
 | `IMPLEMENTATION_REVIEW.md` | either driver, at the implementation gate | the generated document the operator approves: file list, green check, agent notes and test report, and the full diff. Rebuilt from the tree on every gate entry |
 | `green-check.baseline.tsv` | `change-workflow.sh` in `PLAN` | `<exit status>TAB<command>` for the approved command list, run before anything changed |
-| `green-check.tsv` | either driver after implementation | `<PASS\|FIXED\|PREEXISTING\|REGRESSION>TAB<command>` |
+| `green-check.tsv` | either driver after implementation | `<PASS\|FIXED\|PREEXISTING\|REGRESSION\|MUTATION\|BLOCKED-SETUP>TAB<command>` (`BLOCKED-SETUP`: failed because an outstanding BLOCKED-SETUP preflight row explains it, e.g. a port another project holds; not repaired, reported as not performed; `scripts/lib/blocked_prerequisites.py`) |
 | `green-check-override` | either driver at the implementation gate | `<utc>TAB<n> regression(s) overridden`; a human approved over a failing check |
 | `untracked-before.txt` | either driver at the start of implementation | untracked paths that already existed, so they are not charged to the change |
 | `issue-closed` | `change-workflow.sh` after a successful close | `<run-id>TAB<owner/repo>TAB<issue>`; absence means no driver-side close happened |

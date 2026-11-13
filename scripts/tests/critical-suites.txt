@@ -156,6 +156,9 @@ updated-plan-nested-section
 # A project-plan section that stops on its output cap is rerun with more room, and the fallback to the Markdown plan is announced.
 project-plan-section-cap
 
+# A verification command that could not run because a BLOCKED-SETUP prerequisite is outstanding is not sent to repair, and is reported as not performed.
+blocked-prerequisites
+
 # A plan patch names a section with or without its `## ` marker.
 plan-patch-headings
 

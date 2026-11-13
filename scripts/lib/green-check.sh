@@ -366,6 +366,8 @@ green_run_inner() {
 # fail-closed reading: an unrecorded baseline is not evidence of a prior
 # failure, and a gate that assumes otherwise passes everything on a missing
 # file.
+#   BLOCKED-SETUP  fails because a prerequisite the preflight found BLOCKED-SETUP is still outstanding (a port another project holds):
+#                  it did not run, so it is not a defect for repair and not a pass; the report and the audit say it was not performed
 green_classify() {
     local base="$1" cur="$2"
 
@@ -400,7 +402,47 @@ green_classify() {
                 else                       print "REGRESSION\t" cm
             }
         }
-    ' "$cur"
+    ' "$cur" | green_blocked_reclassify
+}
+
+# green_blocked_reclassify — stdin: classified rows; stdout: the same rows, a failing command that an outstanding BLOCKED-SETUP
+# preflight row explains re-labelled BLOCKED-SETUP (blocked_prerequisites.py). Passes the rows through unchanged when there is no
+# report, no log, no python or nothing to explain. The explanations go to green-blocked-setup.tsv for the report and the ledger.
+green_blocked_reclassify() {
+    local state="${STATE_DIR:-.uncle/workflow}" report log
+    report="$state/documents/PREFLIGHT_REPORT.json"
+    log="${LOG_DIR:-$state/logs}/green-check.log"
+    if [[ -s "$report" && -r "$log" && -f "$GREEN_LIB_DIR/blocked_prerequisites.py" ]] && command -v python3 >/dev/null 2>&1; then
+        python3 -B "$GREEN_LIB_DIR/blocked_prerequisites.py" reclassify "$report" "$log" "$state/green-blocked-setup.tsv" || true
+    else
+        rm -f "$state/green-blocked-setup.tsv" 2>/dev/null || true
+        cat
+    fi
+}
+
+# green_blocked_setup_commands <classified_file> — one BLOCKED-SETUP command per line.
+green_blocked_setup_commands() {
+    [[ -s "$1" ]] || return 0
+    awk '{ t = index($0, "\t") } t > 0 && substr($0, 1, t - 1) == "BLOCKED-SETUP" { print substr($0, t + 1) }' "$1"
+}
+
+# green_blocked_setup_reason <command> — "<row ids>: <action>" for one BLOCKED-SETUP command.
+green_blocked_setup_reason() {
+    local side="${STATE_DIR:-.uncle/workflow}/green-blocked-setup.tsv"
+    [[ -s "$side" ]] || return 0
+    awk -F'\t' -v command="$1" '$1 == command { printf "%s: %s", $2, $3; exit }' "$side"
+}
+
+# green_record_blocked_setup <classified_file> — put the checks that could not run in the ledger the final audit reads, once each.
+green_record_blocked_setup() {
+    local classified="$1" command reason ledger="${STATE_DIR:-.uncle/workflow}/nonblocking-test-failures.tsv"
+    declare -F record_nonblocking_failure >/dev/null || return 0
+    while IFS= read -r command; do
+        [[ -n "$command" ]] || continue
+        reason="$(green_blocked_setup_reason "$command")"
+        grep -qF "BLOCKED-SETUP, not performed: $command" "$ledger" 2>/dev/null && continue
+        record_nonblocking_failure green-check "BLOCKED-SETUP, not performed: $command${reason:+ ($reason)}"
+    done < <(green_blocked_setup_commands "$classified")
 }
 
 # green_mutation_failures <classified_file> — one failing mutation / defect-injection command per line.
@@ -513,12 +555,29 @@ green_report() {
             echo
         fi
 
+        local blocked blocked_count=0 blocked_command
+        blocked="$(green_blocked_setup_commands "$classified")"
+        if [[ -n "$blocked" ]]; then
+            echo "**Not performed: BLOCKED-SETUP.** These commands failed because a prerequisite the preflight found blocked is still"
+            echo "outstanding, so they did not run against the code. They are not passes, and repair cannot fix them; the named"
+            echo "action has to be taken by a person, then the check rerun:"
+            echo
+            while IFS= read -r blocked_command; do
+                [[ -n "$blocked_command" ]] || continue
+                blocked_count=$((blocked_count + 1))
+                printf -- '- `%s` -- %s\n' "$blocked_command" "$(green_blocked_setup_reason "$blocked_command")"
+            done <<< "$blocked"
+            echo
+        fi
+
         local failures
         failures="$(green_regressions "$classified")"
 
         if [[ "$has_baseline" != "1" ]]; then
             if [[ "$failures" -gt 0 ]]; then
                 echo "**$failures command(s) failed.**"
+            elif [[ "$blocked_count" -gt 0 ]]; then
+                echo "**$blocked_count command(s) could not run (BLOCKED-SETUP).** The others passed; this check is not complete."
             else
                 echo "All verification commands passed."
             fi
@@ -528,6 +587,10 @@ green_report() {
         else
             echo "No regressions. PREEXISTING rows failed before this change too."
         fi
+        if [[ "$has_baseline" == "1" || "$failures" -gt 0 ]]; then
+            [[ "$blocked_count" -eq 0 ]] || echo "**$blocked_count command(s) could not run (BLOCKED-SETUP)**; this check is not complete."
+        fi
     } > "$out"
     green_record_mutation_failures "$classified"
+    green_record_blocked_setup "$classified"
 }

@@ -256,6 +256,25 @@ class Profile(unittest.TestCase):
                              ('anthropic-api', 'https://api.anthropic.com', 'claude-sonnet-x'), stage)
             self.assertEqual(self_hosted.resolve_profile({'implementation.runner': 'aws-bedrock'}, stage), 'aws-bedrock')
 
+    def test_repair_inherits_what_it_leaves_unset_from_implementation(self):
+        # The shell does this for every key (uncle_stage_key); the profile lookup did not, so repair-investigate came out as plain
+        # self-hosted and asked for a Base URL although the shell had routed it through the configured anthropic-api runner.
+        keys = {'__opencode_connection__': {'api_key': KEY}, '__opencode_models__': {'claude-impl': {'api_key': KEY, 'model': 'claude-impl'}, 'claude-fix': {'api_key': KEY, 'model': 'claude-fix'}}}
+        self.write('implementation.runner anthropic-api\nimplementation.model claude-impl\nrepair.model claude-fix\n', keys)
+        for stage in ('repair', 'repair-investigate'):
+            values = self_hosted.settings(str(self.config), stage)
+            self.assertEqual((values['_profile'], values['base_url'], values['model']),
+                             ('anthropic-api', 'https://api.anthropic.com', 'claude-fix'), stage)   # its own model, inherited runner
+        self.write('implementation.runner anthropic-api\nimplementation.model claude-impl\n', keys)
+        self.assertEqual(self_hosted.settings(str(self.config), 'repair-investigate')['model'], 'claude-impl')
+
+    def test_an_explicit_repair_runner_is_not_overridden_by_implementation(self):
+        self.write('implementation.runner anthropic-api\nrepair.runner self-hosted\nrepair.model m\nrepair.base_url http://localhost:8000/v1\n')
+        with mock.patch.dict(os.environ, {'UNCLE_SELF_HOSTED_API_KEY': 'local'}):
+            values = self_hosted.settings(str(self.config), 'repair-investigate')
+        self.assertNotIn('_profile', values)
+        self.assertEqual(values['base_url'], 'http://localhost:8000/v1')
+
     def test_self_hosted_stages_are_unchanged(self):
         self.write('implementation.runner self-hosted\nimplementation.model local/x\nimplementation.base_url http://localhost:8000/v1\n')
         with mock.patch.dict(os.environ, {'UNCLE_SELF_HOSTED_API_KEY': 'local'}):

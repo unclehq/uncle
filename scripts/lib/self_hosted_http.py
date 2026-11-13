@@ -933,6 +933,11 @@ def _config_values(path=None):
                     values.setdefault(parts[0], parts[1].strip())
     except OSError:
         pass
+    # A repair pass inherits any setting it leaves unset from implementation (uncle_stage_key in stage-config.sh). Without this the
+    # profile lookup saw no `repair.runner`, took plain self-hosted for repair-investigate and asked for a Base URL, though the
+    # shell had already routed the stage through the configured anthropic-api or aws-bedrock runner.
+    for key in [k for k in values if k.startswith('implementation.')]:
+        values.setdefault('repair.' + key[len('implementation.'):], values[key])
     return values
 
 

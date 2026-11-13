@@ -126,6 +126,12 @@ revalidate-attestation
 # uncle --noui opens the preview tab like the screen: the early page and the finished app (a duplicate or a leaked server).
 headless-preview-open
 
+# The preview build has no off switch, and the removed preview variables stay removed.
+preview-build-always-on
+
+# A plan patch names a section with or without its `## ` marker.
+plan-patch-headings
+
 # Check record: the machine-checkable green-check record and its snapshot-backed rerun.
 check-record
 

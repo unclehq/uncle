@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Start the project's application detached, for a host that supplies the browser (UNCLE_PREVIEW_MODE=host).
+"""Start the project's application detached, for a host that supplies the browser (UNCLE_HOSTED=1).
 
     host_preview.py serve PROJECT    starts (or reuses) the app, writes .uncle/preview.json, prints UNCLE_PREVIEW_PORT=<n>
-    host_preview.py mode-check       exit 0 when UNCLE_PREVIEW_MODE is exactly `host`, else 1
+    host_preview.py mode-check       exit 0 when UNCLE_HOSTED is exactly `1`, else 1
 
 serve always exits 0: a failure is a `failed` record, never a build failure.  Stdout carries only the single port line.
 """
@@ -32,8 +32,8 @@ _ENV_KEEP = ('PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR
 
 
 def is_host_mode(env=None):
-    """The one place the mode is decided: exactly the lowercase string `host`."""
-    return (os.environ if env is None else env).get('UNCLE_PREVIEW_MODE') == 'host'
+    """The one place the mode is decided: hosted mode (UNCLE_HOSTED exactly 1)."""
+    return (os.environ if env is None else env).get('UNCLE_HOSTED') == '1'
 
 
 class Failed(Exception):

@@ -21,7 +21,7 @@
 # out not to have changed anything the code depends on, that stage finds the
 # work already done and says so.
 #
-# On by default. WORKFLOW_PREVIEW_BUILD=0 turns it off.
+# Always on: there is no switch to turn it off.
 #
 # It costs an implementation that is usually thrown away: on the two runs
 # measured, the review changed the plan the preview was built from both
@@ -37,7 +37,6 @@ if ! declare -f plan_material_hash > /dev/null 2>&1; then
     . "${PREVIEW_LIB_DIR:-$(cd "${BASH_SOURCE[0]%/*}" && pwd)}/plan-scope.sh"
 fi
 
-PREVIEW_BUILD="${WORKFLOW_PREVIEW_BUILD:-1}"
 PREVIEW_PID=""
 PREVIEW_STARTED=0
 
@@ -151,7 +150,6 @@ preview_existing_project() {
 
 # preview_build_start — launch it, detached, and return immediately.
 preview_build_start() {
-    [[ "$PREVIEW_BUILD" == "1" ]] || return 0
     [[ "$PREVIEW_STARTED" == 0 ]] || return 0
     if preview_existing_project; then
         echo "No preview build: this directory already holds a project, and a preview would write into its root."

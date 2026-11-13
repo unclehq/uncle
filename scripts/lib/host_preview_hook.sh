@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared COMPLETE-branch hook for stagegate.sh and change-workflow.sh (D-2, D-10).
 # Sourced, never executed. Host mode is decided only by host_preview.py mode-check
-# (exact lowercase UNCLE_PREVIEW_MODE=host); any other value does nothing at all.
+# (hosted mode, UNCLE_HOSTED=1); otherwise it does nothing at all.
 # WORKFLOW_PREVIEW_OPEN_BROWSER=0 is set only inside the subshell around the call
 # and never exported to the driver environment. Failures are ignored (INV-1).
 uncle_host_preview_hook() {

@@ -38,13 +38,11 @@ Electron or Tauri, which are launched rather than browsed):
   and opens a tab. A server the driver already owns is never duplicated.
 * **Finished app.** When the build completes, the driver has stopped its own
   preview server, so `--noui` serves the finished project and opens it. That
-  server outlives the command, so it expires: `UNCLE_NOUI_PREVIEW_SECONDS`
-  (default 3600) sets its lifetime, and the `Preview:` line gives the pid to
+  server outlives the command, so it expires after an hour, and the `Preview:` line gives the pid to
   `kill` sooner. A React or Svelte project is handed to its dev server once
   dependencies exist, and the page reloads itself.
 
-Turn this off with `UNCLE_NOUI_PREVIEW=0` (or the driver's own
-`WORKFLOW_PREVIEW_OPEN_BROWSER=0`). On a machine with no browser the server still
+Turn this off with the driver's own `WORKFLOW_PREVIEW_OPEN_BROWSER=0`. On a machine with no browser the server still
 starts and `.uncle/workflow/logs/preview-server.log` says the tab could not be
 opened.
 

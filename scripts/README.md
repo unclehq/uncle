@@ -795,7 +795,7 @@ The config is `STAGE VALUE` lines:
 
 - Stages without a configured runner use `self-hosted`; a `runner` in `.uncle/config` still wins. Supervision and classify follow the same rule and never use the `sonnet` alias on a self-hosted runner.
 - Empty self-hosted fields are filled per field from `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `SEREN_MODEL` (then `UNCLE_MODEL`). `UNCLE_SELF_HOSTED_*`, `.uncle/config` and stored profiles take precedence. A rejected `OPENAI_BASE_URL` is reported by name, never by value.
-- `UNCLE_PUBLISH_MODE` defaults to `handoff` and `UNCLE_PREVIEW_MODE` to `host` when unset or empty; explicit values are kept.
+- `UNCLE_PUBLISH_MODE` defaults to `handoff` when unset or empty; an explicit value is kept. The preview is served for the host (host-preview mode is hosted mode itself).
 - Runs are unattended by default (already the default). `OPENAI_API_KEY` is removed from the environment of the client's tools.
 - Without resolvable settings the run fails with the self-hosted error; it does not fall back to Claude.
 

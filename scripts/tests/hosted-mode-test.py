@@ -87,19 +87,19 @@ class ShellResolution(unittest.TestCase):
 
     def test_hosted_defaults(self):
         out = self.sh({"UNCLE_HOSTED": "1", "SEREN_MODEL": " m "},
-                      'echo "$(uncle_stage_runner implementation)|$(uncle_stage_model implementation)|$UNCLE_PUBLISH_MODE|$UNCLE_PREVIEW_MODE"')
-        self.assertEqual(out.strip(), "self-hosted|m|handoff|host")
+                      'echo "$(uncle_stage_runner implementation)|$(uncle_stage_model implementation)|$UNCLE_PUBLISH_MODE"')
+        self.assertEqual(out.strip(), "self-hosted|m|handoff")
 
     def test_explicit_values_kept_and_uncle_model_fallback(self):
-        out = self.sh({"UNCLE_HOSTED": "1", "UNCLE_MODEL": "u", "UNCLE_PUBLISH_MODE": "pr", "UNCLE_PREVIEW_MODE": "x"},
-                      'echo "$(uncle_stage_model implementation)|$UNCLE_PUBLISH_MODE|$UNCLE_PREVIEW_MODE"')
-        self.assertEqual(out.strip(), "u|pr|x")
+        out = self.sh({"UNCLE_HOSTED": "1", "UNCLE_MODEL": "u", "UNCLE_PUBLISH_MODE": "pr"},
+                      'echo "$(uncle_stage_model implementation)|$UNCLE_PUBLISH_MODE"')
+        self.assertEqual(out.strip(), "u|pr")
 
     def test_not_hosted_unchanged(self):
         for v in ("0", "", "true"):
             out = self.sh({"UNCLE_HOSTED": v, "SEREN_MODEL": "m"},
-                          'echo "$(uncle_stage_runner implementation)|$(uncle_stage_model implementation)|${UNCLE_PUBLISH_MODE:-}|${UNCLE_PREVIEW_MODE:-}"')
-            self.assertEqual(out.strip(), "claude|||", v)
+                          'echo "$(uncle_stage_runner implementation)|$(uncle_stage_model implementation)|${UNCLE_PUBLISH_MODE:-}"')
+            self.assertEqual(out.strip(), "claude||", v)
 
 
 class SupervisorDefault(unittest.TestCase):

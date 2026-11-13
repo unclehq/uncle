@@ -82,8 +82,8 @@ class Base(unittest.TestCase):
                      'url': 'http://127.0.0.1:%d/' % (port or free_port())})
 
     def serve(self, **env):
-        e = {k: v for k, v in os.environ.items() if not k.startswith('UNCLE_PREVIEW')}
-        e.update({'UNCLE_PREVIEW_MODE': 'host', 'UNCLE_PREVIEW_TIMEOUT': '8'})
+        e = {k: v for k, v in os.environ.items() if not k.startswith('UNCLE_PREVIEW') and k != 'UNCLE_HOSTED'}
+        e.update({'UNCLE_HOSTED': '1', 'UNCLE_PREVIEW_TIMEOUT': '8'})
         e.update(env)
         return subprocess.run([sys.executable, str(HOST_PREVIEW), 'serve', str(self.project)], env=e,
                               capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
@@ -115,7 +115,7 @@ class Serve(Base):
     def test_detached_survives_process_group_kill_of_serve(self):  # AC-1 detachment
         port = free_port()
         self.command_launch()
-        env = dict(os.environ, UNCLE_PREVIEW_MODE='host', UNCLE_PREVIEW_PORT=str(port), UNCLE_PREVIEW_TIMEOUT='8')
+        env = dict(os.environ, UNCLE_HOSTED='1', UNCLE_PREVIEW_PORT=str(port), UNCLE_PREVIEW_TIMEOUT='8')
         p = subprocess.Popen([sys.executable, str(HOST_PREVIEW), 'serve', str(self.project)], env=env,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         p.communicate(timeout=60)
@@ -348,10 +348,10 @@ class Reuse(Base):
         marker = '{"left":"by earlier host run"}'
         (self.project / '.uncle/preview.json').write_text(marker)
         self.command_launch()
-        for mode in (None, '', 'HOST', 'false'):
-            e = {k: v for k, v in os.environ.items() if not k.startswith('UNCLE_PREVIEW')}
+        for mode in (None, '', 'true', '0'):
+            e = {k: v for k, v in os.environ.items() if not k.startswith('UNCLE_PREVIEW') and k != 'UNCLE_HOSTED'}
             if mode is not None:
-                e['UNCLE_PREVIEW_MODE'] = mode
+                e['UNCLE_HOSTED'] = mode
             subprocess.run([sys.executable, str(HOST_PREVIEW), 'mode-check'], env=e, capture_output=True)
             self.assertEqual((self.project / '.uncle/preview.json').read_text(), marker)
 
@@ -390,23 +390,23 @@ class NoSecrets(Base):
 
 class ModeHelper(unittest.TestCase):
     def mode(self, value):
-        e = {k: v for k, v in os.environ.items() if k != 'UNCLE_PREVIEW_MODE'}
+        e = {k: v for k, v in os.environ.items() if k != 'UNCLE_HOSTED'}
         if value is not None:
-            e['UNCLE_PREVIEW_MODE'] = value
+            e['UNCLE_HOSTED'] = value
         return subprocess.run([sys.executable, str(HOST_PREVIEW), 'mode-check'], env=e,
                               capture_output=True).returncode
 
-    def test_only_exact_lowercase_host_is_host_mode(self):  # D-1
-        self.assertEqual(self.mode('host'), 0)
-        for v in (None, '', 'HOST', 'Host', ' host', 'host ', 'false', '1'):
+    def test_only_exact_1_is_host_mode(self):  # D-1
+        self.assertEqual(self.mode('1'), 0)
+        for v in (None, '', 'host', 'true', ' 1', '1 ', 'false', '0'):
             with self.subTest(value=v):
                 self.assertEqual(self.mode(v), 1)
 
     def test_is_host_mode_function(self):
         import host_preview
-        self.assertTrue(host_preview.is_host_mode({'UNCLE_PREVIEW_MODE': 'host'}))
-        for v in ('', 'HOST', ' host', 'false'):
-            self.assertFalse(host_preview.is_host_mode({'UNCLE_PREVIEW_MODE': v}))
+        self.assertTrue(host_preview.is_host_mode({'UNCLE_HOSTED': '1'}))
+        for v in ('', 'host', ' 1', 'false'):
+            self.assertFalse(host_preview.is_host_mode({'UNCLE_HOSTED': v}))
         self.assertFalse(host_preview.is_host_mode({}))
 
 
@@ -417,7 +417,7 @@ class CompletionPreviewHostMode(unittest.TestCase):
             root = Path(d)
             (root / '.uncle').mkdir()
             (root / '.uncle/launch.json').write_text(json.dumps({'kind': 'none'}))
-            with mock.patch.dict(os.environ, {'UNCLE_PREVIEW_MODE': 'host'}), \
+            with mock.patch.dict(os.environ, {'UNCLE_HOSTED': '1'}), \
                     mock.patch.object(cp.webbrowser, 'open', side_effect=AssertionError('browser opened')) as opener, \
                     mock.patch('sys.stdout') as out:
                 try:
@@ -433,10 +433,10 @@ class CompletionPreviewHostMode(unittest.TestCase):
 
 class Hook(unittest.TestCase):
     def run_hook(self, project, mode, extra=''):
-        env = {k: v for k, v in os.environ.items() if not k.startswith('UNCLE_PREVIEW')}
+        env = {k: v for k, v in os.environ.items() if not k.startswith('UNCLE_PREVIEW') and k != 'UNCLE_HOSTED'}
         env['ROOT'] = str(ROOT)
         if mode is not None:
-            env['UNCLE_PREVIEW_MODE'] = mode
+            env['UNCLE_HOSTED'] = mode
         script = 'source %s; uncle_host_preview_hook %s %s; echo "rc=$?"' % (HOOK, project, extra)
         return subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True, timeout=60,
                               cwd=project)
@@ -444,7 +444,7 @@ class Hook(unittest.TestCase):
     def test_hook_returns_zero_even_when_preview_fails(self):  # AC-9
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / '.uncle').mkdir()
-            r = self.run_hook(d, 'host')
+            r = self.run_hook(d, '1')
             self.assertIn('rc=0', r.stdout, r.stdout + r.stderr)
             rec = json.loads((Path(d) / '.uncle/preview.json').read_text())
             self.assertEqual(rec['status'], 'failed')
@@ -464,7 +464,7 @@ class Hook(unittest.TestCase):
                 text = (ROOT / 'scripts' / name).read_text()
                 self.assertIn('host_preview_hook.sh', text)
                 self.assertIn('uncle_host_preview_hook', text)
-                self.assertNotIn('UNCLE_PREVIEW_MODE', text)
+                self.assertNotIn('UNCLE_HOSTED', text)
 
 
 class CommandForParity(unittest.TestCase):

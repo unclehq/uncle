@@ -12,10 +12,10 @@ stops that server when it exits. Two things used to belong to the interactive sc
 
 Both start `preview_server.py` detached, the same code the driver uses, so a React or Svelte project is handed to its dev server
 once dependencies exist and the page reloads itself. The server this starts at the end outlives the command, so it expires
-(UNCLE_NOUI_PREVIEW_SECONDS, default 3600) and says how to stop it. Nothing here runs for a change request, or for a desktop
+(one hour) and says how to stop it. Nothing here runs for a change request, or for a desktop
 application (those are launched, not browsed).
 
-Turn it off with UNCLE_NOUI_PREVIEW=0, or WORKFLOW_PREVIEW_OPEN_BROWSER=0 (the driver's own switch).
+Turn it off with WORKFLOW_PREVIEW_OPEN_BROWSER=0 (the driver's own switch).
 """
 import os
 import re
@@ -39,24 +39,14 @@ OFF = ('0', 'false', 'no', 'off')
 def hosted_run(env=None):
     """True in a hosted run, where the host publishes the one signed preview link and no loopback preview is started."""
     env = os.environ if env is None else env
-    return env.get('UNCLE_PREVIEW_MODE') == 'host' or env.get('UNCLE_HOSTED') == '1'
+    return env.get('UNCLE_HOSTED') == '1'
 
 
 def enabled(env=None):
     env = os.environ if env is None else env
     if hosted_run(env):
         return False
-    return (str(env.get('UNCLE_NOUI_PREVIEW', '')).strip().lower() not in OFF
-            and str(env.get('WORKFLOW_PREVIEW_OPEN_BROWSER', '')).strip().lower() not in OFF)
-
-
-def ttl_seconds(env=None):
-    env = os.environ if env is None else env
-    try:
-        value = float(env.get('UNCLE_NOUI_PREVIEW_SECONDS') or DEFAULT_TTL_SECONDS)
-    except ValueError:
-        return DEFAULT_TTL_SECONDS
-    return value if value > 0 else DEFAULT_TTL_SECONDS
+    return str(env.get('WORKFLOW_PREVIEW_OPEN_BROWSER', '')).strip().lower() not in OFF
 
 
 def workflow_dir(root):
@@ -188,7 +178,7 @@ class HeadlessPreview:
             return []
         if server_alive(self.root):
             return []
-        ttl = ttl_seconds(self.env)
+        ttl = DEFAULT_TTL_SECONDS
         pid = self.start(ttl)
         if pid is None:
             return ['Local preview: could not start a preview server for the finished application\n']

@@ -50,8 +50,6 @@ class Timed(io.StringIO):
 def local_env():
     env = dict(os.environ)
     env.pop("UNCLE_HOSTED", None)
-    env.pop("UNCLE_PREVIEW_MODE", None)
-    env.pop("UNCLE_NOUI_PREVIEW", None)
     env.pop("WORKFLOW_PREVIEW_OPEN_BROWSER", None)
     return env
 
@@ -128,7 +126,7 @@ class Preview(unittest.TestCase):
 
 class HostedRun(unittest.TestCase):
     """AC-1/AC-2: hosted runs print no preview line and start no server."""
-    FLAGS = [{"UNCLE_PREVIEW_MODE": "host"}, {"UNCLE_HOSTED": "1"}]
+    FLAGS = [{"UNCLE_HOSTED": "1"}]
 
     def hosted_env(self, flag):
         env = local_env()

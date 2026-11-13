@@ -43,12 +43,11 @@ UNCLE_DEFAULT_RUNNER="claude"
 UNCLE_DEFAULT_EFFORT="low"
 
 # Hosted mode (UNCLE_HOSTED exactly 1, mirrors scripts/lib/hosted.py): the model is self-hosted
-# unless config names a runner, and publish/preview take their hosted defaults only when unset or empty.
+# unless config names a runner, and publish takes its hosted default only when unset or empty; the preview is served for the host.
 uncle_is_hosted() { [[ "${UNCLE_HOSTED:-}" == 1 ]]; }
 if uncle_is_hosted; then
     UNCLE_DEFAULT_RUNNER="self-hosted"
     [[ -n "${UNCLE_PUBLISH_MODE:-}" ]] || export UNCLE_PUBLISH_MODE=handoff
-    [[ -n "${UNCLE_PREVIEW_MODE:-}" ]] || export UNCLE_PREVIEW_MODE=host
 fi
 
 uncle_config_file() {

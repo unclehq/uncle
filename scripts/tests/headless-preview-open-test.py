@@ -156,7 +156,7 @@ class EarlyPage(unittest.TestCase):
         self.assertTrue(preview.poll())
 
     def test_the_switches_turn_it_off(self):
-        for env in ({'UNCLE_NOUI_PREVIEW': '0'}, {'WORKFLOW_PREVIEW_OPEN_BROWSER': '0'}, {'UNCLE_NOUI_PREVIEW': 'off'}):
+        for env in ({'WORKFLOW_PREVIEW_OPEN_BROWSER': '0'}, {'WORKFLOW_PREVIEW_OPEN_BROWSER': 'off'}):
             start = Recorder()
             preview, _ = make(project(), env=env, start=start)
             self.assertFalse(preview.poll(), env)
@@ -174,13 +174,11 @@ class FinishedApp(unittest.TestCase):
         self.assertIn('kill 4242', lines[0])
         self.assertIn('60 minutes', lines[0])
 
-    def test_the_lifetime_follows_the_environment(self):
+    def test_the_lifetime_is_not_configurable(self):
         start = Recorder()
         preview, _ = make(project(), env={'UNCLE_NOUI_PREVIEW_SECONDS': '600'}, start=start)
         preview.finish()
-        self.assertEqual(start.calls, [600.0])
-        self.assertEqual(hp.ttl_seconds({'UNCLE_NOUI_PREVIEW_SECONDS': 'junk'}), hp.DEFAULT_TTL_SECONDS)
-        self.assertEqual(hp.ttl_seconds({'UNCLE_NOUI_PREVIEW_SECONDS': '-5'}), hp.DEFAULT_TTL_SECONDS)
+        self.assertEqual(start.calls, [hp.DEFAULT_TTL_SECONDS])
 
     def test_a_change_request_is_not_opened_when_it_finishes(self):
         start = Recorder()
@@ -219,7 +217,7 @@ class FinishedApp(unittest.TestCase):
 
     def test_the_switches_turn_it_off(self):
         start = Recorder()
-        preview, _ = make(project(), env={'UNCLE_NOUI_PREVIEW': '0'}, start=start)
+        preview, _ = make(project(), env={'WORKFLOW_PREVIEW_OPEN_BROWSER': '0'}, start=start)
         self.assertEqual(preview.finish(), [])
         self.assertEqual(start.calls, [])
 
@@ -259,8 +257,8 @@ class EndToEnd(unittest.TestCase):
         recorder.write_text('#!/bin/sh\necho "$1" >> "%s"\nexit 0\n' % self.opened)
         recorder.chmod(recorder.stat().st_mode | stat.S_IEXEC)
         self.env = {k: v for k, v in os.environ.items()
-                    if k not in ('WORKFLOW_PREVIEW_OPEN_BROWSER', 'UNCLE_NOUI_PREVIEW', 'UNCLE_PREVIEW_TTL_SECONDS')}
-        self.env.update(BROWSER=str(recorder), UNCLE_NOUI_PREVIEW_SECONDS='3', UNCLE_SKIP_UPGRADE='1')
+                    if k not in ('WORKFLOW_PREVIEW_OPEN_BROWSER', 'UNCLE_PREVIEW_TTL_SECONDS')}
+        self.env.update(BROWSER=str(recorder), UNCLE_SKIP_UPGRADE='1')
         self.addCleanup(self.stop_servers)
 
     def stop_servers(self):
@@ -290,29 +288,15 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(urls, 'the recorder (the browser) was never given a URL\n' + out + err)
         self.assertRegex(urls[-1], r'^http://127\.0\.0\.1:\d+/')
         self.assertRegex(out, r'Local preview: http://127\.0\.0\.1:\d+/')
-        self.assertRegex(out, r'Local preview: the server \(pid \d+\) keeps running for 1 minutes; stop it earlier with: kill \d+')
+        self.assertRegex(out, r'Local preview: the server \(pid \d+\) keeps running for 60 minutes; stop it earlier with: kill \d+')
 
-    def test_the_server_it_leaves_running_serves_the_page_then_expires(self):
+    def test_the_server_it_leaves_running_serves_the_page(self):
         code, out, _ = self.run_driver('complete')
         self.assertEqual(code, 0)
-        pid = int((self.root / '.uncle' / 'workflow' / 'preview-server.pid').read_text())
+        self.assertTrue((self.root / '.uncle' / 'workflow' / 'preview-server.pid').exists())
         url = self.opened_urls()[-1]
         from urllib.request import urlopen
         self.assertIn('the page', urlopen(url, timeout=5).read().decode())
-        deadline = time.time() + 12
-        while time.time() < deadline:
-            # It is this process's child, so it stays a zombie (and answers kill -0) until reaped; in real use the runner has
-            # exited and init reaps it.
-            try:
-                done, _ = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                done = pid
-            if done == pid:
-                break
-            time.sleep(0.3)
-        else:
-            self.fail('the preview server was still running long after its lifetime')
-        self.assertFalse((self.root / '.uncle' / 'workflow' / 'preview-server.pid').exists())
 
     def test_an_early_page_opens_while_the_driver_is_still_running(self):
         code, out, err = self.run_driver('incomplete', seconds=2.5)
@@ -335,7 +319,7 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(self.opened_urls(), [])
 
     def test_with_the_switch_off_nothing_opens(self):
-        self.env['UNCLE_NOUI_PREVIEW'] = '0'
+        self.env['WORKFLOW_PREVIEW_OPEN_BROWSER'] = '0'
         code, out, _ = self.run_driver('complete')
         self.assertEqual(code, 0)
         self.assertEqual(self.opened_urls(), [])

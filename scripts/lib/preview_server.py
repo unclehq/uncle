@@ -207,13 +207,13 @@ def _open_local_browser(url):
 
 
 def host_binding(env=None):
-    """(host, port) the preview must listen on when a host supplies the browser (UNCLE_PREVIEW_MODE=host), else None.
+    """(host, port) the preview must listen on when a host supplies the browser (UNCLE_HOSTED=1), else None.
 
     The host (a sandbox whose own proxy exposes one port) names UNCLE_PREVIEW_HOST and UNCLE_PREVIEW_PORT, the same ones
     host_preview.py uses for the finished app, so one link covers the whole build. Anything invalid falls back to loopback
     on a free port, as an unset value does."""
     env = os.environ if env is None else env
-    if env.get('UNCLE_PREVIEW_MODE') != 'host':
+    if env.get('UNCLE_HOSTED') != '1':
         return None
     host = env.get('UNCLE_PREVIEW_HOST') or '127.0.0.1'
     if not re.fullmatch(r'localhost|[0-9]{1,3}(\.[0-9]{1,3}){3}', host):

@@ -160,20 +160,53 @@ class DerivedPaths(Base):
         found = ops.derive_protected_paths('see `.test-out/a.spec.js`, ../x.test.js, node_modules/y.test.js, tests/ok.test.js, package.json')
         self.assertEqual(found, 'tests/ok.test.js')
 
-    def test_the_derivation_finds_other_ecosystems_test_files(self):
-        found = ops.derive_protected_paths('Rust: tests/cli.rs and `cargo test`; Go: pkg/util_test.go; Java: FooTest.java; target/debug/x')
-        self.assertEqual(found.splitlines(), ['tests/cli.rs', 'pkg/util_test.go', 'FooTest.java'])
-        self.assertEqual(ops.derive_protected_paths('Haskell: test/Spec.hs, test/ParserSpec.hs, app/Main.hs').splitlines(),
-                         ['test/Spec.hs', 'test/ParserSpec.hs'])
+    def test_the_derivation_finds_test_files_in_any_language_by_name(self):
+        cases = {
+            'Rust: tests/cli.rs; `cargo test`; target/debug/x': ['tests/cli.rs'],
+            'Go: pkg/util_test.go and main.go': ['pkg/util_test.go'],
+            'Haskell: test/Spec.hs, test/ParserSpec.hs, app/Main.hs': ['test/Spec.hs', 'test/ParserSpec.hs'],
+            'OCaml: test/test_parser.ml, bin/main.ml': ['test/test_parser.ml'],
+            'Zig: src/main.zig and test/basic.zig': ['test/basic.zig'],
+            'Elixir: test/my_app_test.exs, lib/my_app.ex': ['test/my_app_test.exs'],
+            'Java: src/test/java/FooTest.java, src/main/java/Foo.java': ['src/test/java/FooTest.java'],
+            'Swift (iOS): Tests/AppTests/AppTests.swift, Sources/App/main.swift': ['Tests/AppTests/AppTests.swift'],
+            'Flutter: test/widget_test.dart, lib/main.dart': ['test/widget_test.dart'],
+            'Android: app/src/androidTest/java/MainTest.kt, app/src/main/java/Main.kt': ['app/src/androidTest/java/MainTest.kt'],
+            'C#: App.Tests/UnitTests.cs, App/Program.cs': ['App.Tests/UnitTests.cs'],
+            'Python: tests/test_x.py, conftest.py': ['tests/test_x.py', 'conftest.py'],
+            'prose only: see README.md, docs/spec.md and e.g. that': [],
+        }
+        for text, expected in cases.items():
+            self.assertEqual(ops.derive_protected_paths(text).split() if ops.derive_protected_paths(text) else [], expected, text)
 
-    def test_a_rust_plan_that_mentions_a_node_is_not_asked_for_node_ignores(self):
+    def test_ignore_probes_follow_the_plans_commands_and_owned_files_not_its_prose(self):
         import project_plan_stage as stage
-        rust = 'A Rust cargo app: each node of the list holds a value.'
-        self.assertNotIn('node_modules/probe', stage.required_paths(rust))
+
+        def plan(prose, owns='', commands=''):
+            text = prose + '\n'
+            if owns:
+                text += '1. Step\n   Owns: ' + owns + '\n'
+            if commands:
+                text += '## Verification commands\n\n```sh\n' + commands + '\n```\n'
+            return text
+        node = 'node_modules/probe'
+        # prose that merely uses the words
+        self.assertNotIn(node, stage.required_paths(plan('Each node of the list; no JavaScript needed; react to errors.')))
+        # a Rust plan, and one in a language the floor has never heard of
+        rust = plan('A node list.', '`src/main.rs`, `Cargo.toml`', 'cargo test')
+        self.assertNotIn(node, stage.required_paths(rust))
         self.assertIn('target/probe', stage.required_paths(rust))
-        self.assertNotIn('node_modules/probe', stage.required_paths('A Haskell cabal app: each node of the tree holds a value.'))
-        self.assertIn('node_modules/probe', stage.required_paths('An npm project with vite.'))
-        self.assertIn('node_modules/probe', stage.required_paths('Walk each node in JavaScript.'))
+        for stack in (('`app/Main.hs`', 'cabal test'), ('`src/main.zig`', 'zig build test'), ('`lib/app.ex`', 'mix test'),
+                      ('`app/src/main/java/Main.kt`', './gradlew test'), ('`lib/main.dart`', 'flutter test'),
+                      ('`Sources/App/main.swift`', 'swift test')):
+            self.assertEqual(stage.required_paths(plan('A node of a tree.', *stack)), ['.env', '.env.local', '.DS_Store'], stack)
+        # a real Node, Python or Electron plan is still asked for its outputs
+        self.assertIn(node, stage.required_paths(plan('An app.', '`src/main.ts`, `package.json`', 'npm test')))
+        self.assertIn(node, stage.required_paths(plan('A desktop app.', '`main.js`', 'npx electron .')))
+        self.assertIn('.venv/probe', stage.required_paths(plan('A tool.', '`app.py`', 'pytest')))
+        # no commands or owned files to read: only whole-word stack names count
+        self.assertIn(node, stage.required_paths('An npm project with vite.'))
+        self.assertNotIn(node, stage.required_paths('Walk each node in JavaScript.'))
 
     def test_driver_contract_derives_paths_from_the_merged_model_not_stale_base_text(self):
         self.plan_without_paths('\nTests: `tests/old.spec.js`\n')

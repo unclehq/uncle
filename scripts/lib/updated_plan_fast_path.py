@@ -66,21 +66,38 @@ def _section_paths(narrative):
 # still deterministic plan facts: test files and runner configs named by the
 # plan or its verification commands.  Keep this small parser here rather than
 # asking an updated-plan compiler to reproduce an unchanged list.
-TEST_FILE = re.compile(r'(?<![\w./-])((?:[\w.-]+/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?![\w])|'
-                       r'(?<![\w./-])((?:tests?|__tests__|e2e)/(?:[\w.-]+/)*[\w.-]+\.(?:[cm]?[jt]sx?|py|sh|rs|go|rb|java|kt|php|cs|c|cc|cpp|h|hpp|hs))(?![\w])|'
-                       r'(?<![\w./-])((?:vitest|jest|playwright|cypress|karma)\.config\.[cm]?[jt]s)(?![\w])|'
-                       # Other ecosystems' test files (a Rust plan naming tests/cli.rs matched nothing, and the whole updated plan failed).
-                       r'(?<![\w./-])((?:[\w.-]+/)*(?:[\w.-]+_test\.(?:go|rs|py|rb|c|cc|cpp)|test_[\w.-]+\.py|[\w.-]+_spec\.rb'
-                       r'|[\w.-]+Tests?\.(?:java|kt|php|cs|hs)|[\w.-]+Spec\.hs))(?![\w])')
+# Any language: a path-like token in the plan is a test file or runner config by its *name*, not by a list of languages.
+PATH_TOKEN = re.compile(r'(?<![\w./-])((?:[\w.+-]+/)*[\w.+-]+\.[A-Za-z0-9]{1,8})(?![\w])')
+TEST_DIRS = {'test', 'tests', 'spec', 'specs', '__tests__', 'e2e', 'integration', 'testing'}
+# Docs, data and manifests are never the test itself, whatever directory they sit in.
+NOT_CODE = {'md', 'markdown', 'txt', 'rst', 'json', 'lock', 'yml', 'yaml', 'toml', 'xml', 'csv', 'log', 'svg', 'png', 'jpg',
+            'jpeg', 'gif', 'snap', 'html', 'css', 'ini', 'cfg'}
+RUNNER_CONFIG = re.compile(r'^(?:(?:vitest|jest|playwright|cypress|karma)\.config\.[cm]?[jt]s|conftest\.py|pytest\.ini|tox\.ini'
+                           r'|phpunit\.xml(?:\.dist)?|\.rspec)$')
+# test_x.py, x_test.go, x.test.js, x.spec.ts, x-tests.rb, FooTest.java, ParserSpec.hs, FooTests.cs ...
+TEST_NAME = re.compile(r'^(?:test[_-].+|.+[_-]tests?|.+[_-]spec|.+\.(?:test|spec)|.*[a-z0-9](?:Tests?|Specs?)|Tests?|Specs?)$')
+
+
+def is_test_path(path):
+    name = Path(path).name
+    if RUNNER_CONFIG.match(name):
+        return True
+    stem, _, ext = name.rpartition('.')
+    if not stem or ext.lower() in NOT_CODE:
+        return False
+    if TEST_NAME.match(stem):
+        return True
+    return any(part.lower() in TEST_DIRS for part in Path(path).parts[:-1])
 
 
 def derive_protected_paths(text, commands=''):
-    """Return named test/config paths, one per line, excluding generated files."""
+    """Return named test/config paths, one per line, excluding generated files.  Recognized by name in any language."""
     found = []
-    for match in TEST_FILE.finditer((text or '') + '\n' + (commands or '')):
-        path = next(group for group in match.groups() if group)
-        if (path.startswith(('.', '/', 'node_modules', 'dist/', 'build/', 'out/', 'coverage/', 'target/'))
-                or '..' in path or path in found or path.endswith(('.json', '.lock'))):
+    for match in PATH_TOKEN.finditer((text or '') + '\n' + (commands or '')):
+        path = match.group(1)
+        if (path.startswith(('.', '/', 'node_modules', 'dist/', 'build/', 'out/', 'coverage/', 'target/', 'vendor/',
+                             'dist-newstyle/', 'bin/', 'obj/', '__pycache__/'))
+                or '..' in path or path in found or path.endswith(('.json', '.lock')) or not is_test_path(path)):
             continue
         found.append(path)
     # A plan often mentions both `tests/e2e/keyboard.spec.js` and the shorter

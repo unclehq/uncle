@@ -19,8 +19,23 @@ from project_plan_sections import final_text, prompt_contexts
 COMPLETE = 'PROJECT_PLAN_STAGE_COMPLETE'
 
 
-# Another ecosystem the plan chooses, which makes a bare `node` or `javascript` prose rather than a stack.
-OTHER_ECOSYSTEM = r'\b(?:cargo|rust|python|pytest|pip|pyproject|composer|php|golang|go\.mod|gradle|maven|dotnet|haskell|cabal|ghc|stack\.yaml)\b'
+def stack_evidence(plan):
+    """What the plan *does* rather than says: its verification commands and the files its steps own.
+
+    Prose is full of ordinary words that are also ecosystem names (a linked-list "node", "react to errors", "no JavaScript"),
+    and matching them demanded another stack's ignores and threw away the whole sectioned plan.  Commands and owned file
+    names are language-neutral evidence of the stack the plan really builds.  Empty when the plan has neither."""
+    lines = plan.splitlines()
+    found = [line for line in lines if re.match(r'\s*Owns:', line)]
+    inside = False
+    for line in lines:
+        if re.match(r'##\s+Verification commands\b', line):
+            inside = True
+        elif inside and re.match(r'##\s', line):
+            inside = False
+        elif inside:
+            found.append(line)
+    return '\n'.join(found)
 
 
 def required_paths(plan):
@@ -28,26 +43,29 @@ def required_paths(plan):
 
     The agent still owes *every* ecosystem/default/custom entry, per the original
     prompt. These deterministic probes are an additional floor, not a replacement.
+    A stack with no entry here (Haskell, Zig, OCaml, anything) is never demanded anything beyond the universal files:
+    the floor only ever names stacks it knows, so an unknown language cannot fail it.
     """
     paths = ['.env', '.env.local', '.DS_Store']
+    evidence = stack_evidence(plan)
+    text = evidence or plan
+    # With commands and owned files to read, file extensions and tool names are reliable; read from whole prose,
+    # only whole-word stack names count.
+    loose = bool(evidence)
     groups = [
-        # Whole words only: ordinary prose ("the next step", "trust") must not
-        # demand another ecosystem's outputs.  `node` and `javascript` are also ordinary words (a linked-list
-        # node, "no JavaScript needed"), so they count only when the plan names no other ecosystem: a Rust plan
-        # that mentions a node was asked for node_modules/ and the whole sectioned plan was thrown away.
-        (r'\b(?:npm|pnpm|yarn|typescript|vite|react|svelte|next\.?js|node\.?js|package\.json)\b',
-         ['node_modules/probe', 'dist/probe', 'build/probe']),
-        (r'\b(?:node|javascript)\b' if not re.search(OTHER_ECOSYSTEM, plan, re.I) else r'(?!x)x',
+        (r'\b(?:npm|pnpm|typescript|vite|svelte|next\.?js|node\.?js|package\.json)\b'
+         + (r'|\b(?:yarn|react|node|npx|vitest|jest|tsc)\b|\.(?:[cm]?[jt]sx?|svelte)\b' if loose else ''),
          ['node_modules/probe', 'dist/probe', 'build/probe']),
         (r'\bsvelte(?:kit)?\b', ['.svelte-kit/probe']),
         (r'\bnext\.?js\b|"next"\s*:', ['.next/probe', 'out/probe']),
-        (r'\b(?:python|pytest|pip|pyproject)\b', ['.venv/probe', '__pycache__/probe.pyc', '.pytest_cache/probe', 'probe.pyc']),
-        (r'\b(?:cargo|rust)\b', ['target/probe']),
-        (r'\b(?:composer|php)\b', ['vendor/probe']),
+        (r'\b(?:python|pytest|pip|pyproject)\b' + (r'|\.py\b' if loose else ''),
+         ['.venv/probe', '__pycache__/probe.pyc', '.pytest_cache/probe', 'probe.pyc']),
+        (r'\b(?:cargo|rust)\b' + (r'|\.rs\b' if loose else ''), ['target/probe']),
+        (r'\b(?:composer|php)\b' + (r'|\.php\b' if loose else ''), ['vendor/probe']),
         (r'\bplaywright\b', ['test-results/probe', 'playwright-report/probe', 'blob-report/probe', '.pw-browsers/probe']),
     ]
     for pattern, probes in groups:
-        if re.search(pattern, plan, re.I):
+        if re.search(pattern, text, re.I):
             paths.extend(probes)
     return paths
 

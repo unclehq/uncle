@@ -162,6 +162,9 @@ blocked-prerequisites
 # A repair attempt that never made a model request is not counted, and an explicit rerun starts with a fresh repair budget.
 repair-attempt-accounting
 
+# The stages the shell routes through the implementation row resolve identically for the local model, AWS Bedrock and the Anthropic API.
+profile-stage-lookup
+
 # A plan patch names a section with or without its `## ` marker.
 plan-patch-headings
 

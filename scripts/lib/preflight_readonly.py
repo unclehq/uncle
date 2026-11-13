@@ -94,12 +94,21 @@ def check(root, worker):
         raise Violation('%s: read-only preflight project changed: %s' % (worker, ', '.join(changed[:10])))
 
 
+# macOS `mktemp` ignores $TMPDIR when it is given no template and uses the per-user /var/folders directory, which the read-only
+# sandbox forbids: a worker's ordinary `S=$(mktemp -d)` then read as an attempted write and failed the whole preflight. A call
+# with no template is pointed at $TMPDIR (the probe's own scratch); a call that names its template is left alone.
+MKTEMP_PRELUDE = (
+    'mktemp() { local a t=0; for a in "$@"; do case "$a" in *XXX*) t=1;; esac; done; '
+    'if [ "$t" = 0 ]; then command mktemp -p "${TMPDIR:-/tmp}" "$@"; else command mktemp "$@"; fi; }; export -f mktemp\n')
+
+
 def probe_command(command, directory):
     """Only the private probe tree is writable, including through absolute paths."""
     from process_tree import bash_executable
     directory = str(Path(directory).resolve())
     shell = [bash_executable(), '-c', command]
     if sys.platform == 'darwin' and shutil.which('sandbox-exec'):
+        shell = [bash_executable(), '-c', MKTEMP_PRELUDE + command]
         profile = ('(version 1)(allow default)(deny file-write*)'
                    '(allow file-write* (subpath %s) (literal "/dev/null"))'
                    '(deny process-exec (literal "/usr/bin/sandbox-exec"))') % json.dumps(directory)

@@ -5665,6 +5665,28 @@ adopt_speculation() {
     return 0
 }
 
+# A repair attempt is counted when it starts, so the count survives a crash. An attempt that never made a model request fixed
+# nothing and tried nothing, though: a runner or configuration failure before the first request, or a run stopped by hand, must not
+# use up the automatic repairs (a build ended at the final audit with its code defect unrepaired because two such attempts counted).
+# repair-attempt-pending marks an attempt not yet accounted for; when it is found at the next start, the repair logs say whether the
+# agent got as far as a model turn.
+repair_attempt_did_work() {
+    grep -qE '"type": ?"(assistant|self_hosted_turn)"' "$LOG_DIR/repair-investigate.jsonl" "$LOG_DIR/repair.jsonl" 2>/dev/null
+}
+
+repair_uncount_unrun_attempt() {
+    [[ -e "$STATE_DIR/repair-attempt-pending" ]] || return 0
+    rm -f "$STATE_DIR/repair-attempt-pending"
+    repair_attempt_did_work && return 0
+    local used
+    used="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
+    case "$used" in ''|*[!0-9]*) return 0 ;; esac
+    [[ ${#used} -le 3 ]] || return 0
+    (( 10#$used > 0 )) || return 0
+    printf '%s\n' "$((10#$used - 1))" > "$STATE_DIR/repair-count"
+    echo "The previous repair attempt never made a model request, so it is not counted ($((10#$used - 1)) of ${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-0} automatic repairs used)."
+}
+
 # Collect a backgrounded preflight probe. Never stops the run: the operator
 # asked for implementation not to wait on it, so a problem is surfaced -- to the
 # supervisor, to the log, and at the gate the operator is about to read -- while
@@ -5741,6 +5763,7 @@ finished_extras start
 export WORKFLOW_CHECK_REUSE=0
 rm -f "$STATE_DIR/green-check.fingerprint"
 green_background_recover
+repair_uncount_unrun_attempt
 
 # Say where the preview is -- local or not, static page or Vite -- in the driver's own output, so every way of running uncle shows it.
 # `command python3`: the per-run Python host (pyhost.sh) returns a helper's output only when it ends, and this one runs for the whole run.
@@ -6666,6 +6689,7 @@ while true; do
             PREVIOUS_VERIFICATION_SNAPSHOT="$(cat "$STATE_DIR/verification-snapshot" 2>/dev/null || true)"
             if [[ "$plan_status" != 22 ]]; then
                 printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
+                : > "$STATE_DIR/repair-attempt-pending"
                 # Say, in the driver's own words and from its own records, what this repair is for.
                 # The agent's whole job: the critical failures, not every row that happens to be failing.
                 if [[ "${WORKFLOW_REPAIR_SEVERITY:-critical}" == critical ]]; then

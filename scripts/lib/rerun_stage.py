@@ -56,7 +56,9 @@ def consume(root, family):
     for p in approval_dir.glob('*'):
         if p.name.split('.')[0] in invalid:
             archived_approvals=archive/'approvals';archived_approvals.mkdir(exist_ok=True);p.rename(archived_approvals/p.name)
-    for item in ('review-cache','speculative','change-class.json','change-plan.draft-key','validation-error.txt','stop-reason'):
+    # An explicit rerun is a person asking for a fresh pass, so it starts with a fresh repair budget (the count is kept in the archive).
+    for item in ('review-cache','speculative','change-class.json','change-plan.draft-key','validation-error.txt','stop-reason',
+                 'repair-count','repair-attempt-pending'):
         p=state/item
         if p.exists(): p.rename(archive/item)
     # Keep the issue binding. The state file for an issue run is "<issue>:<stage>",

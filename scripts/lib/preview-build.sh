@@ -171,6 +171,9 @@ preview_build_start() {
     fi
 
     PREVIEW_STARTED=1
+    # The preview build runs beside the numbered states; say so where the run narrates its state.
+    echo
+    echo "Current workflow state: PREVIEW_BUILD"
     # Taken before the preview writes anything. Otherwise the baseline is
     # captured after it, every preview file reads as something that was already
     # sitting in the directory, and the scope checks stop seeing it as output of

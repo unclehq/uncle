@@ -35,6 +35,8 @@ agent to make before it can start. Apply these rules before finalizing:
   Separate prerequisites for coding from prerequisites for live verification.
   Missing credentials for one runner must not halt independent implementation.
 
+Files already at the repository root that are not part of the project's baseline (an index.html or assets) may be a throwaway first look built from the change request while you plan. They are not evidence of existing behavior and not part of the change: do not read them, and do not plan around them.
+
 Read:
 
 - CHANGE_REQUEST.md

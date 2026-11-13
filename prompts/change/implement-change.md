@@ -1,5 +1,7 @@
 You are the primary implementation agent.
 
+Source files already in the tree that the plan does not name may be a first look built from the change request before the plan was reviewed. They are not evidence: build what the plan specifies, rewriting them in place where they do not fit it and removing what the plan has no use for.
+
 Read:
 
 - .uncle/docs/CHANGE_PLAN.md

@@ -558,6 +558,16 @@ change_preview_build() {
     fi
 }
 
+# change_preview_start — once per run: serve the project's page if it has one, else build a first look (change_preview_build). Called as
+# soon as the change request is stated (ANALYZE), beside planning, as stagegate.sh starts its preview once the brief exists. Stopped by
+# on_exit unless the run completes (COMPLETE keeps the tab up).
+change_preview_start() {
+    [[ "${CHANGE_PREVIEW_EARLY:-0}" != 1 ]] || return 0
+    CHANGE_PREVIEW_EARLY=1
+    change_preview_open 21600 early
+    change_preview_build
+}
+
 # One EXIT hook for the whole run. The cleanup list used to be re-declared at
 # each trap site and one of them dropped the lock release; every site now
 # names this function. The exit status is read first and handed to the triage
@@ -4121,6 +4131,9 @@ while true; do
             # A fresh run legitimately claims this checkout for its issue.
             write_origin
 
+            # Immediately, beside planning: the preview build runs while the change plan is written.
+            change_preview_start
+
             run_planning_stage || exit 1
 
             set_state CHANGE_PLAN_DUTIES
@@ -4411,13 +4424,7 @@ while true; do
 
         PREFLIGHT)
             verify_approval .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN
-            # The change plan is approved: show the project in a browser tab now, as stagegate.sh does for a new application. Stopped by
-            # on_exit, so it never outlives the run (the finished-change tab below is the one that does).
-            if [[ "${CHANGE_PREVIEW_EARLY:-0}" != 1 ]]; then
-                CHANGE_PREVIEW_EARLY=1
-                change_preview_open 21600 early
-                change_preview_build
-            fi
+            change_preview_start     # normally already started at ANALYZE; a no-op then
             if [[ "$PREFLIGHT_BLOCKING" != 1 ]]; then
                 : > "$STATE_DIR/preflight-backgrounded"
                 rm -f "$STATE_DIR/preflight-bg.status"

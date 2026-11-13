@@ -1,5 +1,7 @@
 You are the primary existing-code analyst.
 
+Files already at the repository root that the change request does not mention (an index.html or assets) may be a throwaway first look built from the change request while you work. They are not part of the project's baseline: do not read them or record them.
+
 Read:
 
 - README.md

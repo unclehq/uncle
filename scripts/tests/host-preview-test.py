@@ -647,5 +647,52 @@ class AgentWritePolicy(unittest.TestCase):
             limited.resolve('.uncle/launch.json', writing=True)
 
 
+class EarlyPreview(Base):
+    """A hosted run serves a starting page and writes .uncle/preview.json before any stage has run."""
+
+    def run_early(self, hosted='1'):
+        port = free_port()
+        state = self.project / '.uncle/workflow'
+        env = {k: v for k, v in os.environ.items() if not k.startswith('UNCLE_PREVIEW') and k != 'UNCLE_HOSTED'}
+        env.update(ROOT=str(ROOT), STATE_DIR=str(state), PROJECT_ROOT=str(self.project),
+                   UNCLE_PREVIEW_HOST='127.0.0.1', UNCLE_PREVIEW_PORT=str(port))
+        if hosted is not None:
+            env['UNCLE_HOSTED'] = hosted
+        script = 'source %s; uncle_host_preview_early; echo "rc=$? early=${HOST_PREVIEW_EARLY:-unset}"' % HOOK
+        r = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True, timeout=60, cwd=self.project)
+        self.addCleanup(lambda: subprocess.run([sys.executable, '-B', str(LIB / 'preview_server.py'), 'stop', str(state)],
+                                               capture_output=True, timeout=30))
+        return r, port
+
+    def test_preview_json_exists_when_the_hook_returns_and_a_starting_page_is_served(self):
+        r, port = self.run_early()
+        self.assertIn('rc=0 early=1', r.stdout, r.stdout + r.stderr)
+        rec = self.record()
+        self.assertEqual((rec['status'], rec['port']), ('running', port))     # there before any stage
+        body = answers('http://127.0.0.1:%d/' % port)
+        self.assertIn(b'Uncle is starting your build', body)
+
+    def test_the_projects_own_page_replaces_the_starting_page(self):
+        r, port = self.run_early()
+        (self.project / 'index.html').write_text('<h1>MY APP</h1>')
+        self.assertIn(b'MY APP', answers('http://127.0.0.1:%d/' % port))
+
+    def test_a_second_call_reuses_the_running_server(self):
+        r, port = self.run_early()
+        pid_file = self.project / '.uncle/workflow/preview-server.pid'
+        first = pid_file.read_text()
+        env = dict(os.environ, ROOT=str(ROOT), STATE_DIR=str(self.project / '.uncle/workflow'), PROJECT_ROOT=str(self.project),
+                   UNCLE_HOSTED='1', UNCLE_PREVIEW_HOST='127.0.0.1', UNCLE_PREVIEW_PORT=str(port))
+        subprocess.run(['bash', '-c', 'source %s; uncle_host_preview_early' % HOOK], env=env, capture_output=True, timeout=60,
+                       cwd=self.project)
+        self.assertEqual(pid_file.read_text(), first)
+
+    def test_it_does_nothing_unless_hosted(self):
+        r, port = self.run_early(hosted=None)
+        self.assertIn('rc=0 early=unset', r.stdout, r.stdout + r.stderr)
+        self.assertIsNone(self.record())
+        self.assertFalse((self.project / '.uncle/workflow/preview-server.pid').exists())
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -118,7 +118,12 @@ class _Handler(SimpleHTTPRequestHandler):
         # can replace the styled standalone preview before Vite and the
         # framework runtime are usable. Keep the visible, styled preview in
         # place until serve_live_preview hands the tab to Vite.
-        if (self.fallback_html and self.path.split('?', 1)[0] in ('/', '/index.html')
+        route = self.path.split('?', 1)[0]
+        # Nothing at the root yet (a run that has only just started): show the standalone page instead of a directory
+        # listing or a 404. The reload snippet swaps it for the project's own page the moment one appears.
+        if self.fallback_html and route in ('/', '/index.html') and not os.path.isfile(path):
+            path = self.fallback_html
+        if (self.fallback_html and route in ('/', '/index.html')
                 and _needs_development_server(path)):
             path = self.fallback_html
         if not path.endswith(('.html', '.htm')) or not os.path.isfile(path):
@@ -516,13 +521,40 @@ def existing_development_url(state):
     return ''
 
 
+STARTING_PAGE = """<!doctype html>
+<meta charset="utf-8">
+<title>Uncle is starting</title>
+<body style="font:16px system-ui,sans-serif;max-width:34em;margin:15vh auto;padding:0 1em;color:#222">
+<h1 style="font-size:1.4em">Uncle is starting your build</h1>
+<p>This page updates by itself as soon as there is something to show.</p>
+</body>
+"""
+
+
+def serve_early(root, state):
+    """The live preview, from the first moment of a run: a "starting" page on the host's address, with .uncle/preview.json
+    written at once. The page is the standalone fallback, so the preview build's own snapshot replaces it later."""
+    page = Path(state) / 'preview' / 'static-index.html'
+    try:
+        if not page.exists():
+            page.parent.mkdir(parents=True, exist_ok=True)
+            pending = page.with_name(page.name + '.starting')
+            pending.write_text(STARTING_PAGE, encoding='utf-8')
+            os.replace(pending, page)
+    except OSError:
+        pass        # the server still starts; it just has nothing to fall back to yet
+    return serve_live_preview(root, state)
+
+
 def main(argv):
+    if argv[:1] == ['early'] and len(argv) == 3:
+        return serve_early(argv[1], argv[2])
     if argv[:1] == ['start'] and len(argv) == 3:
         return serve_live_preview(argv[1], argv[2])
     if argv[:1] == ['stop'] and len(argv) == 2:
         stop_live_preview(argv[1])
         return 0
-    raise SystemExit('usage: preview_server.py start PROJECT STATE_DIR | stop STATE_DIR')
+    raise SystemExit('usage: preview_server.py start|early PROJECT STATE_DIR | stop STATE_DIR')
 
 
 if __name__ == '__main__':

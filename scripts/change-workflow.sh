@@ -582,7 +582,7 @@ on_exit() {
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if [[ -n "${PREFLIGHT_BG_PID:-}" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then kill "$PREFLIGHT_BG_PID" 2>/dev/null || true; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
-    if [[ "${CHANGE_PREVIEW_EARLY:-0}" == 1 ]]; then
+    if [[ "${CHANGE_PREVIEW_EARLY:-0}" == 1 || "${HOST_PREVIEW_EARLY:-0}" == 1 ]]; then
         python3 -B "$ROOT/scripts/lib/preview_server.py" stop "${STATE_DIR:-.uncle/workflow}" > /dev/null 2>&1 || true
     fi
     python3 -B "$ROOT/scripts/lib/app_server.py" stop "${STATE_DIR:-.uncle/workflow}" > /dev/null 2>&1 || true
@@ -598,6 +598,9 @@ on_exit() {
 trap on_exit EXIT
 trap 'uncle_cancel 130' INT
 trap 'uncle_cancel 143' TERM
+# Hosted run: serve a "starting" page and write .uncle/preview.json before any stage runs (on_exit stops it).
+. "$ROOT/scripts/lib/host_preview_hook.sh"
+uncle_host_preview_early || true
 if [[ -n "${STAGEGATE_ORIGIN_REPO:-$(origin_field "$ORIGIN_FILE" 1)}" ]]; then
     uncle_title_begin "$(current_issue 2>/dev/null || true)" || true
 else

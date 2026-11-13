@@ -403,6 +403,9 @@ on_exit() {
     if declare -f worktree_merge_sweep > /dev/null; then worktree_merge_sweep; fi
 }
 trap on_exit EXIT
+# Hosted run: serve a "starting" page and write .uncle/preview.json before any stage runs (the first `trap on_exit` above stops it).
+. "$ROOT/scripts/lib/host_preview_hook.sh"
+uncle_host_preview_early || true
 if [[ -f "$ROOT/scripts/lib/terminal-title.sh" ]]; then
     . "$ROOT/scripts/lib/terminal-title.sh" 2>/dev/null || true
     if declare -f uncle_title_begin > /dev/null; then uncle_title_begin "" 2>/dev/null || true; fi

@@ -20,7 +20,7 @@ COMPLETE = 'PROJECT_PLAN_STAGE_COMPLETE'
 
 
 # Another ecosystem the plan chooses, which makes a bare `node` or `javascript` prose rather than a stack.
-OTHER_ECOSYSTEM = r'\b(?:cargo|rust|python|pytest|pip|pyproject|composer|php|golang|go\.mod|gradle|maven|dotnet)\b'
+OTHER_ECOSYSTEM = r'\b(?:cargo|rust|python|pytest|pip|pyproject|composer|php|golang|go\.mod|gradle|maven|dotnet|haskell|cabal|ghc|stack\.yaml)\b'
 
 
 def required_paths(plan):

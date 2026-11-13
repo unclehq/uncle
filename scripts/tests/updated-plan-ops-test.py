@@ -163,12 +163,15 @@ class DerivedPaths(Base):
     def test_the_derivation_finds_other_ecosystems_test_files(self):
         found = ops.derive_protected_paths('Rust: tests/cli.rs and `cargo test`; Go: pkg/util_test.go; Java: FooTest.java; target/debug/x')
         self.assertEqual(found.splitlines(), ['tests/cli.rs', 'pkg/util_test.go', 'FooTest.java'])
+        self.assertEqual(ops.derive_protected_paths('Haskell: test/Spec.hs, test/ParserSpec.hs, app/Main.hs').splitlines(),
+                         ['test/Spec.hs', 'test/ParserSpec.hs'])
 
     def test_a_rust_plan_that_mentions_a_node_is_not_asked_for_node_ignores(self):
         import project_plan_stage as stage
         rust = 'A Rust cargo app: each node of the list holds a value.'
         self.assertNotIn('node_modules/probe', stage.required_paths(rust))
         self.assertIn('target/probe', stage.required_paths(rust))
+        self.assertNotIn('node_modules/probe', stage.required_paths('A Haskell cabal app: each node of the tree holds a value.'))
         self.assertIn('node_modules/probe', stage.required_paths('An npm project with vite.'))
         self.assertIn('node_modules/probe', stage.required_paths('Walk each node in JavaScript.'))
 

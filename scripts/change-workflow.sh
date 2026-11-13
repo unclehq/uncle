@@ -505,22 +505,33 @@ current_issue() {
 
 . "$ROOT/scripts/lib/terminal-title.sh"
 
-# change_preview_open — serve the project and open one browser tab, once. The change workflow has no model-built first look (that
-# writes an index.html into the repo root, and a change always runs in an existing project); it serves what is there and the
-# server reloads the tab as implementation lands. Off in hosted mode, for a desktop app, with nothing to browse, when a server is
-# already running, or with UNCLE_CHANGE_OPEN_PREVIEW=0. Never fails the run. $1 is the server lifetime in seconds.
+# change_preview_open — start the live preview server once and say so. $1 is its lifetime in seconds, $2 is `early` or `final`.
+# The change workflow has no model-built first look (that writes an index.html into the repo root, and a change usually runs in an
+# existing project); it serves what is there and the server reloads the tab as implementation lands, handing over to Vite once the
+# project has one. It starts for a project that already has a page, and for a greenfield one (nothing but .gitkeep/README/LICENSE):
+# the server waits for the application to appear. Hosted mode (UNCLE_HOSTED=1) starts the same server, which binds the host's
+# address and writes .uncle/preview.json for the host to show; there is no browser to open, and `final` does nothing because the
+# COMPLETE hook serves the finished app on that port. Off for a desktop app, when a server is already running, or with
+# UNCLE_CHANGE_OPEN_PREVIEW=0. Never fails the run.
 change_preview_open() {
     [[ "${UNCLE_CHANGE_OPEN_PREVIEW:-1}" != 0 ]] || return 0
+    [[ "${UNCLE_HOSTED:-0}" != 1 || "${2:-early}" == early ]] || return 0
     (
         export WORKFLOW_PREVIEW_OPEN_BROWSER=1
         PYTHONPATH="$ROOT/scripts/lib" python3 -B - "$PWD" "${1:-3600}" <<'PY'
+import os
 import sys
 import headless_preview as h
 root, ttl = sys.argv[1], int(sys.argv[2])
-if h.enabled() and not h.desktop_app(root) and h.page_available(root) and not h.server_alive(root):
+IGNORED = ('.git', '.uncle', '.gitkeep', '.gitignore', 'LICENSE', 'README', 'README.md')
+def greenfield(root):
+    return not [n for n in os.listdir(root) if n not in IGNORED]
+hosted = h.hosted_run()
+if (hosted or h.enabled()) and not h.desktop_app(root) and not h.server_alive(root) \
+        and (h.page_available(root) or greenfield(root)):
     pid = h.start_live_preview(root, ttl=ttl)
-    if pid and h.wait_for_url(root):
-        print('Preview opened (pid %d, expires in %d minutes; stop earlier with: kill %d)' % (pid, ttl // 60, pid))
+    if pid and (hosted or h.wait_for_url(root)):
+        print('Preview started (pid %d, expires in %d minutes; stop earlier with: kill %d)' % (pid, ttl // 60, pid))
 PY
     ) || true
 }
@@ -4381,7 +4392,7 @@ while true; do
             # on_exit, so it never outlives the run (the finished-change tab below is the one that does).
             if [[ "${CHANGE_PREVIEW_EARLY:-0}" != 1 ]]; then
                 CHANGE_PREVIEW_EARLY=1
-                change_preview_open 21600
+                change_preview_open 21600 early
             fi
             if [[ "$PREFLIGHT_BLOCKING" != 1 ]]; then
                 : > "$STATE_DIR/preflight-backgrounded"
@@ -5155,7 +5166,7 @@ PY
             # clearing the flag stops on_exit from killing it; it expires on its own six-hour lifetime. With none running (nothing to
             # browse at PREFLIGHT), open the finished project now. Failure to preview never fails the run.
             CHANGE_PREVIEW_EARLY=0
-            change_preview_open 3600
+            change_preview_open 3600 final
             echo
             if [[ -s "$STATE_DIR/delivery-summary.tsv" ]] && grep -q $'\tWAIVED\t' "$STATE_DIR/delivery-summary.tsv"; then
                 echo "Change workflow complete with waived acceptance."

@@ -4503,6 +4503,28 @@ project_plan_section_finish() {
 }
 
 # Take a completed section (optionally waiting for its PID); an unusable delivery gets one retry.
+# A section worker that stopped on its per-turn output cap is asked once more with twice the room: abandoning the typed (JSON)
+# plan for the single-pass Markdown one over a single long section loses the model the later stages edit.
+project_plan_section_capped() {
+    grep -q 'reached the limit of [0-9]* tokens' "$LOG_DIR/project-plan-section-$1.log" 2>/dev/null
+}
+
+project_plan_section_rerun_capped() {
+    local name="$1" directory="$2" delivery="$3" rc=0
+    echo "Project plan section $name hit its output cap; running it once more with twice the room."
+    cp "$LOG_DIR/project-plan-section-$name.jsonl" "$LOG_DIR/project-plan-section-$name.attempt1.jsonl" 2>/dev/null || true
+    cp "$LOG_DIR/project-plan-section-$name.log" "$LOG_DIR/project-plan-section-$name.attempt1.log" 2>/dev/null || true
+    UNCLE_PLAN_SECTION_ANSWER_SCALE=2 project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || rc=$?
+    return "$rc"
+}
+
+# Why a section failed, one line per section, for the message that says the typed plan was abandoned.
+project_plan_section_record_failure() {
+    local name="$1" directory="$2" cause
+    cause="$(grep -m1 'cause:' "$LOG_DIR/project-plan-section-$name.log" 2>/dev/null | sed 's/^[[:space:]]*cause:[[:space:]]*//' | cut -c1-200)"
+    printf '%s: %s\n' "$name" "${cause:-exited with an error; see $LOG_DIR/project-plan-section-$name.log}" >> "$directory/failed-sections"
+}
+
 project_plan_section_settle() {
     local name="$1" directory="$2" delivery="$3" pid="${4:-}"
     if [[ -n "$pid" ]]; then
@@ -4510,8 +4532,14 @@ project_plan_section_settle() {
         wait "$pid" || wait_rc=$?
         if [[ "$wait_rc" != 0 ]]; then
             project_plan_spend_worker_status "$name" "$wait_rc" || true
-            echo "Project plan section $name did not complete." >&2
-            return 1
+            if [[ "$wait_rc" != 75 ]] && project_plan_section_capped "$name" \
+                    && project_plan_section_rerun_capped "$name" "$directory" "$delivery"; then
+                :   # the rerun delivered; it is finished below like any other
+            else
+                echo "Project plan section $name did not complete." >&2
+                project_plan_section_record_failure "$name" "$directory"
+                return 1
+            fi
         fi
     fi
     project_plan_section_finish "$name" "$directory" "$delivery" && { : > "$directory/$name.done"; return 0; }
@@ -4589,7 +4617,12 @@ run_project_plan_sections_bounded() {
                 project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || section_rc=$?
                 if [[ "$section_rc" != 0 ]]; then
                     project_plan_spend_worker_status "$name" "$section_rc" && exit 75
-                    exit 1
+                    if project_plan_section_capped "$name" && project_plan_section_rerun_capped "$name" "$directory" "$delivery"; then
+                        :   # the rerun delivered; it is settled below
+                    else
+                        project_plan_section_record_failure "$name" "$directory"
+                        exit 1
+                    fi
                 fi
                 project_plan_section_settle "$name" "$directory" "$delivery"
             ) &
@@ -4807,7 +4840,9 @@ run_stage() {
             rm -f "$STATE_DIR/plan-check-repair-project-plan"
             project_plan_sectioned=0
             project_plan_sections_status=1
+            project_plan_sections_ran=0
             if project_plan_sections_enabled; then
+                project_plan_sections_ran=1
                 project_plan_sections_status=0
                 run_project_plan_sections "$project_plan_investigation" || project_plan_sections_status=$?
             fi
@@ -4822,6 +4857,10 @@ run_stage() {
                 exit 75
             else
                 rm -f "$project_plan_investigation"
+                if [[ "$project_plan_sections_ran" == 1 ]]; then
+                    echo 'Project plan: the typed (JSON) sectioned plan did not complete; falling back to the single-pass Markdown plan, whose model is imported from the Markdown.'
+                    [[ ! -s "$STATE_DIR/project-plan-sections/failed-sections" ]] || sed 's/^/  failed section: /' "$STATE_DIR/project-plan-sections/failed-sections"
+                fi
             fi
             if [[ "$project_plan_sectioned" == 1 ]] || stage_uses_self_hosted project-plan AGENT; then
                 [[ "$project_plan_sectioned" == 1 ]] || run_initial_planning_agent prompts/project-plan-investigate.md project-plan-investigate

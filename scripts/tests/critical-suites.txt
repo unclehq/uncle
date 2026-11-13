@@ -153,6 +153,9 @@ updated-plan-writer-retries
 # A plan section the model holds one level down (### Implementation steps) is patched inside its parent, so a step edit does not fail the merge.
 updated-plan-nested-section
 
+# A project-plan section that stops on its output cap is rerun with more room, and the fallback to the Markdown plan is announced.
+project-plan-section-cap
+
 # A plan patch names a section with or without its `## ` marker.
 plan-patch-headings
 

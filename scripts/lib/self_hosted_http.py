@@ -866,7 +866,10 @@ def output_cap(limit, option_name, artifact=''):
              (artifact.replace('_', '-').endswith(('ops-packet', 'outline-packet',
                                                    'section-worker-packet', 'section-model-packet')) or
               bool(re.search(r'-worker-(?:edits|resolution|resolve|section)-', stage))))
-    default = 4096 if small else 32768
+    # A project-plan section is authored text with many ids (the tests section of a web app with browser specs ran past 4096
+    # tokens, and the whole typed plan was abandoned for the Markdown one), not a mechanical edit list.
+    section = artifact.replace('_', '-').endswith(('section-worker-packet', 'section-model-packet'))
+    default = 16384 if section else 4096 if small else 32768
     if os.environ.get('UNCLE_ADVERSARIAL_SLICE') == '1':
         default = 8192 if option_name == 'reasoning-output-tokens' else 4096
     if small and option_name != 'reasoning-output-tokens' and os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'):
@@ -874,6 +877,12 @@ def output_cap(limit, option_name, artifact=''):
     cap = int(value) if value is not None else default
     if cap <= 0:
         raise ValueError(option_name + ' must be a positive integer')
+    if section and option_name != 'reasoning-output-tokens':
+        # The driver sets UNCLE_PLAN_SECTION_ANSWER_SCALE on a section worker it runs again after the cap stopped it.
+        try:
+            cap *= max(1, min(4, int(os.environ.get('UNCLE_PLAN_SECTION_ANSWER_SCALE') or 1)))
+        except ValueError:
+            pass
     return min(int(limit), cap)
 
 

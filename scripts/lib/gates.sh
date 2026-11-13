@@ -225,6 +225,14 @@ gated_prompt() {
                     done
                     ;;
             esac
+            # When the embed below cannot be used (an input too large to send, or missing), the worker reads its files itself:
+            # name them, or "the artifacts named in your assigned prompt" names nothing and the worker, barred from exploring,
+            # can only report that it could verify nothing.
+            if [[ -n "$worker_files" && "$worker_inputs" == 'the canonical JSON prerequisite artifacts named in your assigned prompt' ]]; then
+                local named_file named_inputs=''
+                for named_file in $worker_files; do named_inputs="${named_inputs:+$named_inputs, }\`$named_file\`"; done
+                worker_inputs="these files, which are not embedded in this prompt: $named_inputs"
+            fi
             # Shared documents first, per-worker text last, so a server's prefix
             # cache covers workers 2..n of a panel. Falls back to the layout below
             # when the inputs are unknown, missing or too large to embed.

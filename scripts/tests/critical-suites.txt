@@ -138,6 +138,9 @@ anthropic-api
 # Generic-table rows of the plan model are editable (set_fields/insert_row with cells), so a finding that needs one is not deferred.
 plan-table-cells
 
+# A final-audit worker whose evidence is too large to embed is still told which files to read (else the build ends NOT_READY).
+final-audit-worker-inputs
+
 # A plan patch names a section with or without its `## ` marker.
 plan-patch-headings
 

@@ -208,9 +208,13 @@ def serve(project, env=None):
     staged = None
     try:
         try:
-            if not (Path(project) / '.uncle' / 'launch.json').is_file():
-                raise ValueError('missing')
-            spec = cp.launch_spec(project)
+            if (Path(project) / '.uncle' / 'launch.json').is_file():
+                spec = cp.launch_spec(project)
+            else:
+                # No launch.json (a self-hosted agent cannot write one, and a change plan never assigns it): work the spec out
+                # from the project itself, as the repair of an invalid file does. Used in memory only; nothing is written into
+                # the audited tree. A project with no dev or start script derives `none`, which is a skipped preview, not a failure.
+                spec = cp.validate_launch_spec(project, dict(cp.derive_launch_manifest(project)))
         except (OSError, ValueError, TypeError) as error:
             raise Failed('launch.json missing or invalid')
         kind = spec.get('kind')

@@ -273,8 +273,8 @@ class Failure(Base):
         self.launch({'kind': 'none'})
         self.check_failed(self.serve(), 'none')
 
-    def test_missing_launch_json_is_failed(self):  # AC-5
-        self.check_failed(self.serve())
+    def test_missing_launch_json_with_nothing_to_derive_is_skipped(self):  # AC-5 (was `failed`: a missing file is now derived)
+        self.check_failed(self.serve(), 'none')
 
     def test_invalid_ports_fail(self):  # AC-5
         self.command_launch()
@@ -444,6 +444,7 @@ class Hook(unittest.TestCase):
     def test_hook_returns_zero_even_when_preview_fails(self):  # AC-9
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / '.uncle').mkdir()
+            (Path(d) / '.uncle/launch.json').write_text('{"kind": "banana"}')     # an unusable file still fails the preview
             r = self.run_hook(d, '1')
             self.assertIn('rc=0', r.stdout, r.stdout + r.stderr)
             rec = json.loads((Path(d) / '.uncle/preview.json').read_text())
@@ -591,6 +592,59 @@ class LiveViteOnHostPort(Base):
         body = answers('http://127.0.0.1:%d/' % port, 5)
         self.assertIn(b'STATIC', body or b'')
         self.assertEqual(self.record()['status'], 'running')
+
+
+class MissingLaunchJson(Base):
+    """A run with no .uncle/launch.json still gets its preview: the spec is derived from the project, and nothing is written."""
+
+    def fake_npm(self):
+        bin_dir = Path(self._tmp.name) / 'bin'
+        bin_dir.mkdir(exist_ok=True)
+        npm = bin_dir / 'npm'
+        npm.write_text('#!/bin/sh\nexec %s -m http.server "$PORT" --bind "$HOST"\n' % sys.executable)
+        npm.chmod(0o755)
+        return os.pathsep.join([str(bin_dir), os.environ.get('PATH', '')])
+
+    def test_a_vite_project_without_launch_json_is_served(self):
+        (self.project / 'package.json').write_text(json.dumps({'scripts': {'dev': 'vite'}, 'dependencies': {'vite': '1'}}))
+        port = free_port()
+        self.assertFalse((self.project / '.uncle/launch.json').exists())
+        r = self.serve(UNCLE_PREVIEW_PORT=str(port), PATH=self.fake_npm())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_one_port_line(r, port)
+        rec = self.record()
+        self.assertEqual((rec['status'], rec['kind'], rec['port']), ('running', 'webpage', port))
+        self.assertTrue(answers('http://127.0.0.1:%d/' % port))
+        self.assertFalse((self.project / '.uncle/launch.json').exists(), 'derived spec is used in memory, not written')
+
+    def test_a_project_with_nothing_to_launch_is_skipped_not_failed(self):
+        r = self.serve(UNCLE_PREVIEW_PORT=str(free_port()))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn('UNCLE_PREVIEW_PORT', r.stdout)
+        rec = self.record()
+        self.assertEqual(rec['status'], 'none')
+        self.assertNotIn('launch.json missing', json.dumps(rec))
+
+    def test_an_invalid_launch_json_still_fails_as_before(self):
+        (self.project / '.uncle/launch.json').write_text('{"kind": "banana"}')
+        r = self.serve(UNCLE_PREVIEW_PORT=str(free_port()))
+        self.assertEqual(self.record()['status'], 'failed')
+
+
+class AgentWritePolicy(unittest.TestCase):
+    def test_only_launch_json_is_opened_under_dot_uncle(self):
+        import http_agent
+        root = Path(tempfile.mkdtemp())
+        (root / '.uncle/docs').mkdir(parents=True)
+        policy = http_agent.Policy(root, write=True)
+        for name in ('.uncle/launch.json', '.uncle/docs/N.md', 'src/App.jsx'):
+            policy.resolve(name, writing=True)
+        for name in ('.uncle/config', '.uncle/self-hosted-keys.json', '.uncle/attestation.json', '.uncle/launch.json.pending'):
+            with self.assertRaises(ValueError, msg=name):
+                policy.resolve(name, writing=True)
+        limited = http_agent.Policy(root, write=True, writable=['.uncle/docs/X.md'])
+        with self.assertRaises(ValueError):
+            limited.resolve('.uncle/launch.json', writing=True)
 
 
 if __name__ == '__main__':

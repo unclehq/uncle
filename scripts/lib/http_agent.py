@@ -45,6 +45,9 @@ SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '__pycache__'}
 # Workflow state the model may read and write; the rest of .uncle (config,
 # credentials) is never exposed.
 UNCLE_OPEN = ('docs', 'workflow')
+# The one file directly under .uncle the agent is told to write (the implementation prompt's "Launch metadata"); it holds no
+# secret, and the driver validates it at the end of the stage. Nothing else under .uncle is opened.
+UNCLE_OPEN_FILES = ('launch.json',)
 SECRET = re.compile(r'(^|/)(\.env(\..*)?|.*self-hosted-keys\.json|config)$')
 ENV_STRIPPED = ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG', 'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO',
                 'STAGEGATE_ORIGIN_ISSUE', 'DOCUMENT_BUDGET_SOURCE')
@@ -219,6 +222,8 @@ class Policy:
 
     def hidden(self, parts):
         if parts[:1] == ('.uncle',):
+            if len(parts) == 2 and parts[1] in UNCLE_OPEN_FILES:
+                return False
             if len(parts) < 2 or parts[1] not in UNCLE_OPEN:
                 return True
             parts = parts[2:]

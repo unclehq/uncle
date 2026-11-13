@@ -103,7 +103,7 @@ done
 # UNCLE_UNATTENDED is deliberately not exported here: the launcher's resolved mode arrives in it, and writing the 0 default over
 # it made every unflagged driver read as an already-resolved attended run (refused without a TTY). uncle_resolve_mode exports it.
 
-# A change request never opens a preview tab (uncle_tui.py's _early_preview_allowed says the same on its side). Everything this run starts,
+# During the run only the early preview below (PREFLIGHT) may open a tab; the TUI leaves it to the driver (_early_preview_allowed). Everything this run starts,
 # an agent running a test that drives stagegate.sh included, inherits it.
 export WORKFLOW_PREVIEW_OPEN_BROWSER=0
 
@@ -505,6 +505,26 @@ current_issue() {
 
 . "$ROOT/scripts/lib/terminal-title.sh"
 
+# change_preview_open — serve the project and open one browser tab, once. The change workflow has no model-built first look (that
+# writes an index.html into the repo root, and a change always runs in an existing project); it serves what is there and the
+# server reloads the tab as implementation lands. Off in hosted mode, for a desktop app, with nothing to browse, when a server is
+# already running, or with UNCLE_CHANGE_OPEN_PREVIEW=0. Never fails the run. $1 is the server lifetime in seconds.
+change_preview_open() {
+    [[ "${UNCLE_CHANGE_OPEN_PREVIEW:-1}" != 0 ]] || return 0
+    (
+        export WORKFLOW_PREVIEW_OPEN_BROWSER=1
+        PYTHONPATH="$ROOT/scripts/lib" python3 -B - "$PWD" "${1:-3600}" <<'PY'
+import sys
+import headless_preview as h
+root, ttl = sys.argv[1], int(sys.argv[2])
+if h.enabled() and not h.desktop_app(root) and h.page_available(root) and not h.server_alive(root):
+    pid = h.start_live_preview(root, ttl=ttl)
+    if pid and h.wait_for_url(root):
+        print('Preview opened (pid %d, expires in %d minutes; stop earlier with: kill %d)' % (pid, ttl // 60, pid))
+PY
+    ) || true
+}
+
 # One EXIT hook for the whole run. The cleanup list used to be re-declared at
 # each trap site and one of them dropped the lock release; every site now
 # names this function. The exit status is read first and handed to the triage
@@ -518,6 +538,9 @@ on_exit() {
     if declare -f change_checklist_draft_cancel > /dev/null; then change_checklist_draft_cancel; fi
     if [[ -n "${PREFLIGHT_BG_PID:-}" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then kill "$PREFLIGHT_BG_PID" 2>/dev/null || true; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
+    if [[ "${CHANGE_PREVIEW_EARLY:-0}" == 1 ]]; then
+        python3 -B "$ROOT/scripts/lib/preview_server.py" stop "${STATE_DIR:-.uncle/workflow}" > /dev/null 2>&1 || true
+    fi
     python3 -B "$ROOT/scripts/lib/app_server.py" stop "${STATE_DIR:-.uncle/workflow}" > /dev/null 2>&1 || true
     if declare -f release_lock > /dev/null; then release_lock; fi
     uncle_title_end
@@ -4354,6 +4377,12 @@ while true; do
 
         PREFLIGHT)
             verify_approval .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN
+            # The change plan is approved: show the project in a browser tab now, as stagegate.sh does for a new application. Stopped by
+            # on_exit, so it never outlives the run (the finished-change tab below is the one that does).
+            if [[ "${CHANGE_PREVIEW_EARLY:-0}" != 1 ]]; then
+                CHANGE_PREVIEW_EARLY=1
+                change_preview_open 21600
+            fi
             if [[ "$PREFLIGHT_BLOCKING" != 1 ]]; then
                 : > "$STATE_DIR/preflight-backgrounded"
                 rm -f "$STATE_DIR/preflight-bg.status"
@@ -5122,6 +5151,11 @@ PY
         COMPLETE)
             . "$ROOT/scripts/lib/host_preview_hook.sh"
             uncle_host_preview_hook
+            # The tab stays up after the run. An early server (started at PREFLIGHT) is kept, not restarted: no second tab, and
+            # clearing the flag stops on_exit from killing it; it expires on its own six-hour lifetime. With none running (nothing to
+            # browse at PREFLIGHT), open the finished project now. Failure to preview never fails the run.
+            CHANGE_PREVIEW_EARLY=0
+            change_preview_open 3600
             echo
             if [[ -s "$STATE_DIR/delivery-summary.tsv" ]] && grep -q $'\tWAIVED\t' "$STATE_DIR/delivery-summary.tsv"; then
                 echo "Change workflow complete with waived acceptance."

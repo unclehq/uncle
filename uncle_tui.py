@@ -2777,22 +2777,17 @@ class UncleTUI:
             self.unattended_finished = True
             self._quit()
             return
-        # Only a new-application build gets a completion preview. A change
-        # request runs against a project that already exists -- often not a
-        # web app at all (uncle's own repo, worked on via its own change
-        # workflow, has an incidental index.html at its root and is a CLI
-        # tool) -- so guessing a launch target for it and opening a browser
-        # tab is never right. .uncle/workflow/family is the driver's own
-        # authoritative record of which state machine actually ran, set by
-        # workflow_family.py regardless of how this TUI session got here;
-        # trust it over self.workflow_idx, which only reflects the menu
-        # choice that started this specific session.
+        # A new application and a change request both get a completion
+        # preview of the finished project (an early, mid-run tab is still
+        # new-application only: see _early_preview_allowed). .uncle/workflow/family
+        # is the driver's own record of which state machine ran; trust it over
+        # self.workflow_idx, which only reflects the menu choice.
         if desktop == "prompt":
             return
         if desktop == "handled":
             self._completion_dialog(False)
             return
-        if _workflow_family() == "app" or self._removal_after_preview_pending():
+        if _workflow_family() in ("app", "change") or self._removal_after_preview_pending():
             self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
 

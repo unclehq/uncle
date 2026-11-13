@@ -180,11 +180,11 @@ class FinishedApp(unittest.TestCase):
         preview.finish()
         self.assertEqual(start.calls, [hp.DEFAULT_TTL_SECONDS])
 
-    def test_a_change_request_is_not_opened_when_it_finishes(self):
+    def test_a_change_request_is_opened_when_it_finishes(self):
         start = Recorder()
         preview, _ = make(project(family='change'), start=start)
-        self.assertEqual(preview.finish(), [])
-        self.assertEqual(start.calls, [])
+        preview.finish()
+        self.assertEqual(start.calls, [hp.DEFAULT_TTL_SECONDS])
 
     def test_a_desktop_application_is_launched_not_browsed(self):
         start = Recorder()

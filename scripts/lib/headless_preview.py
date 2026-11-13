@@ -12,7 +12,7 @@ stops that server when it exits. Two things used to belong to the interactive sc
 
 Both start `preview_server.py` detached, the same code the driver uses, so a React or Svelte project is handed to its dev server
 once dependencies exist and the page reloads itself. The server this starts at the end outlives the command, so it expires
-(one hour) and says how to stop it. Nothing here runs for a change request, or for a desktop
+(one hour) and says how to stop it. The early page is for a new application only; a change request gets just the finished-app tab. Nothing runs for a desktop
 application (those are launched, not browsed).
 
 Turn it off with WORKFLOW_PREVIEW_OPEN_BROWSER=0 (the driver's own switch).
@@ -172,7 +172,7 @@ class HeadlessPreview:
 
     def finish(self):
         """The finished app. Returns the lines to announce after the runner's own `Preview:` line (possibly none)."""
-        if not enabled(self.env) or family(self.root) != 'app':
+        if not enabled(self.env) or family(self.root) not in ('app', 'change'):
             return []
         if desktop_app(self.root) or not page_available(self.root):
             return []

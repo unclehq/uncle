@@ -135,6 +135,9 @@ preview-announce
 # Anthropic API runner: the Messages API profile of the Self Hosted class, wired everywhere the local model is.
 anthropic-api
 
+# Generic-table rows of the plan model are editable (set_fields/insert_row with cells), so a finding that needs one is not deferred.
+plan-table-cells
+
 # A plan patch names a section with or without its `## ` marker.
 plan-patch-headings
 

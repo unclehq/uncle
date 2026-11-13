@@ -700,7 +700,7 @@ def apply_ops(model, ops, root=None, normalize_new=True):
                 raise PlanError('%s has no %s' % (op.get('block') or op.get('list'), 'rows' if name == 'insert_row' else 'items'))
             new = copy.deepcopy(op['row'] if name == 'insert_row' else op['item'])
             if not new.get('id'):
-                new['id'] = '%s.i%d' % (block['id'], len(rows) + 1)
+                new['id'] = '%s.%s%d' % (block['id'], 'r' if block.get('kind') == 'table' else 'i', len(rows) + 1)
                 while new['id'] in index(model):
                     new['id'] += 'x'
             if new['id'] in index(model):
@@ -796,6 +796,15 @@ def typed_block(flat):
     raise PlanError('a new block is prose, heading, code or list, not %r' % kind)
 
 
+def table_cells(block, cells, label):
+    """The cells of one row of a generic table: an array of strings (or one pipe-separated string), fitted to the columns."""
+    if isinstance(cells, str):
+        cells = [cell.strip() for cell in cells.strip().strip('|').split('|')]
+    if not isinstance(cells, list) or not cells or not all(isinstance(cell, str) for cell in cells):
+        raise PlanError('%s cells must be an array of strings, one per column: %s' % (label, ', '.join(block.get('columns') or [])))
+    return fit(cells, len(block.get('columns') or cells))
+
+
 def typed_op(model, flat):
     """The typed op for one flat op written as strings; PlanError names what is wrong with it."""
     name = flat.get('op')
@@ -827,6 +836,12 @@ def typed_op(model, flat):
                     op[field] = split_list(value) if field == 'owns' else dependency_list(value) if field == 'depends_on' else value
             return op
         block = block_of(model, node)
+        if block['kind'] == 'table':
+            # A table that matches no row kind has no named fields: a row is its cells, replaced whole, in column order.
+            if set(fields) != {'cells'}:
+                raise PlanError('%s is a row of a generic table; its only field is cells (the whole row, one string per column: %s)'
+                                % (flat['id'], ', '.join(block.get('columns') or [])))
+            return {'op': 'set_fields', 'id': flat['id'], 'fields': {'cells': table_cells(block, fields['cells'], flat['id'])}}
         if block['kind'] != 'rows':
             detail = 'use set_text' if 'text' in node else 'its fields are ' + ', '.join(k for k in node if k != 'id')
             raise PlanError('%s is not a typed row; %s' % (flat['id'], detail))
@@ -843,6 +858,13 @@ def typed_op(model, flat):
         block = locate(model, flat.get('target') or '')[0]
         new = flat.get('new') or {}
         if name == 'insert_row':
+            if block.get('kind') == 'table':
+                # A generic table row is its cells; the driver assigns the id.
+                if set(new) - {'cells'}:
+                    raise PlanError('a new row of the generic table %s has only cells (one string per column: %s)'
+                                    % (flat['target'], ', '.join(block.get('columns') or [])))
+                return {'op': 'insert_row', 'block': flat['target'], 'after': after,
+                        'row': {'id': '', 'cells': table_cells(block, new.get('cells'), flat['target'])}}
             if block.get('kind') != 'rows':
                 raise PlanError('%s is not a typed rows block' % flat['target'])
             return {'op': 'insert_row', 'block': flat['target'], 'after': after, 'row': typed_row(block['row_kind'], new)}

@@ -179,7 +179,7 @@ A runner with grammar enforcement lists the allowed ids in the schema; the drive
 
 | op | fields | effect |
 |---|---|---|
-| `set_fields` | `id`, `fields{name: value}` | changes only the named fields of one row (names are the row kind's fields) |
+| `set_fields` | `id`, `fields{name: value}` | changes only the named fields of one row (names are the row kind's fields); a row of a generic `table` has one field, `cells` (the whole row, one string per column) |
 | `set_text` | `id`, `text` | prose block, list item, or step body |
 | `set_step` | `id`, any of `title`, `text`, `owns`, `depends_on` | changes those step fields |
 | `insert_row` | `block`, `after` (row id, or null for first), `row{id, ...fields}` | adds a row of that block's kind |

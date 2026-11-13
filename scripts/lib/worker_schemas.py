@@ -194,8 +194,10 @@ def _op(ids=None, model=None):
     generic = _object({
         'op': {'type': 'string', 'enum': [name for name in OP_NAMES if name not in ('insert_step', 'set_fields') and (model is None or name != 'insert_row')]},
         'id': pick(), 'target': pick(), 'after': pick(['']),
-        'fields': _strings(FIELD_NAMES + step), 'text': _text(EDIT_MAX, 0),
-        'new': _strings(['id'] + FIELD_NAMES + step, EDIT_MAX),
+        'fields': _object(dict(_strings(FIELD_NAMES + step)['properties'],
+                               cells={'type': 'array', 'maxItems': 40, 'items': _text(EDIT_MAX, 0)}), ()), 'text': _text(EDIT_MAX, 0),
+        'new': _object(dict(_strings(['id'] + FIELD_NAMES + step, EDIT_MAX)['properties'],
+                            cells={'type': 'array', 'maxItems': 40, 'items': _text(EDIT_MAX, 0)}), ()),
         'block': block, 'heading': _text(300, 0), 'blocks': {'type': 'array', 'maxItems': 20, 'items': block},
     }, ('op',))
     variants = [generic, _new_step(ids)]
@@ -285,7 +287,7 @@ def model_op(model, ids=None, intent=None):
     allowed = set(index(model))
     if ids is not None:
         allowed.intersection_update(ids)
-    variants, rows, texts, steps = [], {}, [], []
+    variants, rows, texts, steps, table_rows = [], {}, [], [], []
     step_blocks = False
     strings = {'type': 'array', 'maxItems': 150, 'items': _text(4000)}
     references = _choice([step['id'] for step in steps_of(model)] + ['new:%d' % n for n in range(1, 121)])
@@ -330,18 +332,26 @@ def model_op(model, ids=None, intent=None):
                 step_blocks = step_blocks or node['id'] in allowed
             elif kind == 'list':
                 texts.extend(member_ids)
+            elif kind == 'table':
+                table_rows.extend(member_ids)
             if node['id'] not in allowed:
                 continue
             if kind in ('prose', 'heading', 'code'):
                 texts.append(node['id'])
-            if kind in ('rows', 'list'):
+            if kind in ('rows', 'list', 'table'):
                 new = (fields(node['row_kind'], new=True) if kind == 'rows' else
+                       _object({'cells': {'type': 'array', 'maxItems': 40, 'items': _text(EDIT_MAX, 0)}}, ('cells',)) if kind == 'table' else
                        _object({'id': _text(120), 'text': _text(EDIT_MAX, 0)}, ('text',)))
-                add('insert_row' if kind == 'rows' else 'insert_item',
+                add('insert_item' if kind == 'list' else 'insert_row',
                     {'target': pick([node['id']]), 'after': pick([''] + member_ids), 'new': new}, ('target', 'new'))
     for kind, keys in rows.items():
         if keys:
             add('set_fields', {'id': pick(keys), 'fields': fields(kind)}, ('id', 'fields'))
+    if table_rows:
+        # A row of a generic table has no named fields: it is its cells, replaced whole.
+        add('set_fields', {'id': pick(table_rows),
+                           'fields': _object({'cells': {'type': 'array', 'maxItems': 40, 'items': _text(EDIT_MAX, 0)}}, ('cells',))},
+            ('id', 'fields'))
     if steps:
         add('set_step', {'id': pick(steps), 'fields': _object(step_fields, ())}, ('id', 'fields'))
     if steps or step_blocks:

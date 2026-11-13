@@ -40,7 +40,10 @@ list fields (requirements, files, owns) use string arrays. Existing step depende
 Legacy schemas may instead request comma-separated strings for these lists.
 
 - `{"op":"set_fields","id":"B-1","fields":{"failure":"..."}}` changes only the named fields of the row `id`. The
-  field names are the keys of that row in the model.
+  field names are the keys of that row in the model. A row of a table with no named fields (it shows `cells`) takes
+  one field, `cells`: the whole row as an array of strings, one per column, e.g.
+  `{"op":"set_fields","id":"s15.1.r5","fields":{"cells":["R-5","risk","mitigation"]}}`. To add a row to such a table,
+  `insert_row` takes `new` as `{"cells":[...]}` (the driver assigns the row id).
 - `{"op":"set_text","id":"s1.2","text":"..."}` replaces the text of a `prose` block or a list item.
 - `{"op":"set_step","id":"step-3","fields":{"title":"...","text":"...","owns":["a.js", "b.js"],"depends_on":[1, 2]}}`
   changes only the fields named.

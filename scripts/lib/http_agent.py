@@ -632,6 +632,31 @@ def save_truncated(where, cap, text, calls=None, usage=None):
         return ''  # a diagnostic; never the reason a stage fails
 
 
+def save_rejected(kind, error, text):
+    """Keep a response the schema or JSON check refused; return the file's path ('' if unwritable).
+
+    A rejection used to leave only the error: the model's answer died with the process, so there was no way to tell a
+    wrong id from a wrong shape from a broken grammar, or to see which op the message was pointing at.
+    """
+    try:
+        root = Path(os.environ.get('UNCLE_PROJECT_ROOT') or os.getcwd())
+        logs = root / '.uncle' / 'workflow' / 'logs'
+        logs.mkdir(parents=True, exist_ok=True)
+        stage = re.sub(r'[^A-Za-z0-9._-]+', '-', os.environ.get('UNCLE_STATUS_STAGE', '') or 'stage')
+        fd, name = tempfile.mkstemp(prefix='rejected-%s-%s-' % (stage, kind), suffix='.txt', dir=str(logs))
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+            stream.write('stage: %s\nrejected by: %s\nerror: %s\ntext: %d chars\n\n--- text ---\n%s\n'
+                         % (os.environ.get('UNCLE_STATUS_STAGE', '') or 'unknown', kind, ' '.join(str(error).split())[:2000],
+                            len(text or ''), (text or '')[:TRUNCATED_KEEP_CHARS]))
+        return name
+    except (OSError, ValueError):
+        return ''  # a diagnostic; never the reason a stage fails
+
+
+def rejection_note(path):
+    return ' The rejected response is saved in %s.' % path if path else ''
+
+
 def truncation_note(path):
     return ' The partial output is saved in %s.' % path if path else ''
 
@@ -1406,11 +1431,13 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     except json.JSONDecodeError as error:
         if final.startswith('{') and not bounded_writer:
             return repair_answer(final, 'Model response is not valid JSON (%s constraint): %s' % (mode, error))
-        raise ValueError('Model response is not valid JSON (%s constraint): %s' % (mode, error)) from None
+        raise ValueError('Model response is not valid JSON (%s constraint): %s%s'
+                         % (mode, error, rejection_note(save_rejected('json', error, final)))) from None
     except ValueError as error:
         if final.startswith('{') and not bounded_writer:
             return repair_answer(final, 'Model response violates the artifact schema (%s constraint): %s' % (mode, error))
-        raise ValueError('Model response violates the artifact schema (%s constraint): %s' % (mode, error)) from None
+        raise ValueError('Model response violates the artifact schema (%s constraint): %s%s'
+                         % (mode, error, rejection_note(save_rejected('schema', error, final)))) from None
     if stage is not None:
         stage.final_answer = final
     return final, requests

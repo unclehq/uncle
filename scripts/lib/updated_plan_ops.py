@@ -169,7 +169,14 @@ def writer_budget(ids, granularity='small'):
     per_op = option('tokens-per-op', 512)
     if turns < 0 or min(expected_ops, per_op) < 1:
         raise Conflict('updated-plan writer budgets must be positive')
-    return turns, max(4096, 1024 + len(ids) * (512 + expected_ops * per_op))
+    # The driver sets UNCLE_UPDATED_PLAN_ANSWER_SCALE on a writer it is asking again: a one-finding retry cannot be split
+    # further, so an answer that hit the cap (long traceability lists cost about a token per character) gets more room
+    # instead of ending as Deferred. Bounded, so a runaway still stops.
+    try:
+        scale = max(1, min(4, int(os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_SCALE') or 1)))
+    except ValueError:
+        scale = 1
+    return turns, max(4096, 1024 + len(ids) * (512 + expected_ops * per_op)) * scale
 
 
 def resolver_budget(directory, group_id):

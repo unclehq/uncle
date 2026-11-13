@@ -200,5 +200,26 @@ class WriteOnce(unittest.TestCase):
         self.assertFalse(delivery.exists())
 
 
+    def test_a_rejected_bounded_writer_answer_is_saved_for_diagnosis(self):
+        packet = {'schema': 'uncle.artifact/v1', 'kind': worker_schemas.EDIT_OPS_KIND, 'ops': 'wrong', 'dispositions': []}
+        delivery = self.root / '.uncle/workflow/edits/1.json'
+        env = dict(UNCLE_ARTIFACT_DELIVERY=str(delivery), UNCLE_UPDATED_PLAN_ANSWER_TOKENS='4096',
+                   UNCLE_STATUS_STAGE='updated-plan-worker-edits-1')
+        with patch.dict(os.environ, env), \
+                patch.object(agent, 'constrained_completion', return_value=(json.dumps(packet), 'stop', {}, 'json_schema')):
+            with self.assertRaises(ValueError) as caught:
+                hosted.run_opencode('agent', self.values, json.dumps(packet), self.root)
+        message = str(caught.exception)
+        self.assertIn('violates the artifact schema', message)
+        saved = sorted((self.root / '.uncle/workflow/logs').glob('rejected-updated-plan-worker-edits-1-schema-*.txt'))
+        self.assertEqual(len(saved), 1, message)
+        self.assertIn(str(saved[0]), message)
+        text = saved[0].read_text()
+        self.assertIn('rejected by: schema', text)
+        self.assertIn('ops must be array', text)
+        self.assertIn('"ops": "wrong"', text)         # the model's own answer, which used to die with the process
+        self.assertFalse(delivery.exists())
+
+
 if __name__ == '__main__':
     unittest.main()

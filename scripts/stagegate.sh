@@ -2943,7 +2943,7 @@ run_updated_plan_edit_writers() {
             fi
             workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
             UNCLE_UPDATED_PLAN_CHEAP_RETRY="$(stage_uses_self_hosted updated-plan AGENT && echo 1)" \
-            UNCLE_UPDATED_PLAN_SCHEMA_ATTEMPT=retry updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || {
+            UNCLE_UPDATED_PLAN_ANSWER_SCALE=2 UNCLE_UPDATED_PLAN_SCHEMA_ATTEMPT=retry updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || {
                 workflow_model_drain "$jobs" ${pids[@]+"${pids[@]}"}; return 1
             }
             pids+=("$!"); names+=("$name"); retry_ids+=("$ids")
@@ -2964,7 +2964,7 @@ run_updated_plan_edit_writers() {
             echo "Updated-plan edit writer(s) failed again; one last try each by the other delivery path."
             for index in "${again[@]}"; do
                 workflow_model_slot "$jobs" ${last_pids[@]+"${last_pids[@]}"}
-                updated_plan_launch_writer "$directory" "$delivery" "${names[$index]}" "${retry_ids[$index]}" "$([[ "${names[$index]}" == 1 || "${names[$index]}" == 1-1 ]] && echo owner)" || failed=1
+                UNCLE_UPDATED_PLAN_ANSWER_SCALE=2 updated_plan_launch_writer "$directory" "$delivery" "${names[$index]}" "${retry_ids[$index]}" "$([[ "${names[$index]}" == 1 || "${names[$index]}" == 1-1 ]] && echo owner)" || failed=1
                 last_pids+=("$!"); last_names+=("${names[$index]}")
             done
             for index in "${!last_pids[@]}"; do

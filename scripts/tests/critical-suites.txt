@@ -144,6 +144,9 @@ final-audit-worker-inputs
 # A read-only preflight probe may call mktemp the usual way on macOS (it is pointed at the probe's scratch, not /var/folders).
 preflight-mktemp
 
+# A retried one-finding updated-plan writer gets more answer room, and a response the schema refuses is kept for diagnosis.
+updated-plan-writer-retries
+
 # A plan patch names a section with or without its `## ` marker.
 plan-patch-headings
 

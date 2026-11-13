@@ -71,7 +71,10 @@ def scan(state_dir, seen, is_hosted=False):
         if url in seen:
             continue
         seen.add(url)
-        lines.append(line(url, vite, is_hosted))
+        text = line(url, vite, is_hosted)
+        # Hosted: the address above is loopback inside the container. Also say what the server was asked to bind and bound.
+        bind = _read(os.path.join(state_dir, 'preview-server.bind')) if is_hosted else ''
+        lines.append(text + (' [%s]' % bind if bind else ''))
     return lines
 
 

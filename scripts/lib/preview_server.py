@@ -258,6 +258,14 @@ def serve_live_preview(root, state):
     actual_port = server.server.server_address[1]
     if binding:
         record_host_preview(root, bind_host, actual_port)
+        # Say what the host asked for and what the server bound, so a wrong address is visible: the announced URL is always
+        # loopback (reachable inside the container only), and an invalid UNCLE_PREVIEW_PORT silently becomes a free port.
+        asked = 'host %s, port %s' % (os.environ.get('UNCLE_PREVIEW_HOST') or '(unset)', os.environ.get('UNCLE_PREVIEW_PORT') or '(unset)')
+        note = 'listening on %s:%d (requested %s)' % (bind_host, actual_port, asked)
+        if bind_port != actual_port:
+            note += ' -- NOT the requested port: the request was unset or not a port from 1024 to 65535'
+        (state / 'preview-server.bind').write_text(note, encoding='utf-8')
+        print('preview: ' + note, flush=True)
     pid_path, url_path = state / 'preview-server.pid', state / 'preview-server.url'
     pid_path.write_text(str(os.getpid()), encoding='utf-8')
     url_path.write_text(server.url, encoding='utf-8')

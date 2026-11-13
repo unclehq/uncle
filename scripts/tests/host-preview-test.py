@@ -561,6 +561,28 @@ class LiveViteOnHostPort(Base):
         rec = self.record()
         self.assertEqual((rec['status'], rec['port']), ('running', port))
 
+    def test_the_announcement_says_what_was_requested_and_what_was_bound(self):
+        import preview_announce
+        port = free_port()
+        self.project_with_vite('#!/bin/sh\nexit 1\n')
+        self.start(port)
+        time.sleep(1.5)
+        line = ''.join(preview_announce.scan(str(self.state), set(), True))
+        self.assertIn('listening on 127.0.0.1:%d (requested host 127.0.0.1, port %d)' % (port, port), line)
+        self.assertNotIn('NOT the requested port', line)
+
+    def test_an_unusable_requested_port_is_called_out(self):
+        import preview_announce
+        e = dict(os.environ, UNCLE_HOSTED='1', UNCLE_PREVIEW_HOST='127.0.0.1', UNCLE_PREVIEW_PORT='80')
+        self.project_with_vite('#!/bin/sh\nexit 1\n')
+        proc = subprocess.Popen([sys.executable, '-B', str(LIB / 'preview_server.py'), 'start', str(self.project), str(self.state)],
+                                env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        self.addCleanup(lambda: (proc.terminate(), proc.wait(10)))
+        time.sleep(1.5)
+        line = ''.join(preview_announce.scan(str(self.state), set(), True))
+        self.assertIn('NOT the requested port', line)
+        self.assertIn('port 80)', line)
+
     def test_a_vite_that_dies_leaves_the_static_page_on_the_port(self):
         port = free_port()
         self.project_with_vite('#!/bin/sh\nexit 1\n')

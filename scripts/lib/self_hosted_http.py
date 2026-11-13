@@ -264,6 +264,8 @@ def compatible_post(values, body, timeout, url=None):
     from self_hosted_stream import ANSWER_CAP, answer_signal, output_accounting
     if isinstance(values, dict) and values.get('_profile') == 'aws-bedrock':
         return _bedrock_converse_post(values, _strip_temperature(body), timeout)  # Self Hosted bodies stay untouched
+    if isinstance(values, dict) and values.get('_profile') == 'anthropic-api':
+        return _anthropic_messages_post(values, _strip_temperature(body), timeout)
     answer_cap = body.get('max_tokens', body.get('options', {}).get('num_predict'))
     if answer_cap is None:
         return _compatible_output_post(values, body, timeout, url)
@@ -423,6 +425,114 @@ def _converse_result(raw, schema_name, model):
         # pending that is a finished answer ('stop'); reporting 'tool_calls' made bounded writers reject a valid answer.
         reason = 'end_turn'
     return {'choices': [{'message': message, 'finish_reason': _CONVERSE_REASONS.get(reason, reason)}],
+            'usage': {'prompt_tokens': u['input'], 'completion_tokens': u['output'], 'total_tokens': u['input'] + u['output']}}
+
+
+_MESSAGES_REASONS = {'end_turn': 'stop', 'stop_sequence': 'stop', 'max_tokens': 'length', 'tool_use': 'tool_calls'}
+
+
+def _anthropic_messages_post(values, body, timeout):
+    """Messages API transport: translate the OpenAI-style body, POST via the `_request` seam (never redirected, so the
+    key stays on api.anthropic.com), return an OpenAI-shaped response so callers are unchanged."""
+    import anthropic_protocols as ap
+    key, model = values['api_key'], values['model']
+    schema, name = None, 'result'
+    rf = body.get('response_format') or {}
+    if rf.get('type') == 'json_schema':
+        schema, name = rf['json_schema']['schema'], rf['json_schema'].get('name', 'result')
+    native = _strip_temperature(ap.build_body(model, body['messages'], body.get('max_tokens', 4096), body.get('tools'), schema, name))
+    url = ap.messages_url()
+
+    def retry_after(error, fallback):
+        try:
+            value = float((getattr(error, 'headers', None) or {}).get('retry-after') or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        return min(120.0, value) if value > 0 else fallback
+
+    def attempt(payload):
+        # Parallel workers share one account's rate limit: 429, 500, 502, 503 and 529 (overloaded) are retried with
+        # backoff, honoring Retry-After, instead of failing the stage.
+        import random, time
+        dropped = 0
+        for tries in range(8):
+            try:
+                return _request(url, key, payload, timeout, headers=ap.build_headers(key))
+            except NetworkLost as error:
+                dropped += 1
+                if dropped > 3 or tries == 7:
+                    raise
+                delay = min(30.0, 2.0 * (2 ** dropped)) * (0.5 + random.random() / 2)
+                print('Self hosted: Anthropic API connection lost (%s); retrying in %.0fs.' % (error, delay), file=sys.stderr, flush=True)
+                time.sleep(delay)
+            except HTTPError as error:
+                if error.code not in (429, 500, 502, 503, 529) or tries == 7:
+                    raise
+                delay = retry_after(error, min(60.0, 2.0 * (2 ** tries)) * (0.5 + random.random() / 2))
+                print('Self hosted: Anthropic API HTTP %d; retrying in %.0fs.' % (error.code, delay), file=sys.stderr, flush=True)
+                time.sleep(delay)
+
+    def detail(error):
+        # Anthropic's own explanation (never the key: _request already redacted it), bounded.
+        if hasattr(error, 'api_note'):
+            return error.api_note
+        try:
+            message = (json.loads(error.read() or b'{}').get('error') or {}).get('message', '')
+        except (ValueError, AttributeError, OSError):
+            return ''
+        error.api_note = ': ' + message[:300].replace('\n', ' ') if isinstance(message, str) and message else ''
+        return error.api_note
+
+    try:
+        try:
+            raw = attempt(native)
+        except HTTPError as error:
+            # Models differ in their output ceiling; retry once at the smallest common one.
+            limit = native['max_tokens']
+            note = detail(error)
+            if error.code == 400 and 'tool_choice' in native and any(w in note.lower() for w in ('tool', 'schema')):
+                # The model rejects a forced tool: ask for the JSON in plain text instead (the callers already request
+                # it in the prompt and validate it).
+                native.pop('tool_choice')
+                native.pop('tools', None)
+                try:
+                    return _messages_result(attempt(native), None, model)
+                except HTTPError as again:
+                    again.detail = detail(again)
+                    raise
+            if error.code != 400 or limit <= 4096 or 'max_tokens' not in note.lower():
+                error.detail = note
+                raise
+            native['max_tokens'] = 4096
+            try:
+                raw = attempt(native)
+            except HTTPError as again:
+                again.detail = detail(again)
+                raise
+    except HTTPError as error:
+        if 300 <= error.code < 400:
+            raise ValueError('Anthropic API request for model %s was redirected (HTTP %d); not followed' % (model, error.code)) from None
+        raise ValueError('Anthropic API request failed (HTTP %d); check the API key and model %s%s'
+                         % (error.code, model, getattr(error, 'detail', None) or detail(error))) from None
+    return _messages_result(raw, name if schema else None, model)
+
+
+def _messages_result(raw, schema_name, model):
+    import anthropic_protocols as ap
+    try:
+        parsed = ap.parse_response(raw, schema_name)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ValueError('Anthropic API response for model %s has no content' % model) from None
+    message = {'role': 'assistant', 'content': parsed['text']}
+    if parsed['tool_calls']:
+        message['tool_calls'] = [{'id': c['id'], 'type': 'function', 'function': {'name': c['name'], 'arguments': json.dumps(c['arguments'])}}
+                                 for c in parsed['tool_calls']]
+    u, reason = parsed['usage'], parsed['reason']
+    if schema_name and reason == 'tool_use' and parsed['text'] and not parsed['tool_calls']:
+        # The schema-constrained answer *is* a forced tool_use, so the API stops with tool_use. With no other tool call
+        # pending that is a finished answer ('stop'); reporting 'tool_calls' made bounded writers reject a valid answer.
+        reason = 'end_turn'
+    return {'choices': [{'message': message, 'finish_reason': _MESSAGES_REASONS.get(reason, reason)}],
             'usage': {'prompt_tokens': u['input'], 'completion_tokens': u['output'], 'total_tokens': u['input'] + u['output']}}
 
 
@@ -1369,9 +1479,11 @@ def sampling(values):
         config = _config_values()
         stage = os.environ.get('UNCLE_STATUS_STAGE', '')
         import self_hosted
-        if self_hosted.resolve_profile(config, stage) == 'aws-bedrock':
-            raise ValueError('AWS Bedrock request values lack _profile; refusing to send a request (never defaults to Self Hosted)')
-    elif profile == 'aws-bedrock':
+        found = self_hosted.resolve_profile(config, stage)
+        if found in ('aws-bedrock', 'anthropic-api'):
+            raise ValueError('%s request values lack _profile; refusing to send a request (never defaults to Self Hosted)'
+                             % self_hosted.LABELS[found])
+    elif profile in ('aws-bedrock', 'anthropic-api'):
         return {}
     value = temperature()
     return {} if value is None else {'temperature': value}
@@ -1410,8 +1522,8 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
 def constrained_completion(values, messages, schema, name, limit, effort=None, timeout=3600, skip=()):
     """Ask for `schema`-shaped output; returns (text, reason, usage, mode)."""
     values = configure_request_options(values)
-    if values.get('_profile') == 'aws-bedrock':
-        # Converse only: no capability probe, no mode fallback.
+    if values.get('_profile') in ('aws-bedrock', 'anthropic-api'):
+        # One native API (Converse, Messages): no capability probe, no mode fallback.
         effort = reasoning_effort(values, effort)
         try:
             text, reason, usage = _final_call(values, messages, schema, name, 'json_schema', limit, effort, timeout)

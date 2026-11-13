@@ -38,7 +38,7 @@ supervision.files_allowlist package.json,package-lock.json,vite.config.js
 ```
 
 Supervision works with any runner and any model. `supervision.runner` accepts
-`claude`, `codex`, `kimi`, `self-hosted`, `aws-bedrock`, `opencode` and `aider`,
+`claude`, `codex`, `kimi`, `self-hosted`, `aws-bedrock`, `anthropic-api`, `opencode` and `aider`,
 and `supervision.model` is any model identifier the chosen runner accepts (a
 token of letters, digits and `. _ / : -`). Uncle passes it to the runner
 unchanged, so a model has to exist for that runner: supervision does not keep a
@@ -50,7 +50,7 @@ Two details depend on the runner:
   `codex` it means "use Codex's configured default model", and with `kimi` it
   means the configured Kimi default; set `kimi:<alias>` to pick a specific Kimi
   model. A model of any other form is ignored by `kimi`.
-- `self-hosted`, `aws-bedrock`, `opencode` and `aider` take their model from the
+- `self-hosted`, `aws-bedrock`, `anthropic-api`, `opencode` and `aider` take their model from the
   stage's runner configuration (`uncle` → Configure), so the stage must be
   configured before supervision can use that runner.
 

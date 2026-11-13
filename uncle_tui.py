@@ -109,7 +109,7 @@ from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compo
                          hold_reason as triage_hold_reason, DIAGNOSIS_TOOLS, EXECUTE_TOOLS)
 from github_issues import IssuePicker, references as issue_references, issue_context
 from self_hosted import settings as home_settings
-from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, refresh_bedrock_models, validate_bedrock_token, local_model
+from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, refresh_bedrock_models, refresh_anthropic_models, validate_bedrock_token, local_model
 import supervisor as supervision_lib
 import supervisor_runner
 import home_agent_session
@@ -369,16 +369,18 @@ BUILD_CONFIG_STAGES = [name for name in CONFIG_STAGES if name != "triage"]
 # scripts/agent-*.sh and scripts/reviewer-*.sh — and the shim is what enforces
 # that difference. codex, for instance, runs `--sandbox workspace-write` as an
 # agent and `--sandbox read-only` as a reviewer.
-AGENT_RUNNERS = ["claude", "kimi", "codex", "self-hosted", "aws-bedrock"]
-REVIEWER_RUNNERS = ["codex", "claude", "kimi", "self-hosted", "aws-bedrock"]
-# Runners that speak HTTP to a configured endpoint.  AWS Bedrock is a profile
-# of the self-hosted class with its own key store, labels and display name.
-HTTP_RUNNERS = ("self-hosted", "aws-bedrock")
+AGENT_RUNNERS = ["claude", "kimi", "codex", "self-hosted", "aws-bedrock", "anthropic-api"]
+REVIEWER_RUNNERS = ["codex", "claude", "kimi", "self-hosted", "aws-bedrock", "anthropic-api"]
+# Runners that speak HTTP to a configured endpoint.  AWS Bedrock and the Anthropic
+# API are profiles of the self-hosted class with their own key stores, labels and display names.
+HTTP_RUNNERS = ("self-hosted", "aws-bedrock", "anthropic-api")
 PROFILES = {
     "self-hosted": {"display": "Self hosted", "key_file": "self-hosted-keys.json",
                     "url_label": "Base URL", "token_label": "API key"},
     "aws-bedrock": {"display": "AWS Bedrock", "key_file": "aws-bedrock-keys.json",
                     "url_label": "Region", "token_label": "AWS Bedrock Token"},
+    "anthropic-api": {"display": "Anthropic API", "key_file": "anthropic-api-keys.json",
+                      "url_label": "Endpoint", "token_label": "Anthropic API Key"},
 }
 
 
@@ -549,6 +551,7 @@ CONFIG_DESC = {
         "records BLOCKED, and no repair attempt can grant it a port."
     ),
     "field:base_url": "The OpenAI-compatible API root the model server should use, for example http://localhost:8000/v1.",
+    "field:anthropic_api_key": "The Anthropic API key (console.anthropic.com), hidden while editing and stored separately in .uncle/anthropic-api-keys.json. Requests go only to https://api.anthropic.com. ANTHROPIC_API_KEY is used when none is stored; no temperature is sent.",
     "field:region": "The AWS region that serves your Bedrock models, for example us-east-1. Endpoints and model discovery are derived from it. Bedrock never sends a temperature.",
     "field:api_key": "Endpoint credential, hidden while editing and stored separately in .uncle/self-hosted-keys.json. Use a placeholder for a server without authentication.",
     "field:model": (
@@ -702,7 +705,7 @@ def stage_env_var(stage):
 def unsupported_runner_message(runner):
     runner = re.sub(r'[\x00-\x1f\x7f]', '', str(runner))[:64]
     return ("uncle: runner '%s' is not supported (Cline support was removed). "
-            "Set it to claude, codex, kimi, self-hosted or aws-bedrock with 'uncle' -> Configure." % runner)
+            "Set it to claude, codex, kimi, self-hosted, aws-bedrock or anthropic-api with 'uncle' -> Configure." % runner)
 
 
 def runner_command(runner, side):
@@ -712,6 +715,7 @@ def runner_command(runner, side):
         table = {
             "self-hosted": shim("reviewer-self-hosted.sh"),
             "aws-bedrock": shim("reviewer-self-hosted.sh"),
+            "anthropic-api": shim("reviewer-self-hosted.sh"),
             "codex": "codex",
             "claude": shim("reviewer-claude.sh"),
             "kimi": shim("reviewer-kimi.sh"),
@@ -720,6 +724,7 @@ def runner_command(runner, side):
         table = {
             "self-hosted": shim("agent-self-hosted.sh"),
             "aws-bedrock": shim("agent-self-hosted.sh"),
+            "anthropic-api": shim("agent-self-hosted.sh"),
             "claude": "claude",
             "kimi": shim("agent-kimi.sh"),
             "codex": shim("agent-codex.sh"),
@@ -754,8 +759,8 @@ def runners_for(side):
 
 
 def selectable_runners(side):
-    """Runners offered in Configure: the installed ones plus the HTTP-only AWS Bedrock runner."""
-    return runners_for(side) + ["aws-bedrock"]
+    """Runners offered in Configure: the installed ones plus the HTTP-only AWS Bedrock and Anthropic API runners."""
+    return runners_for(side) + ["aws-bedrock", "anthropic-api"]
 
 
 
@@ -1294,6 +1299,7 @@ class UncleTUI:
         self.stage_base_urls = {}
         self.stage_api_keys = read_keys(CONFIG_PATH)
         self.bedrock_keys = read_keys(CONFIG_PATH, profile="aws-bedrock")
+        self.anthropic_keys = read_keys(CONFIG_PATH, profile="anthropic-api")
         self.notice = ""
         self.config_sel = 0
         self.config_scroll = 0
@@ -1416,6 +1422,8 @@ class UncleTUI:
             return "@connection"
         if section == "bedrock":
             return "@bedrock"
+        if section == "anthropic":
+            return "@anthropic"
         if section == "misc":
             return "!misc"
         if section == "supervision":
@@ -1433,6 +1441,8 @@ class UncleTUI:
 
     def _keys_for(self, runner):
         """The key store of an HTTP runner's profile."""
+        if runner == "anthropic-api":
+            return self.anthropic_keys
         return self.bedrock_keys if runner == "aws-bedrock" else self.stage_api_keys
 
     # ---- effective values ----
@@ -1499,6 +1509,8 @@ class UncleTUI:
         """
         if stage == "@bedrock":
             return ["region", "api_key"]
+        if stage == "@anthropic":
+            return ["api_key"]
         if stage.startswith("@"):
             return ["base_url", "api_key"]
         runner = self.stage_runner(stage)
@@ -1524,6 +1536,8 @@ class UncleTUI:
                 import bedrock_protocols
                 return connection.get("region") or bedrock_protocols.region_from_url(connection.get("base_url")) or ""
             return connection.get(field, "")
+        if stage == "@anthropic":
+            return connection_settings(self.anthropic_keys).get(field, "")
         if stage.startswith("@"):
             name = stage[1:]
             if field == "name":
@@ -1626,6 +1640,34 @@ class UncleTUI:
                 keys["__opencode_connection__"] = connection
             self.save_config()
             return
+        if stage == "@anthropic":
+            import anthropic_protocols
+            keys = self._keys_for("anthropic-api")
+            try:
+                if value:
+                    anthropic_protocols.validate_key(value)
+            except ValueError as exc:
+                self.notice = str(exc)
+                return
+            connection = {"api_key": value}
+            if value:
+                self.notice = "Discovering supported Anthropic API models…"
+                try:
+                    refresh_anthropic_models(keys, value)
+                except ValueError as exc:
+                    # A failed discovery leaves an existing connection and catalog untouched; with no catalog yet,
+                    # the typed key is saved so first-time setup is not lost.
+                    if not keys.get("__opencode_models__"):
+                        keys["__opencode_connection__"] = connection
+                        self.save_config()
+                        self._saved_despite_notice = True
+                    self.notice = str(exc)
+                    return
+                self.notice = ""
+            else:
+                keys["__opencode_connection__"] = connection
+            self.save_config()
+            return
         if stage == "@connection":
             runner = "self-hosted"
             keys = self._keys_for(runner)
@@ -1666,7 +1708,7 @@ class UncleTUI:
         source = self.stage_target
         runner = self.stage_runner(source)
         if runner not in HTTP_RUNNERS:
-            self.notice = "Select Self hosted or AWS Bedrock and configure its connection first."
+            self.notice = "Select Self hosted, AWS Bedrock or Anthropic API and configure its connection first."
             return
         display = PROFILES[runner]["display"] if runner in PROFILES else runner
         for store in (self.stage_models, self.stage_base_urls, self._keys_for(runner)):
@@ -1693,7 +1735,7 @@ class UncleTUI:
     def _config_items(self):
         section = getattr(self, "config_section", "")
         if not section:
-            return ["1. Configure stages", "2. Configure self hosting", "3. Configure AWS Bedrock", "4. Miscellaneous", "5. Supervision", "6. Recovery"]
+            return ["1. Configure stages", "2. Configure self hosting", "3. Configure AWS Bedrock", "4. Configure Anthropic API", "5. Miscellaneous", "6. Supervision", "7. Recovery"]
         if section == "supervision":
             return self._supervision_items()
         if section == "recovery":
@@ -1703,6 +1745,8 @@ class UncleTUI:
                     "Temperature: " + ("on" if self._use_temperature() else "off")]
         if section == "bedrock":
             return ["Connection — Region and AWS Bedrock Token", "Refresh supported models (%d loaded)" % len(self.bedrock_keys.get("__opencode_models__", {}))]
+        if section == "anthropic":
+            return ["Connection — Anthropic API Key", "Refresh supported models (%d loaded)" % len(self.anthropic_keys.get("__opencode_models__", {}))]
         if section == "misc":
             return ["Auto mode: " + ("off" if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "false" else "on"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
@@ -1728,7 +1772,7 @@ class UncleTUI:
         """Rows of the open stage's popup."""
         stage = self.stage_target
         rows = []
-        profile = PROFILES["aws-bedrock" if stage == "@bedrock" else "self-hosted"]
+        profile = PROFILES["aws-bedrock" if stage == "@bedrock" else "anthropic-api" if stage == "@anthropic" else "self-hosted"]
         for field in self.stage_fields(stage):
             label = {"base_url": profile["url_label"], "region": "Region", "api_key": profile["token_label"]}.get(field, field)
             rows.append("%s  %s" % (label.ljust(8), self._field_display(stage, field)))
@@ -1751,8 +1795,12 @@ class UncleTUI:
         if self.state == "stage":
             field = self._stage_field()
             desc = CONFIG_DESC.get("field:%s" % field, "")
+            if field == "api_key" and self.stage_target == "@anthropic":
+                desc = CONFIG_DESC["field:anthropic_api_key"]
             if field == "model" and self.stage_runner(self.stage_target) == "aws-bedrock":
                 return "Choose one of your configured AWS Bedrock models. Set the Region and AWS Bedrock Token to discover models in Configure → Configure AWS Bedrock."
+            if field == "model" and self.stage_runner(self.stage_target) == "anthropic-api":
+                return "Choose one of your configured Anthropic API models. Set the Anthropic API Key to discover models in Configure → Configure Anthropic API."
             if field == "model" and self.stage_runner(self.stage_target) == "self-hosted":
                 return "Choose one of your configured self-hosted models. Set the Base URL and API key to discover models in Configure → Configure self hosting."
             if field == "runner":
@@ -1870,9 +1918,9 @@ class UncleTUI:
         runner = (self.supervision.get("runner", supervision_lib.DEFAULTS["runner"])
                   if target == "!supervision" else self.stage_runner(target))
         if kind == "model" and runner in HTTP_RUNNERS and not self._keys_for(runner).get("__opencode_models__"):
-            self.notice = ("Set up your endpoint in Configure → Configure AWS Bedrock to discover models first."
-                           if runner == "aws-bedrock" else
-                           "Set up your endpoint in Configure → Configure self hosting to discover models first.")
+            self.notice = {"aws-bedrock": "Set up your endpoint in Configure → Configure AWS Bedrock to discover models first.",
+                           "anthropic-api": "Set up your key in Configure → Configure Anthropic API to discover models first."}.get(
+                runner, "Set up your endpoint in Configure → Configure self hosting to discover models first.")
             return
         self.pick_filter = ""
         cur = (self._picker_current() or "").lower()
@@ -1978,6 +2026,7 @@ class UncleTUI:
         self.stage_base_urls = {}
         self.stage_api_keys = read_keys(CONFIG_PATH)
         self.bedrock_keys = read_keys(CONFIG_PATH, profile="aws-bedrock")
+        self.anthropic_keys = read_keys(CONFIG_PATH, profile="anthropic-api")
         # Normalize existing projects too.  Earlier versions performed this
         # only while creating the first configuration, so a project with an
         # existing config and a legacy bare `.uncle/` rule kept its generated
@@ -2163,6 +2212,7 @@ class UncleTUI:
             pass
         save_keys(CONFIG_PATH, self.stage_api_keys)
         save_keys(CONFIG_PATH, getattr(self, "bedrock_keys", {}), profile="aws-bedrock")
+        save_keys(CONFIG_PATH, getattr(self, "anthropic_keys", {}), profile="anthropic-api")
         self._config_stamp = self._stamp()
 
     def stage_env(self):
@@ -5343,7 +5393,7 @@ class UncleTUI:
         env['UNCLE_CONFIG'] = str(CONFIG_PATH)
         if runner in HTTP_RUNNERS:
             values = home_settings(CONFIG_PATH, 'triage')
-            prefix = 'UNCLE_AWS_BEDROCK_' if runner == 'aws-bedrock' else 'UNCLE_SELF_HOSTED_'
+            prefix = {'aws-bedrock': 'UNCLE_AWS_BEDROCK_', 'anthropic-api': 'UNCLE_ANTHROPIC_API_'}.get(runner, 'UNCLE_SELF_HOSTED_')
             for field in ('model', 'base_url', 'api_key'):
                 env[prefix + field.upper()] = values[field]
         self.triage_turn = turn
@@ -9103,7 +9153,7 @@ class UncleTUI:
             elif k in (10, 13):
                 section = getattr(self, "config_section", "")
                 if not section:
-                    self.config_section = ("stages", "opencode", "bedrock", "misc", "supervision", "recovery")[self.config_sel]
+                    self.config_section = ("stages", "opencode", "bedrock", "anthropic", "misc", "supervision", "recovery")[self.config_sel]
                     self.config_sel = self.config_scroll = 0
                 elif section == "supervision":
                     self._supervision_enter()
@@ -9121,6 +9171,8 @@ class UncleTUI:
                     self._toggle_use_temperature()
                 elif section == "bedrock" and self.config_sel == 1:
                     self._set_field("@bedrock", "region", self._field_value("@bedrock", "region"))
+                elif section == "anthropic" and self.config_sel == 1:
+                    self._set_field("@anthropic", "api_key", self._field_value("@anthropic", "api_key"))
                 else:
                     self._open_stage(self._config_row())
             elif k in (ord("q"), ord("Q")):

@@ -876,12 +876,12 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             runner.build_command(sv.Config(dict(runner='cline', model='x', effort='low')), ROOT)
         self.assertIn('Cline support was removed', str(caught.exception))
-        self.assertIn('claude, codex, kimi, self-hosted or aws-bedrock', str(caught.exception))
+        self.assertIn('claude, codex, kimi, self-hosted, aws-bedrock or anthropic-api', str(caught.exception))
         with self.assertRaises(ValueError) as caught:
             runner.build_command(sv.Config(dict(runner='bogus')), ROOT)
         self.assertEqual(str(caught.exception),
                          "uncle: runner 'bogus' is not supported (Cline support was removed). "
-                         "Set it to claude, codex, kimi, self-hosted or aws-bedrock with 'uncle' -> Configure.")
+                         "Set it to claude, codex, kimi, self-hosted, aws-bedrock or anthropic-api with 'uncle' -> Configure.")
         self.assertNotIn('cline', sv.SUPPORTED_RUNNERS)
 
     def test_codex_supervisor_uses_a_read_only_adapter(self):

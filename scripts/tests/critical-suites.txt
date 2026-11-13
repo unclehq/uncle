@@ -132,6 +132,9 @@ preview-build-always-on
 # Every run says where the preview is: local or not, static page or Vite.
 preview-announce
 
+# Anthropic API runner: the Messages API profile of the Self Hosted class, wired everywhere the local model is.
+anthropic-api
+
 # A plan patch names a section with or without its `## ` marker.
 plan-patch-headings
 

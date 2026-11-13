@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/5966ea18-5f58-418c-a0f3-c8415b68e354
 
 ## Quick start
 
-You need at least one supported AI client installed and authenticated (Claude, Codex, Kimi, a self-hosted model, or AWS Bedrock). See [Prerequisites](PREREQUISITES.md).
+You need at least one supported AI client installed and authenticated (Claude, Codex, Kimi, a self-hosted model, AWS Bedrock, or the Anthropic API). See [Prerequisites](PREREQUISITES.md).
 
 **macOS / Linux / WSL** (Homebrew is required on macOS)
 
@@ -68,7 +68,7 @@ Small contributions and constructive criticism are welcome, including "this was 
 * **Independent review.** The agent implementing a change cannot approve its own implementation. Review is a separate stage run by a separate reviewer process, and you can point it at a different runner or model than the implementer. See [How Uncle works](#how-uncle-works).
 * **Artifact identity.** Review, verification, approval and publication are tied to the relevant Git tree. See [The change is the unit of trust](#the-change-is-the-unit-of-trust).
 * **Verifiable change provenance.** Uncle produces machine-readable evidence and portable attestations using established standards (in-toto, DSSE). See [Verifiable change provenance](#verifiable-change-provenance).
-* **Model flexibility.** Use different supported runners and models for implementation, review and other stages: Claude, Codex, Kimi, self-hosted models, and AWS Bedrock ([docs/aws-bedrock.md](docs/aws-bedrock.md)).
+* **Model flexibility.** Use different supported runners and models for implementation, review and other stages: Claude, Codex, Kimi, self-hosted models, AWS Bedrock ([docs/aws-bedrock.md](docs/aws-bedrock.md)), and the Anthropic API ([docs/anthropic-api.md](docs/anthropic-api.md)).
 * **Local-first operation.** Uncle runs on your machine in a terminal UI, with no Uncle-hosted backend, account or telemetry. Your model runners and GitHub still receive what they need to do the work; see the [privacy policy](PRIVACY_POLICY.md).
 
 Configuration note: in hosted mode (`UNCLE_HOSTED=1`) supervision reads `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `SEREN_MODEL`/`UNCLE_MODEL` from the environment and needs no `supervision.base_url`. Unknown `supervision.*` keys are ignored with a warning. Do not put credentials (API keys, secrets) in `.uncle/config`. Unknown-key warnings name only the key, never its value. See [docs/supervision.md](docs/supervision.md).
@@ -219,6 +219,7 @@ In attended mode, Uncle shows you the audited diff and asks for approval before 
 * [Two issues on one project](docs/worktrees.md): git worktrees
 * [Change plan duties](docs/plan-duties.md)
 * [AWS Bedrock runner](docs/aws-bedrock.md)
+* [Anthropic API runner](docs/anthropic-api.md)
 * [Unattended default migration](docs/UNATTENDED_DEFAULT_MIGRATION.md)
 * [GitHub integration](GITHUB_INTEGRATION.md)
 * [Release provenance](ATTESTATIONS.md): GitHub Actions build provenance for release artifacts, a separate topic from change attestations

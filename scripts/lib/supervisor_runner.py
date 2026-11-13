@@ -50,7 +50,7 @@ def worker_env(environ, home):
 def build_command(config, root, environ=None, config_path=None, stage=''):
     """(argv, env, temporary-home) for one call, or ValueError('unavailable ...')."""
     environ = os.environ if environ is None else environ
-    if config.runner in ('self-hosted', 'aws-bedrock', 'opencode', 'aider'):
+    if config.runner in ('self-hosted', 'aws-bedrock', 'anthropic-api', 'opencode', 'aider'):
         if not config_path or not stage:
             raise ValueError('unavailable: self-hosted homepage runner needs a configured stage')
         home = tempfile.mkdtemp(prefix='uncle-supervisor-')

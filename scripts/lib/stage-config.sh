@@ -236,7 +236,7 @@ uncle_validate_config_runners() {
         [[ "$line" == *" "* ]] || continue
         value="${value%% *}"
         case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
-            ""|claude|codex|kimi|self-hosted|opencode|aider|aws-bedrock) ;;
+            ""|claude|codex|kimi|self-hosted|opencode|aider|aws-bedrock|anthropic-api) ;;
             *) uncle_unsupported_runner "$value" || rc=1 ;;
         esac
     done < "$file"
@@ -310,7 +310,7 @@ uncle_resolve_stage_runner() {
         stage="$(uncle_config_stage "$stage")"
         UNCLE_RESOLVED_RUNNER="$(uncle_stage_key "$stage" runner)"
         [[ -n "$UNCLE_RESOLVED_RUNNER" ]] || UNCLE_RESOLVED_RUNNER="$(uncle_config_get runner)"
-        case "$(printf '%s' "$UNCLE_RESOLVED_RUNNER" | tr '[:upper:]' '[:lower:]')" in opencode|aider|aws-bedrock) UNCLE_RESOLVED_RUNNER=self-hosted ;; esac
+        case "$(printf '%s' "$UNCLE_RESOLVED_RUNNER" | tr '[:upper:]' '[:lower:]')" in opencode|aider|aws-bedrock|anthropic-api) UNCLE_RESOLVED_RUNNER=self-hosted ;; esac
         return 0
     fi
     UNCLE_RESOLVED_RUNNER="$(uncle_stage_runner "$stage")"
@@ -331,7 +331,7 @@ uncle_stage_runner() {
     stage="$(uncle_config_stage "$1")"
     v="$(uncle_stage_key "$stage" runner)"
     [[ -n "$v" ]] || v="$(uncle_config_get runner)"
-    case "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" in opencode|aider|aws-bedrock) v=self-hosted ;; esac
+    case "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" in opencode|aider|aws-bedrock|anthropic-api) v=self-hosted ;; esac
     if [[ -z "$v" ]]; then
         v="$UNCLE_DEFAULT_RUNNER"
     fi
@@ -367,6 +367,12 @@ uncle_stage_model() {
     if [[ "$runner" == "self-hosted" && "$(uncle_raw_stage_runner "$stage")" == "aws-bedrock" ]]; then
         v="${UNCLE_AWS_BEDROCK_MODEL:-$(uncle_stage_key "$stage" model)}"
         [[ -n "$v" ]] || v="$(uncle_config_get aws-bedrock.model)"
+        printf '%s' "$v"
+        return 0
+    fi
+    if [[ "$runner" == "self-hosted" && "$(uncle_raw_stage_runner "$stage")" == "anthropic-api" ]]; then
+        v="${UNCLE_ANTHROPIC_API_MODEL:-$(uncle_stage_key "$stage" model)}"
+        [[ -n "$v" ]] || v="$(uncle_config_get anthropic-api.model)"
         printf '%s' "$v"
         return 0
     fi

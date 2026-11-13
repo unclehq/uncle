@@ -229,9 +229,9 @@ class Reuse:
             except ValueError:
                 pass
         profile = values.get('_profile')
-        if profile is not None and profile not in ('self-hosted', 'aws-bedrock'):
-            raise ValueError('Unknown runner profile %r; expected self-hosted or aws-bedrock' % (profile,))
-        bedrock = profile == 'aws-bedrock'
+        if profile is not None and profile not in ('self-hosted', 'aws-bedrock', 'anthropic-api'):
+            raise ValueError('Unknown runner profile %r; expected self-hosted, aws-bedrock or anthropic-api' % (profile,))
+        bedrock = profile in ('aws-bedrock', 'anthropic-api')  # native vendor APIs: never a temperature
         if (not enabled('result-reuse') or policy.write or policy.shell or schema is None or stage is not None
                 or (not bedrock and (temperature() or 0) > 0 and not enabled('reuse-nonzero-temperature', 'off'))):
             return
@@ -251,11 +251,11 @@ class Reuse:
             implementation = [digest((Path(__file__).parent / file).read_bytes()) for file in
                               ('self_hosted_performance.py', 'http_agent.py', 'self_hosted_http.py',
                                'self_hosted_stream.py', 'self_hosted.py')]
-            controls = {k: v for k, v in os.environ.items() if k.startswith(('WORKFLOW_SELF_HOSTED_', 'WORKFLOW_EFFORT_', 'WORKFLOW_AWS_BEDROCK_'))
+            controls = {k: v for k, v in os.environ.items() if k.startswith(('WORKFLOW_SELF_HOSTED_', 'WORKFLOW_EFFORT_', 'WORKFLOW_AWS_BEDROCK_', 'WORKFLOW_ANTHROPIC_API_'))
                         and not any(s in k for s in ('API_KEY', 'SECRET', 'PASSWORD'))
                         and not (bedrock and k.endswith('_TEMPERATURE'))}
             from self_hosted_http import _config_values, _strip_temperature
-            config = {k: v for k, v in _config_values().items() if k.startswith(('self-hosted.', 'aws-bedrock.')) or
+            config = {k: v for k, v in _config_values().items() if k.startswith(('self-hosted.', 'aws-bedrock.', 'anthropic-api.')) or
                       k.endswith(('.effort', '.request-options', '.turn-output-tokens', '.final-output-tokens'))}
             if bedrock:  # Bedrock never sends a temperature, so no configured one may split the key
                 config = {k: v for k, v in config.items() if not k.endswith('.temperature')}

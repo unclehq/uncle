@@ -132,7 +132,7 @@ class LabelsTest(unittest.TestCase):
     def test_row_order_bedrock_after_self_hosted(self):
         top = re.findall(r'"([^"]+)"', self._items(None))
         self.assertEqual(top, ['1. Configure stages', '2. Configure self hosting', '3. Configure AWS Bedrock',
-                               '4. Miscellaneous', '5. Supervision', '6. Recovery'])
+                               '4. Configure Anthropic API', '5. Miscellaneous', '6. Supervision', '7. Recovery'])
         self.assertEqual(top.index('3. Configure AWS Bedrock'), top.index('2. Configure self hosting') + 1)
 
     def test_bedrock_submenu_exact_and_no_temperature_entry(self):

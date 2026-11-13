@@ -117,7 +117,7 @@ class RunnersNoneInstalled(unittest.TestCase):
         fake_binary(self.tmp.name, "claude")
         for side in SIDES:
             self.assertEqual(uncle_tui.runners_for(side), ["claude", "self-hosted"], side)
-            self.assertEqual(uncle_tui.selectable_runners(side), ["claude", "self-hosted", "aws-bedrock"], side)
+            self.assertEqual(uncle_tui.selectable_runners(side), ["claude", "self-hosted", "aws-bedrock", "anthropic-api"], side)
 
     @unittest.skipIf(WINDOWS, "fake binaries need POSIX executable bits")
     def test_opencode_only(self):

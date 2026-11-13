@@ -45,7 +45,7 @@ nok_leak() { ! grep -q "$TOKEN" "$T/o" "$T/e" "$CFG"; }
 new_project p1; printf 'requirements.runner claude\nrequirements.model local/foo\n' >"$CFG"; seed_keys
 run_uncle "$T/stubbin" '4\n1\n1\nr\nAWS-Bedrock\nq\nq\nq\nq\n'
 prompt=$(grep -o 'Runner ([^)]*)' <<<"$OUT" | head -1)
-check "AC-1 prompt lists aws-bedrock last: $prompt" '[[ "$prompt" == *" aws-bedrock" || "$prompt" == *" aws-bedrock;"* || "$prompt" =~ aws-bedrock\;?\ ?opencode ]] && [[ "${prompt%%aws-bedrock*}" == *claude*codex* ]]'
+check "AC-1 prompt lists aws-bedrock then anthropic-api last: $prompt" '[[ "$prompt" == *" aws-bedrock anthropic-api;"* ]] && [[ "${prompt%%aws-bedrock*}" == *claude*codex* ]]'
 check "AC-1 AWS-Bedrock stored lowercase" '[ "$(cfgval requirements.runner)" = "requirements.runner aws-bedrock" ]'
 check "AC-1 model kept unchanged after switch to aws-bedrock (self/other -> bedrock)" '[ "$(cfgval requirements.model)" = "requirements.model local/foo" ]'
 
@@ -127,12 +127,13 @@ new_project p7; printf 'requirements.effort high\nmisc.approval_name keepme\n' >
 run_uncle "$T/stubbin" '4\n3\n'
 check "menu: 3 opens Configure AWS Bedrock" 'grep -qi "bedrock" "$T/o" && ! grep -q "Auto mode (true/false)" "$T/o"'
 check "menu lists Configure AWS Bedrock as item 3" 'grep -E "3\) +Configure AWS Bedrock" "$T/o" >/dev/null'
-check "menu lists Miscellaneous as item 4" 'grep -E "4\) +Miscellaneous" "$T/o" >/dev/null'
-run_uncle "$T/stubbin" '4\n4\n\n\nq\n'
-check "menu: 4 opens Miscellaneous" 'grep -q "Auto mode (true/false)" "$T/o"'
-run_uncle "$T/stubbin" '4\n5\nq\nq\n'
-check "menu: 5 prints invalid-choice message" 'grep -q "Unrecognized choice: 5" "$T/o"'
-check "menu: 5 writes nothing" 'cmp -s "$CFG" "$T/cfg.b"'
+check "menu lists Configure Anthropic API as item 4" 'grep -E "4\) +Configure Anthropic API" "$T/o" >/dev/null'
+check "menu lists Miscellaneous as item 5" 'grep -E "5\) +Miscellaneous" "$T/o" >/dev/null'
+run_uncle "$T/stubbin" '4\n5\n\n\nq\n'
+check "menu: 5 opens Miscellaneous" 'grep -q "Auto mode (true/false)" "$T/o"'
+run_uncle "$T/stubbin" '4\n6\nq\nq\n'
+check "menu: 6 prints invalid-choice message" 'grep -q "Unrecognized choice: 6" "$T/o"'
+check "menu: 6 writes nothing" 'cmp -s "$CFG" "$T/cfg.b"'
 check "menu: no token output" 'nok_leak'
 
 [ "$fails" -eq 0 ]

@@ -26,11 +26,15 @@ def runner_directory(prefix):
 
 
 BEDROCK = 'aws-bedrock'
+ANTHROPIC = 'anthropic-api'
 SELF_HOSTED = 'self-hosted'
+# Profiles of the Self Hosted runner class that speak a vendor's own API: each has its own key file and model source.
+PROFILES = (BEDROCK, ANTHROPIC)
+LABELS = {BEDROCK: 'AWS Bedrock', ANTHROPIC: 'Anthropic API'}
 
 
 def key_file(config, profile=SELF_HOSTED):
-    return Path(config).parent / (BEDROCK + '-keys.json' if profile == BEDROCK else 'self-hosted-keys.json')
+    return Path(config).parent / (profile + '-keys.json' if profile in PROFILES else 'self-hosted-keys.json')
 
 
 def stage_names(stage):
@@ -55,8 +59,9 @@ def resolve_profile(values, stage=''):
     for name in names:
         runner = (values.get(name + '.runner') or '').strip().lower()
         if runner:
-            return BEDROCK if runner == BEDROCK else SELF_HOSTED
-    return BEDROCK if (values.get('runner') or '').strip().lower() == BEDROCK else SELF_HOSTED
+            return runner if runner in PROFILES else SELF_HOSTED
+    default = (values.get('runner') or '').strip().lower()
+    return default if default in PROFILES else SELF_HOSTED
 
 
 def redact_token(text, token):
@@ -85,7 +90,7 @@ def local_model(name):
 def read_keys(config, profile=SELF_HOSTED):
     path = key_file(config, profile)
     # Bedrock model IDs are used as-is; only self-hosted catalogs carry the local/ provider prefix.
-    local_model = _bedrock_model if profile == BEDROCK else globals()['local_model']
+    local_model = _bedrock_model if profile in PROFILES else globals()['local_model']
     keys = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     # Read old credentials without rewriting them until the user saves config.
     if '__opencode_models__' not in keys and '__aider_models__' in keys:
@@ -120,10 +125,11 @@ def save_keys(config, keys, profile=SELF_HOSTED):
             with ignore.open('a', encoding='utf-8', newline='\n') as stream:
                 stream.write(('\n' if existing and not existing.endswith('\n') else '') + entry + '\n')
     except OSError:
-        if bedrock:
-            raise ValueError('AWS Bedrock token not saved: could not add %s to .uncle/.gitignore' % entry.lstrip('/')) from None
+        if profile in PROFILES:
+            raise ValueError('%s %s not saved: could not add %s to .uncle/.gitignore'
+                             % (LABELS[profile], 'key' if profile == ANTHROPIC else 'token', entry.lstrip('/'))) from None
         raise
-    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.aws-bedrock-' if bedrock else '.self-hosted-')
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.%s-' % profile if profile in PROFILES else '.self-hosted-')
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
@@ -233,6 +239,46 @@ def discover_bedrock_models(region, api_key):
     return names
 
 
+def discover_anthropic_models(api_key):
+    """List the models the key may use (GET /v1/models; no redirects, paginated, x-api-key auth).
+
+    Errors are actionable ValueErrors that never include the key or a response body."""
+    from urllib.error import HTTPError, URLError
+    import anthropic_protocols as ap
+    ap.validate_key(api_key)
+    pages, seen, after = [], set(), None
+    for _ in range(101):
+        try:
+            raw = _discovery_get(ap.models_url(after), dict(ap.build_headers(api_key), Accept='application/json'))
+        except HTTPError as exc:
+            if 300 <= exc.code < 400:
+                raise ValueError(f'Anthropic API model discovery was redirected (HTTP {exc.code}); not followed') from None
+            raise ValueError(f'Anthropic API model discovery failed (HTTP {exc.code}); check the API key') from None
+        except (URLError, OSError):
+            raise ValueError('Could not reach the Anthropic API; check the network') from None
+        if len(raw) > 2_000_000:
+            raise ValueError('Anthropic API model response is too large')
+        try:
+            page = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeError):
+            raise ValueError('Anthropic API returned a malformed model list') from None
+        if not isinstance(page, dict):
+            raise ValueError('Anthropic API returned a malformed model list')
+        pages.append(page)
+        after = page.get('last_id')
+        if not page.get('has_more'):
+            break
+        if not isinstance(after, str) or not after or after in seen:
+            raise ValueError('Anthropic API model list pagination did not terminate')
+        seen.add(after)
+    else:
+        raise ValueError('Anthropic API model list has too many pages')
+    names = ap.parse_models(pages)
+    if not names:
+        raise ValueError('Anthropic API returned no usable models for this key')
+    return names
+
+
 def connection_settings(keys):
     return dict(keys.get('__opencode_connection__') or next(iter(keys.get('__opencode_models__', {}).values()), {}))
 
@@ -254,6 +300,15 @@ def refresh_bedrock_models(keys, region, api_key):
     keys['__opencode_models__'] = {name: dict(connection, model=name) for name in names}
     return names
 
+
+
+def refresh_anthropic_models(keys, api_key):
+    names = discover_anthropic_models(api_key)
+    connection = dict(api_key=api_key)
+    # Commit only after a successful discovery; failures retain the old catalog and connection.
+    keys['__opencode_connection__'] = connection
+    keys['__opencode_models__'] = {name: dict(connection, model=name) for name in names}
+    return names
 
 
 def config_stage(stage, values):
@@ -381,17 +436,46 @@ def _bedrock_result(values, stage, stored):
     return dict(model=model, base_url=bp.runtime_url(region), api_key=token, region=region)
 
 
+def _anthropic_result(values, stage, stored):
+    """Anthropic API connection: the key from env/connection; entries supply only the model ID. The endpoint is fixed."""
+    import anthropic_protocols as ap
+    profiles = stored.get('__opencode_models__', {})
+    connection = stored.get('__opencode_connection__')
+    selected = values.get(stage + '.model', '')
+    if selected and selected not in profiles:
+        selected = _bedrock_model(selected)
+    entry = profiles.get(selected) if selected in profiles else None
+    if not isinstance(entry, dict):
+        entry = None
+    # A cleared connection must not revive stale per-model values.
+    stale = entry if connection is None else None
+    conn = connection if isinstance(connection, dict) else {}
+    key = (os.environ.get('UNCLE_ANTHROPIC_API_KEY') or conn.get('api_key') or stored.get(stage) or (stale or {}).get('api_key')
+           or os.environ.get('ANTHROPIC_API_KEY') or '')
+    model = (os.environ.get('UNCLE_ANTHROPIC_API_MODEL') or (entry or {}).get('model', selected if entry else '')
+             or values.get(stage + '.model') or values.get(ANTHROPIC + '.model', ''))
+    if not model and profiles:
+        raise ValueError('No anthropic api model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (stage, stage))
+    model = model.removeprefix('openai/').removeprefix('local/')
+    if not model:
+        raise ValueError('Anthropic API requires a model name')
+    ap.validate_key(key)
+    return dict(model=model, base_url=ap.API_URL, api_key=key)
+
+
 def settings(config, stage):
     from self_hosted_http import _config_values, request_options
     values = _config_values(config)
     options = request_options(stage, values)  # validate before credential lookup
     requested_stage = stage
     profile = resolve_profile(values, requested_stage)
-    bedrock = profile == BEDROCK
+    bedrock = profile in PROFILES
     env = 'UNCLE_SELF_HOSTED_'
     stage = config_stage(stage, values)
     stored = read_keys(config, profile)
-    if bedrock:
+    if profile == ANTHROPIC:
+        result = _anthropic_result(values, stage, stored)
+    elif bedrock:
         result = _bedrock_result(values, stage, stored)
     else:
         result = {}
@@ -438,7 +522,7 @@ def settings(config, stage):
             any(key.startswith('WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS') for key in os.environ)):
         result.update(_request_options=options, _request_options_stage=requested_stage)
     if bedrock:
-        result['_profile'] = BEDROCK
+        result['_profile'] = profile
     return result
 
 
@@ -2147,32 +2231,33 @@ APPLY_ALL_STAGES = ('requirements change-spec project-plan change-plan adversari
 
 
 def validate_profile(value=None):
-    """The one profile check for models, choose-model, set-key and apply-all: absent or aws-bedrock only."""
+    """The one profile check for models, choose-model, set-key and apply-all: absent, aws-bedrock or anthropic-api only."""
     if value is None or value == '':
         return SELF_HOSTED if value is None else None
-    return BEDROCK if value == BEDROCK else None
+    return value if value in PROFILES else None
 
 
 def profile_menu(config, choose=False, profile=SELF_HOSTED):
     import getpass
-    bedrock = profile == BEDROCK
+    bedrock = profile in PROFILES
+    label = LABELS.get(profile, '')
     keys = read_keys(config, profile)
     profiles = keys.setdefault('__opencode_models__', {})
     if choose and bedrock:
         names = sorted(profiles)
         if not names:
-            print('No AWS Bedrock models are configured; add models in Configure → AWS Bedrock', file=sys.stderr)
+            print('No %s models are configured; add models in Configure → %s' % (label, label), file=sys.stderr)
             return 1
         for name in names:
             print('  ' + name, file=sys.stderr)
-        print('AWS Bedrock model name: ', end='', file=sys.stderr, flush=True)
+        print('%s model name: ' % label, end='', file=sys.stderr, flush=True)
         try:
             name = input().strip()
         except EOFError:
             name = ''
         key = name if name in profiles else _bedrock_model(name) if name else ''
         if key not in profiles:
-            print('Choose a configured AWS Bedrock model; add models in Configure → AWS Bedrock', file=sys.stderr)
+            print('Choose a configured %s model; add models in Configure → %s' % (label, label), file=sys.stderr)
             return 1
         print(profiles[key].get('model') or key.removeprefix('local/'))
         return 0
@@ -2186,6 +2271,8 @@ def profile_menu(config, choose=False, profile=SELF_HOSTED):
         print(name)
         return 0
     old = connection_settings(keys)
+    if profile == ANTHROPIC:
+        return _anthropic_configure(config, keys, old, profile)
     if bedrock:
         return _bedrock_configure(config, keys, old, profile)
     url = input('Base URL [' + old.get('base_url', '') + ']: ').strip() or old.get('base_url', '')
@@ -2213,6 +2300,23 @@ def _bedrock_configure(config, keys, old, profile):
         return 1
     save_keys(config, keys, profile)
     print(f'Loaded {len(names)} AWS Bedrock models: ' + ', '.join(names))
+    return 0
+
+
+def _anthropic_configure(config, keys, old, profile):
+    """Shell Configure → Anthropic API: the key only (the endpoint is fixed). Nothing is saved unless discovery succeeds."""
+    import getpass
+    import anthropic_protocols as ap
+    try:
+        key = getpass.getpass('Anthropic API Key (hidden; blank keeps existing): ').strip() or old.get('api_key', '')
+        ap.validate_key(key)
+        print('Discovering Anthropic API models…', flush=True)
+        names = refresh_anthropic_models(keys, key)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    save_keys(config, keys, profile)
+    print(f'Loaded {len(names)} Anthropic API models: ' + ', '.join(names))
     return 0
 
 
@@ -2290,10 +2394,10 @@ def _main(side, args):
         raw = args[position] if len(args) > position else None
         profile = validate_profile(raw)
         if profile is None:
-            print('Unsupported profile %r; only aws-bedrock is accepted' % raw, file=sys.stderr)
+            print('Unsupported profile %r; only aws-bedrock and anthropic-api are accepted' % raw, file=sys.stderr)
             return 2
         if side == 'apply-all' and raw is None:
-            print('apply-all requires the aws-bedrock profile', file=sys.stderr)
+            print('apply-all requires the aws-bedrock or anthropic-api profile', file=sys.stderr)
             return 2
     if side in ('models', 'choose-model'):
         return profile_menu(args[0], side == 'choose-model', profile)
@@ -2304,7 +2408,7 @@ def _main(side, args):
         keys = read_keys(args[0], profile)
         token = keys.get(args[2])
         if not isinstance(token, str) or not token:
-            print('AWS Bedrock token for the source stage is not set', file=sys.stderr)
+            print('%s %s for the source stage is not set' % (LABELS[profile], 'key' if profile == ANTHROPIC else 'token'), file=sys.stderr)
             return 1
         targets = args[3:] or APPLY_ALL_STAGES
         for target in targets:

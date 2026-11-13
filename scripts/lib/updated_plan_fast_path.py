@@ -67,8 +67,11 @@ def _section_paths(narrative):
 # plan or its verification commands.  Keep this small parser here rather than
 # asking an updated-plan compiler to reproduce an unchanged list.
 TEST_FILE = re.compile(r'(?<![\w./-])((?:[\w.-]+/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?![\w])|'
-                       r'(?<![\w./-])((?:tests?|__tests__|e2e)/(?:[\w.-]+/)*[\w.-]+\.(?:[cm]?[jt]sx?|py|sh))(?![\w])|'
-                       r'(?<![\w./-])((?:vitest|jest|playwright|cypress|karma)\.config\.[cm]?[jt]s)(?![\w])')
+                       r'(?<![\w./-])((?:tests?|__tests__|e2e)/(?:[\w.-]+/)*[\w.-]+\.(?:[cm]?[jt]sx?|py|sh|rs|go|rb|java|kt|php|cs|c|cc|cpp|h|hpp))(?![\w])|'
+                       r'(?<![\w./-])((?:vitest|jest|playwright|cypress|karma)\.config\.[cm]?[jt]s)(?![\w])|'
+                       # Other ecosystems' test files (a Rust plan naming tests/cli.rs matched nothing, and the whole updated plan failed).
+                       r'(?<![\w./-])((?:[\w.-]+/)*(?:[\w.-]+_test\.(?:go|rs|py|rb|c|cc|cpp)|test_[\w.-]+\.py|[\w.-]+_spec\.rb'
+                       r'|[\w.-]+Tests?\.(?:java|kt|php|cs)))(?![\w])')
 
 
 def derive_protected_paths(text, commands=''):
@@ -76,7 +79,7 @@ def derive_protected_paths(text, commands=''):
     found = []
     for match in TEST_FILE.finditer((text or '') + '\n' + (commands or '')):
         path = next(group for group in match.groups() if group)
-        if (path.startswith(('.', '/', 'node_modules', 'dist/', 'build/', 'out/', 'coverage/'))
+        if (path.startswith(('.', '/', 'node_modules', 'dist/', 'build/', 'out/', 'coverage/', 'target/'))
                 or '..' in path or path in found or path.endswith(('.json', '.lock'))):
             continue
         found.append(path)

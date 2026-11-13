@@ -19,6 +19,10 @@ from project_plan_sections import final_text, prompt_contexts
 COMPLETE = 'PROJECT_PLAN_STAGE_COMPLETE'
 
 
+# Another ecosystem the plan chooses, which makes a bare `node` or `javascript` prose rather than a stack.
+OTHER_ECOSYSTEM = r'\b(?:cargo|rust|python|pytest|pip|pyproject|composer|php|golang|go\.mod|gradle|maven|dotnet)\b'
+
+
 def required_paths(plan):
     """Probe common outputs for the selected ecosystems, plus universal local files.
 
@@ -28,8 +32,12 @@ def required_paths(plan):
     paths = ['.env', '.env.local', '.DS_Store']
     groups = [
         # Whole words only: ordinary prose ("the next step", "trust") must not
-        # demand another ecosystem's outputs.
-        (r'\b(?:node|npm|pnpm|yarn|javascript|typescript|vite|react|svelte|next\.?js|package\.json)\b',
+        # demand another ecosystem's outputs.  `node` and `javascript` are also ordinary words (a linked-list
+        # node, "no JavaScript needed"), so they count only when the plan names no other ecosystem: a Rust plan
+        # that mentions a node was asked for node_modules/ and the whole sectioned plan was thrown away.
+        (r'\b(?:npm|pnpm|yarn|typescript|vite|react|svelte|next\.?js|node\.?js|package\.json)\b',
+         ['node_modules/probe', 'dist/probe', 'build/probe']),
+        (r'\b(?:node|javascript)\b' if not re.search(OTHER_ECOSYSTEM, plan, re.I) else r'(?!x)x',
          ['node_modules/probe', 'dist/probe', 'build/probe']),
         (r'\bsvelte(?:kit)?\b', ['.svelte-kit/probe']),
         (r'\bnext\.?js\b|"next"\s*:', ['.next/probe', 'out/probe']),

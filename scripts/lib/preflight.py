@@ -40,8 +40,17 @@ def prerequisites(commands):
             return
         if name in BUILTINS:
             return
+        if name in ('command', 'which'):
+            args = [w for w in words[1:] if not w.startswith('-')]
+            if not args or '/' in args[0]:
+                raise ValueError('Unrecognized verification executable: ' + name)
+            names.add(args[0])
+            return
         if name not in PROBES:
-            raise ValueError('Unrecognized verification executable: ' + name)
+            if '/' in name or not re.fullmatch(r'[A-Za-z0-9_.+-]+', name):
+                raise ValueError('Unrecognized verification executable: ' + name)
+            names.add(name)  # Unlisted tool: presence check only, never executed.
+            return
         if name in ('bash', 'sh') and any(arg == '-c' or arg.startswith('-') and 'c' in arg for arg in words[1:]):
             raise ValueError('Embedded shell program needs model preflight')
         names.add(name)
@@ -107,6 +116,8 @@ def probe(name):
     executable = shutil.which(name)
     if not executable:
         raise ValueError('Missing runtime: ' + name)
+    if name not in PROBES:
+        return '%s found at %s' % (name, executable)
     from process_tree import start_check, wait_check, finish_check
     import tempfile
     with tempfile.TemporaryFile() as output:

@@ -3610,6 +3610,15 @@ import json, sys
 rows = [{'id': 'PF-RUNTIME', 'required': True, 'status': 'N/A', 'evidence': 'The change plan names no verification commands, so there is no runtime to probe.'}]
 json.dump({'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report', 'narrative': 'No verification commands to probe.', 'rows': rows}, open(sys.argv[1], 'w'), indent=2)
 PY
+    else
+        # Hosted toolchain install (gated inside the helper by UNCLE_HOSTED=1 and WORKFLOW_TOOLCHAIN_INSTALL!=0). Whatever the outcome
+        # (success, nonzero exit, timeout, missing sudo/apt) the run continues, and preflight below judges actual PATH availability, so a
+        # tool that installed despite a failed batch is not reported as a Missing runtime.
+        python3 -B "$ROOT/scripts/lib/toolchain_install.py" "$commands" "$STATE_DIR/toolchain-install.json" \
+            > "$STATE_DIR/toolchain-install.log" 2>&1 || echo "Toolchain install: helper exited nonzero; preflight will judge actual availability." >&2
+    fi
+    if [[ ! -s "$commands" ]]; then
+        :
     elif python3 -B "$ROOT/scripts/lib/preflight.py" "$commands" "$report" 2> "$STATE_DIR/preflight.err"; then
         echo "Preflight: runtime checks passed without a model call."
     else

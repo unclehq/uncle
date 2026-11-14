@@ -34,26 +34,33 @@ worktree_merge_commit_all() {
         || { echo "the worktree is not clean after the commit" >&2; return 1; }
 }
 
+# worktree_merge_drop_placeholder_gitignore <branch> <main> — a first build leaves the source checkout with an untracked placeholder
+# .gitignore (uncle's own ignore entries, nothing of the project's). The run's branch carries the real one, so the placeholder is
+# removed: git will not merge over an untracked file, and after a PR it would block pulling the merged .gitignore and leave the
+# source checkout dirty. Only that exact case is touched: untracked, absent from <main>'s HEAD, present on <branch>, and holding
+# nothing but uncle's managed lines. Anything the project wrote itself stays.
+worktree_merge_drop_placeholder_gitignore() {
+    local branch="$1" main="$2"
+    [[ -f "$main/.gitignore" ]] || return 0
+    [[ -z "$(git -C "$main" ls-files -- .gitignore)" ]] || return 0
+    git -C "$main" cat-file -e "$branch:.gitignore" 2>/dev/null || return 0
+    ! git -C "$main" cat-file -e "HEAD:.gitignore" 2>/dev/null || return 0
+    python3 -B - "$WORKTREE_MERGE_LIB_DIR" "$main/.gitignore" <<'PY' 2>/dev/null || return 0
+import sys
+sys.path.insert(0, sys.argv[1])
+from uncle_gitignore import strip_managed
+sys.exit(0 if not strip_managed(open(sys.argv[2], encoding='utf-8').read()).strip() else 1)
+PY
+    rm -f "$main/.gitignore"
+}
+
 # worktree_merge_into_source <branch> <main> — merge <branch> into the branch checked out in <main>. A merge git refuses is aborted, so
 # <main> is left as it was. Prints why on failure.
 worktree_merge_into_source() {
     local branch="$1" main="$2" srcbranch
     srcbranch="$(git -C "$main" branch --show-current 2>/dev/null)"
     [[ -n "$srcbranch" ]] || { echo "the source checkout $main is not on a named branch" >&2; return 1; }
-    # A first build leaves the source checkout with an untracked placeholder .gitignore (uncle's own ignore entries, nothing of the
-    # project's). git will not merge over an untracked file, and the run's .gitignore is the one the project should have.
-    if [[ -f "$main/.gitignore" ]] \
-       && [[ -z "$(git -C "$main" ls-files -- .gitignore)" ]] \
-       && git -C "$main" cat-file -e "$branch:.gitignore" 2>/dev/null \
-       && ! git -C "$main" cat-file -e "HEAD:.gitignore" 2>/dev/null \
-       && python3 -B - "$WORKTREE_MERGE_LIB_DIR" "$main/.gitignore" <<'PY' 2>/dev/null; then
-import sys
-sys.path.insert(0, sys.argv[1])
-from uncle_gitignore import strip_managed
-sys.exit(0 if not strip_managed(open(sys.argv[2], encoding='utf-8').read()).strip() else 1)
-PY
-        rm -f "$main/.gitignore"
-    fi
+    worktree_merge_drop_placeholder_gitignore "$branch" "$main"
     # The run's own brief is an input the run carries in its branch. worktree_auto moves it out of the source checkout when the worktree
     # is made, but a source checkout left by an earlier run (or one that wrote it afterwards) can still hold a changed or stray copy,
     # which git would refuse to merge over. It is the run's file, so the source copy is put back to HEAD (or removed if untracked).

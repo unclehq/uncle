@@ -171,6 +171,10 @@ change_pr_complete() {
                 # worktree_merge_remove still refuses anything dirty outside .uncle/.
                 local pr_main
                 pr_main="$(git worktree list --porcelain | head -n 1)"; pr_main="${pr_main#worktree }"
+                # The PR holds the run's .gitignore; the source checkout must not keep an untracked placeholder of uncle's own.
+                if change_pr_in_worktree; then
+                    worktree_merge_drop_placeholder_gitignore "$(git branch --show-current 2>/dev/null)" "$pr_main"
+                fi
                 if [[ "${WORKFLOW_LOCAL_MERGE:-1}" == 1 && ! -s "${ORIGIN_FILE:-/nonexistent}" ]] && change_pr_in_worktree \
                    && { worktree_merge_owned || [[ "$(dirname "$(pwd -P)")" == "$(dirname "$pr_main")" \
                         && "$(basename "$(pwd -P)")" == "$(basename "$pr_main")"-* ]]; }; then

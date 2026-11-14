@@ -174,3 +174,6 @@ check-record
 
 # Freeze: no uncle edit to the tracked .gitignore after push/commit.
 gitignore-post-push
+
+# Hand-off with no base commit: seed, truthful completion text, no signer invoked.
+handoff-no-base

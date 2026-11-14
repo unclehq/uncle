@@ -222,5 +222,46 @@ check "scripts/README.md: Branch and worktree policy section" grep -q '^### Bran
 check "scripts/README.md: documents UNCLE_RUN_POLICY=off" grep -q 'UNCLE_RUN_POLICY=off' "$ROOT/scripts/README.md"
 check "home-agent prompt states branch and worktree policy" grep -q '^Branch and worktree policy:' "$ROOT/prompts/home-agent.md"
 
+# ---- run_policy_snapshot_base: commit-free base seed (hand-off only, unborn HEAD, isolated index)
+seedrepo() {  # seedrepo name -> unborn repo with a source file, pre-staged .uncle files and an untracked one
+    local d="$TMP/$1"; mkdir -p "$d/.uncle/docs"; (cd "$d" && g init -q && echo s > src.txt && echo p > .uncle/docs/PLAN.md \
+        && echo st > .uncle/state && g add src.txt .uncle/docs/PLAN.md -f && echo u > untracked.txt)
+    echo "$d"
+}
+snap() { local d="$1"; (cd "$d" && g ls-files -s | sha256sum 2>/dev/null || g ls-files -s | shasum -a 256; cat src.txt untracked.txt .uncle/docs/PLAN.md | shasum -a 256; shasum -a 256 .git/index); }
+seed() { local d="$1"; shift; (cd "$d" && env "$@" bash -c 'source "$1"; run_policy_snapshot_base; echo "rc=$?"' _ "$ROOT/scripts/lib/run-policy.sh") 2>&1; }
+d="$(seedrepo seed1)"; before="$(snap "$d")"
+out="$(seed "$d" UNCLE_PUBLISH_MODE=handoff)"
+check "seed returns 0 in hand-off mode" grep -q 'rc=0' <<<"$out"
+check "seed: HEAD stays unborn" bash -c '! git -C "$1" rev-parse -q --verify HEAD >/dev/null' _ "$d"
+check "seed: private ref holds a base commit" git -C "$d" rev-parse -q --verify refs/uncle/handoff-base
+tree="$(git -C "$d" ls-tree -r --name-only refs/uncle/handoff-base 2>/dev/null)"
+check "seed tree contains source file" grep -qx src.txt <<<"$tree"
+check "seed tree contains untracked file" grep -qx untracked.txt <<<"$tree"
+check "seed tree has no .uncle path (pre-staged or untracked)" bash -c '! grep -q "^\.uncle" <<<"$1"' _ "$tree"
+check "seed leaves real index and work tree unchanged" test "$before" = "$(snap "$d")"
+check "seed names the commit sha on stderr" grep -Eq '[0-9a-f]{7,40}' <<<"$out"
+check "seed leaves no temp index" bash -c '! ls "$1"/.git | grep -qi "uncle.*index\|tmp.*index"' _ "$d"
+d="$(seedrepo seed2)"; before="$(snap "$d")"
+seed "$d" >/dev/null
+check "no seed without hand-off mode" bash -c '! git -C "$1" rev-parse -q --verify refs/uncle/handoff-base >/dev/null' _ "$d"
+check "no seed without hand-off: index/worktree unchanged" test "$before" = "$(snap "$d")"
+d="$(newrepo seed3)"; h="$(git -C "$d" rev-parse HEAD)"
+seed "$d" UNCLE_PUBLISH_MODE=handoff >/dev/null
+check "no seed with existing HEAD (HEAD unchanged)" test "$h" = "$(git -C "$d" rev-parse HEAD)"
+# failure injected after temp index populated: commit-tree shim fails
+d="$(seedrepo seed4)"; before="$(snap "$d")"; mkdir -p "$TMP/shim"
+real_git="$(command -v git)"
+cat > "$TMP/shim/git" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do [[ "\$a" == commit-tree || "\$a" == update-ref ]] && { echo "injected failure" >&2; exit 1; }; done
+exec "$real_git" "\$@"
+SH
+chmod +x "$TMP/shim/git"
+out="$(seed "$d" UNCLE_PUBLISH_MODE=handoff PATH="$TMP/shim:$PATH")"
+check "seed failure: returns 0 and warns" bash -c 'grep -q "rc=0" <<<"$1" && grep -qi "warn" <<<"$1"' _ "$out"
+check "seed failure: HEAD still unborn" bash -c '! git -C "$1" rev-parse -q --verify HEAD >/dev/null' _ "$d"
+check "seed failure: index/worktree identical" test "$before" = "$(snap "$d")"
+
 echo "# $n checks, $fails failed"
 test "$fails" -eq 0

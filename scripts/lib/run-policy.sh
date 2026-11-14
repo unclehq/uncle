@@ -155,12 +155,67 @@ run_policy_app_preflight() {
     return 0
 }
 
+# Commit-free base snapshot (hand-off only). Builds a tree in an isolated
+# temporary index from the work tree (tracked + untracked, never `.uncle/`),
+# prints the tree id on stdout and, when $1 is given, writes a
+# "<blob-sha><TAB><path>" inventory there. Creates no commit or ref and never
+# touches the real index, work tree or HEAD. Returns 1 on any failure.
+run_policy_seed_base() {
+    local inv="${1:-}" tmp idx tree gd rc=0 p
+
+    [[ "${UNCLE_PUBLISH_MODE:-}" == "handoff" ]] || return 0
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+    gd="$(git rev-parse --git-dir 2>/dev/null)" || return 1
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/run-policy-seed.XXXXXX")" || return 1
+    idx="$tmp/index"
+    (
+        # Subshell: GIT_INDEX_FILE must not leak into the caller.
+        export GIT_INDEX_FILE="$idx"
+        git ls-files -z --cached --others --exclude-standard -- . ':(exclude).uncle' ':(exclude).uncle/**' \
+            | while IFS= read -r -d '' p; do
+                case "$p" in .uncle|.uncle/*) continue ;; esac
+                [[ -e "$p" || -L "$p" ]] && printf '%s\0' "$p"
+            done > "$tmp/paths" \
+        && git update-index --add -z --stdin < "$tmp/paths" \
+        && tree="$(git write-tree)" \
+        && [[ -n "$tree" ]] \
+        && ! git ls-tree -r --name-only "$tree" | grep -qE '^\.uncle(/|$)' \
+        && { [[ -z "$inv" ]] || git ls-tree -r "$tree" | sed -E 's/^[0-7]+ [a-z]+ ([0-9a-f]+)\t/\1\t/' > "$inv"; } \
+        && printf '%s\n' "$tree"
+    ) > "$tmp/out" 2>/dev/null || rc=1
+    [[ "$rc" == 0 ]] && cat "$tmp/out"
+    rm -rf "$tmp"
+    [[ "$rc" == 0 ]]
+}
+
+# Hand-off base evidence: snapshot tree (isolated index) plus an unsigned
+# evidence commit under the private ref refs/uncle/handoff-base. HEAD, branches,
+# the real index and the work tree are never touched; nothing is pushed.
+# Failure warns and returns 0 (HEAD stays unborn).
+run_policy_snapshot_base() {
+    local tree commit
+    [[ "${UNCLE_PUBLISH_MODE:-}" == "handoff" ]] || return 0
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+    git rev-parse --verify --quiet HEAD >/dev/null 2>&1 && return 0
+    if tree="$(run_policy_seed_base)" && [[ -n "$tree" ]] \
+       && commit="$(git -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=Uncle -c user.email=uncle@localhost \
+            commit-tree --no-gpg-sign -m "uncle hand-off base snapshot" "$tree" </dev/null)" && [[ -n "$commit" ]] \
+       && git update-ref refs/uncle/handoff-base "$commit"; then
+        export UNCLE_HANDOFF_BASE_TREE="$tree" UNCLE_HANDOFF_BASE_COMMIT="$commit"
+        echo "Run policy: hand-off base snapshot $commit (tree $tree); HEAD left unborn." >&2
+    else
+        echo "Run policy: warning: could not capture a hand-off base snapshot; continuing without one." >&2
+    fi
+    return 0
+}
+
 run_policy_change_branch() {
     local cur base name n=2 dir
 
     run_policy_off && return 0
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
        || ! git rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+        run_policy_snapshot_base
         echo "Run policy: no git history to branch from; continuing without a run branch." >&2
         return 0
     fi

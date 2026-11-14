@@ -213,7 +213,16 @@ final_audit_route_verdict() {
             if [[ "${WORKFLOW_NOT_READY_GATE:-0}" == "1" && "$AUDIT_GATE" == "1" ]]; then
                 set_state WAIT_AUDIT_OVERRIDE
             else
-                echo "Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in the PR and attestation)."
+                local _nr_root="${PROJECT_ROOT:-.}" _nr_named=""
+                [[ -s "$_nr_root/.uncle/handoff/handoff.json" ]] && _nr_named=" the hand-off record (.uncle/handoff/handoff.json)"
+                if [[ -s "$_nr_root/.uncle/attestation.json" ]]; then
+                    _nr_named="${_nr_named:+$_nr_named and}${_nr_named:+ }the attestation (.uncle/attestation.json)"
+                fi
+                if [[ -n "$_nr_named" ]]; then
+                    echo "Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in${_nr_named})."
+                else
+                    echo "Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in .uncle/docs/FINAL_AUDIT.md)."
+                fi
                 set_state COMPLETE
             fi
             ;;

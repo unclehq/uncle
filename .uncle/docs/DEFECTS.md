@@ -1,15 +1,8 @@
 # Defects
 
-## None. Setup needed: provide a disposable Debian host or container with OCaml absent and passwordless sudo, then rerun MC-200.
+## Retained artifacts from an earlier run are named as holding current findings (audit-verdict.sh:216-222); plus spacing typo 'inthe' in the attestation-only message (line 219-222).
 
-- **Status:** BLOCKED-SETUP
-- **Evidence:** `uname -s` printed Darwin. `command -v docker` printed nothing. `docker info` failed and the shell printed 'nodocker'.
-- **Expected result:** Installation completes without requesting credentials or interactive confirmation; sudo and package installation remain non-interactive. If the required sandbox is unavailable, record BLOCKED-SETUP rather than passing this observation.
-- **Actual result:** The sandbox is unavailable. The host is Darwin (macOS), not Debian. Docker is not installed and no container runtime responded. The observation was not performed.
-
-## None. Setup action needed: provide a disposable Debian/Ubuntu sandbox (VM or container) with apt-get, passwordless sudo and OCaml absent, then rerun MC-300.
-
-- **Status:** BLOCKED-SETUP
-- **Evidence:** uname -s printed Darwin. `which` reported apt-get not found, ocaml not found and docker not found. Only /usr/bin/sudo exists.
-- **Expected result:** The installer installs the mapped ocaml package without a password or interactive confirmation, records the outcome, and finishes within the 300-second deadline.
-- **Actual result:** Not performed. The host is Darwin (macOS) with no apt-get, no ocaml, and no docker. A Debian sandbox with apt-get and passwordless sudo is unavailable.
+- **Status:** FAIL
+- **Evidence:** Function at scripts/lib/audit-verdict.sh:216-225 uses only `[[ -s file ]]` for handoff.json and attestation.json; no run_id/mtime comparison. Scenario 4 output: 'Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in the hand-off record (.uncle/handoff/handoff.json) and the attestation (.uncle/attestation.json)).' Scenario 2 output contains 'inthe'. Not covered by driver green-check as a live exercise of this function.
+- **Expected result:** Messages name only artifacts confirmed written for the current run; none confirmed -> point to .uncle/docs/FINAL_AUDIT.md; hand-off completion does not claim findings are in a published PR; retained artifacts alone do not justify naming them.
+- **Actual result:** (1) none: 'findings are in .uncle/docs/FINAL_AUDIT.md' - OK. (2) attestation only: 'findings are inthe attestation (.uncle/attestation.json)' - names correct artifact but has a missing-space typo ('inthe'). (3) both: names hand-off record and attestation, no PR-publication claim - OK. (4) retained/stale: message still names the hand-off record and attestation as holding findings, because the function only tests file existence/non-emptiness (-s) and has no run-provenance check; expected pointer to .uncle/docs/FINAL_AUDIT.md. All scenarios ended in STATE=COMPLETE.

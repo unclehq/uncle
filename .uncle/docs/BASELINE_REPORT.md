@@ -1,75 +1,70 @@
-# Baseline Report — Issue 275
+# Baseline report
 
-Omitted sections: Reproduction result (not run; the issue's evidence is a hosted run, and the preflight refusal is reproducible by reading `preflight.py`); Areas explicitly outside the change (folded into section 12)
+Omitted sections: Reproduction (done by reading code and the issue log, not run); Performance (none)
 
 ## 1. Change-request summary
-See CHANGE_REQUEST.md. Hosted builds (`UNCLE_HOSTED=1`) never install a missing language toolchain; `preflight.py` refuses `command -v X` and non-listed toolchains; prompts treat a missing compiler as a fact to work around.
+Issue 276 (CHANGE_REQUEST.md). An unattended hand-off build (`UNCLE_PUBLISH_MODE=handoff`, `UNATTENDED=1`) whose work tree has no commit publishes nothing: no `.uncle/attestation.json`, no `handoff.json`, no audit verdict/findings, no `draft` flag. The completion text also claims findings are in the PR.
 
 ## 2. Repository architecture
-Bash driver `scripts/change-workflow.sh` (state machine; states incl. PREFLIGHT, MODULE_INTERFACES, IMPLEMENT) sources `scripts/lib/*.sh` and shells to Python helpers in `scripts/lib/`. Prompts live in `prompts/` and `prompts/change/`. Hosted switch: `scripts/lib/hosted.py:is_hosted` and `scripts/lib/stage-config.sh:47 uncle_is_hosted` (both require exactly `UNCLE_HOSTED=1`). Tests: `scripts/tests/*-test.py|sh`, default tier listed in `scripts/tests/critical-suites.txt`.
+Bash drivers (`scripts/change-workflow.sh`) source libs in `scripts/lib/`. PR/hand-off engine is an embedded Python program in `scripts/lib/change-pr.sh` (`change_pr_engine <action>`), plus `scripts/lib/handoff_export.py`. Tests are `scripts/tests/*-test.sh|py`, run by `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (default tier = `scripts/tests/critical-suites.txt`).
 
 ## 3. Relevant code paths
-- `scripts/lib/preflight.py:12-19` PROBES/BUILTINS; `:42-44` raises `Unrecognized verification executable`; `:105-120` `probe()` raises `Missing runtime: <name>` when `shutil.which` fails; `:123` `run()`; `:143-153` CLI exits 2 with `Deterministic preflight needs diagnosis`.
-- `scripts/change-workflow.sh:3599-3626` `change_preflight_run` (writes PF-RUNTIME row; failure => BLOCKED-SETUP row, non-blocking); `:4430-4449` PREFLIGHT state runs it in the background beside implementation unless `WORKFLOW_PREFLIGHT_BLOCKING=1`; `:4189` `install_warm_start`.
-- `scripts/lib/install_warm.py` / `install-warm.sh`: warms npm and Playwright caches only.
-- Prompts: `prompts/change/baseline.md:155-161` (install guidance for npm only), `prompts/change/change-plan.md`, `prompts/change/implement-change.md`, `prompts/implement.md`.
+- `scripts/change-workflow.sh:44-48` run policy call; `:3997` `change_pr_engine start`.
+- `scripts/lib/run-policy.sh:158-166` `run_policy_change_branch`: unborn HEAD -> prints "no git history to branch from" and returns 0.
+- `scripts/change-workflow.sh:5269-5284` unattended completion: `git rev-parse --verify HEAD` else prints "Unattended: no base commit, so no PR was made." and skips `change_pr_complete`.
+- `scripts/lib/change-pr.sh:198-214` `change_pr_complete_route` hand-off branch -> `attest-handoff` (`:815`) then `handoff_export.py`.
+- `scripts/lib/change-pr.sh:903-911` `head()`/`branch()` need a commit; audit action creates the journal with `original_head=head()` (~`:2064`); `start_build` returns on unborn HEAD or no remote (`:1550-1557`).
+- `scripts/lib/handoff_export.py:83-123` writes `.uncle/handoff/handoff.json` (`draft = not verdict.startswith('READY')`, `base_commit`, attestation, verdict); `changes()` tolerates empty base.
+- `scripts/lib/audit-verdict.sh:216` unconditional "findings are in the PR and attestation".
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Verification line `ocaml -version`, `ghc`, `dune`, `java`, ... | preflight exits 2: `Unrecognized verification executable: <name>` | preflight.py:42-44 | Replace for unknown executables |
-| B-2 | Line `command -v ocaml` / `which ocaml` | same refusal on `command`/`which` | preflight.py:12-19 | Replace |
-| B-3 | Line `node --version` etc. for a PROBES name that is installed | PASS row, `<name> --version exited 0` | preflight.py:105-120 | Yes |
-| B-4 | A PROBES name not installed | `Missing runtime: <name>` exit 2 | preflight.py:109 | Yes |
-| B-5 | Shell expansion / embedded `bash -c` / PATH assignment in a line | refused as needs model preflight | preflight.py:30-33,40-41 | Yes |
-| B-6 | Hosted run, toolchain missing | nothing installs it; prompts allow hand-tracing | issue 275 | No (change) |
-| B-7 | Non-hosted run | no installs by driver | install_warm.py | Yes |
-| B-8 | Preflight failure | PF-RUNTIME BLOCKED-SETUP row, run continues | change-workflow.sh:3616-3622 | Yes |
+| B-1 | Hand-off/unattended build, HEAD exists, audit NOT_READY | handoff.json with attestation, verdict, `draft:true` | handoff-export-test.py; change-pr.sh:207 | Yes |
+| B-2 | Any run, unborn HEAD, non-hand-off | run policy skips branch with message | run-policy.sh:164 | Yes |
+| B-3 | Unattended, unborn HEAD | no PR/hand-off, prints "no base commit" | change-workflow.sh:5281 | Modify only for hand-off mode |
+| B-4 | NOT_READY final audit, gate off | prints "findings are in the PR and attestation", state COMPLETE | audit-verdict.sh:216 | Modify wording only when untrue |
+| B-5 | Non-hand-off unattended, HEAD exists | `change_pr_complete` publishes (draft if not READY) | unattended-test.sh:366-380 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Preflight never executes plan commands, only fixed `--version`/no-op probes | PROBES table, tokenizer | none direct found | Medium |
-| I-2 | Preflight never evaluates shell expansions | preflight.py:30-33 | none direct found | Medium |
-| I-3 | Hosted only when `UNCLE_HOSTED` is exactly `1` | hosted.py, stage-config.sh:47 | hosted-mode-test.py Predicate | High |
-| I-4 | Verification commands do not change the repo; baseline runs twice | baseline prompt rules | none | Low |
+| I-1 | A NOT_READY verdict is never published as a ready PR | handoff_export.py:100 draft flag; PR draft path | handoff-export-test.py | High |
+| I-2 | Run never works on main/preexisting branch when history exists | run-policy.sh | run-policy-test.sh | High |
+| I-3 | Workflow never commits the project without consent in non-hand-off mode | CLAUDE.md/driver design | various | Medium |
 
-## 6. Interface contracts
-`python3 preflight.py <commands-file> <report-json>`; exit 0 and writes acceptance-report JSON with row PF-RUNTIME; exit 2 with stderr message on failure. Report schema `uncle.artifact/v1` kind `acceptance-report`.
+## 6. Contracts
+`handoff.json` schema `SCHEMA` in handoff_export.py: fields base_commit, draft, audit_verdict, attestation, changes, tree. `base_commit` empty means empty tree. Host script is outside this repo.
 
 ## 7. Existing automated-test coverage
-No test file imports `preflight.py` directly (grep of `scripts/tests` shows only `preflight_readonly`, a different module, and stage-level suites). `hosted-mode-test.py` covers the hosted predicate and model-setting fallback. Python suites run through `scripts/run-python-tests.sh`, shell suites through `scripts/run-shell-tests.sh`; they use separate temp dirs, so they run as one parallel group.
+`unattended-test.sh` (stubs `change_pr_complete`, harness extracts driver functions), `handoff-export-test.py` (real git fixtures), `run-policy-test.sh`, `pr-auto-publish-test.sh`, `pr-publish-reason-test.sh`. No test covers unborn HEAD in hand-off mode. The shell and Python runners use separate temp dirs and share no ports, so they run as one parallel group.
 
 ## 9. Baseline test results
-Commands come from the repository runners (`scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh`) per the stage contract. Not executed here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout.
+Commands come from `scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh` (named in the task's runner guidance). Not run here; the driver baseline is authoritative. Some Python suites are documented as failing on a clean checkout.
 
-## 10. Existing failures, warnings, flaky behavior
-None documented in-repo for this surface. UNRESOLVED until the driver baseline lands.
+## 10. Existing failures
+Unknown until driver baseline; see `.uncle/workflow/green-check.baseline.tsv`.
 
 ## 12. Likely change surface
-`scripts/lib/preflight.py`; a new hosted toolchain installer helper and its wiring at the PREFLIGHT state in `change-workflow.sh`; prompt text in `prompts/change/baseline.md`, `change-plan.md`, `implement-change.md` (and `prompts/implement.md` for the greenfield driver); new tests. Outside the change: `install_warm.py` cache warming, supervisor start-up in headless builds (#274), test-file recognition (#262), non-hosted behavior.
+`scripts/lib/run-policy.sh`, `scripts/change-workflow.sh` (unattended completion text), `scripts/lib/audit-verdict.sh` (message), new test, `scripts/tests/critical-suites.txt`.
 
 ## 13. Regression-sensitive components
-`preflight.py` tokenizer (I-1, I-2); the PREFLIGHT state ordering (background probe vs. implementation); `uncle_is_hosted` predicate; prompt files measured by size budgets and prompt tests (e.g. `reviewer-prompt-kind-test.py`).
+run-policy branch creation; unattended completion for non-hand-off runs; PR engine journal binding to `original_head`.
+
+## 14. Outside the change
+Host build script (release owner, not in repo); `handoff_export.py` schema; PR publication for repos with history; the PR text quoting `uncle verify`.
 
 ## 15. Unknowns and assumptions
-- Whether the host has passwordless sudo and a package manager: assumed only on hosted machines; installer must detect, not assume.
-- Exact package names per toolchain (e.g. `ocaml`, `dune`, `ghc`, `cabal-install`, `default-jdk`) are chosen in the plan.
-- The hosted end-to-end build in the issue's request item 4 cannot run in this environment (needs a model and a Debian sandbox).
+- A1: `scripts/run-shell-tests.sh -- <name>` selects one suite (same form as the Python runner); implementer confirms with `--help`.
+- A2: With a seeded base, the audit action creates the PR journal even with no remote (journal creation at change-pr.sh ~2064 is not gated on remote); to be confirmed by the new test.
 
-## 16. Initial risk assessment
-Medium. Installing system packages is outward-facing on the host; it must be hosted-only, bounded, logged and never fatal to the run. Widening the preflight allowlist must not weaken I-1/I-2.
+## 16. Initial risk
+Medium: a synthetic base commit differs from the host's real base; handoff.json `base_commit` will then name the seed commit, which the host must treat as local-only (release-owner item).
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-```
-
-## Parallel verification groups
-
-```text
-1 2
 ```
 

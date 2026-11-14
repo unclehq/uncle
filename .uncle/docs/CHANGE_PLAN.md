@@ -1,147 +1,125 @@
-# Change Plan — Issue 275
+# Change plan: issue 276
 
-Seeded from [unclehq/uncle#275](https://github.com/unclehq/uncle/issues/275).
+Omitted sections: schema/persistence (none), migration (none), concurrency (none), feature flag (gated by existing UNCLE_PUBLISH_MODE=handoff)
 
-Issue 275
+Seeded from [unclehq/uncle#276](https://github.com/unclehq/uncle/issues/276).
 
-Omitted sections: Schema/persistence (none); State-transition (no new state); Concurrency (installer runs serially before the background probe); Observability beyond report narrative (none)
+Issue 276
 
 ## 1. Selected technical approach
 
-1. `preflight.py`: add `command`/`which` handling (probe the word after `-v`/directly), and make unlisted executables a presence check via `shutil.which` that raises `Missing runtime: NAME` or records `NAME found at PATH` without executing.
-2. New `scripts/lib/toolchain_install.py`: given the commands file, parse each command line independently (reusing the preflight tokenizer); record and skip malformed/unparseable lines with a reason, then continue discovering missing executables from the valid lines. Map missing executables to apt packages from a fixed table (unmapped tools are skipped with a recorded reason), and when `is_hosted()` install via `sudo -n apt-get install -y --no-install-recommends` (argv arrays, timeout, never fatal). Writes a JSON record to `$STATE_DIR/toolchain-install.json` and prints a summary.
-3. `change-workflow.sh`: at PREFLIGHT, in hosted runs, call the installer synchronously (before the background probe and implementation), then run preflight so its result reflects the installed tools. The record text is appended to the PF-RUNTIME narrative via an env/file read in `change_preflight_run`.
-4. Prompts: add a short hosted-toolchain paragraph to `prompts/change/baseline.md`, `change-plan.md`, `implement-change.md`, and `prompts/implement.md`.
+D-1 (revised, AR-001/AR-008): no project commit is created, no branch is created, HEAD is not created or advanced, and the user's real index and working tree are never read-modified or written. Build, verification, approval and completion neither create nor require a project commit or a clean tree, in every mode. Add `run_policy_snapshot_base` in `scripts/lib/run-policy.sh`, called from the existing no-history branch of `run_policy_change_branch` (line ~164) only when `UNCLE_PUBLISH_MODE=handoff` and HEAD is unborn; all other modes behave exactly as today. It captures the starting tree as a file-hash and path inventory that includes untracked files and excludes all `.uncle/` paths, built in an isolated temporary index (`GIT_INDEX_FILE` pointing at a temp file, removed on exit, starting empty so pre-staged `.uncle/` entries in the user's index cannot leak in): `git add -A -- . ':(exclude).uncle'` against the temp index, then `git write-tree`. The tree is verified to contain no `.uncle/` path (`git ls-tree -r --name-only`); if any appears the snapshot is abandoned. The resulting tree id and inventory are exported/recorded as hand-off base evidence (`UNCLE_HANDOFF_BASE_TREE`). Where the hand-off exporter requires a commit-shaped base id, an unsigned internal evidence object may be derived from that tree with `git -c commit.gpgsign=false -c user.name=Uncle -c user.email=uncle@localhost commit-tree --no-gpg-sign`, held only under the private ref `refs/uncle/handoff-base`; it is not on any branch, is not a project commit, and is never pushed. On any failure (including after the temp-index add) it removes the temp index, warns, leaves the real index and working tree byte-identical to their pre-run state and HEAD unborn, and returns 0 as today. If consuming this base requires edits to `change-pr.sh` beyond reading the exported value, stop and amend the plan.
+D-2: `scripts/lib/audit-verdict.sh:216` completion text names only artifacts confirmed written for this run (e.g. the PR URL only if a PR was published, `handoff.json` only if the hand-off record exists on disk, the attestation only if `.uncle/attestation.json` exists); HEAD existence is not a condition. When no such artifact was confirmed, the text points to `.uncle/docs/FINAL_AUDIT.md`.
+D-3: `scripts/change-workflow.sh:5280-5283` no-HEAD message: when `UNCLE_PUBLISH_MODE=handoff` and no base evidence was captured, say no hand-off record was written because there is no base. Non-hand-off text unchanged.
 
-## 2. Alternatives considered
-| Alternative | Rejected because |
-|---|---|
-| Only prompt changes | Agent lacks reliable sudo discipline; issue shows it won't install |
-| Let the implementer run apt itself | Unlogged, unbounded, and non-deterministic; kept as fallback in prompt only |
-| Install via opam/ghcup/rustup | Slow, network-heavy; apt took 5s |
+## 2. Alternatives
+(a) Write hand-off with empty base when no HEAD: needs engine changes (`head()`, journal, attest) throughout change-pr.sh; high risk. (b) Fix only the host: outside repo.
 
 ## 3. Why preferred
-Deterministic, logged, hosted-gated, no model call, and fixes preflight so the signal is correct.
+Smallest surface; reuses the fully tested hand-off path; no engine or schema edits.
 
-## 4. Decisions
+## 4. Components to modify
+See change-impact table.
 
-| ID | Decision | Reason |
-|---|---|---|
-| D-1 | Package map (exactly one package per executable): ocaml, ocamlc, ocamlopt -> `ocaml`; ocamlfind -> `ocaml-findlib`; dune -> `ocaml-dune`; ghc -> `ghc`; cabal -> `cabal-install`; stack -> `haskell-stack`; java, javac -> `default-jdk-headless`; dotnet -> `dotnet-sdk-8.0`; opam -> `opam`. Packages are deduplicated, in first-seen order, before the install argv is built. | Debian names; a single unambiguous package per executable lets installer code and argv assertions agree; unmapped tools are skipped, not guessed |
-| D-5 | The four prompt updates (baseline.md, change-plan.md, implement-change.md, implement.md), all D-1 package mappings, and the preflight narrative record are required deliverables and may not be cut without an approved scope revision. This supersedes the cut list in section 21: only the order of work may change under time pressure, never the scope. The preflight fix and the hosted gate also remain uncuttable. | Keeps implementation scope identical to BH-5/BH-8 and the acceptance checks (AR-001). |
-| D-2 | Gate: `UNCLE_HOSTED=1` and `WORKFLOW_TOOLCHAIN_INSTALL!=0` | Matches request item 1 and rollback |
-| D-3 | Install all deduplicated mapped packages in ONE `sudo -n apt-get install -y --no-install-recommends` invocation, with no retry. The whole installer shares a single 300-second deadline (not per package). If the deadline expires, no further install is attempted and any unattempted packages are recorded as skipped, then the run continues to preflight. The installer starts apt in its own process group/session (`start_new_session=True`). On timeout it terminates the entire process tree, including privileged descendants (sudo, apt-get, dpkg, maintainer scripts): SIGTERM to the group, a short grace period, then SIGKILL, and it reaps the child. If a direct signal is denied because `sudo -n` ran the group as root, it signals through `sudo -n kill`. Cleanup completes before the record is written and before preflight resumes, so no package mutation runs concurrently with verification. The record states the timeout and the cleanup outcome; if cleanup cannot be confirmed, the record says so and the run continues. A test in toolchain-install-test.py uses a fake `apt-get` that spawns a persistent child, forces the timeout, and asserts that no descendant is alive afterward. `apt-get update` is not run (package lists present on hosted images). | Bounded total hosted delay (matches the 300s cap in the risk table) and minimal. One invocation under one deadline gives installer tests a single oracle for argv, failure and timing. Killing and reaping the whole tree stops privileged descendants from outliving the timeout and mutating the system during verification. |
-| D-4 | `PATH`-only presence check for unlisted tools; no execution | Preserves INV-1/INV-2 |
+## 5. Not to modify
+`change-pr.sh`, `handoff_export.py`, host script, `uncle verify`.
 
-## Restrictions
-| R-ID | source_kind | Source | Requirement IDs | Required property | Mechanism | Rationale | CAP | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST item 1 | BH-5, INV-3 | Install only in hosted builds | `is_hosted()` check in installer | Exact-1 predicate | CAP-HOSTED | CODING |
-| R-2 | DESIGN | spec 10 | INV-4 | No plan text becomes a package name | Fixed map | Avoid injection | CAP-PKGMAP | CODING |
-| R-3 | DESIGN | spec 8 | INV-5, BH-6 | Installer never fatal | Always exit 0, record failure | Run continues | CAP-NONFATAL | CODING |
-| R-4 | REPOSITORY | preflight.py:42-44 | INV-1, INV-2 | Never execute unlisted tools | `shutil.which` only | Observed in `probe()` lines 105-111 | CAP-PRESENCE | CODING |
-| R-5 | PLATFORM | Debian apt, sudo | BH-5 | Non-interactive privilege | `sudo -n`, `-y` | A password prompt would hang | CAP-SUDO | LIVE_VERIFICATION |
+## 6. Data flow / 7. state
 
-Feasibility: `shutil.which` use observed at preflight.py:106; hosted predicate at hosted.py:10; apt/sudo are not available on this macOS machine, so the tests use fakes (CODING) and a real install is LIVE_VERIFICATION (live check LV-1: in a hosted Debian sandbox run `UNCLE_HOSTED=1 python3 scripts/lib/toolchain_install.py <commands> <record>` for a file containing `ocaml -version`; no secrets needed).
-
-## 4a. Components to modify
-See change-impact table. Not modified: `install_warm.py`, supervisor, test-file recognition, `hosted.py`, `stage-config.sh`.
-
-## 6. Data-flow changes
-verification commands file -> installer (hosted) -> record JSON -> preflight narrative; preflight then runs on the updated PATH.
-
-## 8. Interface changes
-New CLI `toolchain_install.py <commands> <record-json>`; exit always 0 unless usage error (2). preflight.py CLI unchanged.
+The seed runs only under UNCLE_PUBLISH_MODE=handoff. In hand-off mode the base is built from an isolated index (inventory includes untracked files); its commit/tree sha becomes `original_head` in the audit-created journal and `handoff.json.base_commit`, with the inventory stored alongside. Outside hand-off mode no commit is created and the starting tree is represented by the file inventory and hashes only. HEAD remains unborn in both cases. No state-machine change.
 
 ## 10. Compatibility
-Non-hosted flow byte-for-byte unchanged apart from preflight accepting more lines (previously a BLOCKED-SETUP).
+Only the hand-off-mode + unborn-HEAD case changes. Hosts must treat the seed commit as local; release owner to clone the real base per the issue (out of scope).
 
 ## 12. Error and recovery
 
-Install failure, timeout, missing sudo/apt: recorded and the run continues. After any install outcome preflight checks actual PATH availability and reports `Missing runtime` only for tools still absent; tools that installed despite a failed batch are not reported. On timeout the whole installer process tree, including privileged descendants, is terminated and reaped before preflight resumes.
+Seed failure -> warning, continue; the real index and work tree are left exactly as they were before the run (the seed uses only a temporary index, which is deleted), so a failed startup never changes the user's staged selections. D-3 message makes the missing record explicit. A rerun on an existing seed sees HEAD and skips seeding.
 
-## 13. Migration
-None.
+## 14. Rollback
+Revert the change; no persisted format changes.
 
-## 14. Rollback plan
-Revert the commit, or set `WORKFLOW_TOOLCHAIN_INSTALL=0`. Installed system packages are not removed (harmless, additive).
+## 16-17. Automated and regression tests
 
-## 15. Containment
-Hosted-only gate plus env kill switch.
+T-1 `scripts/tests/run-policy-test.sh`: cases for seed (hand-off, unborn), no seed without hand-off, no seed with existing HEAD (HEAD unchanged). INV-3 cases: (a) unborn repo with `.uncle/` files (e.g. `.uncle/docs/PLAN.md`, `.uncle/state`) already staged in the user's index plus a normal source file -> `git ls-tree -r --name-only HEAD` contains no `.uncle/` path, contains the source file, and the user's real index is unchanged (same `git ls-files -s` output and index file hash before and after, pre-staged `.uncle/` entries still staged); (b) untracked `.uncle/` -> absent from the seed; (c) failure injected after the temporary index has been populated (e.g. failing `commit-tree`/`update-ref` via PATH shim or env hook) -> warning emitted, function returns 0, HEAD still unborn, real index listing and work-tree file hashes identical to the pre-run snapshot, no temp index file left behind. T-2 new `scripts/tests/handoff-no-base-test.sh` has separate scenarios, each in its own temp repo with no commits, git signing disabled in the fixture, gh/remote absent. T-2a (successful seed): the fixture explicitly arranges a NOT_READY final audit (AC-3 applies only to NOT_READY) and drives the unattended hand-off completion path; assert handoff.json (attestation present, audit_verdict NOT_READY, draft true, base_commit = seed sha) and that `.uncle/attestation.json` exists; D-2 assertions are artifact-based: completion text mentions the hand-off record and attestation only when those files exist and never claims a PR in hand-off mode. T-2c (non-NOT_READY): with a READY audit, assert audit_verdict and draft keep their existing mapping (draft not forced true). T-2b (injected seed failure, e.g. commit forced to fail): HEAD stays absent; assert the D-3 no-hand-off-record message, that no handoff.json is written, that completion text names no unwritten artifact and points to `.uncle/docs/FINAL_AUDIT.md`, and that the exit status equals the pre-change exit status for the same no-HEAD run. Reuse harness style of unattended-test.sh and fixtures of handoff-export-test.py. T-2 is added to `critical-suites.txt` as `handoff-no-base`. Regression: the driver's two default runners; also run explicitly `bash scripts/run-shell-tests.sh -- handoff-no-base` (confirm flag form with `--help`). Tests that must fail before the fix: T-2a handoff.json assertion; T-1 case (a) must also fail against a naive `git add -A -- . ':(exclude).uncle'` plus `git commit` implementation.
 
-## 16. Automated-test strategy
+T-3 (AR-012, inside T-1/T-2 fixtures): under a hostile inherited environment (global/system config with `commit.gpgsign=true`, `tag.gpgsign=true` and `gpg.program` set to a fake signer that records each invocation to a file and exits non-zero), create the fixture repository and run the seed and hand-off paths. Assert the recorder file shows zero invocations and every fixture Git subprocess received both repo-local signing settings and the explicit `-c ...=false` / `--no-gpg-sign` / `--no-sign` flags.
 
-New suites `scripts/tests/preflight-toolchain-test.py` (AC-1..3) and `scripts/tests/toolchain-install-test.py` (AC-4..8), fixture git use none. Fake `sudo`/`apt-get` shell stubs in a temp PATH. The default runner only runs `critical-suites.txt`, so regression coverage uses explicit full-suite selection: run both baseline regression runners (python and shell) with their full-suite option, not the default critical tier. Retain `bash scripts/run-python-tests.sh -- preflight-toolchain` and `bash scripts/run-python-tests.sh -- toolchain-install` as additional targeted verification commands recorded for the driver; do not add the new suites to the critical tier.
+## 18. Manual verification
+None required; optionally run a hand-off build in a commit-less sandbox.
 
-## 17. Regression-test strategy
-
-Cases in preflight-toolchain-test.py pin B-3, B-4, B-5. toolchain-install-test.py also pins: exact deduplicated argv `sudo -n apt-get install -y --no-install-recommends ocaml ocaml-findlib ocaml-dune` for ocaml/ocamlfind/dune; one apt-get call with a timeout record and exit 0 when the fake sleeps past the deadline; a test-only short-deadline override with several missing tools asserting total wall time is bounded and remaining packages are recorded as skipped; a fake apt-get spawning a persistent child (pid file) asserting no descendant is alive after timeout; a partial-success case where preflight reports only the still-absent tool; and a mixed valid/malformed commands file. Full python and shell runners (explicit full-suite selection) must show no new failures.
-
-## 18. Manual-verification strategy
-LV-1 above on a Debian sandbox; plus a full hosted hello-world OCaml build, expected READY with AC rows IMPLEMENTED (BLOCKED-SETUP in this environment: needs a model and sandbox).
+## 19. Observability
+Seed emits one stderr line naming the seed commit sha.
 
 ## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/lib/preflight.py` | command/which probe; presence check for unlisted tools | BH-1..3 | Medium (tokenizer allowlist) | preflight-toolchain-test.py |
-| `scripts/lib/toolchain_install.py` | new installer | BH-5..7 | Low (new, gated) | toolchain-install-test.py |
-| `scripts/change-workflow.sh` | call installer at PREFLIGHT when hosted; narrative append | AC-8 | Medium (large driver) | toolchain-wiring-test.py source assertion; driver suites |
-| `prompts/change/baseline.md`, `prompts/change/change-plan.md`, `prompts/change/implement-change.md`, `prompts/implement.md` | hosted toolchain paragraph | BH-8 | Low (prompt size budgets) | toolchain-wiring-test.py content check; existing prompt suites |
-| `scripts/tests/preflight-toolchain-test.py`, `scripts/tests/toolchain-install-test.py` | new | verification | n/a | self |
+| `scripts/lib/run-policy.sh` | add seed function (isolated temporary index via GIT_INDEX_FILE, write-tree, commit-tree, update-ref; `.uncle/` excluded from the seed tree even if pre-staged; real index and work tree untouched on success and failure) and call | give hand-off a base commit | Medium: runs before branch logic | T-1 (incl. unborn repo with pre-staged `.uncle/` files asserting no `.uncle` paths in the seed tree, index-preservation, and failure-after-staging cases) |
+| `scripts/lib/audit-verdict.sh` | conditional completion message | wording truthful | Low | T-2a, T-2b |
+| `scripts/change-workflow.sh` | hand-off no-HEAD message | truthful output | Low | T-2b |
+| `scripts/tests/run-policy-test.sh` | seed cases | cover AC-1, AC-2 | Low | itself |
+| `scripts/tests/handoff-no-base-test.sh` | new suite | cover AC-3..5 | Low | itself |
+| `scripts/tests/critical-suites.txt` | add suite name | run in default tier | Low | runner |
 
 ## Traceability
+
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| Request 3 | BH-1..3 | INV-1, INV-2 | preflight.py | preflight-toolchain-test.py | none |
-| Request 1 | BH-5..7 | INV-3..5 | toolchain_install.py, change-workflow.sh | toolchain-install-test.py | LV-1 |
-| Request 2 | BH-8 | n/a | prompts | toolchain-install-test.py | review |
-| Request 4 | BH-9 | n/a | all | AC-7 simulated test | live OCaml build (BLOCKED-SETUP) |
+| With UNCLE_PUBLISH_MODE=handoff and unborn HEAD, a base snapshot (tree id plus file-hash/path inventory including untracked files, excluding .uncle/) is captured without creating a project commit, creating HEAD or a branch, changing the index, or invoking a signer. | BH-1 | INV-2, INV-3 | run-policy.sh | T-1 (incl. unborn repo with pre-staged .uncle/ files: seed built in an isolated temporary index, seed tree has no .uncle/ paths, user's index unchanged, failure-after-staging case) | none |
+| AC-2 | BH-5, BH-6 | INV-4 | run-policy.sh | T-1 (incl. failure-after-staging leaves index and working tree unchanged) | none |
+| AC-3 applies to a NOT_READY audit: for an unattended hand-off build that starts commit-less and ends with a NOT_READY audit, handoff.json is written with attestation present, audit_verdict NOT_READY and draft true. Other audit outcomes retain their existing verdict and draft mapping. | BH-2 | INV-1 | run-policy.sh | T-2a | optional |
+| AC-4: Completion text names only artifacts confirmed written for this run (PR, hand-off record, attestation); otherwise it points to .uncle/docs/FINAL_AUDIT.md. HEAD existence alone is not the condition. | BH-3 | - | audit-verdict.sh | T-2a, T-2b | none |
+| AC-5 | BH-4 | - | change-workflow.sh | T-2b | none |
+| AC-6 | all PRESERVE | all EXISTING | all | driver commands | none |
 
-Bug regression test: `preflight-toolchain-test.py::test_command_v_probes_name` fails before the fix (raises Unrecognized executable: command) and passes after.
+## Restrictions
 
-## Implementation sequence
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
+|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST.md fix 1 | AC-1, AC-3 | hand-off carries a commit-free base record; build, verification and completion never create or require a project commit | commit-free snapshot (D-1): isolated temporary index excluding .uncle plus file-hash and path inventory including untracked files; runs only under UNCLE_PUBLISH_MODE=handoff, never modifies the user's index, HEAD stays unborn, no project commit in any mode | user's binding commit-free rule; revisable DESIGN choice within it, seed limited to the user-chosen hand-off publish flow | CAP-git | CODING |
+| R-2 | REPOSITORY | CLAUDE.md signing rules | AC-1 | no signer is invoked by the product path; fixture commits disable signing | D-1 never invokes git commit or any signer and makes no real-project commit, branch, or index change; any evidence object uses `--no-gpg-sign` under a private ref; test fixtures set `commit.gpgsign=false`, `tag.gpgsign=false` repo-locally plus explicit `-c commit.gpgsign=false -c tag.gpgsign=false` and `--no-gpg-sign`/`--no-sign` on every fixture Git subprocess; a negative test runs under inherited `commit.gpgsign=true` with a failing recording fake signer (`gpg.program`) and asserts zero invocations | mandated | CAP-git | CODING |
+| R-3 | USER | issue fix 2 | AC-4 | completion message names only artifacts confirmed written this run | D-2 | direct | CAP-bash | CODING |
 
-1. Preflight probe fix and its test
-   Owns: `scripts/lib/preflight.py`, `scripts/tests/preflight-toolchain-test.py`
-2. Installer helper and its test (reuses the tokenizer from step 1's `prerequisites`; builds on step 1's change to `preflight.py` without editing it). The test includes a mixed valid/malformed commands-file case: malformed lines are recorded and skipped, and missing tools from the valid lines are still discovered and installed.
-   Owns: `scripts/lib/toolchain_install.py`, `scripts/tests/toolchain-install-test.py`
-   Depends on: 1
-3. Driver wiring at PREFLIGHT. After every install outcome (success, nonzero exit, timeout, missing sudo/apt), run preflight against actual tool availability: it reports `Missing runtime` only for tools still absent, so tools that were installed despite a failed or timed-out batch are not forced into BLOCKED-SETUP. toolchain-install-test.py must include a partial-success case (installer fails after one tool becomes available; preflight lists only the remaining absent tool).
-   Owns: `scripts/change-workflow.sh`
-   Depends on: 2
-4. Prompt paragraphs (independent of 1-3)
-   
-   Verification commands: the two baseline commands, each run with explicit full-suite selection (not the default critical-only tier), plus the additional targeted commands `bash scripts/run-python-tests.sh -- preflight-toolchain` and `bash scripts/run-python-tests.sh -- toolchain-install`. Protected paths: the two new test files.
-   Owns: `prompts/change/baseline.md`, `prompts/change/change-plan.md`, `prompts/change/implement-change.md`, `prompts/implement.md`
-5. **Wiring and prompt assertions** — New test `scripts/tests/toolchain-wiring-test.py` asserts the installer call and narrative append in `scripts/change-workflow.sh` and the hosted-toolchain paragraph in the four prompt files; toolchain-install-test.py stays limited to the installer helper. Verification commands additionally include `bash scripts/run-python-tests.sh -- toolchain-wiring`. Protected paths: the three new test files (preflight-toolchain-test.py, toolchain-install-test.py, toolchain-wiring-test.py).
-   Owns: `scripts/tests/toolchain-wiring-test.py`
-   Depends on: 3, 4
+Constraint (AR-008): the implementation must not create a project commit, checkpoint or tag to satisfy any stage; only disposable test fixtures may commit, and then with signing disabled.
+
+Feasibility: run-policy.sh:158-166 and change-pr.sh:2064 inspected; local git and bash only. No live-auth prerequisites.
+
+## 20. Implementation sequence
+
+Steps 1-3 are independent files and may run in parallel.
+
+1. Commit-free base snapshot function in run-policy (D-1 revised; R-1, R-2): runs only under UNCLE_PUBLISH_MODE=handoff; builds the seed tree in an isolated temporary index (write-tree) from a file-hash and path inventory that includes untracked files and excludes `.uncle/` even if pre-staged; the user's real index, worktree and HEAD are left unchanged on success and failure; non-hand-off modes make no commit, add or index change; `.uncle` exclusion is verified on the written tree.
+   Owns: `scripts/lib/run-policy.sh`
+2. Message fixes (D-2 artifact-based completion wording, D-3)
+   Owns: `scripts/lib/audit-verdict.sh`, `scripts/change-workflow.sh`
+3. Tests: seed cases, new suite (two scenarios T-2a/T-2b), critical-suites entry, written from the spec contract. The recording fake-signer helper for the AR-012 negative signing test is inlined in handoff-no-base-test.sh (no separate file) and that script is a protected verification path. Also assert the fixture's HEAD and refs are unchanged by any non-hand-off run.
+   Owns: `scripts/tests/run-policy-test.sh`, `scripts/tests/handoff-no-base-test.sh`, `scripts/tests/critical-suites.txt`
+4. Verification only: run the two default runners plus the explicit suite command and report results. Edits only files already owned by steps 1-3; creates no new files and makes no project commit.
+   Owns: `scripts/lib/run-policy.sh`, `scripts/lib/audit-verdict.sh`, `scripts/change-workflow.sh`, `scripts/tests/run-policy-test.sh`, `scripts/tests/handoff-no-base-test.sh`, `scripts/tests/critical-suites.txt`
+   Depends on: 1, 2, 3
 
 ## 21. Scope cuts under time pressure
 
-The four prompt updates, all D-1 package mappings, the PF-RUNTIME narrative record, the preflight fix and the hosted gate are required deliverables and may not be cut without an approved scope revision. Only the order of work may change under time pressure; if time expires, stop and report unfinished required items rather than silently dropping them.
+D-3 and AC-5 verification remain required unless the user explicitly approves a revised scope. If time expires, cut only optional items first: the optional manual hand-off run in a commit-less sandbox, then extra edge-case variants in T-1 (but keep the T-1 pre-staged regression). Never cut the commit-free snapshot seed behavior (D-1), including its isolated-index and `.uncle` exclusion guarantees, D-2, D-3, or the T-2 assertions that cover AC-3, AC-4 and AC-5 (including the handoff.json assertion).
 
 ## 22. Risks and unresolved questions
-
-| Risk | Mitigation |
-|---|---|
-| Wrong Debian package name | Map limited to well-known names; failure is non-fatal and recorded |
-| Driver size/prompt-budget tests fail on added text | Keep paragraphs to a few lines; run full runners |
-| Installer slows hosted runs | Only runs when something is missing; one grouped apt-get call with a single 300s timeout, no retry |
-| Live end-to-end not verifiable here | LV-1 and the hosted OCaml build are explicit BLOCKED-SETUP checks |
+- Synthetic base sha differs from the host's real base; host must clone the real base (issue item 3, release owner).
+- A2 (journal creation without remote) is verified by T-2; if it fails, stop and amend the plan.
+- Runner flag form for one suite is unconfirmed (A1); fall back to running the new script with `bash` directly.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | The scope cuts in section 21 would drop deliverables that BH-5/BH-8 and section 1 require, so scope and acceptance criteria disagreed. | Added decision D-5 in section 4 making the four prompt updates, all D-1 mappings and the narrative record non-cuttable and superseding the section 21 cut list. |
-| AR-002 | Accepted | D-1 listed ambiguous OCaml mapping and two dune package names; one package per executable is needed so installer code and argv assertions agree. | D-1 now maps ocaml/ocamlc/ocamlopt->ocaml, ocamlfind->ocaml-findlib, dune->ocaml-dune, with deduplication. |
-| AR-003 | Accepted | D-3 said 300s per install while the risk table promised a 300s cap; one shared deadline makes both agree and gives timeout tests one oracle. | D-3 now sets one shared 300-second deadline for all install attempts, with remaining-time per attempt and skipped records after expiry. |
-| AR-004 | Accepted | Plan and spec conflict on partial success; preflight must judge actual availability after any install outcome. | Edit step-3 text to require preflight to report Missing runtime only for tools still absent after any install outcome, plus a partial-success test. |
-| AR-005 | Accepted | The default runner only runs critical suites, so full regression coverage needs explicit selection alongside the two targeted suites. | Edit s14.1 and step-4 so verification commands run both runners with full-suite selection plus the two targeted suite commands. |
-| AR-006 | Accepted | A per-install timeout lets several packages multiply the hosted delay past the promised 300s cap, so one shared deadline is needed. | D-3 now sets one shared 300s deadline for all installer subprocesses, with remaining packages recorded as skipped when it expires. |
-| AR-007 | Accepted | Timing out only the sudo process can leave apt-get or package scripts mutating the system while preflight runs, so the timeout must kill the whole process tree. | D-3 now requires the installer to run in its own process group and, on timeout, kill and reap the whole tree before preflight resumes, with a persistent-child test. |
-| AR-008 | Accepted | D-1 gave ambiguous OCaml and competing dune package names, so installer code and argv assertions could diverge. | D-1 now fixes one package per executable, with deduplication before the install argv is built. |
-| AR-009 | Accepted | Per-install timeout vs 300s cap was ambiguous; one grouped apt-get call with a single 300s timeout gives tests one oracle. | D-3 now specifies one apt-get invocation for all deduplicated packages, one 300s timeout, no retry; s21.1.r3 mitigation aligned. |
-| AR-010 | Accepted | A malformed line next to valid ones had no defined recovery scope; per-line parsing removes the ambiguity. | Section 1 item 2 now parses each line independently, records and skips malformed lines; step-2 adds a mixed valid/malformed test case. |
+| AR-001 | Partially accepted | Project commits during build are prohibited, so D-1 must not commit on HEAD/branch or touch the index; but the hand-off engine needs a base id, so a non-branch snapshot object plus a hash/path inventory is used instead. | Rewrote D-1 (s1.1), s6.1, R-1, R-2, AC-1 and step-1 to a commit-free snapshot: isolated index, inventory including untracked files, HEAD stays unborn. |
+| AR-002 | Accepted | HEAD existence does not prove a PR or attestation was written, so completion wording must follow confirmed artifact outcomes. | D-2 in s1.1 and T-2 in s10.1 now key completion text on artifacts confirmed written this run, else point to FINAL_AUDIT.md. |
+| AR-003 | Accepted | AC-3 lacked an audit-result precondition while BH-2 limits NOT_READY/draft:true to a NOT_READY audit; T-2 must arrange that audit explicitly. | AC-3 now applies only to a NOT_READY audit; T-2 arranges a NOT_READY audit and checks that other verdicts keep their existing mapping. |
+| AR-004 | Accepted | AC-5 is a mandatory acceptance criterion, so the plan must not allow cutting D-3 or its test unilaterally. | Section 21 (s17.1) now keeps D-3 and AC-5 verification required unless the user approves a revised scope; only non-acceptance items may be cut. |
+| AR-005 | Partially accepted | Build, verification and completion must stay commit-free, but the issue's hand-off needs a base commit, so the seed is confined to the user-selected hand-off publish mode. | Rewrite D-1, section 6, R-1 and step 1 so the seed runs only under UNCLE_PUBLISH_MODE=handoff, uses an isolated index, and keeps non-hand-off builds commit-free. |
+| AR-006 | Accepted | A pathspec exclude on git add does not remove already-staged .uncle entries, so committing the index could violate INV-3 and alter the user's index. | D-1 now builds the seed tree in an isolated temporary index excluding .uncle, leaves the user's index untouched; T-1 adds pre-staged and failure-after-staging cases. |
+| AR-007 | Accepted | Real gap: `git add -A` can leave the index changed if commit fails, silently altering the user's staged selections. | D-1 builds the seed with an isolated temporary index (GIT_INDEX_FILE); §12 and T-1 add index/work-tree preservation on failure with a failure-after-staging test. |
+| AR-008 | Accepted | A real project commit during build startup contradicts the binding no-project-commit rule; commits are a user-approved publishing action and signing rules govern only disposable fixtures. | Replace D-1 in s1.1 with a commit-free file-snapshot base; update R-1, R-2, step-1 and the s17 scope cut; add a no-commit constraint to s15. |
+| AR-009 | Accepted | A pathspec exclude on git add does not remove already-staged .uncle entries, so committing the live index could violate INV-3; an isolated index fixes this and leaves the user's index untouched. | Rewrote D-1 (s1.1) to build the seed tree from a temporary GIT_INDEX_FILE excluding .uncle, and T-1 (s10.1) to add a pre-staged .uncle case and an index-unchanged assertion. |
+| AR-010 | Accepted | A pathspec exclude on git add does not remove already-staged .uncle entries, so INV-3 needs an explicit pre-staged-state test and an isolated-index mechanism. | D-1 builds the seed from an isolated index excluding .uncle; T-1 adds an unborn repo case with staged .uncle files asserting the seed tree has no .uncle paths. |
+| AR-011 | Accepted | A successful seed means HEAD exists, so the no-HEAD messages (D-3, BH-4) can only be exercised in a separate injected-seed-failure case. | s10.1 splits T-2 into T-2a (successful seed) and T-2b (injected seed failure); traceability and change-impact rows updated to match. |
+| AR-012 | Accepted | Disabling signing alone does not prove an inherited signing=true config cannot reach a signer; a recording fake signer test is a cheap, direct proof. | R-2 mechanism extended and s10.1 gains a negative test with inherited signing=true and a failing recording fake signer asserting zero invocations. |

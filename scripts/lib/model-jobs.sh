@@ -213,6 +213,35 @@ workflow_writer_exhausted() {
     echo 'Updated-plan writer attempts exhausted; completed packets retained for diagnosis.' >&2
 }
 
+# A merge conflict (updated_plan_ops.py merge, status 4) is a plan-content failure, not writer exhaustion.  The stop reason
+# keeps the `updated-plan:` prefix and the same terminal-failure flag file readers already use.  The message is normalized
+# here only: strip the `updated-plan ops:` prefix, collapse whitespace runs, trim, cap at 500 characters, empty -> unspecified.
+workflow_merge_conflict() {
+    local message
+    message="$(printf '%s' "$1" | tr -s '[:space:]' ' ')"
+    message="${message#"${message%%[![:space:]]*}"}"
+    message="${message%"${message##*[![:space:]]}"}"
+    message="${message#updated-plan ops:}"
+    message="${message#"${message%%[![:space:]]*}"}"
+    message="${message%"${message##*[![:space:]]}"}"
+    message="${message:0:500}"
+    [[ -n "$message" ]] || message=unspecified
+    : > "$STATE_DIR/updated-plan-writers-exhausted"
+    printf 'updated-plan: merge conflict: %s\n' "$message" > "$STATE_DIR/stop-reason"
+    echo "Updated-plan merge conflict: $message" >&2
+}
+
+# Dispatch on the status of `updated_plan_ops.py merge`: 0 continues, 4 is a conflict (stop reason recorded), anything else
+# is returned for the caller to treat as it always did.  $2 is the file holding the helper's stderr.
+workflow_merge_dispatch() {
+    local status="$1" errfile="${2:-/dev/null}"
+    case "$status" in
+        0) return 0 ;;
+        4) workflow_merge_conflict "$(cat "$errfile" 2>/dev/null)"; return 4 ;;
+        *) return "$status" ;;
+    esac
+}
+
 workflow_deferred_report() {
     if [[ "${UNCLE_SPECULATIVE:-}" == true ]]; then
         # speculate() already redirects stdout to the speculative log.

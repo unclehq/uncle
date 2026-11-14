@@ -131,9 +131,26 @@ def export_project_plan(path, project='.'):
     narrative = re.sub(r'\n{3,}', '\n\n', text[:commands.start()] + text[commands.end():]).strip()
     payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': narrative,
                'verification_commands': commands.group(1)}
+    payload = apply_derived_protected_paths(payload, narrative, commands.group(1))
     payload = _plan_records(payload, project, 'project-plan')
     _artifact_json().render_plan(payload, protected=False)
     _artifact_json().write(project, Path(path).name, payload)
+    return payload
+
+
+def apply_derived_protected_paths(payload, narrative, commands):
+    """Markdown ingest fallback (D-3): when the payload does not carry
+    protected_verification_paths, derive them from the narrative and commands
+    and mark them ingest-derived so the merge may recompute them from the
+    merged plan. Explicitly supplied paths are left untouched."""
+    if payload.get('protected_verification_paths'):
+        return payload
+    sys.path.insert(0, str(_LIB))
+    from updated_plan_fast_path import derive_protected_paths
+    derived = derive_protected_paths(narrative, commands)
+    if derived:
+        payload = dict(payload, protected_verification_paths=derived,
+                       protected_verification_paths_source='ingest-derived')
     return payload
 
 

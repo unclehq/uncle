@@ -2999,7 +2999,12 @@ run_updated_plan_edit_writers() {
         reconcile_pid="$UPDATED_PLAN_RECONCILE_PID"
     fi
     local merge_status=0
-    python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" || merge_status=$?
+    python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" 2> "$directory/merge.err" || merge_status=$?
+    [[ ! -s "$directory/merge.err" ]] || cat "$directory/merge.err" >&2
+    if [[ "$merge_status" == 4 ]]; then
+        (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_merge_dispatch 4 "$directory/merge.err") || true
+        return 1
+    fi
     if [[ "$merge_status" == 0 && -n "$reconcile_pid" ]]; then
         wait "$reconcile_pid" 2>/dev/null || true
         if [[ -s "$late_ops" ]]; then
@@ -3116,7 +3121,16 @@ run_updated_plan_edit_writers() {
             done
             UNCLE_LATE_OPS="$late_ops" python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" resolvers "$directory" "$bad_groups" updated-plan "$STATE_DIR/documents/PROJECT_PLAN.json" "$helper" || { workflow_writer_exhausted updated-plan; return 1; }
         else
-            UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || { workflow_writer_exhausted updated-plan; return 1; }
+            UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" 2> "$directory/merge.err" || {
+                merge_status=$?
+                [[ ! -s "$directory/merge.err" ]] || cat "$directory/merge.err" >&2
+                if [[ "$merge_status" == 4 ]]; then
+                    (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_merge_dispatch 4 "$directory/merge.err") || true
+                else
+                    workflow_writer_exhausted updated-plan
+                fi
+                return 1
+            }
         fi
     elif [[ "$merge_status" != 0 ]]; then
         return 1

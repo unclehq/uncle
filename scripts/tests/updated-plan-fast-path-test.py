@@ -76,5 +76,24 @@ class FastPath(unittest.TestCase):
         self.assertFalse(ok)
 
 
+class ExecutedPathsTest(unittest.TestCase):
+    def paths(self, cmd):
+        return fast.executed_paths(cmd)
+
+    def test_positive(self):
+        for cmd, want in [('bash scripts/check.sh', 'scripts/check.sh'), ('./scripts/check.sh', 'scripts/check.sh'),
+                          ('bash -e scripts/check.sh', 'scripts/check.sh'), ('python3 -u scripts/check.py', 'scripts/check.py'),
+                          ('bash scripts/check', 'scripts/check')]:
+            self.assertEqual(self.paths(cmd), [want], cmd)
+
+    def test_negative(self):
+        for cmd in ["python3 -c 'scripts/check.py'", "bash -c 'scripts/check.sh'", 'python3 -m pkg.mod', 'pytest', 'bash']:
+            self.assertEqual(self.paths(cmd), [], cmd)
+
+    def test_fallback_only_when_nothing_named(self):
+        self.assertEqual(fast.derive_protected_paths('', 'bash scripts/check.sh'), 'scripts/check.sh')
+        self.assertEqual(fast.derive_protected_paths('', 'bash scripts/check.sh\npytest tests/test_a.py'), 'tests/test_a.py')
+
+
 if __name__ == '__main__':
     unittest.main()

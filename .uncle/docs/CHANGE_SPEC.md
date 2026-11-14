@@ -1,55 +1,65 @@
-# Change Spec: Issue 264
+# Change spec — issue 267
 
-Omitted sections: Migration (none); Prototype isolation (not a prototype); Security beyond link lifetime (no change)
+Omitted sections: Performance (none); Security (no new trust boundary); Migration (none, no persisted format change); Prototype isolation (n/a).
 
 ## 1. Change type
-Bug fix, in the external build-script repo.
+Bug fix.
 
 ## 2. Problem statement
-A hosted build lasting more than an hour hands over an expired signed preview link, because the link is requested only once, early.
+An updated plan whose checks are scripts not named like tests (e.g. `scripts/check-launch.sh`) is refused with no protected paths, and the refusal is reported as `writer attempts exhausted`. Baseline B-2, B-3, B-7.
 
 ## 3. Current behavior
-See request and baseline B-2 (UNRESOLVED, source absent). Per the request: `announce_preview` prints the link once and sets `sb.announced`; `build` returns early when announced; `sb.link_expires` keeps the first link's expiry.
+Baseline B-1..B-7.
 
 ## 4. Desired behavior
-At the end of `build`, after the pull request, always request a fresh signed link, print it as the last `Preview:` line, and set `sb.link_expires` from it. The early link is still printed during the build. Optionally expire the earlier link.
+Protected paths fall back to the repository files that `verification_commands` execute; the Markdown project-plan fallback records protected paths; a merge refusal is reported as its own stop reason.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| BH-1 | PRESERVE | Preview appears mid-build | Prints `Preview: <url> (works until <time>)` | Unchanged | build-script test |
-| BH-2 | MODIFY | Build ends after PR, link already announced | No new link; early link is last | Fresh link requested; last `Preview:` line is the fresh link | build-script test, mocked clock |
-| BH-3 | MODIFY | Same | `sb.link_expires` = first link expiry | `sb.link_expires` = final link expiry; kept-sandbox label and `kept ... until` match | build-script test |
-| BH-4 | PRESERVE | No link ever refused | No request over 3600 s | Same | build-script test |
-| BH-5 | ADD (optional) | Fresh link issued | Both links live | Earlier link expired via POST .../expire | build-script test |
+| SB-1 | MODIFY | Plan names no test file by name/dir but `verification_commands` run `scripts/check-a.sh`, `bash scripts/run-defects.sh`, `./scripts/check-b.sh` | Conflict, stage stops (B-2) | Those scripts are derived as protected paths (subject to B-5 ownership filter) and merge succeeds | unit test on `derive_protected_paths` and on merge with a fixture plan |
+| SB-2 | PRESERVE | Plan names test files by name/dir | Named test files derived | Unchanged result: the executed-file fallback is not consulted | existing ops/fast-path tests |
+| SB-3 | PRESERVE | Excluded tokens (`.json`, `.lock`, dot/abs/`..`/build dirs) | Excluded | Also excluded from the executed-file fallback | unit test |
+| SB-4 | MODIFY | Commands execute only tools with no repo file (e.g. `cabal test`, `npm test`) and plan names no test file | Conflict | Still a refusal, now reported per SB-6 | unit test |
+| SB-5 | MODIFY | Markdown single-pass project plan is ingested | No `protected_verification_paths` | Payload carries derived `protected_verification_paths` (named tests first, else executed files), so the updated plan need not derive | unit test on ingest |
+| SB-6 | MODIFY | `updated_plan_ops.py merge` raises Conflict | stop-reason `updated-plan: writer attempts exhausted` | stop-reason `updated-plan: merge conflict: <message>`; stderr names the merge refusal | python test (exit code/message) + shell test (stop-reason file) |
+| SB-7 | PRESERVE | Writers genuinely exhausted (stagegate 2984 path) | `updated-plan: writer attempts exhausted` | Unchanged | existing writer-retries test |
+| SB-8 | PRESERVE | Merge refusal | `workflow_terminal_failure` treats the run as terminal | Still terminal | shell test |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| INV-1 | EXISTING | No signed-link request has expiresInSeconds > 3600 | build.py | link request code | mocked publisher test |
-| INV-2 | STRENGTHENED | The last printed link is valid for >= 55 min after build end | build.py | end of `build` | mocked clock test |
-| INV-3 | STRENGTHENED | Kept-sandbox label equals the last printed link's expiry | build.py | `sb.link_expires` | test |
-
+| SI-1 | EXISTING | Protected paths are repository-relative with no generated/build/dot/`..` paths (I-1) | derivation | fast_path | unit test |
+| SI-2 | EXISTING | Protected path must be step-owned when any are owned (I-2) | merge/publish | ops, publish_agent_artifact | existing test |
+| SI-3 | STRENGTHENED | Protected-path derivation covers executed repository files when no tests are named; empty only when commands execute no repo file | derivation | fast_path | unit test |
+| SI-4 | EXISTING | Updated plan never published with empty protected paths (I-3) | merge/publish | ops, edits, publish | unit test (SB-4) |
+| SI-5 | NEW | A merge refusal never reports writer exhaustion; writer exhaustion never reports merge conflict | stop-reason | stagegate, model-jobs | shell test |
 No RELAXED or REMOVED invariants.
 
-## 7. Compatibility
-Setting `sb.link_expires` and label format unchanged.
+## 7. Compatibility requirements
+Stop-reason keeps the `updated-plan:` prefix. `updated-plan-writers-exhausted` flag still created on merge refusal. Existing plans with named tests derive identical paths.
 
 ## 8. Error and failure behavior
-If the final link request fails, behavior is UNRESOLVED: keep the early link as the last line and say it may have expired, or fail. Needs decision by the build-script owner.
+Merge refusal: stderr line `updated-plan ops: <message>`, distinct exit status from other errors, stop-reason `updated-plan: merge conflict: <message>` (message single-line, truncated), stage returns 1.
+
+## 12. Rollback
+Revert the commit; no persisted data changes.
 
 ## 14. Non-goals
-autoStopInterval value (#263).
+Changing writer prompts; changing the typed-plan path; protecting files beyond those executed; touching change-workflow.sh messaging.
 
-## 15. Assumptions and unresolved questions
-- BLOCKING: the code is not in this repository (baseline section 2).
+## 15. Assumptions
+Executed-file means a repository-relative path token with a file extension in command position or as the first argument to an interpreter (`bash`, `sh`, `python3`, `node`, etc.), with leading `./` stripped. Existence on disk is not required (the implementation steps create it).
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | With a mocked publisher and clock, preview appears at 1 min and the build ends at 70 min; the last `Preview:` line's end time is at least 55 minutes after the build ends. | Build-script test (external repo). |
-| AC-2 | The kept-sandbox label and the `kept ... until` line equal the last link's expiry. | Build-script test (external repo). |
-| AC-3 | A build whose link was never refused makes no signed-preview-url request with expiresInSeconds above 3600. | Mocked publisher assertion (external repo). |
-| AC-4 | The early link is still printed while the build runs. | Build-script test (external repo). |
+| AC-1 | derive_protected_paths(text, commands) with no test-named path returns the repository scripts executed by commands (`scripts/check-ghci-exercises.sh`, `scripts/check-launch.sh`, `scripts/run-defects.sh`, including `./`-prefixed and interpreter-prefixed forms), one per line, in first-appearance order, deduplicated. | New unit test in scripts/tests/updated-plan-fast-path-test.py with the issue's command list. |
+| AC-2 | When any test-named path is found the executed-file fallback is not used, and exclusions (.json/.lock, dot/absolute/`..`/build-dir paths, tool names without a repository file such as `cabal test`) still apply. | Unit tests for named-test precedence and exclusions; existing ops-test:160-180 unchanged and passing. |
+| AC-3 | updated_plan_ops merge of a fixture plan whose commands run scripts/check-*.sh (no test-named files, steps own those scripts) succeeds and yields those protected paths instead of Conflict. | New test in scripts/tests/updated-plan-ops-test.py. |
+| AC-4 | When commands execute no repository file and no test is named, merge still refuses, with a distinct nonzero exit status and the message on stderr. | New test in updated-plan-ops-test.py asserting the status and message. |
+| AC-5 | The single-pass Markdown project-plan ingest produces `protected_verification_paths` (named tests, else executed files) in the payload without failing validation. | New unit test scripts/tests/plan-context-protected-test.py calling the Markdown ingest on a plan like the issue's; payload field asserted and artifact validation succeeds. |
+| AC-6 | A merge refusal in stagegate writes stop-reason `updated-plan: merge conflict: <message>`, still creates the updated-plan-writers-exhausted flag, and does not print the writer-exhausted line; genuine writer exhaustion still writes `updated-plan: writer attempts exhausted`. | New shell suite scripts/tests/updated-plan-merge-conflict-test.sh exercising the helper(s); existing updated-plan-writer-retries test passes. |
+| AC-7 | All pre-existing shell and Python suites that passed in the baseline still pass. | Driver re-run of the verification commands compared with baseline. |
 

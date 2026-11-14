@@ -816,6 +816,11 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
         base_paths = protected_paths(plan).strip()
     except ValueError:
         base_paths = ''
+    if plan.get('protected_verification_paths_derived') is True:
+        # Ingest-derived paths are a guess from the pre-review plan, not an
+        # explicit contract: recompute them from the merged plan below so a
+        # renamed or removed script cannot survive as a stale protected path.
+        base_paths = ''
     for name, ids in owners:
         delivery = read_packet(Path(directory) / ('%s.json' % name))
         by_finding = {}
@@ -1272,7 +1277,11 @@ def main(argv):
                 print('updated-plan ops: group %s: %s' % (gid, why), file=sys.stderr)
             return 5 if bad else 0
         elif command == 'merge' and len(rest) in (4, 5):
-            merge(*rest)
+            try:
+                merge(*rest)
+            except Conflict as conflict:
+                print('updated-plan ops: %s' % conflict, file=sys.stderr)
+                return 4
         else:
             raise SystemExit(__doc__)
     except NeedsResolution as overlap:

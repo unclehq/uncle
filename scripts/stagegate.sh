@@ -5153,6 +5153,29 @@ run_stage() {
                     fi
                 else
                     run_claude prompts/preflight.md preflight
+                    # The prompt asks for the JSON object as the reply and for the file; a model that only replies leaves no file, and
+                    # --export-json below then dies on a missing path. Recover the reply when it is the whole JSON object.
+                    if [[ ! -s .uncle/docs/PREFLIGHT_REPORT.md && -s "$LOG_DIR/preflight.jsonl" ]]; then
+                        mkdir -p .uncle/docs
+                        python3 -B - "$LOG_DIR/preflight.jsonl" .uncle/docs/PREFLIGHT_REPORT.md <<'PYRECOVER' || true
+import json, sys
+reply = None
+for line in open(sys.argv[1], encoding='utf-8', errors='replace'):
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if isinstance(event, dict) and event.get('type') == 'result' and isinstance(event.get('result'), str):
+        reply = event['result']
+if reply:
+    try:
+        if isinstance(json.loads(reply), dict):
+            open(sys.argv[2], 'w', encoding='utf-8').write(reply.strip() + '\n')
+            print('Preflight: recovered the JSON report from the model reply (it did not write the file).')
+    except ValueError:
+        pass
+PYRECOVER
+                    fi
                     # Unlike the self-hosted investigation path above, this
                     # hosted call has no canonical-JSON delivery contract
                     # (preflight is not one of run_claude's special-cased

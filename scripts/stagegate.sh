@@ -5121,6 +5121,15 @@ run_stage() {
             ;;
         PREFLIGHT)
             rm -f "$STATE_DIR/documents/PREFLIGHT_REPORT.json" .uncle/docs/PREFLIGHT_REPORT.md
+            # Hosted toolchain install, as change-workflow.sh does at its preflight (gated inside the helper: hosted runs only, and never
+            # with WORKFLOW_TOOLCHAIN_INSTALL=0; a local run installs nothing and a missing tool fails loudly below). Whatever the outcome
+            # (success, nonzero exit, timeout, missing sudo/apt) the run continues, and the probe below judges actual PATH availability,
+            # so a tool that installed despite a failed batch is not reported as a missing runtime.
+            if [[ -s "$GREEN_CMDS" ]]; then
+                python3 -B "$ROOT/scripts/lib/toolchain_install.py" "$GREEN_CMDS" "$STATE_DIR/toolchain-install.json" \
+                    > "$STATE_DIR/toolchain-install.log" 2>&1 \
+                    || echo "Toolchain install: helper exited nonzero; preflight will judge actual availability." >&2
+            fi
             if python3 -B "$ROOT/scripts/lib/preflight.py" "$GREEN_CMDS" "$STATE_DIR/documents/PREFLIGHT_REPORT.json"; then
                 echo "Preflight: runtime checks passed without a model call."
             else

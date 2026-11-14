@@ -77,15 +77,12 @@ def fingerprints(plan):
     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 
-def verify(directory, plan, record=False):
-    directory = Path(directory)
-    receipt = directory / 'stage-duties.json'
-    hashes = fingerprints(plan)
-    if receipt.exists() and json.loads(receipt.read_text()) != hashes:
-        raise ValueError('stage inputs or .gitignore changed after completion; start a new planning stage')
+def ignore_gaps(plan):
+    """(probe paths the current .gitignore does not ignore, git's error text or '').
+
+    Test this file, not a user's global excludes or .git/info/exclude. No commits, hooks, network, or signing are involved in the
+    disposable index."""
     paths = required_paths(Path(plan).read_text())
-    # Test this file, not a user's global excludes or .git/info/exclude. No
-    # commits, hooks, network, or signing are involved in the disposable index.
     with tempfile.TemporaryDirectory(prefix='uncle-ignore-check-') as scratch:
         env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
         env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
@@ -96,8 +93,53 @@ def verify(directory, plan, record=False):
                                 input='\0'.join(paths) + '\0', text=True, capture_output=True)
     ignored = set(result.stdout.rstrip('\0').split('\0'))
     missing = [p for p in paths if p not in ignored]
-    if result.returncode not in (0, 1) or missing:
-        raise ValueError('ignore verification failed: ' + (', '.join(missing) or result.stderr.strip()))
+    failure = result.stderr.strip() if result.returncode not in (0, 1) else ''
+    return missing, failure
+
+
+def ignore_entries(missing):
+    """The .gitignore lines that cover the probe paths the check found uncovered (`build/probe` -> `build/`)."""
+    entries = []
+    for path in missing:
+        if path == 'probe.pyc':
+            line = '*.pyc'
+        elif path.endswith('/probe') or path.endswith('/probe.pyc'):
+            line = path.rsplit('/', 1)[0] + '/'
+        else:
+            line = path
+        if line not in entries:
+            entries.append(line)
+    return entries
+
+
+def ignore_instruction(plan):
+    """Tell the model exactly which lines to add, or '' when `.gitignore` already satisfies the driver's check.
+
+    The driver demands these for the stack the plan names, whether or not this project's tooling writes there (a Vite project
+    builds into `dist`, yet the Node floor also wants `build/`). A model that judges the existing file sufficient for the tooling
+    then fails the check, twice; naming the lines removes the judgement."""
+    try:
+        missing, failure = ignore_gaps(plan)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    entries = ignore_entries(missing) if not failure else []
+    if not entries:
+        return ''
+    return ('The driver checks that `.gitignore` ignores a fixed set of paths for this stack, whether or not this project writes '
+            'there, and it currently does not ignore: %s. Add exactly these lines to `.gitignore` (keep every existing rule):\n%s\n'
+            "Do not decide they are unnecessary: the check is the driver's, not a judgement about this project's tooling.\n"
+            % (', '.join(missing), ''.join('    %s\n' % entry for entry in entries)))
+
+
+def verify(directory, plan, record=False):
+    directory = Path(directory)
+    receipt = directory / 'stage-duties.json'
+    hashes = fingerprints(plan)
+    if receipt.exists() and json.loads(receipt.read_text()) != hashes:
+        raise ValueError('stage inputs or .gitignore changed after completion; start a new planning stage')
+    missing, failure = ignore_gaps(plan)
+    if failure or missing:
+        raise ValueError('ignore verification failed: ' + (', '.join(missing) or failure))
     if record:
         if final_text(directory / 'stage-duties.jsonl').strip() != COMPLETE:
             raise ValueError('stage step did not confirm consistency and file duties')
@@ -135,6 +177,9 @@ def prepare(directory, plan, output):
         text += ('The driver already found these, by comparing every file the plan mentions with the files its steps own. '
                  'Resolve each one:\n' + ''.join('- %s\n' % line for line in known) + '\n')
     text += consistency + '\n' + duties
+    instruction = ignore_instruction(plan)
+    if instruction:
+        text += '\n' + instruction
     text += ('\nPreserve existing project ignore rules. You own the stage file update; workers do not. '
              'When both duties are complete, reply with exactly %s and nothing else.\n' % COMPLETE)
     Path(output).write_text(text)
@@ -155,6 +200,9 @@ def prepare_repair(directory, plan, output, reason=''):
     known = known_inconsistencies(plan)
     if known:
         text += 'The driver still finds:\n' + ''.join('- %s\n' % line for line in known) + '\n'
+    instruction = ignore_instruction(plan)
+    if instruction:
+        text += instruction + '\n'
     text += ('Fix every contradiction listed, choosing for each the option that fits the requirements and most of the plan, '
              'then complete the `.gitignore` duties. When the plan is consistent and `.gitignore` is updated, reply with '
              'exactly %s and nothing else.\n' % COMPLETE)

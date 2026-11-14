@@ -15,10 +15,12 @@ from pathlib import Path
 DEADLINE_SECONDS = 300
 GRACE_SECONDS = 3
 
-# Fixed executable -> Debian package table. Unmapped tools are skipped.
+# Fixed executable -> Debian package table. Unmapped tools are skipped. A value is a package name or a tuple of names tried in order,
+# the first one apt can install: Debian 13 (the hosted sandbox) renamed `dune` to `ocaml-dune`, and with the old name the whole
+# `apt-get install` failed (exit 100, "has no installation candidate") and dune was never installed.
 PACKAGES = {
     'ocaml': 'ocaml', 'ocamlc': 'ocaml', 'ocamlopt': 'ocaml',
-    'ocamlfind': 'ocaml-findlib', 'dune': 'dune', 'opam': 'opam',
+    'ocamlfind': 'ocaml-findlib', 'dune': ('ocaml-dune', 'dune'), 'opam': 'opam',
     'make': 'make', 'gcc': 'gcc', 'g++': 'g++', 'cc': 'gcc', 'cmake': 'cmake',
     'clang': 'clang', 'java': 'default-jre-headless', 'javac': 'default-jdk-headless',
     'mvn': 'maven', 'gradle': 'gradle', 'php': 'php-cli', 'lua': 'lua5.4',
@@ -91,9 +93,8 @@ def _terminate_tree(child, grace):
     return 'process group terminated and reaped'
 
 
-def run_install(packages, deadline):
-    """One apt-get invocation under a shared deadline. Returns an outcome dict."""
-    argv = ['sudo', '-n', 'apt-get', 'install', '-y', '--no-install-recommends', *packages]
+def _run(argv, deadline):
+    """Run one apt command under a deadline. Returns an outcome dict."""
     if not shutil.which('sudo') or not shutil.which('apt-get'):
         return {'argv': argv, 'status': 'unavailable', 'detail': 'sudo or apt-get not found on PATH'}
     if deadline <= 0:
@@ -115,33 +116,90 @@ def run_install(packages, deadline):
     return {'argv': argv, 'status': 'ok' if code == 0 else 'failed', 'exit_status': code}
 
 
+def run_install(packages, deadline):
+    """One apt-get invocation under a shared deadline. Returns an outcome dict."""
+    return _run(['sudo', '-n', 'apt-get', 'install', '-y', '--no-install-recommends', *packages], deadline)
+
+
+def run_update(deadline):
+    """Refresh apt's package lists once. Returns an outcome dict."""
+    return _run(['sudo', '-n', 'apt-get', 'update', '-qq'], deadline)
+
+
+def has_candidate(package):
+    """Whether apt can install `package`. True when that cannot be told (no apt-cache, an error), so apt itself decides."""
+    exe = shutil.which('apt-cache')
+    if not exe:
+        return True
+    try:
+        out = subprocess.run([exe, 'policy', package], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if out.returncode:
+        return True
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if line.startswith('Candidate:'):
+            return line.split(':', 1)[1].strip() not in ('', '(none)')
+    return False        # apt knows no such package
+
+
+def candidates(tool):
+    value = PACKAGES.get(tool)
+    return () if not value else ((value,) if isinstance(value, str) else tuple(value))
+
+
+def choose(tools):
+    """({tool: package apt can install}, {tool: names tried}) for the tools that have a mapping."""
+    chosen, unresolved = {}, {}
+    for tool in tools:
+        names = candidates(tool)
+        if not names:
+            continue
+        found = next((n for n in names if has_candidate(n)), None)
+        if found:
+            chosen[tool] = found
+        else:
+            unresolved[tool] = names
+    return chosen, unresolved
+
+
 def install(commands_path, record_path):
     text = Path(commands_path).read_text(encoding='utf-8', errors='replace')
     record = {'schema': 'uncle.toolchain-install/v1', 'enabled': is_enabled(), 'malformed': [],
               'missing': [], 'packages': [], 'skipped': [], 'install': None, 'still_missing': []}
     names, record['malformed'] = discover(text)
     record['missing'] = [n for n in names if not shutil.which(n)]
-    mapped = []
     for name in record['missing']:
-        pkg = PACKAGES.get(name)
-        if pkg:
-            if pkg not in mapped:
-                mapped.append(pkg)
-        else:
+        if not candidates(name):
             record['skipped'].append({'tool': name, 'reason': 'no package mapping'})
-    record['packages'] = mapped
+    mapped = []
     if not record['enabled']:
         record['skipped'].extend({'tool': n, 'reason': 'installer disabled (not hosted or WORKFLOW_TOOLCHAIN_INSTALL=0)'}
-                                 for n in record['missing'] if n in PACKAGES)
-    elif mapped:
+                                 for n in record['missing'] if candidates(n))
+    else:
         try:
             deadline = float(os.environ.get('WORKFLOW_TOOLCHAIN_DEADLINE', DEADLINE_SECONDS))
-            record['install'] = run_install(mapped, deadline)
+            started = time.monotonic()
+            chosen, unresolved = choose(record['missing'])
+            if unresolved:
+                # Stale or empty package lists look the same as a package that does not exist: refresh them once and look again.
+                record['update'] = run_update(deadline)
+                chosen, unresolved = choose(record['missing'])
+            for tool, tried in unresolved.items():
+                # Left out of the install: one name apt cannot install made the whole `apt-get install` fail (exit 100).
+                record['skipped'].append({'tool': tool, 'reason': 'no installable package (tried: %s)' % ', '.join(tried)})
+            for pkg in chosen.values():
+                if pkg not in mapped:
+                    mapped.append(pkg)
+            if mapped:
+                record['install'] = run_install(mapped, deadline - (time.monotonic() - started))
         except Exception as exc:  # never fatal
             record['install'] = {'status': 'error', 'detail': str(exc)}
-        status = record['install'].get('status')
+        status = (record['install'] or {}).get('status')
         if status in ('timeout', 'skipped', 'unavailable', 'error'):
             record['skipped'].extend({'tool': p, 'reason': 'package not installed: ' + status} for p in mapped)
+    record['packages'] = mapped
     record['still_missing'] = [n for n in record['missing'] if not shutil.which(n)]
     installed = [n for n in record['missing'] if n not in record['still_missing']]
     record['installed'] = installed
@@ -150,6 +208,15 @@ def install(commands_path, record_path):
                              len(record['missing']), ', '.join(record['missing']) or 'none',
                              ', '.join(installed) or 'none', ', '.join(record['still_missing']) or 'none',
                              len(record['malformed'])))
+    # Say WHY something is still missing, in the same line the run output and the supervisor read: a bare "still missing: dune" gave
+    # nobody a cause to act on (the package had been renamed and the install failed with apt's generic exit 100).
+    why = []
+    outcome = record.get('install') or {}
+    if outcome.get('status') in ('failed', 'timeout', 'error'):
+        why.append('apt-get install %s%s' % (outcome['status'], ' (exit %s)' % outcome['exit_status'] if 'exit_status' in outcome else ''))
+    why.extend('%s: %s' % (row['tool'], row['reason']) for row in record['skipped'] if row['tool'] in record['still_missing'])
+    if why and record['still_missing']:
+        record['summary'] += ' Why: ' + '; '.join(why) + '.'
     Path(record_path).parent.mkdir(parents=True, exist_ok=True)
     Path(record_path).write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
     print(record['summary'])

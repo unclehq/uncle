@@ -5753,6 +5753,14 @@ collect_background_preflight() {
     fi
     PREFLIGHT_BG_PID=""
     rm -f "$STATE_DIR/preflight-backgrounded"
+    # The toolchain installer's one-line outcome, with the reason when something is still missing. It used to go only to a log file, so
+    # a build that blocked on a missing runtime never said whether an install had been tried or why it failed.
+    local install_note=""
+    if [[ -s "$STATE_DIR/toolchain-install.log" ]] && ! grep -q '^Toolchain install: 0 missing' "$STATE_DIR/toolchain-install.log"; then
+        install_note="$(head -n 1 "$STATE_DIR/toolchain-install.log")"
+        echo
+        echo "$install_note"
+    fi
     [[ -s "$STATE_DIR/preflight-bg.status" ]] && status="$(cat "$STATE_DIR/preflight-bg.status")"
     [[ -s "$STATE_DIR/documents/PREFLIGHT_REPORT.json" ]] && result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/PREFLIGHT_REPORT.json")"
 
@@ -5769,7 +5777,7 @@ collect_background_preflight() {
     echo "prerequisites behind it were not proved. Weigh this with the diff."
     echo "Log: $LOG_DIR/preflight.background.log"
     supervision_validation_failed preflight .uncle/docs/PREFLIGHT_REPORT.md \
-        "Prerequisite probe did not confirm the environment: ${result:-no report}." 0 || true
+        "Prerequisite probe did not confirm the environment: ${result:-no report}.${install_note:+ $install_note}" 0 || true
     snapshot_preflight_capabilities "$STATE_DIR/documents/PREFLIGHT_REPORT.json" 2>/dev/null || true
     return 0
 }

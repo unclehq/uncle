@@ -129,6 +129,29 @@ class InstallTest(unittest.TestCase):
         self.assertEqual([s['tool'] for s in rec['skipped']], ['zzfake1'] * 0 + ['pkg-one'] * 0 + [s['tool'] for s in rec['skipped']])
         self.assertIn('pkg-one', [s['tool'] for s in rec['skipped']])
 
+    def apt_cache(self, available):
+        self.script('apt-cache', '#!/bin/sh\n[ "$1" = policy ] || exit 0\ncase "$2" in %s) echo "  Candidate: 1.0";; *) echo "  Candidate: (none)";; esac\n'
+                    % '|'.join(available))
+
+    def test_renamed_package_uses_second_candidate(self):
+        log = self.tmp / 'argv.log'
+        self.script('apt-get', '#!/bin/sh\necho "$@" >> %s\ntouch %s/zzfake1\nchmod +x %s/zzfake1\n' % (log, self.bin, self.bin))
+        self.apt_cache(['pkg-new'])
+        with mock.patch.dict(ti.PACKAGES, {'zzfake1': ('pkg-old', 'pkg-new')}):
+            rec = self.run_installer('zzfake1\n')
+        self.assertIn('install -y --no-install-recommends pkg-new', log.read_text())
+        self.assertEqual(rec['still_missing'], [])
+
+    def test_unavailable_package_does_not_block_the_others(self):
+        log = self.tmp / 'argv.log'
+        self.script('apt-get', '#!/bin/sh\necho "$@" >> %s\ntouch %s/zzfake2\nchmod +x %s/zzfake2\n' % (log, self.bin, self.bin))
+        self.apt_cache(['pkg-two'])
+        rec = self.run_installer('zzfake1\nzzfake2\n')
+        self.assertNotIn('pkg-one', ' '.join(l for l in log.read_text().splitlines() if l.startswith('install')))
+        self.assertEqual(rec['installed'], ['zzfake2'])
+        self.assertEqual(rec['still_missing'], ['zzfake1'])
+        self.assertIn('no installable package', [s for s in rec['skipped'] if s['tool'] == 'zzfake1'][0]['reason'])
+
     def test_cli_usage_error_is_two(self):
         with mock.patch('sys.stderr'):
             self.assertEqual(ti.main([]), 2)

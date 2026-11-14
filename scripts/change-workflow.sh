@@ -3646,6 +3646,14 @@ change_preflight_collect() {
     fi
     PREFLIGHT_BG_PID=""
     rm -f "$STATE_DIR/preflight-backgrounded"
+    # The toolchain installer's one-line outcome, with the reason when something is still missing. It used to go only to a log file, so
+    # a build that blocked on a missing runtime never said whether an install had been tried or why it failed.
+    local install_note=""
+    if [[ -s "$STATE_DIR/toolchain-install.log" ]] && ! grep -q '^Toolchain install: 0 missing' "$STATE_DIR/toolchain-install.log"; then
+        install_note="$(head -n 1 "$STATE_DIR/toolchain-install.log")"
+        echo
+        echo "$install_note"
+    fi
     [[ -s "$STATE_DIR/preflight-bg.status" ]] && status="$(cat "$STATE_DIR/preflight-bg.status")"
     [[ -s "$STATE_DIR/documents/PREFLIGHT_REPORT.json" ]] && result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/PREFLIGHT_REPORT.json")"
     snapshot_preflight_capabilities "$STATE_DIR/documents/PREFLIGHT_REPORT.json" 2>/dev/null || true
@@ -3656,9 +3664,9 @@ change_preflight_collect() {
     echo
     echo "Prerequisite probe did not confirm this environment: ${result:-no report}."
     echo "Implementation ran without waiting for it; weigh this with the diff. Log: $LOG_DIR/preflight.background.log"
-    record_nonblocking_failure PREFLIGHT_REPORT.json "the prerequisite probe did not confirm the environment: ${result:-no report}"
+    record_nonblocking_failure PREFLIGHT_REPORT.json "the prerequisite probe did not confirm the environment: ${result:-no report}${install_note:+. $install_note}"
     supervision_validation_failed preflight .uncle/docs/PREFLIGHT_REPORT.md \
-        "Prerequisite probe did not confirm the environment: ${result:-no report}." 0 || true
+        "Prerequisite probe did not confirm the environment: ${result:-no report}.${install_note:+ $install_note}" 0 || true
     return 0
 }
 

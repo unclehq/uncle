@@ -1431,7 +1431,14 @@ class Controller:
             self.worker = self.host.start_worker(prompt, meta)
         except (OSError, ValueError) as exc:
             self.journal.finish_call(call_id)
-            self._finish(trigger, 'unavailable', 'Supervision unavailable: configure supervision.runner (%s)' % exc)
+            if 'needs a configured stage' in str(exc):
+                # supervision.runner is set; the host did not hand the runner its config file and stage. Do not send the operator
+                # to a setting that is already correct.
+                reason = ('Supervision unavailable: supervision.runner is %s, but the supervision host did not pass it the config '
+                          'file and stage it needs (%s)' % (self.config.runner, exc))
+            else:
+                reason = 'Supervision unavailable: configure supervision.runner (%s)' % exc
+            self._finish(trigger, 'unavailable', reason)
             self._record_call({'status': 'unavailable', 'elapsed': 0, 'detail': str(exc)}, None, meta)
         return True
 
@@ -1781,7 +1788,13 @@ class HeadlessHost:
 
     def start_worker(self, prompt, meta):
         from supervisor_runner import SupervisorRequest, build_command
-        command, env, cwd_holder = build_command(self.controller.config, self.root)
+        # A self-hosted-style runner (self-hosted, aws-bedrock, anthropic-api, ...) is a child of Uncle's own adapter and needs the config
+        # file and a stage to find its model, base URL and key. Without them every call ended "configure supervision.runner" in every
+        # headless build. The stage is `supervision`, the row the operator configured for the supervisor: it carries supervision.model
+        # and the supervision key, and falls back to self-hosted.base_url. (The trigger's own stage, meta['stage'], would make the
+        # supervisor silently use that stage's model instead.)
+        command, env, cwd_holder = build_command(self.controller.config, self.root,
+                                                 config_path=self.controller.config_path, stage='supervision')
         log = self.state_dir / 'logs' / ('supervisor-%d.jsonl' % meta['number'])
         return SupervisorRequest(command, prompt, env, cwd_holder, log, meta)
 

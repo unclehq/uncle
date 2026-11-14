@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source-level wiring: the driver calls the toolchain installer at PREFLIGHT (hosted only) and the four prompts carry the hosted-toolchain paragraph."""
+"""Source-level wiring: each driver calls the toolchain installer at PREFLIGHT (hosted only) and the four prompts carry the hosted-toolchain paragraph."""
 import re
 import unittest
 from pathlib import Path
@@ -38,6 +38,33 @@ class DriverWiring(unittest.TestCase):
 
     def test_preflight_failure_still_blocked_setup(self):
         self.assertIn('BLOCKED-SETUP', self.src)
+
+
+class StagegateWiring(unittest.TestCase):
+    """The new-application driver installs missing toolchains at PREFLIGHT the same way (hosted only, never fatal)."""
+
+    def setUp(self):
+        self.src = (ROOT / 'scripts' / 'stagegate.sh').read_text(encoding='utf-8')
+        self.install = self.src.index('toolchain_install.py')
+
+    def test_driver_calls_installer_before_the_probe(self):
+        probe = self.src.index('preflight.py" "$GREEN_CMDS"')
+        self.assertLess(self.install, probe)
+        self.assertLess(probe - self.install, 1500)
+
+    def test_installer_runs_on_the_approved_verification_commands(self):
+        call = self.src[self.install:self.install + 200]
+        self.assertIn('$GREEN_CMDS', call)
+        self.assertIn('toolchain-install.json', call)
+
+    def test_installer_call_is_documented_as_hosted_gated_and_never_fatal(self):
+        window = self.src[self.install - 900:self.install + 500]
+        self.assertRegex(window, r'(?i)hosted')
+        self.assertIn('|| echo "Toolchain install: helper exited nonzero', window)
+
+    def test_driver_never_names_the_hosted_switch(self):
+        # tests/host-preview-test.py: only the shared hook may read it; the helper decides hosted mode itself.
+        self.assertNotIn('UNCLE_HOSTED', self.src[self.install - 900:self.install + 500])
 
 
 class PromptParagraph(unittest.TestCase):

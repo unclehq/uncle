@@ -3611,7 +3611,7 @@ rows = [{'id': 'PF-RUNTIME', 'required': True, 'status': 'N/A', 'evidence': 'The
 json.dump({'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report', 'narrative': 'No verification commands to probe.', 'rows': rows}, open(sys.argv[1], 'w'), indent=2)
 PY
     else
-        # Hosted toolchain install (gated inside the helper by UNCLE_HOSTED=1 and WORKFLOW_TOOLCHAIN_INSTALL!=0). Whatever the outcome
+        # Hosted toolchain install (gated inside the helper: hosted runs only, and never with WORKFLOW_TOOLCHAIN_INSTALL=0). Whatever the outcome
         # (success, nonzero exit, timeout, missing sudo/apt) the run continues, and preflight below judges actual PATH availability, so a
         # tool that installed despite a failed batch is not reported as a Missing runtime.
         python3 -B "$ROOT/scripts/lib/toolchain_install.py" "$commands" "$STATE_DIR/toolchain-install.json" \

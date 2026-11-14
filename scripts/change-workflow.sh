@@ -546,7 +546,10 @@ PY
 # If nothing could be built, a greenfield project still gets the server, which waits for the application to appear.
 change_preview_build() {
     [[ "${UNCLE_CHANGE_OPEN_PREVIEW:-1}" != 0 ]] || return 0
-    if [[ -s "$STATE_DIR/preview-server.pid" ]] && kill -0 "$(cat "$STATE_DIR/preview-server.pid" 2>/dev/null)" 2>/dev/null; then
+    # Skip only when the project already has a page of its own (change_preview_open serves that, and a first look would be written over
+    # it). A server that is merely running does not count: the hosted early server is up from the first second of every run, serving a
+    # "starting" page, and it must still get its first look.
+    if PYTHONPATH="$ROOT/scripts/lib" python3 -B -c 'import sys, headless_preview as h; sys.exit(0 if h.page_available(sys.argv[1]) else 1)' "$PWD" 2>/dev/null; then
         return 0
     fi
     local saved="${WORKFLOW_PREVIEW_OPEN_BROWSER:-0}"

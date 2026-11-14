@@ -1,72 +1,64 @@
-## AR-001: Ignored marker failures contradict the unconditional post-commit protection.
+## AR-001: Option B permits documentation-only completion, but the implementation sequence and acceptance criteria still require an
 
 - Severity: HIGH
-- References: CHANGE_SPEC.json §4 forbids writes after finalize/publish, but §8 and CHANGE_PLAN.json §12 explicitly restore today's behavior on marker-write failure. This permits the original defect after a successful commit or push; resolve the guarantee versus best-effort conflict in both artifacts.
-- Failure: Ignored marker failures contradict the unconditional post-commit protection. Add: "If recording the freeze fails, subsequent and resumed workflow operations must suppress .gitignore writes rather than resume normalization."
+- References: CHANGE_PLAN.json §BLOCKING PLANNING DECISION offers option B, while §Implementation sequence steps 2–3 require the external regression test and constant change, and §Scope cuts forbids cutting that test. CHANGE_SPEC.json AC-1 through AC-4 retain code-level acceptance, allowing incompatible interpretations of completion.
+- Failure: Option B permits documentation-only completion, but the implementation sequence and acceptance criteria still require an external code fix and regression test. Add: “Option B requires a separately approved documentation-only spec and sequence; it does not satisfy AC-1 through AC-4 of this bug fix.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: The tracked-file guarantee exceeds the planned .gitignore guard.
-
-- Severity: HIGH
-- References: CHANGE_SPEC.json §4 says no uncle code path writes '.gitignore or any tracked file'; CHANGE_PLAN.json R-1 repeats this scope, while D-1 only guards uncle_gitignore.ensure(). Without additional coverage, implementation and verification can satisfy the mechanism while violating the stated requirement.
-- Failure: The tracked-file guarantee exceeds the planned .gitignore guard. Add: "Inventory every uncle writer of tracked files reachable after finalize or publish, and prevent those writes after that boundary."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-003: Permitted scope cuts remove mandatory acceptance behavior.
+## AR-002: Zero-refusal acceptance also covers eventual success after a refusal, contradicting required retry success.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §18 permits cutting documentation and the stagegate.sh/from-issue.sh freeze calls. CHANGE_SPEC.json AC-3 requires both call sites and AC-5 requires the documentation; the scope-cut instructions and acceptance checklist cannot both govern completion.
-- Failure: Permitted scope cuts remove mandatory acceptance behavior. Add: "The finalize and merge freeze calls and the documentation update are required deliverables and cannot be cut without revising the approved acceptance criteria."
+- References: CHANGE_SPEC.json AC-2 says a build whose request is accepted makes no refused request, and S-2 requires zero refusals whenever a build gets its link; AC-3 and S-3 require a refused request followed by successful retry. CHANGE_PLAN.json §16 includes both scenarios without defining the exception.
+- Failure: Zero-refusal acceptance also covers eventual success after a refusal, contradicting required retry success. Add: “AC-2 and S-2 apply when the host accepts the initial valid request; an injected initial refusal followed by success satisfies AC-3 and is exempt from the zero-refusal requirement.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: The reset boundary is undefined for a reused root, making preservation and renewed normalization ambiguous.
+## AR-003: The plan does not settle which attempt determines the displayed expiry or how second-level expiry matches minute-only ou
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §6-7 says the marker is 'never cleared by uncle' but also that fresh run state resets it; U-3 relies on that reset. CHANGE_SPEC.json S-6 requires reused worktrees after push to remain frozen, so starting a fresh run could either preserve protection or re-enable the prohibited write.
-- Failure: The reset boundary is undefined for a reused root, making preservation and renewed normalization ambiguous. Add: "A new run on the same project root preserves the freeze marker; creating fresh run state must not remove it."
+- References: CHANGE_PLAN.json §1 derives end time from the initial 3600-second constant, while CHANGE_SPEC.json S-3 preserves a shorter retry and S-4/V-2 require the Preview end time to match link expiry. S-4 fixes output to HH:MM UTC, leaving both retry attribution and minute precision unresolved for implementation and tests.
+- Failure: The plan does not settle which attempt determines the displayed expiry or how second-level expiry matches minute-only output. Add: “Compute expiry from the successful request’s start time and lifetime, then format it as HH:MM UTC by truncating seconds; a successful retry uses its own start time and lifetime.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: A failed finalize or merge commit leaves normalization permanently disabled, changing retry behavior before any commit s
+## AR-004: The retry test does not establish which request determines the printed expiry, allowing the changed initial constant to
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 freezes before finalize/merge commits, while §6–7 says the marker is never cleared; CHANGE_SPEC.json S-4 preserves pre-freeze normalization. Neither defines commit failure or cancellation, so a rejected commit can suppress normalization on subsequent retries. Specify recovery and add a failed-commit retry regression test.
-- Failure: A failed finalize or merge commit leaves normalization permanently disabled, changing retry behavior before any commit succeeds. Add: "If a commit attempt fails, remove the freeze marker created by that attempt; preserve any marker that existed beforehand."
+- References: CHANGE_PLAN.json §1 derives end time from the initial constant, while §16 says only that retry works and Preview end time equals expiry; CHANGE_SPEC.json S-3 preserves a shorter retry and V-2 requires the actual link expiry. Resolve the retry case explicitly so implementation and regression assertions use the same successful request.
+- Failure: The retry test does not establish which request determines the printed expiry, allowing the changed initial constant to produce an incorrect end time after fallback. Add: "After a successful retry, compute and verify the Preview end time using the successful request's lifetime and time origin."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Symlink refusal does not specify ancestor directories or the marker itself, allowing implementations that write outside
-
-- Severity: HIGH
-- References: CHANGE_SPEC.json §10 explicitly refuses only symlinked `.uncle/workflow`, whereas AC-4 requires writes only inside that directory; CHANGE_PLAN.json D-1 merely says "refuses symlinks." A symlinked `.uncle` ancestor or marker leaf can redirect the write, so the plan must define refusal for the entire marker path.
-- Failure: Symlink refusal does not specify ancestor directories or the marker itself, allowing implementations that write outside the project. Add: "freeze() refuses symlinks at .uncle, workflow, and gitignore-frozen, and creates the marker without following links or truncating an existing target."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-007: An unwritable marker leaves post-publish tracked-file writes enabled despite the stated security guarantee.
+## AR-005: The regression strategy covers refusal followed by success but omits exhausted retries, leaving preserved failure output
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json §4 promises no uncle tracked-file writes after finalize/publish, but §8 and CHANGE_PLAN.json §12 explicitly restore today's behavior on marker-write failure. Permission errors or a refused symlink therefore bypass the protection; revise the failure policy and specify how subsequent processes preserve it.
-- Failure: An unwritable marker leaves post-publish tracked-file writes enabled despite the stated security guarantee. Add: "If freeze persistence fails, later ensure calls must remain read-only; inability to persist the marker must not restore tracked-file writes."
+- References: CHANGE_SPEC.json §8 explicitly requires no Preview line and a reason when all attempts fail; CHANGE_PLAN.json §16 tests only immediate success and a single refusal followed by success. Add the exhausted-retry case to the planned mocked-publisher regression coverage.
+- Failure: The regression strategy covers refusal followed by success but omits exhausted retries, leaving preserved failure output unprotected. Add: "When every permitted attempt is refused, verify that retries terminate, no Preview line is printed, and a failure reason is printed."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Source-order checks cannot establish that publishing or finalizing actually freezes the correct root.
-
-- Severity: HIGH
-- References: .uncle/workflow/documents/CHANGE_PLAN.json §16 and CHANGE_SPEC.json AC-3 prescribe source-order checks plus a separate freeze()/ensure() fixture. Those checks can pass for unreachable calls, incorrect roots, or calls executed after failed pushes; replace source ordering as the primary AC-3 oracle with execution tests.
-- Failure: Source-order checks cannot establish that publishing or finalizing actually freezes the correct root. Add: "Disposable-fixture integration tests execute each freeze call site with mocked publishing and signing, verify the target root is frozen, and verify a failed push creates no marker."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: The missing-file case has no valid SHA-256 oracle, and the plan leaves its assertion ambiguous.
+## AR-006: The zero-refusal requirement conflicts with the successful retry scenario, so tests can disagree about valid success.
 
 - Severity: MEDIUM
-- References: .uncle/workflow/documents/CHANGE_SPEC.json AC-1 includes missing-file cases but specifies before/after SHA-256 comparisons; CHANGE_PLAN.json §16 likewise promises SHA-256 equality for missing files. Hashing an absent path fails, while treating absence as empty bytes can miss erroneous creation of an empty file; define separate existence and content assertions.
-- Failure: The missing-file case has no valid SHA-256 oracle, and the plan leaves its assertion ambiguous. Add: "For an initially absent .gitignore, assert it remains absent after each frozen API and CLI invocation; for existing files, compare bytes against the unchanged pre-invocation snapshot."
+- References: CHANGE_SPEC.json AC-2 and S-2 require no refused requests when a build obtains its link, while AC-3 requires a refused request followed by a link. CHANGE_PLAN.json §16 includes both assertions without explicitly separating their applicability.
+- Failure: The zero-refusal requirement conflicts with the successful retry scenario, so tests can disagree about valid success. Add: “Zero refusals applies only when the host accepts the first request; the forced-refusal test expects one refusal followed by a successful retry.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-007: Expiry equality lacks a clock reference and rounding rule despite minute-only output, making the Preview assertion ambig
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC.json S-4 specifies HH:MM UTC, while V-2 requires the printed end time to equal link expiry. CHANGE_PLAN.json §1 derives end time from the same lifetime value and §16 asserts equality, but neither defines the reference instant, minute rounding, or which request supplies the lifetime after retry.
+- Failure: Expiry equality lacks a clock reference and rounding rule despite minute-only output, making the Preview assertion ambiguous. Add: “Freeze the mock clock at request acceptance; assert HH:MM UTC equals that instant plus the accepted request’s lifetime, truncated to the minute, including after retry.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-008: First-request assertions leave the every-request expiry invariant unverified, especially on retry.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC.json V-1 applies the integer 1..3600 constraint to every signed-link request, and S-3 preserves retry at a shorter lifetime. CHANGE_PLAN.json §16 explicitly checks only the first request’s upper bound and that retry works; mock range enforcement alone does not establish integrality or a shorter retry.
+- Failure: First-request assertions leave the every-request expiry invariant unverified, especially on retry. Add: “In both success and forced-refusal tests, assert every recorded request has an integer expiresInSeconds in 1..3600, and assert the retry lifetime is shorter than the initial 3600 seconds.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

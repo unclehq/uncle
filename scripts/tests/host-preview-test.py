@@ -687,11 +687,58 @@ class EarlyPreview(Base):
                        cwd=self.project)
         self.assertEqual(pid_file.read_text(), first)
 
+    def test_a_vite_source_entry_at_the_root_shows_the_first_look_not_the_starting_page(self):
+        r, port = self.run_early()
+        state = self.project / '.uncle/workflow/preview'
+        (state / 'static-index.html').write_text('<h1>FIRST LOOK</h1>')           # preview-build's snapshot replaces the starting page
+        (self.project / 'index.html').write_text('<div id="root"></div><script type="module" src="/src/main.jsx"></script>')
+        body = answers('http://127.0.0.1:%d/' % port)
+        self.assertIn(b'FIRST LOOK', body)
+        self.assertNotIn(b'Uncle is starting', body)
+
     def test_it_does_nothing_unless_hosted(self):
         r, port = self.run_early(hosted=None)
         self.assertIn('rc=0 early=unset', r.stdout, r.stdout + r.stderr)
         self.assertIsNone(self.record())
         self.assertFalse((self.project / '.uncle/workflow/preview-server.pid').exists())
+
+
+class ChangePreviewBuildGuard(unittest.TestCase):
+    """change_preview_build must build a first look for an empty project even though the hosted early server is already running,
+    and must still leave a project that has a page of its own alone."""
+
+    def build_started(self, with_server, index_html):
+        import re
+        src = (ROOT / 'scripts/change-workflow.sh').read_text()
+        fn = re.search(r'^change_preview_build\(\) \{.*?^\}', src, re.S | re.M).group(0)
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / '.uncle/workflow').mkdir(parents=True)
+            (Path(d) / '.gitkeep').write_text('')
+            sleeper = None
+            if with_server:
+                sleeper = subprocess.Popen(['sleep', '30'])
+                (Path(d) / '.uncle/workflow/preview-server.pid').write_text(str(sleeper.pid))
+            if index_html:
+                (Path(d) / 'index.html').write_text('<h1>mine</h1>')
+            script = ('ROOT=%s; STATE_DIR=%s/.uncle/workflow; PREVIEW_STARTED=0\n'
+                      'preview_build_start() { echo BUILD_STARTED; PREVIEW_STARTED=1; }\n'
+                      'preview_existing_project() { return 1; }\nchange_preview_open() { :; }\n%s\ncd %s; change_preview_build'
+                      % (ROOT, d, fn, d))
+            try:
+                out = subprocess.run(['bash', '-c', script], capture_output=True, text=True, timeout=60).stdout
+            finally:
+                if sleeper:
+                    sleeper.kill()
+            return 'BUILD_STARTED' in out
+
+    def test_builds_for_an_empty_project_while_the_early_server_is_running(self):
+        self.assertTrue(self.build_started(with_server=True, index_html=False))
+
+    def test_builds_for_an_empty_project_with_no_server(self):
+        self.assertTrue(self.build_started(with_server=False, index_html=False))
+
+    def test_leaves_a_project_with_its_own_page_alone(self):
+        self.assertFalse(self.build_started(with_server=True, index_html=True))
 
 
 if __name__ == '__main__':

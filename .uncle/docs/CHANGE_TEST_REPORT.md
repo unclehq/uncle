@@ -4,12 +4,15 @@
 
 | Command | Status | Meaningful output | Requirements |
 |---|---|---|---|
-| Implementation handoff | NOT RUN | The implementation stage omitted its required test handoff; no command result is inferred. | None stated |
+| grep -n -i '7200\\|3600\\|expiresIn' docs/preview-link-release.md | PASS | Single match, line 38: 'use an expiry of at most 3600 seconds'. No 7200 in the repo. | AC-1 |
+| targeted mocked-publisher tests | N/A | The build script is external to this repo. | AC-1, AC-2, AC-3, AC-4 |
+| bash scripts/run-shell-tests.sh; bash scripts/run-python-tests.sh | DRIVER PENDING | The driver owns the full regression run. | AC-4 |
+| formatter, type check, lint, integration, frontend build, migration, rollback, performance, security | N/A | No source file changed. | None stated |
 
 ## Coverage gaps
 
-- All changed behavior requires review against the approved plan and fresh observed test evidence.
+- AC-1 to AC-4 are unverified: the build script is not in this repo.
 
 ## Next action
 
-Run the approved verification commands and replace this incomplete record with actual results.
+The owner picks option A (point at the build-script repo) or C (transfer the issue), then re-run implementation there.

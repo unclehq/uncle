@@ -269,6 +269,16 @@ green_run() {
     record_dir="$(dirname "$2")/green-check-records"
     rm -rf "$record_dir"; mkdir -p "$record_dir"
     UNCLE_CHECK_RECORD_DIR="$record_dir" UNCLE_EXECUTED_ROOT="$PWD" green_run_inner "$@" || status=$?
+    # A command that failed because a program was not installed (the output says so) is run again after the program is installed, a
+    # few times at most. Hosted runs only: the helper does nothing elsewhere, and a local run's failure reads as it always did.
+    local heal_round=0
+    while [[ "$status" == 0 && "$heal_round" -lt "${WORKFLOW_TOOLCHAIN_HEAL_ROUNDS:-3}" && -f "$GREEN_LIB_DIR/toolchain_heal.py" ]] \
+        && awk -F'\t' '$1 != 0 { found = 1 } END { exit !found }' "$2" 2>/dev/null \
+        && python3 -B "$GREEN_LIB_DIR/toolchain_heal.py" "$3" "${STATE_DIR:-.uncle/workflow}/toolchain-heal.json" >&2; do
+        heal_round=$((heal_round + 1))
+        echo "Re-running the verification commands after the toolchain repair." >&2
+        UNCLE_CHECK_RECORD_DIR="$record_dir" UNCLE_EXECUTED_ROOT="$PWD" green_run_inner "$@" || status=$?
+    done
     if [[ -f "$GREEN_LIB_DIR/check_record.py" ]] && command -v python3 >/dev/null 2>&1; then
         python3 -B "$GREEN_LIB_DIR/check_record.py" assemble "$record_dir" "$(dirname "$2")/green-check.json" >/dev/null 2>&1 || true
     fi

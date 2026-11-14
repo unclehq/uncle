@@ -149,9 +149,6 @@ def candidates(tool):
     return () if not value else ((value,) if isinstance(value, str) else tuple(value))
 
 
-NEEDS = {'dune': ('ocaml',), 'ocamlfind': ('ocaml',), 'ocamlc': ('ocaml',)}
-
-
 def choose(tools):
     """({tool: package apt can install}, {tool: names tried}) for the tools that have a mapping."""
     chosen, unresolved = {}, {}
@@ -172,10 +169,6 @@ def install(commands_path, record_path):
     record = {'schema': 'uncle.toolchain-install/v1', 'enabled': is_enabled(), 'malformed': [],
               'missing': [], 'packages': [], 'skipped': [], 'install': None, 'still_missing': []}
     names, record['malformed'] = discover(text)
-    # A build tool is useless without its compiler: Debian's ocaml-dune does not depend on ocaml, so a run that only named `dune`
-    # got dune and then failed with "Program ocamlc not found". Add the tools these always need.
-    for tool in list(names):
-        names.extend(d for d in NEEDS.get(tool, ()) if d not in names)
     record['missing'] = [n for n in names if not shutil.which(n)]
     for name in record['missing']:
         if not candidates(name):

@@ -152,16 +152,6 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(rec['still_missing'], ['zzfake1'])
         self.assertIn('no installable package', [s for s in rec['skipped'] if s['tool'] == 'zzfake1'][0]['reason'])
 
-    def test_dune_also_brings_the_ocaml_compiler(self):
-        log = self.tmp / 'argv.log'
-        self.script('apt-get', '#!/bin/sh\necho "$@" >> %s\n' % log)
-        with mock.patch.dict(ti.PACKAGES, {'zzdune': 'pkg-dune', 'zzocaml': 'pkg-ocaml'}), \
-                mock.patch.dict(ti.NEEDS, {'zzdune': ('zzocaml',)}):
-            rec = self.run_installer('zzdune build\n')
-        self.assertIn('pkg-dune', log.read_text())
-        self.assertIn('pkg-ocaml', log.read_text())
-        self.assertIn('zzocaml', rec['missing'])
-
     def test_cli_usage_error_is_two(self):
         with mock.patch('sys.stderr'):
             self.assertEqual(ti.main([]), 2)

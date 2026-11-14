@@ -1,56 +1,50 @@
-# Baseline report
+# Baseline Report
 
-Omitted sections: Reproduction result (not run; needs hosted Daytona); Existing failures (none documented in repo)
+Omitted sections: Current API contracts (target code absent); Reproduction (not runnable here)
 
 ## 1. Change-request summary
-CHANGE_REQUEST.md (Issue 263): the build script's first signed-link request uses `expiresInSeconds=7200`; host caps at 3600 and returns 400; retry at 3600 works. Fix: ask for <=3600 first, keep retry. Test: mocked publisher.
+Issue 264 (CHANGE_REQUEST.md): hosted build script `build-with-uncle/scripts/build.py` prints a signed preview link once (`announce_preview`), skips the final link request (`sb.announced`), and keeps `sb.link_expires` from the first link. Builds over an hour hand over an expired link.
 
 ## 2. Repository architecture
-This repo is the Uncle workflow driver (bash + Python): `scripts/*.sh`, `scripts/lib/*.py`, `scripts/tests/*-test.py` and `*.sh`, `skills/uncle-build/SKILL.md`, `docs/`.
+This repository (Uncle driver: `scripts/`, `scripts/lib/`, `scripts/tests/`, `skills/`, `prompts/`, `docs/`) does NOT contain `build-with-uncle/` or `build.py`. Evidence: `git ls-files` has no such path; grep for `announce_preview`, `sb.announced`, `link_expires`, `autoStopInterval`, `cleanup_expired` returns no match in the working tree; `git log --all -- '*build.py'` is empty. `docs/preview-link-release.md` (lines 1-6, 24-30) states the build script lives in a separate build-script repo and that work on it is external to this repo. The prior fix for #263 (commit dee824c) touched only `.uncle/` artifacts here.
 
 ## 3. Relevant code paths
-- Repo-wide grep for `expiresInSeconds`, `7200`, `signed-preview`, `works until`, `autoStopInterval` (excluding .git/.venv/.uncle) found NO build-script source.
-- `docs/preview-link-release.md:13,40-48`: handoff doc stating the build script lives in an external build-script repo and must use expiry <=3600 s. Not code.
-- `scripts/lib/check_release_grants.py:15,46,79`: pre-publish check for the signed-preview-url grant only; does not set expiry.
-- `skills/uncle-build/SKILL.md:8-17`: relays `Preview:` lines; says link valid up to an hour.
+| Path | Relevance |
+|---|---|
+| `docs/preview-link-release.md` | Documents build-script requirements: `Preview:` line, expiry <= 3600 s, keep sandbox. |
+| `scripts/lib/check_release_grants.py` | Checks release grant for GET `/sandbox/{sandboxId}/ports/{port}/signed-preview-url` (line 15, 46). Does not cover the `/expire` POST named as optional in the request. |
+| `scripts/tests/release-grants-test.py` | Tests that checker. |
+| `skills/uncle-build/SKILL.md` | Chat skill; no build.py reference. |
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Release grant check on definition | OK/exit 1/exit 2 per grant | check_release_grants.py:46-80; release-grants-test.py | Yes |
-| B-2 | Chat reports build output | Relays `Preview:` lines verbatim, https only | SKILL.md:8-17; chat-skill-test.py | Yes |
-| B-3 | Hosted build requests signed link | First request asks 7200, host 400, retry 3600 | CHANGE_REQUEST.md table; code NOT in this repo | Behavior to change |
+| B-1 | Run check_release_grants.py on a definition with GET signed-preview-url grant | exit 0 `OK` | docs/preview-link-release.md:20-26 | Yes |
+| B-2 | build.py announce/final-link behavior | UNRESOLVED: source not in this repo | grep above | n/a |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Only an exact boolean-false-approval grant qualifies | check_release_grants.py | release-grants-test.py | High |
-| I-2 | Only valid https `Preview:` lines are relayed | SKILL.md | chat-skill-test.py | Medium |
-
-## 6. Interface contracts
-Host: `GET /sandbox/{id}/ports/{port}/signed-preview-url?expiresInSeconds=N`, N whole integer 1..3600 else 400 (from CHANGE_REQUEST.md; not verifiable here).
+| I-1 | Release grant checker accepts only boolean `require_approval:false` GET grant | check_release_grants.py | scripts/tests/release-grants-test.py | Medium (not read in full) |
 
 ## 7. Existing automated-test coverage
-No test in this repo covers the build script's link request. Shell and Python suites use separate temp dirs and no shared ports, so they are run as a parallel group.
+No test in this repo covers build.py. Shell and Python runners are independent (separate temp dirs), so they are grouped.
 
 ## 9. Baseline test results
-Commands taken from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (present). Not run by this stage; driver baseline is authoritative. No documented pre-existing failures found; per task notes some Python suites may already fail on a clean checkout.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (both exist). Not run here, per stage rules; the driver baseline is authoritative. No repository-documented failures were read.
 
 ## 12. Likely change surface
-The build script, in an external repo (UNRESOLVED: its location/path is not in this checkout). In-repo: at most `docs/preview-link-release.md`.
+UNRESOLVED. The surface named by the request (`build-with-uncle/scripts/build.py`, its tests) is outside this repository.
 
-## 13. Regression-sensitive components
-check_release_grants.py, SKILL.md and their tests.
-
-## 14. Outside the change
-Host cap, release grant, SKILL.md, host_preview.py, autoStop/autoDelete settings.
+## 14. Areas explicitly outside the change
+Driver scripts (`scripts/*.sh`, `scripts/lib/host_preview.py`), the release checker.
 
 ## 15. Unknowns and assumptions
-- U-1: Where the build script lives and whether it can be edited in this task. UNRESOLVED.
-- U-2: Whether the script's retry logic (#207) is a loop on 400 that lowers lifetime; assumed from the request.
+- U-1: Location of the build-script repo and its test harness (mocked publisher and clock) is unknown to this checkout.
+- U-2: Whether the release grant must also allow POST `.../expire` (optional step 3).
 
 ## 16. Initial risk assessment
-High: the requested code change cannot be located in this repository; any in-repo work would not fix the reported defect.
+High: the requested change cannot be made or tested in this repository. Any edit here would be unrelated to the reported defect.
 
 ## Exact build and test commands executed
 

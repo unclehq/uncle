@@ -1,59 +1,55 @@
-# Change spec
+# Change Spec: Issue 264
 
-Omitted sections: Performance (none); Migration (none); Prototype isolation (n/a)
+Omitted sections: Migration (none); Prototype isolation (not a prototype); Security beyond link lifetime (no change)
 
 ## 1. Change type
-Bug fix.
+Bug fix, in the external build-script repo.
 
 ## 2. Problem statement
-The build script's first signed-link request asks for 7200 s; the host caps at 3600 and logs a refusal error for every hosted build.
+A hosted build lasting more than an hour hands over an expired signed preview link, because the link is requested only once, early.
 
 ## 3. Current behavior
-B-3 in baseline: 400 on first request, success on retry.
+See request and baseline B-2 (UNRESOLVED, source absent). Per the request: `announce_preview` prints the link once and sets `sb.announced`; `build` returns early when announced; `sb.link_expires` keeps the first link's expiry.
 
 ## 4. Desired behavior
-First request uses `expiresInSeconds` <=3600 and succeeds; retry retained for refused requests.
+At the end of `build`, after the pull request, always request a fresh signed link, print it as the last `Preview:` line, and set `sb.link_expires` from it. The early link is still printed during the build. Optionally expire the earlier link.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| S-1 | MODIFY | Build requests signed link | expiresInSeconds=7200 first | First request expiresInSeconds <=3600 (whole number) | Mocked publisher test in build-script repo |
-| S-2 | MODIFY | Build gets its link | One refused request, then success | Zero refused link requests | Mocked publisher records no 400 |
-| S-3 | PRESERVE | Host refuses a request | Retry at shorter lifetime | Retry kept | Mocked publisher returns 400 once, then 200 |
-| S-4 | PRESERVE | Link obtained | Prints `Preview: <url> (works until HH:MM UTC)` matching expiry | Unchanged; end time matches requested lifetime | Mocked publisher test asserts line |
+| BH-1 | PRESERVE | Preview appears mid-build | Prints `Preview: <url> (works until <time>)` | Unchanged | build-script test |
+| BH-2 | MODIFY | Build ends after PR, link already announced | No new link; early link is last | Fresh link requested; last `Preview:` line is the fresh link | build-script test, mocked clock |
+| BH-3 | MODIFY | Same | `sb.link_expires` = first link expiry | `sb.link_expires` = final link expiry; kept-sandbox label and `kept ... until` match | build-script test |
+| BH-4 | PRESERVE | No link ever refused | No request over 3600 s | Same | build-script test |
+| BH-5 | ADD (optional) | Fresh link issued | Both links live | Earlier link expired via POST .../expire | build-script test |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| V-1 | NEW | Requested expiry is a single whole number 1..3600 | Every signed-link request | Build script | Mocked publisher test |
-| V-2 | EXISTING | Printed end time equals link expiry | Preview line | Build script | Mocked test |
-| V-3 | EXISTING | Release grant check unchanged (I-1) | check_release_grants.py | Existing | release-grants-test.py |
+| INV-1 | EXISTING | No signed-link request has expiresInSeconds > 3600 | build.py | link request code | mocked publisher test |
+| INV-2 | STRENGTHENED | The last printed link is valid for >= 55 min after build end | build.py | end of `build` | mocked clock test |
+| INV-3 | STRENGTHENED | Kept-sandbox label equals the last printed link's expiry | build.py | `sb.link_expires` | test |
+
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Preview line format unchanged.
+Setting `sb.link_expires` and label format unchanged.
 
-## 8. Failure behavior
-If the host still refuses, existing retry applies; if all fail, build prints no Preview line and a reason.
-
-## 10. Security
-Shorter-or-equal lifetime only; never longer than 3600.
-
-## 12. Rollback
-Revert the constant in the build script.
+## 8. Error and failure behavior
+If the final link request fails, behavior is UNRESOLVED: keep the early link as the last line and say it may have expired, or fail. Needs decision by the build-script owner.
 
 ## 14. Non-goals
-Host cap, grants, autoStop/autoDelete, SKILL.md, retry redesign.
+autoStopInterval value (#263).
 
 ## 15. Assumptions and unresolved questions
-UNRESOLVED: the build script source is not in this repository (baseline U-1); the criteria are verifiable only where it lives.
+- BLOCKING: the code is not in this repository (baseline section 2).
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | The build script's first signed-link request has expiresInSeconds <= 3600 (a whole number >= 1). | Mocked-publisher test in the repo containing the build script asserts the first recorded request. |
-| AC-2 | A build whose link request is accepted makes no refused (400) link request. | Mocked publisher that enforces the 1..3600 cap records zero refusals. |
-| AC-3 | The retry after a refused request is retained and still yields a link. | Mocked publisher refuses the first request; test asserts a retry and a Preview line. |
-| AC-4 | The printed end time matches the requested expiry; existing suites in this repo still pass. | Mocked test asserts the Preview line; bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh unchanged versus baseline. |
+| AC-1 | With a mocked publisher and clock, preview appears at 1 min and the build ends at 70 min; the last `Preview:` line's end time is at least 55 minutes after the build ends. | Build-script test (external repo). |
+| AC-2 | The kept-sandbox label and the `kept ... until` line equal the last link's expiry. | Build-script test (external repo). |
+| AC-3 | A build whose link was never refused makes no signed-preview-url request with expiresInSeconds above 3600. | Mocked publisher assertion (external repo). |
+| AC-4 | The early link is still printed while the build runs. | Build-script test (external repo). |
 

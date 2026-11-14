@@ -83,7 +83,10 @@ EOT
         ;;
         unit) cat <<'EOT'
 Lane `unit`. Own: pure domain/logic unit tests, component tests (render, props, events, with the testing library the plan names),
-and property or invariant tests. Cover every behavior and invariant that is not a whole-browser flow. Conventional location when the
+and property or invariant tests. Cover every behavior and invariant that is not a whole-browser flow. That includes black-box
+checks of a command-line program or script (run it, compare its output and exit status), and the test runner file the plan names under
+`Protected verification paths` (for example `tests/check.sh`): no other lane owns it, and the driver stops when the plan's protected
+paths hold no file. Never answer "nothing to unit-test" while a protected test file the plan names is still unwritten. Conventional location when the
 plan names none: `tests/unit/` and `tests/component/`. Do not write browser (playwright/cypress) tests or defect-injection specs.
 EOT
         ;;

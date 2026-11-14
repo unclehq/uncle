@@ -1,64 +1,56 @@
-## AR-001: Option B permits documentation-only completion, but the implementation sequence and acceptance criteria still require an
+## AR-001: The failure fallback contradicts the unconditional final-link lifetime guarantee.
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json §BLOCKING PLANNING DECISION offers option B, while §Implementation sequence steps 2–3 require the external regression test and constant change, and §Scope cuts forbids cutting that test. CHANGE_SPEC.json AC-1 through AC-4 retain code-level acceptance, allowing incompatible interpretations of completion.
-- Failure: Option B permits documentation-only completion, but the implementation sequence and acceptance criteria still require an external code fix and regression test. Add: “Option B requires a separately approved documentation-only spec and sequence; it does not satisfy AC-1 through AC-4 of this bug fix.”
+- References: CHANGE_PLAN.json §12 keeps the earlier link on failure; CHANGE_SPEC.json §8 leaves failure unresolved, while INV-2 requires every last printed link to remain valid for at least 55 minutes after completion. An early link can already be expired in AC-1's 70-minute build; reconcile the spec, invariant, and failure tests with the chosen fallback.
+- Failure: The failure fallback contradicts the unconditional final-link lifetime guarantee. Add: “If final renewal fails, complete the build with a warning, preserve any earlier link and its expiry, or report preview unavailable if none exists; the 55-minute guarantee applies only to successful renewal.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Zero-refusal acceptance also covers eventual success after a refusal, contradicting required retry success.
+## AR-002: “After the PR” leaves renewal undefined when publishing is declined or PR creation fails.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-2 says a build whose request is accepted makes no refused request, and S-2 requires zero refusals whenever a build gets its link; AC-3 and S-3 require a refused request followed by successful retry. CHANGE_PLAN.json §16 includes both scenarios without defining the exception.
-- Failure: Zero-refusal acceptance also covers eventual success after a refusal, contradicting required retry success. Add: “AC-2 and S-2 apply when the host accepts the initial valid request; an injected initial refusal followed by success satisfies AC-3 and is exempt from the zero-refusal requirement.”
+- References: CHANGE_PLAN.json §1 and CHANGE_SPEC.json §4 place renewal “after” the PR, and BH-2 only describes completion after a PR. The supplied workflow instructions make publishing and PR creation optional; specify the trigger so an otherwise completed build still receives a fresh preview without publishing.
+- Failure: “After the PR” leaves renewal undefined when publishing is declined or PR creation fails. Add: “Run final preview renewal when build work completes, whether PR creation succeeds, fails, or is skipped; PR creation is not a prerequisite.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: The plan does not settle which attempt determines the displayed expiry or how second-level expiry matches minute-only ou
+## AR-003: The request limit has conflicting scopes after a refused link.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 derives end time from the initial 3600-second constant, while CHANGE_SPEC.json S-3 preserves a shorter retry and S-4/V-2 require the Preview end time to match link expiry. S-4 fixes output to HH:MM UTC, leaving both retry attribution and minute precision unresolved for implementation and tests.
-- Failure: The plan does not settle which attempt determines the displayed expiry or how second-level expiry matches minute-only output. Add: “Compute expiry from the successful request’s start time and lifetime, then format it as HH:MM UTC by truncating seconds; a successful retry uses its own start time and lifetime.”
+- References: CHANGE_SPEC.json AC-3 and BH-4 restrict the 3600-second assertion to builds where no link was refused, whereas INV-1 prohibits larger requests unconditionally and CHANGE_PLAN.json §2-3 states the host caps expiry at 3600 seconds. Remove the refusal qualification from the acceptance criterion and test retries against the same cap.
+- Failure: The request limit has conflicting scopes after a refused link. Add: “Every signed-preview-url request, including retries after refusal, must use expiresInSeconds no greater than 3600.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: The retry test does not establish which request determines the printed expiry, allowing the changed initial constant to
+## AR-004: The refresh-failure fallback can return an expired link, contradicting the unconditional 55-minute validity invariant an
 
-- Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 derives end time from the initial constant, while §16 says only that retry works and Preview end time equals expiry; CHANGE_SPEC.json S-3 preserves a shorter retry and V-2 requires the actual link expiry. Resolve the retry case explicitly so implementation and regression assertions use the same successful request.
-- Failure: The retry test does not establish which request determines the printed expiry, allowing the changed initial constant to produce an incorrect end time after fallback. Add: "After a successful retry, compute and verify the Preview end time using the successful request's lifetime and time origin."
+- Severity: HIGH
+- References: CHANGE_PLAN.json §12 keeps the earlier link and does not fail; CHANGE_SPEC.json §8 leaves that decision unresolved, while INV-2 requires the last printed link to remain valid for at least 55 minutes after completion. Reconcile the spec and plan and require a mocked refresh-failure regression test.
+- Failure: The refresh-failure fallback can return an expired link, contradicting the unconditional 55-minute validity invariant and leaving failure tests without one expected outcome. Add: “If refresh fails, preserve the earlier expiry, warn without failing the build, and exempt this outcome from INV-2.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: The regression strategy covers refusal followed by success but omits exhausted retries, leaving preserved failure output
+## AR-005: Final refresh is placed “after the PR,” leaving builds that skip optional publishing unspecified and risking retention o
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json §8 explicitly requires no Preview line and a reason when all attempts fail; CHANGE_PLAN.json §16 tests only immediate success and a single refusal followed by success. Add the exhausted-retry case to the planned mocked-publisher regression coverage.
-- Failure: The regression strategy covers refusal followed by success but omits exhausted retries, leaving preserved failure output unprotected. Add: "When every permitted attempt is refused, verify that retries terminate, no Preview line is printed, and a failure reason is printed."
+- References: CHANGE_PLAN.json §1 and CHANGE_SPEC.json §4 locate refresh after the PR; BH-2 also describes only completion after PR creation. The supplied workflow instructions make publishing and PR creation optional; add a regression case that skips PR creation and still checks final-link lifetime and kept-sandbox expiry.
+- Failure: Final refresh is placed “after the PR,” leaving builds that skip optional publishing unspecified and risking retention of the original expired link. Add: “Run final preview refresh on successful build completion even when PR creation is skipped.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: The zero-refusal requirement conflicts with the successful retry scenario, so tests can disagree about valid success.
+## AR-006: Final-request failure has incompatible test oracles: fallback may print an expired link, while INV-2 requires 55 minutes
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-2 and S-2 require no refused requests when a build obtains its link, while AC-3 requires a refused request followed by a link. CHANGE_PLAN.json §16 includes both assertions without explicitly separating their applicability.
-- Failure: The zero-refusal requirement conflicts with the successful retry scenario, so tests can disagree about valid success. Add: “Zero refusals applies only when the host accepts the first request; the forced-refusal test expects one refusal followed by a successful retry.”
+- Severity: HIGH
+- References: CHANGE_PLAN.json §12 selects nonfatal fallback; CHANGE_SPEC.json §8 leaves fallback versus failure unresolved, and INV-2 unconditionally requires >=55 minutes of validity. Reconcile these statements so failure-path tests and review checks agree.
+- Failure: Final-request failure has incompatible test oracles: fallback may print an expired link, while INV-2 requires 55 minutes of validity. Add: "On final-request failure, complete with an expiry warning, preserve the earlier expiry metadata, and exempt this fallback from INV-2; test this with an expired early link."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Expiry equality lacks a clock reference and rounding rule despite minute-only output, making the Preview assertion ambig
+## AR-007: The request-limit acceptance test excludes refused-link histories, although the invariant covers every request.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json S-4 specifies HH:MM UTC, while V-2 requires the printed end time to equal link expiry. CHANGE_PLAN.json §1 derives end time from the same lifetime value and §16 asserts equality, but neither defines the reference instant, minute rounding, or which request supplies the lifetime after retry.
-- Failure: Expiry equality lacks a clock reference and rounding rule despite minute-only output, making the Preview assertion ambiguous. Add: “Freeze the mock clock at request acceptance; assert HH:MM UTC equals that instant plus the accepted request’s lifetime, truncated to the minute, including after retry.”
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: First-request assertions leave the every-request expiry invariant unverified, especially on retry.
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC.json V-1 applies the integer 1..3600 constraint to every signed-link request, and S-3 preserves retry at a shorter lifetime. CHANGE_PLAN.json §16 explicitly checks only the first request’s upper bound and that retry works; mock range enforcement alone does not establish integrality or a shorter retry.
-- Failure: First-request assertions leave the every-request expiry invariant unverified, especially on retry. Add: “In both success and forced-refusal tests, assert every recorded request has an integer expiresInSeconds in 1..3600, and assert the retry lifetime is shorter than the initial 3600 seconds.”
+- References: CHANGE_SPEC.json AC-3 and BH-4 apply only when no link was ever refused; INV-1 says no signed-link request exceeds 3600 seconds, and CHANGE_PLAN.json §1 repeats that cap. Extend the test obligation to refused requests so conditional acceptance coverage cannot conceal an invariant violation.
+- Failure: The request-limit acceptance test excludes refused-link histories, although the invariant covers every request. Add: "Test a refused signing request and any subsequent retries or fallback requests, asserting that every expiresInSeconds value remains at most 3600."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

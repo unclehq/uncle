@@ -1,65 +1,64 @@
-# Change spec — issue 267
-
-Omitted sections: Performance (none); Security (no new trust boundary); Migration (none, no persisted format change); Prototype isolation (n/a).
+# Change spec
+Omitted sections: Migration (no persisted data); Prototype isolation (none); Performance (only the re-ask saving); Security (no new exposure beyond reading two non-secret headers)
 
 ## 1. Change type
 Bug fix.
 
 ## 2. Problem statement
-An updated plan whose checks are scripts not named like tests (e.g. `scripts/check-launch.sh`) is refused with no protected paths, and the refusal is reported as `writer attempts exhausted`. Baseline B-2, B-3, B-7.
+Updated-plan edit schemas exceed Bedrock's 24-optional-property grammar limit, so Claude models are not schema-constrained; the adapter also ignores the `x-seren-schema-relaxed` signal and, for bounded writers, skips repair, costing a full re-ask per bad packet.
 
 ## 3. Current behavior
-Baseline B-1..B-7.
+See baseline EB-1, EB-2.
 
 ## 4. Desired behavior
-Protected paths fall back to the repository files that `verification_commands` execute; the Markdown project-plan fallback records protected paths; a merge refusal is reported as its own stop reason.
+Every edit schema sent for an updated-plan writer has at most 24 optional properties; a reply flagged relaxed is treated as unenforced and a bounded writer may run the targeted repair step.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| SB-1 | MODIFY | Plan names no test file by name/dir but `verification_commands` run `scripts/check-a.sh`, `bash scripts/run-defects.sh`, `./scripts/check-b.sh` | Conflict, stage stops (B-2) | Those scripts are derived as protected paths (subject to B-5 ownership filter) and merge succeeds | unit test on `derive_protected_paths` and on merge with a fixture plan |
-| SB-2 | PRESERVE | Plan names test files by name/dir | Named test files derived | Unchanged result: the executed-file fallback is not consulted | existing ops/fast-path tests |
-| SB-3 | PRESERVE | Excluded tokens (`.json`, `.lock`, dot/abs/`..`/build dirs) | Excluded | Also excluded from the executed-file fallback | unit test |
-| SB-4 | MODIFY | Commands execute only tools with no repo file (e.g. `cabal test`, `npm test`) and plan names no test file | Conflict | Still a refusal, now reported per SB-6 | unit test |
-| SB-5 | MODIFY | Markdown single-pass project plan is ingested | No `protected_verification_paths` | Payload carries derived `protected_verification_paths` (named tests first, else executed files), so the updated plan need not derive | unit test on ingest |
-| SB-6 | MODIFY | `updated_plan_ops.py merge` raises Conflict | stop-reason `updated-plan: writer attempts exhausted` | stop-reason `updated-plan: merge conflict: <message>`; stderr names the merge refusal | python test (exit code/message) + shell test (stop-reason file) |
-| SB-7 | PRESERVE | Writers genuinely exhausted (stagegate 2984 path) | `updated-plan: writer attempts exhausted` | Unchanged | existing writer-retries test |
-| SB-8 | PRESERVE | Merge refusal | `workflow_terminal_failure` treats the run as terminal | Still terminal | shell test |
+| B-1 | MODIFY | Driver builds an updated-plan edit schema (any ids/model shape) | 133-159 optional props | <=24 optional props counted over whole schema | AC-1 test |
+| B-2 | MODIFY | Model writes generic-op `fields`/`new` as required array of `{name,value}` pairs | not accepted | Converted to the same typed ops as dict form | AC-2 test |
+| B-3 | PRESERVE | Model writes `fields`/`new` as dict of strings (EB-5) | applied | Still applied identically | AC-3 test |
+| B-4 | ADD | Response has `x-seren-schema-relaxed` | ignored | Mode reported as relaxed/unenforced | AC-4 test |
+| B-5 | MODIFY | Bounded writer reply relaxed and schema-invalid | ValueError, group re-ask | Targeted repair runs once | AC-5 test |
+| B-6 | PRESERVE | Bounded writer reply not relaxed and schema-invalid | ValueError, no repair | Unchanged | AC-6 test |
+| B-7 | PRESERVE | Non-bounded writer schema-invalid | targeted repair | Unchanged | existing + AC-6 |
+| B-8 | PRESERVE | Server sends no header | no change | No change | existing suites |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| SI-1 | EXISTING | Protected paths are repository-relative with no generated/build/dot/`..` paths (I-1) | derivation | fast_path | unit test |
-| SI-2 | EXISTING | Protected path must be step-owned when any are owned (I-2) | merge/publish | ops, publish_agent_artifact | existing test |
-| SI-3 | STRENGTHENED | Protected-path derivation covers executed repository files when no tests are named; empty only when commands execute no repo file | derivation | fast_path | unit test |
-| SI-4 | EXISTING | Updated plan never published with empty protected paths (I-3) | merge/publish | ops, edits, publish | unit test (SB-4) |
-| SI-5 | NEW | A merge refusal never reports writer exhaustion; writer exhaustion never reports merge conflict | stop-reason | stagegate, model-jobs | shell test |
+| INV-1 | NEW | No edit schema has >24 optional properties | worker_schemas._op/model_op outputs | schema builders | AC-1 |
+| INV-2 | EXISTING | Enum-constrained ids still restrict op id/target/after | edit schemas | `_op` pick | AC-1 |
+| INV-3 | EXISTING | typed_op validates every op before apply | plan_model | typed_op | existing ops test |
+| INV-4 | STRENGTHENED | Bounded writer repair only when schema enforcement is known absent (relaxed header) | http_agent | final-answer path | AC-5, AC-6 |
+| INV-5 | EXISTING | Headers other than the two named are not persisted; API key never logged | self_hosted_http | _request | existing spending/budget suites |
+
 No RELAXED or REMOVED invariants.
 
-## 7. Compatibility requirements
-Stop-reason keeps the `updated-plan:` prefix. `updated-plan-writers-exhausted` flag still created on merge refusal. Existing plans with named tests derive identical paths.
+## 7. Compatibility
+Dict-form `fields`/`new` remain accepted by consumers. `constrained_completion` keeps its 4-tuple return.
 
 ## 8. Error and failure behavior
-Merge refusal: stderr line `updated-plan ops: <message>`, distinct exit status from other errors, stop-reason `updated-plan: merge conflict: <message>` (message single-line, truncated), stage returns 1.
+Relaxed + repair still invalid: raise the existing schema ValueError (driver retries group). Header absent/malformed: treat as enforced.
 
 ## 12. Rollback
-Revert the commit; no persisted data changes.
+Revert the commit; no persisted state.
 
 ## 14. Non-goals
-Changing writer prompts; changing the typed-plan path; protecting files beyond those executed; touching change-workflow.sh messaging.
+Project-plan typed sections schema; Seren server changes; changing driver retry grouping; budgets.
 
 ## 15. Assumptions
-Executed-file means a repository-relative path token with a file extension in command position or as the first argument to an interpreter (`bash`, `sh`, `python3`, `node`, etc.), with leading `./` stripped. Existence on disk is not required (the implementation steps create it).
+Any non-empty `x-seren-schema-relaxed` value signals unenforced schema. Optional-property count is measured over the entire schema including all anyOf branches and nested objects (conservative).
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | derive_protected_paths(text, commands) with no test-named path returns the repository scripts executed by commands (`scripts/check-ghci-exercises.sh`, `scripts/check-launch.sh`, `scripts/run-defects.sh`, including `./`-prefixed and interpreter-prefixed forms), one per line, in first-appearance order, deduplicated. | New unit test in scripts/tests/updated-plan-fast-path-test.py with the issue's command list. |
-| AC-2 | When any test-named path is found the executed-file fallback is not used, and exclusions (.json/.lock, dot/absolute/`..`/build-dir paths, tool names without a repository file such as `cabal test`) still apply. | Unit tests for named-test precedence and exclusions; existing ops-test:160-180 unchanged and passing. |
-| AC-3 | updated_plan_ops merge of a fixture plan whose commands run scripts/check-*.sh (no test-named files, steps own those scripts) succeeds and yields those protected paths instead of Conflict. | New test in scripts/tests/updated-plan-ops-test.py. |
-| AC-4 | When commands execute no repository file and no test is named, merge still refuses, with a distinct nonzero exit status and the message on stderr. | New test in updated-plan-ops-test.py asserting the status and message. |
-| AC-5 | The single-pass Markdown project-plan ingest produces `protected_verification_paths` (named tests, else executed files) in the payload without failing validation. | New unit test scripts/tests/plan-context-protected-test.py calling the Markdown ingest on a plan like the issue's; payload field asserted and artifact validation succeeds. |
-| AC-6 | A merge refusal in stagegate writes stop-reason `updated-plan: merge conflict: <message>`, still creates the updated-plan-writers-exhausted flag, and does not print the writer-exhausted line; genuine writer exhaustion still writes `updated-plan: writer attempts exhausted`. | New shell suite scripts/tests/updated-plan-merge-conflict-test.sh exercising the helper(s); existing updated-plan-writer-retries test passes. |
-| AC-7 | All pre-existing shell and Python suites that passed in the baseline still pass. | Driver re-run of the verification commands compared with baseline. |
+| AC-1 | For representative inputs (ids list, real plan model, kind-only, intent), every updated-plan edit schema built by worker_schemas has at most 24 optional properties across the whole schema, and op id/target/after enums are preserved. | New suite scripts/tests/edit-schema-limits-test.py counts optional properties recursively and asserts <=24 and enum presence. |
+| AC-2 | A generic op whose `fields` or `new` is an array of `{name,value}` pairs (name from the field-name enum) is converted by typed_op to the same typed op as the equivalent dict form, including step fields and rows. | New test compares typed_op output for pair form vs dict form. |
+| AC-3 | Dict-form `fields`/`new` still produce identical typed ops; existing updated-plan suites pass unchanged. | bash scripts/run-python-tests.sh and updated-plan-ops-test.py. |
+| AC-4 | When a Converse/chat response carries a non-empty `x-seren-schema-relaxed` header, constrained_completion reports a mode marked relaxed; without the header the mode is unchanged. | New test stubbing the transport/_request seam with and without the header. |
+| AC-5 | A bounded updated-plan writer whose relaxed reply fails schema validation runs targeted repair_answer once and returns the repaired packet; the failure text and constraint_mode record the relaxed mode. | New http_agent test with stubbed constrained_completion returning a relaxed mode and invalid then repaired JSON. |
+| AC-6 | A bounded writer whose non-relaxed reply violates the schema still raises the schema ValueError without repair, and a non-bounded writer still repairs. | Extended updated-plan-writer-retries-test.py or the new suite. |
 

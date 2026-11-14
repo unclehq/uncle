@@ -182,6 +182,14 @@ def _strings(names, maximum=8000):
     return _object({name: _text(maximum, 0) for name in names}, ())
 
 
+def _pairs(names, maximum):
+    """An object of optional string fields, written instead as a required array of {name, value} pairs: the same
+    fields, but no optional property (a grammar engine's optional-property budget is small). plan_model.pairs_to_dict reads it back."""
+    names = list(dict.fromkeys(names))
+    return {'type': 'array', 'maxItems': len(names), 'items': _object(
+        {'name': {'type': 'string', 'enum': names}, 'value': _text(maximum, 0)}, ('name', 'value'))}
+
+
 def _op(ids=None, model=None):
     """One flat edit of the plan model (docs/plan-model.md): every value a string, so any grammar accepts it.
     `ids`, when given, are the only ids the edit may name."""
@@ -194,10 +202,9 @@ def _op(ids=None, model=None):
     generic = _object({
         'op': {'type': 'string', 'enum': [name for name in OP_NAMES if name not in ('insert_step', 'set_fields') and (model is None or name != 'insert_row')]},
         'id': pick(), 'target': pick(), 'after': pick(['']),
-        'fields': _object(dict(_strings(FIELD_NAMES + step)['properties'],
-                               cells={'type': 'array', 'maxItems': 40, 'items': _text(EDIT_MAX, 0)}), ()), 'text': _text(EDIT_MAX, 0),
-        'new': _object(dict(_strings(['id'] + FIELD_NAMES + step, EDIT_MAX)['properties'],
-                            cells={'type': 'array', 'maxItems': 40, 'items': _text(EDIT_MAX, 0)}), ()),
+        'fields': _pairs(FIELD_NAMES + step, 8000), 'text': _text(EDIT_MAX, 0),
+        'new': _pairs(['id'] + FIELD_NAMES + step, EDIT_MAX),
+        'cells': {'type': 'array', 'maxItems': 40, 'items': _text(EDIT_MAX, 0)},
         'block': block, 'heading': _text(300, 0), 'blocks': {'type': 'array', 'maxItems': 20, 'items': block},
     }, ('op',))
     variants = [generic, _new_step(ids)]
@@ -211,7 +218,7 @@ def _op(ids=None, model=None):
                 continue
             variants.append(_object({'op': {'const': 'set_fields'},
                                      'id': _choice(keys) if ids is not None else _text(120),
-                                     'fields': _strings([f[0] for f in specs if f[0] != 'id'])},
+                                     'fields': _pairs([f[0] for f in specs if f[0] != 'id'], 8000)},
                                     ('op', 'id', 'fields')))
     if model is not None:
         variants.extend(v for v in model_op(model, ids).get('anyOf', [])
@@ -290,17 +297,9 @@ def model_op(model, ids=None, intent=None):
     variants, rows, texts, steps, table_rows = [], {}, [], [], []
     step_blocks = False
     strings = {'type': 'array', 'maxItems': 150, 'items': _text(4000)}
-    references = _choice([step['id'] for step in steps_of(model)] + ['new:%d' % n for n in range(1, 121)])
-    step_fields = {'title': _text(EDIT_MAX, 0), 'text': _text(EDIT_MAX, 0), 'owns': strings,
-                   'depends_on': {'type': 'array', 'maxItems': 150,
-                                  'items': {'anyOf': [{'type': 'integer', 'minimum': 0}, references]}}}
-
     def fields(kind, new=False):
-        properties = {name: strings if is_list else _text(EDIT_MAX, 0)
-                      for name, _, is_list, _ in ROW_KINDS[kind] if new or name != 'id'}
-        if new:
-            properties['id'] = _text(120)
-        return _object(properties, ('id',) if new else ())
+        # Pairs of {name, value}, every value a string (a list field is one comma-separated string).
+        return _pairs([name for name, _, _, _ in ROW_KINDS[kind] if new or name != 'id'] + (['id'] if new else []), EDIT_MAX)
 
     def add(op, properties, required):
         variants.append(_object(dict(op={'const': op}, **properties), ['op'] + list(required)))
@@ -353,7 +352,7 @@ def model_op(model, ids=None, intent=None):
                            'fields': _object({'cells': {'type': 'array', 'maxItems': 40, 'items': _text(EDIT_MAX, 0)}}, ('cells',))},
             ('id', 'fields'))
     if steps:
-        add('set_step', {'id': pick(steps), 'fields': _object(step_fields, ())}, ('id', 'fields'))
+        add('set_step', {'id': pick(steps), 'fields': _pairs(('title', 'text', 'owns', 'depends_on'), EDIT_MAX)}, ('id', 'fields'))
     if steps or step_blocks:
         variants.append(_new_step(steps))
     if texts:

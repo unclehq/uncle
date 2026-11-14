@@ -1436,16 +1436,26 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
               'without the grammar.' % (mode, cap, tail), file=sys.stderr)
         messages.append({'role': 'user', 'content': 'That was cut off. ' + COMPACT_JSON_REQUEST})
     final = transport.strip_reasoning(final).strip()
+    # A bounded writer is repaired only where the server said it did not enforce the schema (x-seren-schema-relaxed):
+    # elsewhere an invalid reply is the driver's to retry, and only an object is worth repairing.
+    relaxed = mode.endswith('_relaxed')
+    repairable = final.startswith('{') and (not bounded_writer or relaxed)
+
+    def repair_final(why):
+        repaired = repair_answer(final, why)
+        if relaxed:
+            usage['constraint_mode'] += ' after ' + mode
+        return repaired
     try:
         validate(final)
     except json.JSONDecodeError as error:
-        if final.startswith('{') and not bounded_writer:
-            return repair_answer(final, 'Model response is not valid JSON (%s constraint): %s' % (mode, error))
+        if repairable:
+            return repair_final('Model response is not valid JSON (%s constraint): %s' % (mode, error))
         raise ValueError('Model response is not valid JSON (%s constraint): %s%s'
                          % (mode, error, rejection_note(save_rejected('json', error, final)))) from None
     except ValueError as error:
-        if final.startswith('{') and not bounded_writer:
-            return repair_answer(final, 'Model response violates the artifact schema (%s constraint): %s' % (mode, error))
+        if repairable:
+            return repair_final('Model response violates the artifact schema (%s constraint): %s' % (mode, error))
         raise ValueError('Model response violates the artifact schema (%s constraint): %s%s'
                          % (mode, error, rejection_note(save_rejected('schema', error, final)))) from None
     if stage is not None:

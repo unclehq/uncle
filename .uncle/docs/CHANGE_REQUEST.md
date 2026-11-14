@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 267
+Issue 268
 
-Seeded from [unclehq/uncle#267](https://github.com/unclehq/uncle/issues/267).
+Seeded from [unclehq/uncle#268](https://github.com/unclehq/uncle/issues/268).
 
 ## Change Type
 
@@ -10,41 +10,45 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Updated plan stops with "writer attempts exhausted" after every writer succeeded, because the plan's check scripts aren't recognised as test files
+Updated-plan edit schemas have 130+ optional fields, so Claude models can't enforce them and writers fail on format
 
 ## Motivation
 
 ## What happened
 
-A hosted, unattended build (self-hosted delivery, Claude Sonnet 5 through an OpenAI-compatible chat route) was asked for a small Haskell hello-world command-line app with a one-page tutorial README. It stopped in `UPDATED_PLAN` and published nothing:
+In the same hosted build as #267 (Claude Sonnet 5, OpenAI-compatible chat route backed by Amazon Bedrock), 3 of the 10 updated-plan edit writer calls returned packets that broke their schema, although each was sent with `response_format: {"type": "json_schema", ...}`:
 
 ```
-updated-plan ops: 5 overlapping group(s); they need one resolver call
-[+00:16:02] Updated-plan edits overlap; one small resolver call per overlapping group, all at once.
-updated-plan ops: no writer supplied protected_verification_paths, and the plan names no test files to protect
-Updated-plan writer attempts exhausted; completed packets retained for diagnosis.
-updated-plan: writer attempts exhausted
-uncle --noui: driver exited with status 1
+cause: Model response violates the artifact schema (json_schema constraint): $.ops[4] matches none of the allowed forms ($.ops[4].fields.depends_on must be string; $.ops[4] is missing required field new; ...)
+cause: Model response violates the artifact schema (json_schema constraint): $.ops[2] matches none of the allowed forms ($.ops[2].id must be one of 'R-1', 'R-2', 'R-3', 's10', ...)
+cause: Model response violates the artifact schema (json_object constraint): $.ops[0] matches none of the allowed forms ($.ops[0].after must be one of '', 's10.4'; $.ops[0].target must be 's12')
 ```
 
-By then every edit writer had delivered a valid packet: writers 1, 3 and 5 first time; 2-1, 4-1 and 4-2 on the one-finding retry; 2-2 on the last try by the other delivery path. All five resolvers (G1–G5) also succeeded. The stage stopped in the merge, not in a writer.
+A grammar-enforced reply could not contain an `id` outside its `enum` or an array where a string is required. The schema was not enforced.
 
 ## Cause
 
-1. The plan Uncle approved came from the single-pass Markdown fallback (`Project plan: the typed (JSON) sectioned plan did not complete; falling back to the single-pass Markdown plan`). Its `PROJECT_PLAN.json` has no `protected_verification_paths` (the field is `null`).
-2. No writer supplied the field, so the merge derives it from the plan: [`scripts/lib/updated_plan_ops.py#L947`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/updated_plan_ops.py#L947) raises `Conflict` when that derivation is empty.
-3. The derivation recognises test files only by name or directory: [`scripts/lib/updated_plan_fast_path.py#L71-L91`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/updated_plan_fast_path.py#L71-L91). This plan's `verification_commands` run `scripts/check-ghci-exercises.sh`, `scripts/check-launch.sh` and `scripts/run-defects.sh`, and its test table also names `scripts/check-run.sh`. None of those names matches `TEST_NAME`, and `scripts/` is not in `TEST_DIRS`, so the plan "names no test files".
-4. [`scripts/stagegate.sh#L3119`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/stagegate.sh#L3119) turns any merge failure into `workflow_writer_exhausted`. The stop reason therefore says "writer attempts exhausted", and the agent relaying the build reported a writer/format failure instead of the merge refusal.
+Claude models on Bedrock enforce a response schema only when it has at most 24 optional properties. This build's updated-plan edit schemas (`.uncle/workflow/updated-plan-edits/schemas/*.json`) have 133–159 each. Sending writer 2's schema to Bedrock's Converse API as `output_config.format` returns:
+
+```
+ValidationException: Schemas contains too many optional parameters (159), which would make grammar compilation inefficient. Reduce the number of optional parameters in your tool schemas (limit: 24).
+```
+
+129 of the 159 come from the generic op in [`scripts/lib/worker_schemas.py#L194-L201`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/worker_schemas.py#L194-L201): its `fields` and `new` objects list every `FIELD_NAMES` entry as optional. `set_step` fields ([`#L356`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/worker_schemas.py#L356)) and row `fields` ([`#L298-L303`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/worker_schemas.py#L298-L303)) are also all optional.
+
+When a schema can't be enforced, the Seren route asks the model for any JSON object, passes the schema as an instruction, and says so in two response headers:
+
+- `x-seren-schema-relaxed`: the schema rules it could not enforce (here including `optional parameters`).
+- `x-seren-schema-check`: `failed; <first violation>` when its own check of those rules fails.
+
+[`scripts/lib/self_hosted_http.py`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/self_hosted_http.py#L1524) does not read either header, so `http_agent.py` records the mode as `json_schema` and treats the reply as a model failure. Bounded updated-plan writers also skip the targeted repair step ([`http_agent.py#L1352-L1356`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/http_agent.py#L1352-L1356), [`#L1442-L1449`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/http_agent.py#L1442-L1449)), so each bad packet cost a full re-ask: about 2.5 minutes in this build.
+
+The typed project-plan sections failed earlier in the same build on invalid JSON (`Unrepaired draft: Expecting ',' delimiter`). That fits the same unenforced format, but I did not test that schema.
 
 ## Requested fix
 
-1. When the plan names no test files by name, treat the repository files its `verification_commands` execute (here `scripts/check-ghci-exercises.sh`, `scripts/check-launch.sh`, `scripts/run-defects.sh`) as the protected paths instead of stopping the stage.
-2. Have the single-pass Markdown plan fallback produce `protected_verification_paths`, as the typed plan path does, so the updated plan is not left to derive them.
-3. Give a merge refusal its own stop reason (for example `updated-plan: merge conflict: <message>`) instead of "writer attempts exhausted".
-
-## Workaround until then
-
-A plan whose checks sit under `test/` or `tests/`, or are named like tests (for example a cabal test suite at `test/Spec.hs`), passes this check.
+1. Keep each edit schema within 24 optional properties. For example, replace the optional `fields`/`new` objects in the generic op with a required array of `{"name": <enum of field names>, "value": <string>}` pairs, or drop the generic variant when the plan-model ops already cover the edit.
+2. When a reply carries `x-seren-schema-relaxed`, treat it as unenforced: allow the targeted repair step for bounded writers instead of failing the writer.
 
 Checked against `main` at `c5815a928b`; the cited lines are unchanged there.
 

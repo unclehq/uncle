@@ -453,7 +453,9 @@ class Schemas(unittest.TestCase):
         self.assertIn('step-2', item['id']['enum'])
         self.assertNotIn('B-9', item['id']['enum'])
         self.assertIn('', item['after']['enum'])
-        self.assertIn('failure', item['fields']['properties'])
+        names = {n for v in schema['properties']['ops']['items']['anyOf'] if 'fields' in v['properties']
+                 for n in v['properties']['fields']['items']['properties']['name'].get('enum', [])}
+        self.assertIn('failure', names)      # `fields` is an array of {name, value} pairs (issue 268)
         self.assertNotIn('pattern', json.dumps(schema))
 
     def test_the_static_forms_are_registered_for_a_local_grammar(self):

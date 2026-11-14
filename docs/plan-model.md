@@ -286,6 +286,13 @@ What was built
 - Ops are flat and every value is a string, so any grammar accepts them: `set_fields`, `set_text`, `set_step`,
   `insert_row`, `insert_item`, `insert_block`, `delete`, `insert_section`. A list field is one comma-separated string;
   `plan_model.typed_op` turns it into the typed op.
+- In the edit schemas an op's `fields` and `new` are required arrays of `{name, value}` pairs (name from the field-name
+  enum, value a string, at most one pair per name), and a row's `cells` is a top-level array of the op. This keeps every
+  edit schema at 24 or fewer optional properties, the most some servers will compile. `typed_op` reads the pairs as the
+  dict they stand for (a repeated name: the last wins) and still accepts the dict form; `cells` given both at the top and
+  inside `fields`/`new` is an error. A response carrying a non-empty `x-seren-schema-relaxed` header was not held to the
+  schema: its mode is reported as `<mode>_relaxed`, and a bounded writer's schema-invalid object reply in that mode gets
+  one targeted repair (otherwise it still fails to the driver's group retry).
 - The merge publishes the section-level patch (`edit_sections`, `insert_sections`) the pipeline already reads, so
   nothing downstream changed; untouched sections stay byte-identical to the base plan.
 - Both drivers (`stagegate.sh`, `change-workflow.sh`) use ops mode by default; `WORKFLOW_UPDATED_PLAN_OPS=0` keeps the

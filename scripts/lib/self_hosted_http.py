@@ -226,6 +226,33 @@ def _record_budget_header(headers):
         pass
 
 
+SCHEMA_RELAXED_HEADER = 'x-seren-schema-relaxed'
+SCHEMA_CHECK_HEADER = 'x-seren-schema-check'
+_schema_seen = threading.local()   # per thread, in memory only: what the last response said about schema enforcement
+
+
+def _record_schema_headers(headers):
+    """Note, for the calling thread, that a response said the schema was relaxed (a non-empty x-seren-schema-relaxed once
+    trimmed, whatever it contains). x-seren-schema-check is kept for diagnostics and never changes the mode."""
+    try:
+        value = headers.get(SCHEMA_RELAXED_HEADER)
+        if isinstance(value, str) and value.strip():
+            _schema_seen.relaxed = True
+        check = headers.get(SCHEMA_CHECK_HEADER)
+        if isinstance(check, str):
+            _schema_seen.check = check.strip()
+    except (AttributeError, TypeError):
+        pass
+
+
+def schema_relaxed_seen():
+    return bool(getattr(_schema_seen, 'relaxed', False))
+
+
+def _clear_schema_headers():
+    _schema_seen.relaxed, _schema_seen.check = False, ''
+
+
 def _names_option(detail, options):
     for key, value in options.items():
         if key and re.search(r'(?<![\w])' + re.escape(key.lower()) + r'(?![\w])', detail):
@@ -1384,6 +1411,7 @@ def _request(url, api_key, body=None, timeout=30, headers=None):
     transport = _via_http2 if wants_http2(urlsplit(url).scheme) else _via_http1
     status, reason, response_headers, raw = transport(method, url, data, headers, timeout)
     _record_budget_header(response_headers)
+    _record_schema_headers(response_headers)
     if not 200 <= status < 300:
         if api_key and not isinstance(raw, dict):
             # An upstream body or reason may echo the Authorization value; scrub it and bound what is kept.
@@ -1506,6 +1534,7 @@ def sampling(values):
 def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
     """One schema-constrained request in `mode`; returns (text, reason, usage)."""
     base_url, key = values['base_url'].rstrip('/'), values['api_key']
+    _clear_schema_headers()
     if mode == 'ollama_format':
         body = {'model': values['model'], 'messages': _flatten(messages), 'stream': False, 'format': schema,
                 'options': dict({'num_predict': limit}, **sampling(values))}
@@ -1533,6 +1562,9 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
     return strip_reasoning(choice['message'].get('content')), choice.get('finish_reason'), data.get('usage') or {}
 
 
+_RELAXED = '_relaxed'   # appended to the mode when the server said it did not enforce the schema
+
+
 def constrained_completion(values, messages, schema, name, limit, effort=None, timeout=3600, skip=()):
     """Ask for `schema`-shaped output; returns (text, reason, usage, mode)."""
     values = configure_request_options(values)
@@ -1543,7 +1575,7 @@ def constrained_completion(values, messages, schema, name, limit, effort=None, t
             text, reason, usage = _final_call(values, messages, schema, name, 'json_schema', limit, effort, timeout)
         except TimeoutError:
             raise _no_answer(timeout, limit) from None
-        return text, reason, usage, 'json_schema'
+        return text, reason, usage, 'json_schema' + _RELAXED * schema_relaxed_seen()
     caps = capabilities(values['base_url'], values['api_key'])
     effort = reasoning_effort(values, effort)
     last = None
@@ -1552,7 +1584,7 @@ def constrained_completion(values, messages, schema, name, limit, effort=None, t
             continue
         try:
             text, reason, usage = _final_call(values, messages, schema, name, mode, limit, effort, timeout)
-            return text, reason, usage, mode
+            return text, reason, usage, mode + _RELAXED * schema_relaxed_seen()
         except HTTPError as error:
             if error.code not in REJECTED:
                 stop = _spending_stop(error)
@@ -1581,6 +1613,29 @@ def add_usage(total, usage):
 
 
 # --- schema conformance ----------------------------------------------------
+
+def _is_pair_array(schema):
+    items = schema.get('items') if isinstance(schema, dict) and schema.get('type') == 'array' else None
+    return isinstance(items, dict) and items.get('required') == ['name', 'value']
+
+
+def _dict_payloads_as_pairs(value, properties):
+    """An op's `fields`/`new` written as the older dict of strings is still a valid answer where the schema now asks for
+    {name, value} pairs (plan_model.typed_op reads both): shown to the check in pair form, with a nested `cells` array
+    moved up beside them. Anything that is not a plain string dict is left for the check to reject."""
+    out = value
+    for field, sub in properties.items():
+        payload = value.get(field)
+        if not isinstance(payload, dict) or not _is_pair_array(sub):
+            continue
+        payload = dict(payload)
+        if isinstance(payload.get('cells'), list) and 'cells' in properties and 'cells' not in value:
+            out = dict(out, cells=payload.pop('cells'))
+        pairs = [{'name': name, 'value': ', '.join(item) if isinstance(item, list) and all(isinstance(i, str) for i in item) else item}
+                 for name, item in payload.items()]
+        out = dict(out, **{field: pairs})
+    return out
+
 
 def conforms(value, schema, path='$'):
     """Check the JSON-Schema subset these artifacts use; raises ValueError."""
@@ -1638,6 +1693,7 @@ def conforms(value, schema, path='$'):
             extra = sorted(set(value) - set(properties))
             if extra:
                 raise ValueError('%s has unexpected fields: %s' % (path, ', '.join(extra)))
+        value = _dict_payloads_as_pairs(value, properties)
         for field, sub in properties.items():
             if field in value:
                 conforms(value[field], sub, path + '.' + field)

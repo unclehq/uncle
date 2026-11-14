@@ -805,8 +805,53 @@ def table_cells(block, cells, label):
     return fit(cells, len(block.get('columns') or cells))
 
 
+STEP_FIELD_NAMES = ('title', 'text', 'owns', 'depends_on')
+PAIR_LIMITS = {'fields': (len(set(FIELD_NAMES) | set(STEP_FIELD_NAMES)), 8000),
+               'new': (len(set(FIELD_NAMES) | set(STEP_FIELD_NAMES) | {'id', 'number'}), 12000)}
+
+
+def pairs_to_dict(value, label):
+    """`fields`/`new` written as an array of {name, value} pairs, as the dict they stand for (a repeated name: the last wins).
+    A dict passes through unchanged. The bounds are those the schema states, checked before anything is merged."""
+    if not isinstance(value, list):
+        return value
+    count, limit = PAIR_LIMITS[label]
+    if len(value) > count:
+        raise PlanError('%s has %d name/value pairs; at most %d (one per field name)' % (label, len(value), count))
+    out = {}
+    for pair in value:
+        if (not isinstance(pair, dict) or set(pair) != {'name', 'value'}
+                or not isinstance(pair['name'], str) or not isinstance(pair['value'], str)):
+            raise PlanError('%s pairs are objects with a string name and a string value' % label)
+        if len(pair['value']) > limit:
+            raise PlanError('%s value for %r is %d characters; at most %d' % (label, pair['name'], len(pair['value']), limit))
+        out[pair['name']] = pair['value']
+    return out
+
+
+def with_plain_payload(flat):
+    """The flat op with `fields`/`new` as dicts and a top-level `cells` moved into the row payload."""
+    if not any(key in flat for key in ('fields', 'new', 'cells')):
+        return flat
+    flat = dict(flat)
+    for label in ('fields', 'new'):
+        if label in flat:
+            flat[label] = pairs_to_dict(flat[label], label)
+    if flat.get('cells') is not None and flat.get('op') in ('set_fields', 'insert_row'):
+        label = 'fields' if flat['op'] == 'set_fields' else 'new'
+        payload = flat.get(label)
+        if payload is not None and not isinstance(payload, dict):
+            raise PlanError('%s must be an array of name/value pairs or an object' % label)
+        if payload and 'cells' in payload:
+            raise PlanError('cells given twice: at the top of the op and inside %s' % label)
+        flat[label] = dict(payload or {}, cells=flat['cells'])
+        del flat['cells']
+    return flat
+
+
 def typed_op(model, flat):
     """The typed op for one flat op written as strings; PlanError names what is wrong with it."""
+    flat = with_plain_payload(flat)
     name = flat.get('op')
     if name not in OP_NAMES:
         raise PlanError('unknown op %r' % name)

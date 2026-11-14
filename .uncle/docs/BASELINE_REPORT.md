@@ -1,80 +1,73 @@
 # Baseline report
-Omitted sections: Reproduction (needs live Bedrock; evidence is the issue text); Existing failures (none documented in repo; driver baseline is authority)
+
+Omitted sections: Reproduction result (reasoned from code, suite not run per stage rules); Areas outside change folded into section 12
 
 ## 1. Change-request summary
-Issue 268 (CHANGE_REQUEST.md): updated-plan edit schemas carry 130+ optional properties, so Claude-on-Bedrock cannot grammar-enforce them and the Seren route silently relaxes to json_object. Fix (1): keep each edit schema <=24 optional properties. Fix (2): when the reply carries `x-seren-schema-relaxed`, treat the schema as unenforced and allow targeted repair for bounded writers.
+Issue 272 (CHANGE_REQUEST.md): hosted/self-hosted new-app builds never class `small` because `interpretation_counts` reads only `R-n`/`D-n` ids, which the self-hosted investigation does not emit.
 
 ## 2. Repository architecture
-Shell-driven workflow with Python libs in `scripts/lib/`. Schemas: `worker_schemas.py`. Op semantics: `plan_model.py`. Writer orchestration: `updated_plan_ops.py`. HTTP agent loop: `http_agent.py`. Transport: `self_hosted_http.py`.
+Shell driver `scripts/stagegate.sh` calls Python helpers in `scripts/lib/`. `scripts/lib/change_class.py` computes the build class (features -> deterministic_class -> profile) and writes `change-class.json`.
 
 ## 3. Relevant code paths
-- `scripts/lib/worker_schemas.py:185-219` `_op(ids, model)`: generic variant (194-202) lists `fields` and `new` objects with every `FIELD_NAMES`+step name optional (`_strings` at 181), plus `cells`; `block` object (191-193); anyOf adds `_new_step` (222-229) and `model_op` set_fields/insert_row variants.
-- `worker_schemas.py:279-303` `model_op`: per-row-kind `fields()` objects, all optional (298-303).
-- `worker_schemas.py:356` set_step fields, also all optional.
-- `plan_model.py:734-735` FIELD_NAMES, OP_NAMES; `plan_model.py:808-830` `typed_op(model, flat)` reads `flat['fields']` as a dict (`fields.items()`); `new_step_op` at 891.
-- `updated_plan_ops.py:147,568,586,910,989,1092` call `pm.typed_op` on model-written flat ops.
-- `self_hosted_http.py:1375-1393` `_request` returns parsed JSON only; response headers used solely by `_record_budget_header` (212). `_final_call` 1506-1533; `constrained_completion` 1536-1568 (Bedrock/Anthropic profile returns mode 'json_schema' at 1546; other profiles loop modes). `compatible_post` 262.
-- `http_agent.py:1352-1356` bounded writer: `attempts[:1]`; `1442-1450` repair_answer skipped when `bounded_writer`; `repair_answer` 1304-1320; `usage['constraint_mode']=mode` 1421.
+- `scripts/stagegate.sh:4819-4835`: self-hosted requirements fast path copies investigation to REQUIREMENTS_INTERPRETATION.md, `requirements-context.py --export-json`.
+- `scripts/lib/requirements-context.py:83-100` `export_json`: stores each section body as a raw Markdown string under `sections` (keys `required_functionality`, `definition_of_done`).
+- `scripts/lib/change_class.py:215-223` `interpretation()`: sections as text.
+- `scripts/lib/change_class.py:226-230` `interpretation_counts()`: counts distinct `R-\d+` / `D-\d+` only.
+- `scripts/lib/change_class.py:245-260` `features()`: feeds counts as `requirements`, `criteria`.
+- `scripts/lib/change_class.py:263-269` `app_is_small()`: needs 0<requirements<=6 and 0<criteria<=8, steps<=12, files<=30, no risk hits.
+- `scripts/lib/change_class.py:272-286` `deterministic_class()`: `steps>=7 or files>=15 or directories>=6` -> large.
+- `scripts/lib/change_class.py:556-579` `plan_budget`/`plan_word_scale`: terse-plan budget applies only when class is small.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| EB-1 | Updated-plan writer sent schema with >24 optional props to Claude via Seren/Bedrock | Server relaxes to json_object; reply may violate schema; writer fails after full re-ask (~2.5 min) | issue text; http_agent.py:1442-1450 | No (fix) |
-| EB-2 | Reply carries `x-seren-schema-relaxed` | Header ignored; mode recorded 'json_schema' | self_hosted_http.py:1385-1393 | No (fix) |
-| EB-3 | Non-bounded writer, schema-violating JSON | `repair_answer` targeted repair | http_agent.py:1442-1448 | Yes |
-| EB-4 | Bounded writer, enforced-schema reply violating schema | ValueError, driver retries group | http_agent.py:1449 | Yes |
-| EB-5 | Model writes flat op with `fields`/`new` as dict of strings | `typed_op` applies it | plan_model.py:808-830 | Yes (still accepted) |
-| EB-6 | Servers without the header (OpenAI, vLLM, Ollama, Bedrock native) | Behavior as EB-3/EB-4 | self_hosted_http.py:1523-1546 | Yes |
+| B-1 | App interpretation with `R-n`/`D-n` ids, <=6 req, <=8 done, small plan, no risk | class small | change_class.py:263-269 | Yes |
+| B-2 | App interpretation with plain bullets / id-less table (self-hosted path) | counts (0,0) -> never small | change_class.py:229-230, issue 272 | No (the bug) |
+| B-3 | App plan with steps>=7 or files>=15 or dirs>=6, not small | large | change_class.py:282 | Yes |
+| B-4 | family=change classification (docs, test-only, small, standard) | unchanged by interpretation counts | change_class.py:257-258,276-285 | Yes |
+| B-5 | Risk keyword hit | risky | change_class.py:273 | Yes |
+| B-6 | No interpretation file | counts (0,0), plan size decides alone | change_class.py:215-223, docstring 264-265 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| EI-1 | Bounded updated-plan writer never grows a prompt-mode or tool-repair tail when schema was enforced | `attempts[:1]`, `not bounded_writer` guards (http_agent.py:1352-1356,1442-1449) | updated-plan-writer-retries-test.py | Medium |
-| EI-2 | Ops reaching `apply_ops` are typed/validated by `typed_op`; unknown ids/ops raise PlanError | plan_model.py:808+ | updated-plan-ops-test.py | High |
-| EI-3 | Op ids/targets constrained to enum of known ids when ids given | worker_schemas.py:189 `pick` | updated-plan-ops-test.py (assumed) | Medium |
-| EI-4 | Response headers never leak the API key; budget header recorded atomically | self_hosted_http.py:212-225 | self-hosted-spending-stop-test.py | Medium |
+| I-1 | Risk hits always yield `risky` regardless of size | deterministic_class first branch | scripts/tests/review-skip-test.py | Medium |
+| I-2 | Small requires an interpretation to read | app_is_small `0 <` guards | none specific found | Medium |
+| I-3 | Small limits: req<=6, done<=8, steps<=12, files<=30 | APP_SMALL | none specific found | Medium |
 
-## 6. Current API, schema, interface contracts
-Edit-op packet: `{ops:[{op,id,target,after,fields:{name:str...},text,new:{...},block,heading,blocks}...]}`; `fields`/`new` are string-valued objects. `constrained_completion` returns `(text, reason, usage, mode)`; mode strings feed `usage['constraint_mode']` and error text. Docs: `docs/plan-model.md`.
+## 6. Contracts
+`change-class.json` `features` keys (`requirements`, `criteria`, ...) are unchanged in shape. Interpretation JSON: `sections` map of Markdown strings (id-bearing R-/D- rows are also valid input).
 
 ## 7. Existing automated-test coverage
-Python suites in `scripts/tests/*-test.py` (runner `scripts/run-python-tests.sh`, critical tier from `scripts/tests/critical-suites.txt`); shell suites via `scripts/run-shell-tests.sh`. Relevant: updated-plan-ops-test.py, updated-plan-writer-retries-test.py, updated-plan-fast-path-test.py, updated-plan-nested-section-test.py, self-hosted-*-test.py. No test counts optional properties or reads schema-relaxed headers. The two runners use separate temp dirs and no shared ports (per workflow guidance), so they run as one parallel group.
+Change-class logic is exercised by `scripts/tests/review-skip-test.py` (and `.sh`), `scripts/tests/hosted-mode-test.py`. `review-skip` is not in `scripts/tests/critical-suites.txt`, so the default python runner skips it; an explicit command is listed. No test covers `interpretation_counts` on an id-less interpretation. The shell and python runners use separate temp dirs and share no ports, so they form a parallel group.
 
 ## 9. Baseline test results
-Commands come from scripts/run-python-tests.sh and scripts/run-shell-tests.sh (task guidance). No pre-existing failure was documented in the files read; some Python suites may fail on a clean checkout. I did not run them: the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (CLAUDE-mandated Uncle runners). Not run in this stage; driver baseline is the authority. Python suites may have known pre-existing failures.
+
+## 10. Existing failures
+None recorded in repository docs for this surface.
+
+## 11. Reproduction
+Reasoned: interpretation JSON with 4 plain bullets and a 4-row id-less table gives `interpretation_counts == (0, 0)`, so `app_is_small` is False and the plan-recheck lands on `large` (issue 272 change-class.json shows requirements 0, criteria 0).
 
 ## 12. Likely change surface
-`worker_schemas.py`, `plan_model.py` (typed_op input normalization), `self_hosted_http.py`, `http_agent.py`, tests under `scripts/tests/`, `docs/plan-model.md` if it documents the packet shape.
+`scripts/lib/change_class.py` (`interpretation_counts`, possibly `features`), `scripts/tests/review-skip-test.py`.
 
 ## 13. Regression-sensitive components
-`typed_op` and all updated_plan_ops callers; schema consumers other than updated-plan writers (`_op` kind-only callers, `model_op`); bounded-writer retry logic; `compatible_post` streaming path (may bypass `_request`); `plan_step_recovery.py` and `supervisor_runner.py` call `constrained_completion` and unpack 4 values.
-
-## 14. Outside the change
-Typed project-plan sections schema (issue says untested), Seren server behavior, driver retry grouping, non-updated-plan schemas, approval gates.
+id-bearing interpretations (other requirements paths), family=change classing, risk detection, plan_budget/plan_word_scale (depend on class small).
 
 ## 15. Unknowns and assumptions
-- Exact optional-property counting rule used by Bedrock (assumed: every non-required property across the whole schema incl. all anyOf branches and nested objects). UNRESOLVED precisely; plan counts conservatively.
-- Whether streaming transport exposes response headers (to inspect in implementation).
-- Header value format of `x-seren-schema-relaxed`: assumed any non-empty value means unenforced.
+- Exact Markdown shape of investigation bullets/tables: prompts/requirements-investigate.md:15-30 lists the sections; assumed bullets (`-`, `*`, `1.`) and a pipe table with header and separator.
+- Where stderr from change_class is surfaced is not confirmed; a log line is best-effort.
 
 ## 16. Initial risk assessment
-| Risk | Level |
-|---|---|
-| Reshaping `fields` breaks model-written packets already accepted by consumers | Medium |
-| `model_op` per-kind row `fields` alone may exceed 24 | Medium |
-| Header not visible on streaming path | Medium |
-| Allowing repair for bounded writers breaks EI-1 when schema was enforced | Low (gated on header) |
+Low: single pure function. Main risk is over-counting (header/separator rows, nested bullets) wrongly granting small, or under-counting restoring today's behavior.
 
 ## Exact build and test commands executed
 
 ```sh
-bash scripts/run-python-tests.sh
 bash scripts/run-shell-tests.sh
-```
-
-## Parallel verification groups
-
-```text
-1 2
+bash scripts/run-python-tests.sh
+bash scripts/run-python-tests.sh -- review-skip
 ```
 

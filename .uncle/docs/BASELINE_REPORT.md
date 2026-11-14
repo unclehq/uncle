@@ -1,73 +1,75 @@
-# Baseline report
+# Baseline Report — Issue 275
 
-Omitted sections: Reproduction result (reasoned from code, suite not run per stage rules); Areas outside change folded into section 12
+Omitted sections: Reproduction result (not run; the issue's evidence is a hosted run, and the preflight refusal is reproducible by reading `preflight.py`); Areas explicitly outside the change (folded into section 12)
 
 ## 1. Change-request summary
-Issue 272 (CHANGE_REQUEST.md): hosted/self-hosted new-app builds never class `small` because `interpretation_counts` reads only `R-n`/`D-n` ids, which the self-hosted investigation does not emit.
+See CHANGE_REQUEST.md. Hosted builds (`UNCLE_HOSTED=1`) never install a missing language toolchain; `preflight.py` refuses `command -v X` and non-listed toolchains; prompts treat a missing compiler as a fact to work around.
 
 ## 2. Repository architecture
-Shell driver `scripts/stagegate.sh` calls Python helpers in `scripts/lib/`. `scripts/lib/change_class.py` computes the build class (features -> deterministic_class -> profile) and writes `change-class.json`.
+Bash driver `scripts/change-workflow.sh` (state machine; states incl. PREFLIGHT, MODULE_INTERFACES, IMPLEMENT) sources `scripts/lib/*.sh` and shells to Python helpers in `scripts/lib/`. Prompts live in `prompts/` and `prompts/change/`. Hosted switch: `scripts/lib/hosted.py:is_hosted` and `scripts/lib/stage-config.sh:47 uncle_is_hosted` (both require exactly `UNCLE_HOSTED=1`). Tests: `scripts/tests/*-test.py|sh`, default tier listed in `scripts/tests/critical-suites.txt`.
 
 ## 3. Relevant code paths
-- `scripts/stagegate.sh:4819-4835`: self-hosted requirements fast path copies investigation to REQUIREMENTS_INTERPRETATION.md, `requirements-context.py --export-json`.
-- `scripts/lib/requirements-context.py:83-100` `export_json`: stores each section body as a raw Markdown string under `sections` (keys `required_functionality`, `definition_of_done`).
-- `scripts/lib/change_class.py:215-223` `interpretation()`: sections as text.
-- `scripts/lib/change_class.py:226-230` `interpretation_counts()`: counts distinct `R-\d+` / `D-\d+` only.
-- `scripts/lib/change_class.py:245-260` `features()`: feeds counts as `requirements`, `criteria`.
-- `scripts/lib/change_class.py:263-269` `app_is_small()`: needs 0<requirements<=6 and 0<criteria<=8, steps<=12, files<=30, no risk hits.
-- `scripts/lib/change_class.py:272-286` `deterministic_class()`: `steps>=7 or files>=15 or directories>=6` -> large.
-- `scripts/lib/change_class.py:556-579` `plan_budget`/`plan_word_scale`: terse-plan budget applies only when class is small.
+- `scripts/lib/preflight.py:12-19` PROBES/BUILTINS; `:42-44` raises `Unrecognized verification executable`; `:105-120` `probe()` raises `Missing runtime: <name>` when `shutil.which` fails; `:123` `run()`; `:143-153` CLI exits 2 with `Deterministic preflight needs diagnosis`.
+- `scripts/change-workflow.sh:3599-3626` `change_preflight_run` (writes PF-RUNTIME row; failure => BLOCKED-SETUP row, non-blocking); `:4430-4449` PREFLIGHT state runs it in the background beside implementation unless `WORKFLOW_PREFLIGHT_BLOCKING=1`; `:4189` `install_warm_start`.
+- `scripts/lib/install_warm.py` / `install-warm.sh`: warms npm and Playwright caches only.
+- Prompts: `prompts/change/baseline.md:155-161` (install guidance for npm only), `prompts/change/change-plan.md`, `prompts/change/implement-change.md`, `prompts/implement.md`.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | App interpretation with `R-n`/`D-n` ids, <=6 req, <=8 done, small plan, no risk | class small | change_class.py:263-269 | Yes |
-| B-2 | App interpretation with plain bullets / id-less table (self-hosted path) | counts (0,0) -> never small | change_class.py:229-230, issue 272 | No (the bug) |
-| B-3 | App plan with steps>=7 or files>=15 or dirs>=6, not small | large | change_class.py:282 | Yes |
-| B-4 | family=change classification (docs, test-only, small, standard) | unchanged by interpretation counts | change_class.py:257-258,276-285 | Yes |
-| B-5 | Risk keyword hit | risky | change_class.py:273 | Yes |
-| B-6 | No interpretation file | counts (0,0), plan size decides alone | change_class.py:215-223, docstring 264-265 | Yes |
+| B-1 | Verification line `ocaml -version`, `ghc`, `dune`, `java`, ... | preflight exits 2: `Unrecognized verification executable: <name>` | preflight.py:42-44 | Replace for unknown executables |
+| B-2 | Line `command -v ocaml` / `which ocaml` | same refusal on `command`/`which` | preflight.py:12-19 | Replace |
+| B-3 | Line `node --version` etc. for a PROBES name that is installed | PASS row, `<name> --version exited 0` | preflight.py:105-120 | Yes |
+| B-4 | A PROBES name not installed | `Missing runtime: <name>` exit 2 | preflight.py:109 | Yes |
+| B-5 | Shell expansion / embedded `bash -c` / PATH assignment in a line | refused as needs model preflight | preflight.py:30-33,40-41 | Yes |
+| B-6 | Hosted run, toolchain missing | nothing installs it; prompts allow hand-tracing | issue 275 | No (change) |
+| B-7 | Non-hosted run | no installs by driver | install_warm.py | Yes |
+| B-8 | Preflight failure | PF-RUNTIME BLOCKED-SETUP row, run continues | change-workflow.sh:3616-3622 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Risk hits always yield `risky` regardless of size | deterministic_class first branch | scripts/tests/review-skip-test.py | Medium |
-| I-2 | Small requires an interpretation to read | app_is_small `0 <` guards | none specific found | Medium |
-| I-3 | Small limits: req<=6, done<=8, steps<=12, files<=30 | APP_SMALL | none specific found | Medium |
+| I-1 | Preflight never executes plan commands, only fixed `--version`/no-op probes | PROBES table, tokenizer | none direct found | Medium |
+| I-2 | Preflight never evaluates shell expansions | preflight.py:30-33 | none direct found | Medium |
+| I-3 | Hosted only when `UNCLE_HOSTED` is exactly `1` | hosted.py, stage-config.sh:47 | hosted-mode-test.py Predicate | High |
+| I-4 | Verification commands do not change the repo; baseline runs twice | baseline prompt rules | none | Low |
 
-## 6. Contracts
-`change-class.json` `features` keys (`requirements`, `criteria`, ...) are unchanged in shape. Interpretation JSON: `sections` map of Markdown strings (id-bearing R-/D- rows are also valid input).
+## 6. Interface contracts
+`python3 preflight.py <commands-file> <report-json>`; exit 0 and writes acceptance-report JSON with row PF-RUNTIME; exit 2 with stderr message on failure. Report schema `uncle.artifact/v1` kind `acceptance-report`.
 
 ## 7. Existing automated-test coverage
-Change-class logic is exercised by `scripts/tests/review-skip-test.py` (and `.sh`), `scripts/tests/hosted-mode-test.py`. `review-skip` is not in `scripts/tests/critical-suites.txt`, so the default python runner skips it; an explicit command is listed. No test covers `interpretation_counts` on an id-less interpretation. The shell and python runners use separate temp dirs and share no ports, so they form a parallel group.
+No test file imports `preflight.py` directly (grep of `scripts/tests` shows only `preflight_readonly`, a different module, and stage-level suites). `hosted-mode-test.py` covers the hosted predicate and model-setting fallback. Python suites run through `scripts/run-python-tests.sh`, shell suites through `scripts/run-shell-tests.sh`; they use separate temp dirs, so they run as one parallel group.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (CLAUDE-mandated Uncle runners). Not run in this stage; driver baseline is the authority. Python suites may have known pre-existing failures.
+Commands come from the repository runners (`scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh`) per the stage contract. Not executed here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout.
 
-## 10. Existing failures
-None recorded in repository docs for this surface.
-
-## 11. Reproduction
-Reasoned: interpretation JSON with 4 plain bullets and a 4-row id-less table gives `interpretation_counts == (0, 0)`, so `app_is_small` is False and the plan-recheck lands on `large` (issue 272 change-class.json shows requirements 0, criteria 0).
+## 10. Existing failures, warnings, flaky behavior
+None documented in-repo for this surface. UNRESOLVED until the driver baseline lands.
 
 ## 12. Likely change surface
-`scripts/lib/change_class.py` (`interpretation_counts`, possibly `features`), `scripts/tests/review-skip-test.py`.
+`scripts/lib/preflight.py`; a new hosted toolchain installer helper and its wiring at the PREFLIGHT state in `change-workflow.sh`; prompt text in `prompts/change/baseline.md`, `change-plan.md`, `implement-change.md` (and `prompts/implement.md` for the greenfield driver); new tests. Outside the change: `install_warm.py` cache warming, supervisor start-up in headless builds (#274), test-file recognition (#262), non-hosted behavior.
 
 ## 13. Regression-sensitive components
-id-bearing interpretations (other requirements paths), family=change classing, risk detection, plan_budget/plan_word_scale (depend on class small).
+`preflight.py` tokenizer (I-1, I-2); the PREFLIGHT state ordering (background probe vs. implementation); `uncle_is_hosted` predicate; prompt files measured by size budgets and prompt tests (e.g. `reviewer-prompt-kind-test.py`).
 
 ## 15. Unknowns and assumptions
-- Exact Markdown shape of investigation bullets/tables: prompts/requirements-investigate.md:15-30 lists the sections; assumed bullets (`-`, `*`, `1.`) and a pipe table with header and separator.
-- Where stderr from change_class is surfaced is not confirmed; a log line is best-effort.
+- Whether the host has passwordless sudo and a package manager: assumed only on hosted machines; installer must detect, not assume.
+- Exact package names per toolchain (e.g. `ocaml`, `dune`, `ghc`, `cabal-install`, `default-jdk`) are chosen in the plan.
+- The hosted end-to-end build in the issue's request item 4 cannot run in this environment (needs a model and a Debian sandbox).
 
 ## 16. Initial risk assessment
-Low: single pure function. Main risk is over-counting (header/separator rows, nested bullets) wrongly granting small, or under-counting restoring today's behavior.
+Medium. Installing system packages is outward-facing on the host; it must be hosted-only, bounded, logged and never fatal to the run. Widening the preflight allowlist must not weaken I-1/I-2.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- review-skip
+```
+
+## Parallel verification groups
+
+```text
+1 2
 ```
 

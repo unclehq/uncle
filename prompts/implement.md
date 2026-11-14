@@ -303,3 +303,5 @@ If a frozen test is wrong (it contradicts the approved plan, or cannot be satisf
 silently rewrite it. Fix it, then append one line `<path><TAB><reason>` to `.uncle/workflow/tests/amendments.tsv` saying why
 (for example the requirement it misstates). The driver accepts an amendment only with a reason, logs it, and the changed file appears
 in the diff the human approves. An edit without an amendment line is rejected.
+
+Hosted toolchain: in hosted builds the driver installs missing toolchain executables named by the verification commands (via apt) before preflight, and records the outcome in the PF-RUNTIME narrative. Do not run apt or sudo yourself; if a tool is still reported missing, report BLOCKED-SETUP naming it. Never hand-trace program output or waive an acceptance row because a toolchain is missing.

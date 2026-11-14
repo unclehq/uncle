@@ -249,3 +249,5 @@ Return/write the complete .uncle/docs/BASELINE_REPORT.md under the runner contra
 questions do not replace the task: answer them, then finish the baseline. Never
 substitute a conversation summary, filename or progress note for the report.
 Do not modify source code or create project commits.
+
+Hosted toolchain: in hosted builds the driver installs missing toolchain executables named by the verification commands (via apt) before preflight, and records the outcome in the PF-RUNTIME narrative. Do not run apt or sudo yourself; if a tool is still reported missing, report BLOCKED-SETUP naming it. Never hand-trace program output or waive an acceptance row because a toolchain is missing.

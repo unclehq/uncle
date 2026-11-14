@@ -1750,6 +1750,69 @@ def uuid_hex():
     return uuid.uuid4().hex[:8]
 
 
+class HeadlessSelfHostedRunnerTests(unittest.TestCase):
+    """A headless build (--noui, hosted) with a self-hosted supervision runner must reach the runner: it needs the config file and a
+    stage, and the host passed neither, so every supervisor call ended "configure supervision.runner" (issue #274)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.project = Path(self.tmp.name)
+        self.state = self.project / '.uncle' / 'workflow'
+        self.state.mkdir(parents=True)
+        self.config_path = self.project / '.uncle' / 'config'
+        self.config_path.write_text('supervision.enabled true\nsupervision.runner self-hosted\nsupervision.model supervisor-model-x\n'
+                                    'self-hosted.base_url https://example.test/v1\nself-hosted.model other-model\n')
+        (self.project / '.uncle' / 'self-hosted-keys.json').write_text(json.dumps({'supervision': 'supervisor-key'}))
+        self.status = self.project / 'status.jsonl'
+        self.status.write_text('')
+        self.config = sv.load_config(str(self.config_path))
+
+    def host(self, **kwargs):
+        host = sv.HeadlessHost(self.state, self.config, ROOT, str(self.status), out=open(os.devnull, 'w'), **kwargs)
+        self.addCleanup(host.controller.close)
+        return host
+
+    def test_the_worker_is_started_with_the_config_file_and_the_supervision_stage(self):
+        host = self.host(config_path=str(self.config_path))
+        with patch('supervisor_runner.SupervisorRequest') as request:
+            host.start_worker('prompt', {'number': 1, 'stage': 'change-plan'})      # raised "needs a configured stage" before
+        command, prompt, env, home, log, meta = request.call_args.args
+        self.assertEqual(env['UNCLE_CONFIG'], str(self.config_path))
+        self.assertEqual(env['UNCLE_STATUS_STAGE'], 'supervision')
+        self.assertEqual(meta['stage'], 'change-plan')                                # the trigger's stage is still on the record
+        shutil.rmtree(home, ignore_errors=True)
+
+    def test_the_runner_then_resolves_the_supervisors_own_model_and_key(self):
+        import self_hosted
+        settings = self_hosted.settings(str(self.config_path), 'supervision')
+        self.assertEqual((settings['model'], settings['api_key'], settings['base_url']),
+                         ('supervisor-model-x', 'supervisor-key', 'https://example.test/v1'))
+
+    def test_a_host_that_passes_nothing_is_named_instead_of_blaming_the_setting(self):
+        host = FakeHost()
+        host.spawn_error = ValueError('unavailable: self-hosted homepage runner needs a configured stage')
+        ctl = sv.Controller(self.state, sv.Config(dict(enabled=True, runner='self-hosted')), host, CONTRACT)
+        self.addCleanup(ctl.close)
+        ctl.observe({'event': 'start', 'stage': 'implementation'})
+        ctl.observe({'event': 'validation_failed', 'stage': 'implementation', 'validator': 'v', 'diagnostic': 'x'})
+        ctl.tick()
+        text = ' '.join(host.lines)
+        self.assertIn('supervision.runner is self-hosted', text)
+        self.assertIn('did not pass it the config file and stage', text)
+        self.assertNotIn('configure supervision.runner', text)
+
+    def test_a_missing_runner_still_says_to_configure_it(self):
+        host = FakeHost()
+        host.spawn_error = ValueError('unavailable: claude is not on PATH')
+        ctl = sv.Controller(self.state, sv.Config(dict(enabled=True)), host, CONTRACT)
+        self.addCleanup(ctl.close)
+        ctl.observe({'event': 'start', 'stage': 'implementation'})
+        ctl.observe({'event': 'validation_failed', 'stage': 'implementation', 'validator': 'v', 'diagnostic': 'x'})
+        ctl.tick()
+        self.assertTrue(any('Supervision unavailable: configure supervision.runner' in l for l in host.lines))
+
+
 class WorkerBoundsTests(unittest.TestCase):
     """AR-013 / D-16: output is capped while the worker runs; the tree dies with the parent."""
 

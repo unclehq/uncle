@@ -1,64 +1,80 @@
-## AR-001: The required diagnostic would appear twice during normal feature extraction because counts are computed twice.
+## AR-001: The permitted scope cuts remove required behavior without changing acceptance criteria.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 places the diagnostic inside interpretation_counts and requires one line; supplied scripts/lib/change_class.py:257-258 invokes that function separately for criteria and requirements. The plan must specify reuse so implementation and stderr acceptance tests agree on diagnostic cardinality.
-- Failure: The required diagnostic would appear twice during normal feature extraction because counts are computed twice. Add: "For app feature extraction, call interpretation_counts once, reuse both counts, and emit at most one unknown-count diagnostic."
+- References: CHANGE_PLAN.json §21 permits cutting the greenfield prompt, dotnet/stack mappings, and narrative append; §1, D-1, and CHANGE_SPEC.json BH-5/BH-8 require these deliverables. Remove those cuts so implementation and acceptance checks use the same scope.
+- Failure: The permitted scope cuts remove required behavior without changing acceptance criteria. Add: “The four prompt updates, all D-1 mappings, and the preflight narrative record are required deliverables and may not be cut without an approved scope revision.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: A valid interpretation with empty sections is present but receives no diagnostic under the plan, conflicting with AC-4.
+## AR-002: D-1 gives competing dune package names and an ambiguous OCaml mapping.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-4 and §8 require logging when an interpretation exists but a count is zero; CHANGE_PLAN.json §1 logs only when interpretation() is non-empty. Supplied scripts/lib/change_class.py:215-223 returns {} for both empty sections and missing/invalid input. Align AC-4 with the explicit empty-object decision.
-- Failure: A valid interpretation with empty sections is present but receives no diagnostic under the plan, conflicting with AC-4. Add: "Treat an empty sections object as absent for diagnostic purposes; valid non-empty sections with either count zero emit the diagnostic."
+- References: CHANGE_PLAN.json D-1 says “ocaml,ocamlfind,ocamlc,ocamlopt” map to “ocaml/ocaml-findlib” and lists both ocaml-dune and dune for dune. Specify one mapping per executable so installer code and argv assertions cannot select different packages.
+- Failure: D-1 gives competing dune package names and an ambiguous OCaml mapping. Replace it with: “Map ocaml, ocamlc, and ocamlopt to ocaml; ocamlfind to ocaml-findlib; and dune to ocaml-dune.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: The plan permits cutting behavior that remains mandatory for acceptance.
+## AR-003: Multiple missing tools have no clear aggregate time limit.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §Scope cuts under time pressure says to cut the stderr diagnostic first, while CHANGE_SPEC.json AC-4 and OB-3 require it and CHANGE_PLAN.json §16 requires AC-4 tests. Remove the scope-cut permission so implementation cannot legitimately omit behavior that verification must require.
-- Failure: The plan permits cutting behavior that remains mandatory for acceptance. Add: "The AC-4 diagnostic is required and may not be cut under time pressure."
+- References: CHANGE_PLAN.json D-3 specifies “300s per install,” while §22 describes installer delay as a “300s cap.” With several package installs these bounds differ; define one total budget so workflow timing and timeout tests agree.
+- Failure: Multiple missing tools have no clear aggregate time limit. Add: “All package-install attempts share one 300-second deadline; each attempt receives only the remaining time, and unattempted packages are recorded as skipped when the deadline expires.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Adding logging inside interpretation_counts produces duplicate diagnostics during normal feature extraction, contradicti
+## AR-004: A failed installation can still leave some requested tools available, but the artifacts prescribe conflicting preflight
 
 - Severity: MEDIUM
-- References: scripts/lib/change_class.py:257-258 calls interpretation_counts separately for criteria and requirements. CHANGE_PLAN.json §1 places logging inside that function, while CHANGE_SPEC.json OB-3 requires one diagnostic line; a helper-only stderr test would miss the regression.
-- Failure: Adding logging inside interpretation_counts produces duplicate diagnostics during normal feature extraction, contradicting the one-line requirement. Amend the plan: “features shall call interpretation_counts once per app feature extraction and reuse both counts; test that this emits exactly one diagnostic.”
+- References: CHANGE_PLAN.json §1 step 3 requires preflight to reflect installed tools, but §12 says install failure produces Missing runtime; CHANGE_SPEC.json §8 similarly says the check remains missing after nonzero exit or timeout. Specify partial-success behavior so a failed batch does not force successfully installed tools into BLOCKED-SETUP.
+- Failure: A failed installation can still leave some requested tools available, but the artifacts prescribe conflicting preflight results. Add: “After every install outcome, preflight checks actual tool availability and reports Missing runtime only for tools still absent.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Mixed interpretations with IDs in only one section have ambiguous fallback behavior and compatibility guarantees.
+## AR-005: Regression coverage is ambiguous: the plan requires full runners but says the default runner selects only critical suite
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 says “if the id count is 0” and “ids win over structure when present,” but §10 promises identical counts for id-bearing interpretations. scripts/lib/change_class.py:229-230 currently returns zero for an ID-less section even when the other section has IDs; per-section fallback changes that tuple and potentially the class. Narrow the compatibility promise to sections containing IDs.
-- Failure: Mixed interpretations with IDs in only one section have ambiguous fallback behavior and compatibility guarantees. Amend the plan: “Apply ID precedence independently per section; preserve counts for sections containing IDs and use structural fallback for the other section, with tests for both mixed cases.”
+- References: CHANGE_PLAN.json §16 states that the default runner only runs critical-suites.txt; §17 requires full Python and shell runners, while the implementation sequence specifies only baseline commands plus two targeted suites. Implementers could satisfy the command checklist while omitting existing noncritical regression coverage.
+- Failure: Regression coverage is ambiguous: the plan requires full runners but says the default runner selects only critical suites. Add: “Run both regression runners with explicit full-suite selection; retain the two targeted new-suite commands as additional checks.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: The diagnostic's emission scope is unspecified, so a helper-only test can pass while classification prints twice.
+## AR-006: Multiple missing toolchains can exceed the promised 300-second delay because the timeout is defined per install.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 places logging in interpretation_counts and promises one line; supplied change_class.py:257-258 calls interpretation_counts twice per app features() evaluation. AC-4's stderr test does not specify its entry point, leaving the observable line-count assertion ambiguous.
-- Failure: The diagnostic's emission scope is unspecified, so a helper-only test can pass while classification prints twice. Add: "Each features() evaluation emits exactly one unknown-count diagnostic when either interpretation count is zero; test stderr through features()."
+- References: CHANGE_PLAN.json D-3 specifies “Timeout 300s per install,” but §22 mitigates hosted-run slowdown with a “300s cap”; §1 runs installation synchronously before the background probe. Separate installs for several missing tools could multiply the delay, creating a hosted workflow latency regression.
+- Failure: Multiple missing toolchains can exceed the promised 300-second delay because the timeout is defined per install. Add: “All installer subprocesses share one 300-second deadline; when it expires, record remaining packages as skipped and continue to preflight.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: The plan both requires the diagnostic and permits removing it, leaving contradictory pass criteria.
+## AR-007: The timeout does not define what happens to privileged installer descendants, allowing package changes to continue after
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-4 and OB-3 require a diagnostic for a present interpretation with a zero count. CHANGE_PLAN.json §16 requires AC-1..AC-4 tests, but 'Scope cuts under time pressure' explicitly allows cutting the AC-4 log; implementing that cut cannot satisfy the approved test oracle.
-- Failure: The plan both requires the diagnostic and permits removing it, leaving contradictory pass criteria. Add: "The AC-4 diagnostic and its stderr assertion are mandatory and cannot be cut under time pressure."
+- References: CHANGE_PLAN.json D-3 specifies a 300-second timeout; §12 says timeout is recorded and the run continues; CHANGE_SPEC.json §10 requires a bounded timeout. Neither specifies descendant cleanup: timing out the sudo process alone need not stop apt-get or package scripts, leaving privileged mutations concurrent with verification.
+- Failure: The timeout does not define what happens to privileged installer descendants, allowing package changes to continue after preflight resumes. Add: "On timeout, terminate and reap the entire installer process tree, including privileged descendants, before resuming preflight; test this with a persistent child process."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: Mixed-format interpretations lack an explicit fallback oracle: IDs in one section could suppress structural counting in
+## AR-008: The package map lacks a single expected argv for installer tests.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 says 'if the id count is 0' and 'ids win over structure when present' without specifying section scope. Its §16 and implementation step 2 list id-less and id-bearing tests but no mixed case; different implementations could pass those tests while returning different counts for mixed inputs.
-- Failure: Mixed-format interpretations lack an explicit fallback oracle: IDs in one section could suppress structural counting in the other. Add: "Apply ID precedence independently per section; test ID requirements with id-less criteria and id-less requirements with ID criteria."
+- References: CHANGE_PLAN.json D-1 gives ocaml-family tools an ambiguous `ocaml`/`ocaml-findlib` mapping and names both `ocaml-dune` and `dune`. AC-4 checks recorded argv, so implementations and tests can choose different packages while each claims compliance; resolve the map before coding.
+- Failure: The package map lacks a single expected argv for installer tests. Add: “Map ocaml, ocamlc and ocamlopt to ocaml, ocamlfind to ocaml-findlib, and dune to ocaml-dune; deduplicate packages before installation.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: Multiple missing packages have no defined install grouping or total timeout, leaving failure and timing assertions ambig
+
+- Severity: MEDIUM
+- References: CHANGE_PLAN.json D-3 specifies “300s per install,” while section 22 promises a “300s cap.” With multiple packages, separate calls can exceed that cap and produce different failure outcomes; define invocation grouping and timeout scope so installer tests have one oracle.
+- Failure: Multiple missing packages have no defined install grouping or total timeout, leaving failure and timing assertions ambiguous. Add: “Install all deduplicated mapped packages in one apt-get invocation with a single 300-second timeout; do not retry.”
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-010: A malformed line alongside valid commands has no defined recovery scope, so tests could accept either aborting discovery
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC.json section 8 says “Unparseable or unmapped tool: skipped with recorded reason,” while CHANGE_PLAN.json section 1 reuses the preflight tokenizer without defining mixed-file recovery. Specify line-level recovery and add a mixed valid/malformed input case to toolchain-install-test.py.
+- Failure: A malformed line alongside valid commands has no defined recovery scope, so tests could accept either aborting discovery or installing the remaining tools. Add: “Parse each command line independently; record and skip malformed lines, then continue discovering missing tools from valid lines.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

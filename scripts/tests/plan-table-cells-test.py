@@ -64,11 +64,13 @@ class TableCells(unittest.TestCase):
         self.assertEqual(list(inserts[0]['new']['properties']), ['cells'])
 
     def test_the_loose_schema_allows_cells_too(self):
-        generic = ws._op(['s15.1.r1'])['anyOf'][0]['properties']['fields']['properties']
+        # Row cells are a top-level array of the generic op (issue 268): `fields` and `new` are {name, value} pairs and
+        # carry no cells; plan_model.typed_op moves the array into the payload.
+        generic = ws._op(['s15.1.r1'])['anyOf'][0]['properties']
         self.assertEqual(generic['cells']['type'], 'array')
-        new = ws._op(['s15.1.r1'])['anyOf'][0]['properties']['new']['properties']
-        self.assertEqual(new['cells']['type'], 'array')
-
+        for key in ('fields', 'new'):
+            self.assertEqual(generic[key]['type'], 'array')
+            self.assertNotIn('cells', generic[key]['items']['properties']['name']['enum'])
 
 if __name__ == '__main__':
     unittest.main()

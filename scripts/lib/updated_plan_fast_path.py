@@ -90,8 +90,65 @@ def is_test_path(path):
     return any(part.lower() in TEST_DIRS for part in Path(path).parts[:-1])
 
 
+INTERPRETERS = {'bash', 'sh', 'zsh', 'python', 'python3', 'node', 'ruby', 'perl'}
+VALUE_OPTIONS = {'-c', '-m', '-e', '-E', '-p', '-r', '-I', '--eval', '--command'}
+INLINE_OPTIONS = {'-c', '-m', '-e', '-E', '-p', '--eval', '--command'}
+SHELLS = {'bash', 'sh', 'zsh'}
+EXCLUDED_PREFIXES = ('.', '/', 'node_modules', 'dist/', 'build/', 'out/', 'coverage/', 'target/', 'vendor/',
+                     'dist-newstyle/', 'bin/', 'obj/', '__pycache__/')
+
+
+def _eligible(token):
+    token = token[2:] if token.startswith('./') else token
+    if not token or token.startswith(EXCLUDED_PREFIXES) or '..' in token or any(c in token for c in '$`*?{}<>|;&='):
+        return None
+    name = token.rsplit('/', 1)[-1]
+    if '/' not in token and '.' not in name:
+        return None
+    return token
+
+
+def executed_paths(commands):
+    """Literal script files the command lines run; text only, nothing is executed."""
+    import shlex
+    found = []
+    for line in (commands or '').splitlines():
+        try:
+            tokens = shlex.split(line, comments=True)
+        except ValueError:
+            continue
+        candidate = None
+        if tokens and tokens[0] in INTERPRETERS:
+            i, inline = 1, False
+            while i < len(tokens) and tokens[i].startswith('-') and tokens[i] != '-':
+                opt = tokens[i]
+                if tokens[0] in SHELLS and opt in ('-e', '-E', '-p'):
+                    i += 1
+                    continue
+                if opt in INLINE_OPTIONS:
+                    inline = True
+                    break
+                i += 2 if opt in VALUE_OPTIONS else 1
+            if not inline and i < len(tokens):
+                candidate = tokens[i]
+        elif tokens:
+            candidate = tokens[0]
+        path = _eligible(candidate) if candidate else None
+        if path and path not in found:
+            found.append(path)
+    return found
+
+
 def derive_protected_paths(text, commands=''):
-    """Return named test/config paths, one per line, excluding generated files.  Recognized by name in any language."""
+    """Return named test/config paths, one per line, excluding generated files.  Recognized by name in any language.
+    When none is named, fall back to the script files the verification commands execute."""
+    named = _derive_named(text, commands)
+    if named:
+        return named
+    return '\n'.join(executed_paths(commands)[:40])
+
+
+def _derive_named(text, commands=''):
     found = []
     for match in PATH_TOKEN.finditer((text or '') + '\n' + (commands or '')):
         path = match.group(1)

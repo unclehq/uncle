@@ -4,16 +4,22 @@
 
 | Command | Status | Meaningful output | Requirements |
 |---|---|---|---|
-| ls build-with-uncle/scripts/build.py | FAIL | No such file or directory. The change target is not in this repo. | AC-1, AC-2, AC-3, AC-4 |
-| targeted mocked-publisher/clock tests | NOT RUN | No build.py exists here, so there is nothing to test or to implement against. | AC-1, AC-2, AC-3, AC-4 |
-| bash scripts/run-shell-tests.sh; bash scripts/run-python-tests.sh | DRIVER PENDING | The driver owns the full regression run. | None stated |
-| formatter, type check, lint, integration, frontend build, migration, rollback, performance, security | N/A | No source file changed. | None stated |
+| bash scripts/run-python-tests.sh -- updated-plan-ops (env -u UNCLE_PLAN_KIND) | PASS | exit 0; 44 tests | AC-2, AC-3, AC-4 |
+| bash scripts/run-python-tests.sh -- updated-plan-fast-path (env -u UNCLE_PLAN_KIND) | PASS | exit 0; 8 tests; failed on `bash -e` before the fix | AC-1, AC-2 |
+| bash scripts/run-python-tests.sh -- plan-context-protected (env -u UNCLE_PLAN_KIND) | PASS | exit 0 | AC-5 |
+| bash scripts/run-shell-tests.sh -- updated-plan-merge-conflict | PASS | exit 0 | AC-6 |
+| bash scripts/run-python-tests.sh -- updated-plan-writer-retries (regression) | PASS | exit 0 | AC-7 |
+| bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh (full suite) | DRIVER PENDING | Run by the driver after this stage. | AC-7 |
+| baseline result | DRIVER PENDING | Compared by the driver against BASELINE_REPORT. | AC-7 |
+| formatting / type checker / lint / frontend build / migration / rollback / performance / security | N/A | No such tooling for these shell/Python scripts; no persisted format changed. | None stated |
+| integration tests | NOT RUN | Optional hosted rerun with scripts/check-*.sh plans not performed (LIVE_VERIFICATION). | AC-3 |
 
 ## Coverage gaps
 
-- AC-1 to AC-4 are unimplemented and unverified because build-with-uncle/scripts/build.py is absent.
-- Final-request failure behavior (DESIGN default) is untested.
+- Hosted end-to-end rerun not performed.
+- Suites must run with UNCLE_PLAN_KIND unset; in a change-plan stage environment ops tests fail for unrelated environmental reasons.
+- No newly introduced warnings observed; pre-existing failures: none observed in targeted suites.
 
 ## Next action
 
-Supply the build-script repo (or transfer the issue to it), then re-run implementation there.
+Driver runs the full verification block and compares against baseline.

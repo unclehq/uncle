@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plan_patch import UNRESOLVED, expand_items, apply_patch, split_sections
-from updated_plan_fast_path import protected_paths
+from updated_plan_fast_path import protected_paths, derive_protected_paths
 from updated_plan_slices import finding_ids
 from worker_schemas import EDIT_KIND, RESOLUTION_KIND
 
@@ -763,6 +763,10 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
             leave_out(dispositions, owners, {e['writer'] for g in groups if g['id'] == gid for e in g['edits']}, count)
             print('updated-plan edits: group %s: %d edit(s) could not be placed and were left out' % (gid, count), file=sys.stderr)
     commands = merged_commands(base_commands, command_edits)
+    if not CHANGE and not (next(iter(paths), base_paths) or '').strip():
+        derived_paths = derive_protected_paths('', commands)
+        if derived_paths.strip():
+            paths = {derived_paths}
     if not CHANGE and not (next(iter(paths), base_paths) or '').strip():
         raise Conflict('no writer supplied protected_verification_paths')
     patch = merged_patch(parts, narrative)

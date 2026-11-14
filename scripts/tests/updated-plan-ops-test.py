@@ -220,6 +220,61 @@ class DerivedPaths(Base):
         self.assertEqual(result['protected_verification_paths'], 'tests/e2e/current.spec.js')
 
 
+class MergeStatus(Base):
+    def run_main(self):
+        import contextlib
+        import io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status = ops.main(['merge', str(self.dir / 'plan.json'), str(self.dir / 'slices.tsv'), str(self.dir), str(self.dir / 'out.json')])
+        return status, err.getvalue()
+
+    def test_a_clean_merge_exits_zero(self):
+        self.deliver('1', 'AR-1')
+        self.deliver('2', 'AR-2')
+        self.assertEqual(self.run_main()[0], 0)
+
+    def test_a_merge_conflict_exits_four_with_the_message_unmodified(self):
+        self.deliver('1', 'AR-1')
+        (self.dir / '2.json').write_text(json.dumps({'dispositions': [], 'ops': []}))
+        status, err = self.run_main()
+        self.assertEqual(status, 4)
+        self.assertIn('updated-plan ops: writer 2 left AR-2 without a disposition', err)
+
+    def test_other_failures_still_exit_one(self):
+        # a failure that is not a merge Conflict (an OS error) keeps status 1
+        from unittest import mock
+        with mock.patch.object(ops, 'merge', side_effect=OSError('disk full')):
+            self.assertEqual(self.run_main()[0], 1)
+
+
+class IngestDerivedPaths(Base):
+    COMMANDS = 'bash scripts/check.sh'
+
+    def plan(self, derived, paths):
+        narrative = NARRATIVE.replace('Owns: `package.json`', 'Owns: `scripts/check.sh`')
+        plan = dict(PLAN, narrative=narrative, verification_commands=self.COMMANDS, protected_verification_paths=paths)
+        if derived:
+            plan['protected_verification_paths_derived'] = True
+        (self.dir / 'plan.json').write_text(json.dumps(plan))
+
+    def rename(self):
+        self.deliver('1', 'AR-1', {'op': 'set_step', 'id': 'step-1', 'fields': {'owns': 'scripts/verify.sh'}},
+                     commands_replace=[{'old': 'scripts/check.sh', 'new': 'scripts/verify.sh'}])
+        self.deliver('2', 'AR-2')
+        return self.merge()
+
+    def test_a_renamed_protected_script_replaces_the_ingest_derived_path(self):
+        self.plan(True, 'scripts/check.sh')
+        paths = self.rename()['protected_verification_paths'].splitlines()
+        self.assertIn('scripts/verify.sh', paths)
+        self.assertNotIn('scripts/check.sh', paths)
+
+    def test_explicitly_supplied_paths_are_preserved_unchanged(self):
+        self.plan(False, 'scripts/check.sh')
+        self.assertEqual(self.rename()['protected_verification_paths'], 'scripts/check.sh')
+
+
 class Resolve(Base):
     def conflict(self):
         self.deliver('1', 'AR-1', set_fields('B-1', failure='first'))

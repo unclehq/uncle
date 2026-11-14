@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 275
+Issue 276
 
-Seeded from [unclehq/uncle#275](https://github.com/unclehq/uncle/issues/275).
+Seeded from [unclehq/uncle#276](https://github.com/unclehq/uncle/issues/276).
 
 ## Change Type
 
@@ -10,46 +10,58 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Hosted builds never install a missing language toolchain: an OCaml app ends NOT_READY with its requirements waived and output hand-traced, though installing OCaml takes 5 seconds on the build machine
+Hand-off builds with no base commit publish no attestation or audit findings: every hosted PR is a non-draft that says "NOT VERIFIED, do not trust its attestation", even when the audit is NOT_READY
 
 ## Motivation
 
 ## What happened
 
-A hosted, unattended build (Daytona sandbox, Debian 13, passwordless `sudo`, apt package lists present, `runner self-hosted`, Claude Sonnet 5) was asked for a hello-world OCaml application with a one-page interactive tutorial.
+This was a hosted, unattended build in hand-off mode (`UNCLE_PUBLISH_MODE=handoff`, `UNCLE_HOSTED=1`). The host's build script set up the sandbox work tree from the target repository's files but not its history. The target repository has a commit on `main`. The sandbox had none:
 
-1. **Baseline.** The baseline report recorded the missing toolchain, and the green-check baseline failed on it:
-   ```
-   FAIL(1)   command -v ocaml && ocaml -version
-   FAIL(1)   command -v dune && dune --version
-   FAIL(1)   command -v ocamlfind && ocamlfind ocamlc -version
-   ```
-   The report assumed a toolchain "is or can be made available". The plan instead chose a fallback: "if `ocaml` is unavailable … hand-derive expected output", with R-3 "absence of `ocaml` must not block writing/implementing".
-2. **Preflight.** `Preflight: the runtime probe did not confirm the environment: Deterministic preflight needs diagnosis: Unrecognized verification executable: command`. This was recorded as a non-blocking failure.
-3. **Implementation.** "No ocaml binary found. I'll write both files, hand-trace output". AC-1 and AC-2 came back `INCOMPLETE`. The run printed "Unattended: waiving rejected rows (AC-1 AC-2); no person authorized this."
-4. **Test review.** ASSERTIONS and COVERAGE failed as MAJOR, and NEGATIVE and ORACLE as MINOR. None was critical, so there was no repair.
-5. **Final audit.** `NOT_READY`.
+```
+[+00:00:00] Initialized Git repository in /home/daytona/work
+Run policy: no git history to branch from; continuing without a run branch.
+...
+$ git log
+fatal: your current branch 'master' does not have any commits yet
+```
 
-After the build finished, I ran `sudo apt-get install -y --no-install-recommends ocaml` on the same machine. It took about 5 seconds and installed OCaml 5.3.0. Both `.ml` files then ran with exit 0, and every output line matched the hand-traced output on the tutorial page. The build's only blocker was a toolchain it never tried to install.
+At the end of the build:
 
-An earlier hosted build that asked for a hello-world **Haskell** application shipped no Haskell at all: only `index.html`, JavaScript and JS tests. That looks like the same gap.
+```
+[+00:14:00] Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in the PR and attestation).
+[+00:14:00] Current state: COMPLETE
+[+00:14:00] Unattended: no base commit, so no PR was made.
+[+00:14:00] PR: none (no base commit)
+```
+
+Neither `.uncle/attestation.json` nor a hand-off record was written. The host then published the pull request itself:
+
+- it was a normal pull request, not a draft, even though the audit was `NOT_READY`
+- it contained only the three changed files: no attestation and no audit findings
+- its description quoted `uncle verify` run in the sandbox before publishing:
+  ```
+  nothing to verify: HEAD does not exist (this repository has no commits yet; commit the build, including .uncle/attestation.json, then run uncle verify again)
+  NOT VERIFIED
+  This change could not be verified. Do not trust its attestation as it stands.
+  ```
+
+The previous hand-off pull request from the same host, a different build, has the same `NOT VERIFIED` text. So every pull request this host publishes tells the reviewer not to trust it, and none of them carries the audit's verdict or findings.
 
 ## Cause
 
-1. Nothing in the workflow installs a runtime the plan needs. `install_warm.py` only warms the npm and Playwright caches. The baseline, planning and implementation prompts treat a missing compiler as a fact to work around, even on a hosted machine with a package manager and `sudo`.
-2. `preflight.py` can't probe a toolchain outside its fixed list ([`scripts/lib/preflight.py#L12-L19`](https://github.com/unclehq/uncle/blob/3cecf2b3e46d59fa00389edd50ccb0fc93b2679a/scripts/lib/preflight.py#L12-L19)):
-   - `BUILTINS` lacks `command`, yet the baseline writes `command -v <tool>`, the usual POSIX probe. Every such line raises "Unrecognized verification executable: command" ([`#L42-L44`](https://github.com/unclehq/uncle/blob/3cecf2b3e46d59fa00389edd50ccb0fc93b2679a/scripts/lib/preflight.py#L43-L44)).
-   - `PROBES` covers node, npm, npx, python, bash, git, ruby, go, cargo, rustc, pytest and ruff only. `ocaml`, `dune`, `ghc`, `cabal`, `stack`, `java`, `dotnet`, `opam` and others are refused the same way. So preflight can neither confirm a missing toolchain nor report it as missing.
-3. The supervisor that should diagnose these non-blocking failures is never started in headless builds (#274).
+1. With `UNATTENDED=1` and no `HEAD`, the workflow skips `change_pr_complete` entirely ([`scripts/change-workflow.sh#L5261-L5274`](https://github.com/unclehq/uncle/blob/3cecf2b3e46d59fa00389edd50ccb0fc93b2679a/scripts/change-workflow.sh#L5261-L5274)). That function writes the hand-off record and attestation and makes a `NOT_READY` build a draft (issue 107). Without a base commit, hand-off mode therefore has nothing to hand off.
+2. The line printed just before it ("findings are in the PR and attestation") is unconditional, so it is wrong on this path.
+3. The host's build script copies the target files into a fresh repository instead of cloning or fetching the base branch, so every hosted build takes this path. That script is outside this repository; this item is for the release owner.
 
 ## Requested fix
 
-1. In hosted builds (`UNCLE_HOSTED=1`), when the baseline or preflight shows that a runtime the plan's verification needs is missing, install it before implementation (apt, opam, ghcup, rustup and so on), or add an explicit toolchain step the implementer runs. Record what was installed in the baseline or preflight report.
-2. Tell the planner and implementer that on a hosted machine with a package manager, a missing compiler is something to install, not a reason to hand-trace output or waive acceptance rows.
-3. In `preflight.py`, treat `command -v <name>` (and `which <name>`) as a probe of `<name>`. For an executable not in `PROBES`, check it with `shutil.which` and report "Missing runtime: <name>" instead of refusing the line.
-4. Add a test: a hosted hello-world build in a language missing from the base image (OCaml or Haskell) installs its toolchain, runs its verification commands, and reaches `READY` with AC rows `IMPLEMENTED`.
+1. In hand-off mode with no base commit, either commit the starting tree as a base before the build starts, so `HEAD` exists, or still write the hand-off record with the attestation, the audit verdict, its findings and `draft: true` when the audit isn't `READY`.
+2. Print "findings are in the PR and attestation" only when they will be.
+3. Build script (release owner): clone or fetch the target repository's base branch into the sandbox so the build has a base commit and a run branch. Open `NOT_READY` builds as drafts with the verdict and findings in the description. Don't quote `uncle verify` output from a sandbox with no `HEAD`.
+4. Add a test: an unattended hand-off build whose work tree has no commits still produces a hand-off record with the attestation, the verdict and the draft flag.
 
-Related: #262 (Haskell, Rust and Go test-file recognition), #274 (supervisor never runs in headless builds).
+Related: #233 (hand-off mode left the attestation out of `handoff.json`).
 
 ## Observed Current Behavior
 

@@ -4,18 +4,17 @@
 
 | Command | Status | Meaningful output | Requirements |
 |---|---|---|---|
-| python3 scripts/tests/preflight-toolchain-test.py | PASS | 7 tests OK | AC-1, AC-2, AC-3 |
-| python3 scripts/tests/toolchain-install-test.py | PASS | 10 tests OK | AC-4, AC-5, AC-7 |
-| python3 scripts/tests/toolchain-wiring-test.py | PASS | 7 tests OK (4 prompt failures before adding hand-tracing sentence) | AC-6, AC-8 |
-| bash scripts/run-shell-tests.sh && bash scripts/run-python-tests.sh | DRIVER PENDING | Driver owns full regression run | AC-3, AC-8 |
-| formatter / type checker / lint / frontend build / migration / rollback / performance / security | N/A | No such tooling in this repository for this change | None stated |
-| live hosted OCaml run | BLOCKED | BLOCKED-SETUP: needs hosted machine with sudo and apt | AC-7 |
+| bash scripts/tests/run-policy-test.sh | PASS | 119 checks, 0 failed | AC-1, AC-2 |
+| bash scripts/tests/handoff-no-base-test.sh | PASS | 15 checks, 0 failed; fake signer never invoked | AC-2, AC-4, AC-5 |
+| bash scripts/run-shell-tests.sh && bash scripts/run-python-tests.sh | DRIVER PENDING | full suite owned by driver | AC-6 |
+| formatter / type checker / lint | N/A | no formatter configured for shell scripts here | None stated |
+| integration, frontend build, migration, rollback, performance, security | N/A | not applicable to this change | None stated |
 
 ## Coverage gaps
 
-- Live hosted install not exercised; simulated with fake sudo/apt-get
-- MC-901 change_class.py defect is out of scope
+- AC-3 end-to-end not tested: engine requires HEAD (PB-1)
+- AC-4/AC-5 only checked by wording greps, not by driving completion
 
 ## Next action
 
-Driver runs full regression block.
+Amend the plan to allow a change-pr.sh unborn-HEAD base path, then add the end-to-end handoff.json test.

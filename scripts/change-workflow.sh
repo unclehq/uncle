@@ -5278,7 +5278,11 @@ PY
                     change_pr_complete </dev/null || pr_rc=$?
                     ! declare -f change_pr_extras_print >/dev/null || change_pr_extras_print "$pr_rc"
                 else
-                    echo "Unattended: no base commit, so no PR was made."
+                    if [[ "${UNCLE_PUBLISH_MODE:-}" == "handoff" ]]; then
+                        echo "Unattended: no hand-off record was written because there is no base."
+                    else
+                        echo "Unattended: no base commit, so no PR was made."
+                    fi
                     finished_extras print --kind change --reason no-base-commit --unattended
                 fi
                 echo "Built in $PROJECT_ROOT; review $DIFF_FILE."

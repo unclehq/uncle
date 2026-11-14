@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 260
+Issue 263
 
-Seeded from [unclehq/uncle#260](https://github.com/unclehq/uncle/issues/260).
+Seeded from [unclehq/uncle#263](https://github.com/unclehq/uncle/issues/263).
 
 ## Change Type
 
@@ -10,23 +10,34 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Stop uncle from modifying .gitignore after committing code at the end of a build / pushing a PR
+Build script still asks for a 7200-second preview link, so the host refuses every hosted build's first link request (#235 step 2 and #251 didn't ship this part)
 
 ## Motivation
 
-## Problem
-At the end of a build, after uncle has committed the code and pushed the PR, it updates `.gitignore` in the working tree. This leaves an uncommitted change behind (and, if it lands in the PR, an unplanned file in the diff — see FA-003 in a prior FINAL_AUDIT.md, where `.gitignore` was flagged as outside the plan's change-impact table with no recorded rationale).
+## What happens
 
-## Expected
-Once the code is committed and the PR is pushed, uncle must not modify `.gitignore` (or any other tracked file). Any `.gitignore` duties should happen before the commit, be declared in the plan's `Owns:` list, and be part of the committed diff — or not happen at all for existing-repo change requests.
+In a hosted build on 2026-11-13, the host refused the build script's first signed-link request, and the retry worked:
 
-## Acceptance criteria
-- After a build finishes and the PR is pushed, `git status` in the working tree is clean of uncle-made `.gitignore` edits.
-- A test covers the post-push phase leaving `.gitignore` byte-identical.
-- If `.gitignore` needs a change, it appears in the plan and the PR diff, not afterwards.
+| Time (UTC) | Request | Result |
+|---|---|---|
+| 23:46:44 | `GET /sandbox/{id}/ports/5173/signed-preview-url?expiresInSeconds=7200` | `400`: "expiresInSeconds must be given once, as a whole number of seconds from 1 to 3600." |
+| 23:46:45 | The same request with `expiresInSeconds=3600` | `200`. The build printed `Preview: https://5173-<token>.daytonaproxy01.net (works until 00:46 UTC)` |
 
-## Notes
-Relevant: `prompts/project-plan-investigate.md` (the `.gitignore` write duty) and `docs/plan-duties.md`. The step that actually writes `.gitignore` after the push still needs to be located.
+The person still gets a working link. But every hosted build makes one request the host refuses, and the host now records each refusal as an error, so every build adds a false error to the host's logs.
+
+The rest of #251's link steps shipped: the sandbox was created with `autoStopInterval` 120 and `autoDeleteInterval` 0, and the printed end time matches the link's expiry.
+
+## Why
+
+The host caps signed preview links at 3600 seconds on purpose. A signed link opens the sandbox's app for anyone holding it, so the host keeps it short and expires it when the task ends. #235 (fix step 2) and #251 asked the script for at most 3600, and both are closed, but the shipped script still asks for 7200 first and depends on #207's shorter-lifetime retry.
+
+## Fix
+
+Ask for `expiresInSeconds=3600` or less on the first request. Keep the retry in case a request is refused.
+
+## Test
+
+Build script, with a mocked publisher: the first signed-link request has `expiresInSeconds` of at most 3600, and a build that gets its link makes no refused link request.
 
 ## Observed Current Behavior
 

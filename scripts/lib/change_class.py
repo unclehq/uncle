@@ -223,11 +223,26 @@ def interpretation(project):
     return {name: value if isinstance(value, str) else json.dumps(value) for name, value in sections.items()}
 
 
+def _structural_count(text):
+    """Items in an id-less section: table data rows (not the header or separator) plus top-level bullets/numbered items."""
+    rows = [line.strip() for line in text.splitlines() if line.strip().startswith('|')]
+    separators = [i for i, row in enumerate(rows) if re.fullmatch(r'\|?[\s:|-]+\|?', row) and '-' in row]
+    table = max(0, len(rows) - len(separators) - len(separators)) if separators else 0
+    bullets = len(re.findall(r'(?m)^(?:[-*+]|\d+[.)])\s+\S', text))
+    return table + bullets
+
+
+def _section_count(text, id_pattern):
+    ids = set(re.findall(id_pattern, text))
+    return len(ids) if ids else _structural_count(text)
+
+
 def interpretation_counts(project):
-    """(required functionality items, definition-of-done rows) in the approved interpretation."""
+    """(required functionality items, definition-of-done rows) in the approved interpretation. Pure: no logging. A section
+    with R-n/D-n ids counts the ids; a section without any counts its structure. Each section is decided on its own."""
     sections = interpretation(project)
-    return (len(set(re.findall(r'\bR-\d+', sections.get('required_functionality', '')))),
-            len(set(re.findall(r'\bD-\d+', sections.get('definition_of_done', '')))))
+    return (_section_count(sections.get('required_functionality', ''), r'\bR-\d+'),
+            _section_count(sections.get('definition_of_done', ''), r'\bD-\d+'))
 
 
 def criteria_text(family, project):
@@ -250,12 +265,18 @@ def features(family, project, plan):
     for path in owned:
         kinds[kind_of(path)] += 1
     hits = sorted(risk_hits_in(request + '\n' + criteria_text(family, project) + '\n' + '\n'.join(owned)))
+    requirements, criteria = 0, 0
+    if family != 'change':
+        requirements, criteria = interpretation_counts(project)
+        if interpretation(project) and (requirements == 0 or criteria == 0):
+            print('change_class: interpretation counts unknown (requirements=%d, criteria=%d); no R-n/D-n ids or list/table '
+                  'rows found' % (requirements, criteria), file=sys.stderr)
     directories = {path.rsplit('/', 1)[0] if '/' in path else '' for path in owned}
     return {
         'family': family, 'request_chars': len(request), 'plan_chars': len(plan_text), 'steps': steps,
         'owned_files': len(owned), 'directories': len(directories), 'file_kinds': kinds,
-        'criteria': criteria_count(project) if family == 'change' else interpretation_counts(project)[1],
-        'requirements': interpretation_counts(project)[0] if family != 'change' else 0, 'risk_hits': hits[:12],
+        'criteria': criteria_count(project) if family == 'change' else criteria,
+        'requirements': requirements, 'risk_hits': hits[:12],
         'owned_sample': owned[:12], 'plan_sha': digest(plan_text),
     }
 

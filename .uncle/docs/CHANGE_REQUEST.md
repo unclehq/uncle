@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 268
+Issue 272
 
-Seeded from [unclehq/uncle#268](https://github.com/unclehq/uncle/issues/268).
+Seeded from [unclehq/uncle#272](https://github.com/unclehq/uncle/issues/272).
 
 ## Change Type
 
@@ -10,47 +10,49 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Updated-plan edit schemas have 130+ optional fields, so Claude models can't enforce them and writers fail on format
+Hosted new-app builds never qualify as small: requirement counts read R-n/D-n ids the self-hosted interpretation doesn't have, so a hello-world app runs as large
 
 ## Motivation
 
 ## What happened
 
-In the same hosted build as #267 (Claude Sonnet 5, OpenAI-compatible chat route backed by Amazon Bedrock), 3 of the 10 updated-plan edit writer calls returned packets that broke their schema, although each was sent with `response_format: {"type": "json_schema", ...}`:
+A hosted, unattended build (self-hosted delivery, Claude Sonnet 5) was asked for a hello-world app with a quick one-page interactive tutorial. The result is 156 lines across 4 files (`index.html`, `src/main.js`, `src/steps.js`, `src/tutorial.js`). Uncle classed the build `large` and ran its full process:
+
+- a 46,143-character project plan
+- 4 adversarial review lenses and full test scope
+- 3 test-review lenses, 4 checklist lenses and 4 final-audit lenses
+- a repair round
+
+The build took about 37 minutes and about $16 of model usage, and it ended `NOT_READY`.
+
+`change-class.json` from the build:
 
 ```
-cause: Model response violates the artifact schema (json_schema constraint): $.ops[4] matches none of the allowed forms ($.ops[4].fields.depends_on must be string; $.ops[4] is missing required field new; ...)
-cause: Model response violates the artifact schema (json_schema constraint): $.ops[2] matches none of the allowed forms ($.ops[2].id must be one of 'R-1', 'R-2', 'R-3', 's10', ...)
-cause: Model response violates the artifact schema (json_object constraint): $.ops[0] matches none of the allowed forms ($.ops[0].after must be one of '', 's10.4'; $.ops[0].target must be 's12')
+"class": "large", "source": "plan-recheck", "floor_class": "large",
+"rationale": "Raised from standard to large: the plan (7 steps, 13 files) is larger than the standard class allows.",
+"features": { "family": "app", "request_chars": 759, "plan_chars": 46143, "steps": 7, "owned_files": 13,
+              "file_kinds": {"test": 4, "docs": 0, "scaffold": 4, "app": 5}, "criteria": 0, "requirements": 0, "risk_hits": [] }
 ```
 
-A grammar-enforced reply could not contain an `id` outside its `enum` or an array where a string is required. The schema was not enforced.
+Note `"requirements": 0` and `"criteria": 0`. The approved interpretation had 4 required-functionality items and 4 definition-of-done rows.
 
 ## Cause
 
-Claude models on Bedrock enforce a response schema only when it has at most 24 optional properties. This build's updated-plan edit schemas (`.uncle/workflow/updated-plan-edits/schemas/*.json`) have 133–159 each. Sending writer 2's schema to Bedrock's Converse API as `output_config.format` returns:
+1. In hosted builds, the requirements stage takes the self-hosted path ([`scripts/stagegate.sh#L4819-L4835`](https://github.com/unclehq/uncle/blob/9255d7e687614cfdb36a01a99cdd86c12a40f49b/scripts/stagegate.sh#L4819-L4835)). It copies the investigation as `REQUIREMENTS_INTERPRETATION.md` and renders the JSON from it ("Requirements fast path"). The investigation writes `required_functionality` as plain bullets and `definition_of_done` as a table, with no `R-n` or `D-n` ids.
+2. `interpretation_counts` counts only `R-\d+` and `D-\d+` ids ([`scripts/lib/change_class.py#L226-L230`](https://github.com/unclehq/uncle/blob/9255d7e687614cfdb36a01a99cdd86c12a40f49b/scripts/lib/change_class.py#L226-L230)), so it returns `(0, 0)`.
+3. `app_is_small` requires `0 < requirements` and `0 < criteria` ([`#L263-L269`](https://github.com/unclehq/uncle/blob/9255d7e687614cfdb36a01a99cdd86c12a40f49b/scripts/lib/change_class.py#L263-L269)), so a small app is never `small` on this path.
+4. Not being `small`, the plan is written at full length, without `PLAN_TARGET` or `PLAN_WORD_SCALE`. This plan reached 7 steps and 13 files, 8 of them tests and scaffolding the plan added itself. `deterministic_class` then raised it to `large` ([`#L282`](https://github.com/unclehq/uncle/blob/9255d7e687614cfdb36a01a99cdd86c12a40f49b/scripts/lib/change_class.py#L282)).
 
-```
-ValidationException: Schemas contains too many optional parameters (159), which would make grammar compilation inefficient. Reduce the number of optional parameters in your tool schemas (limit: 24).
-```
-
-129 of the 159 come from the generic op in [`scripts/lib/worker_schemas.py#L194-L201`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/worker_schemas.py#L194-L201): its `fields` and `new` objects list every `FIELD_NAMES` entry as optional. `set_step` fields ([`#L356`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/worker_schemas.py#L356)) and row `fields` ([`#L298-L303`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/worker_schemas.py#L298-L303)) are also all optional.
-
-When a schema can't be enforced, the Seren route asks the model for any JSON object, passes the schema as an instruction, and says so in two response headers:
-
-- `x-seren-schema-relaxed`: the schema rules it could not enforce (here including `optional parameters`).
-- `x-seren-schema-check`: `failed; <first violation>` when its own check of those rules fails.
-
-[`scripts/lib/self_hosted_http.py`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/self_hosted_http.py#L1524) does not read either header, so `http_agent.py` records the mode as `json_schema` and treats the reply as a model failure. Bounded updated-plan writers also skip the targeted repair step ([`http_agent.py#L1352-L1356`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/http_agent.py#L1352-L1356), [`#L1442-L1449`](https://github.com/unclehq/uncle/blob/c5815a928b746ae322d7b6a1d813074e719f7bc5/scripts/lib/http_agent.py#L1442-L1449)), so each bad packet cost a full re-ask: about 2.5 minutes in this build.
-
-The typed project-plan sections failed earlier in the same build on invalid JSON (`Unrepaired draft: Expecting ',' delimiter`). That fits the same unenforced format, but I did not test that schema.
+So every hosted new-app build skips the small class, however small the request.
 
 ## Requested fix
 
-1. Keep each edit schema within 24 optional properties. For example, replace the optional `fields`/`new` objects in the generic op with a required array of `{"name": <enum of field names>, "value": <string>}` pairs, or drop the generic variant when the plan-model ops already cover the edit.
-2. When a reply carries `x-seren-schema-relaxed`, treat it as unenforced: allow the targeted repair step for bounded writers instead of failing the writer.
+1. Count the interpretation's items in a way that doesn't depend on ids: bullet items under `required_functionality` and table rows under `definition_of_done`. Alternatively, make the self-hosted investigation path assign `R-n`/`D-n` ids the way the other requirements paths do.
+2. When an interpretation exists but its counts come back 0, treat them as unknown and log it, instead of silently ruling out `small`.
+3. For the `large` check on new apps, consider not counting test and scaffold files toward `owned_files` and `steps`. A plan that adds its own test harness shouldn't push a small app into the heaviest class.
+4. Add a test: a self-hosted-path interpretation for a hello-world app with 4 bullets and 4 done rows classes as `small`.
 
-Checked against `main` at `c5815a928b`; the cited lines are unchanged there.
+Related: #245 (no overall time or spending limit for unattended builds).
 
 ## Observed Current Behavior
 

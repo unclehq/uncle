@@ -1,80 +1,64 @@
-## AR-001: Moving row cells out of fields/new leaves their normalization and conflict behavior undefined, risking lost row data.
-
-- Severity: HIGH
-- References: CHANGE_PLAN.json D-1 moves cells to a top-level array, while D-3 specifies only pair-to-dict normalization. CHANGE_SPEC.json AC-2 requires equivalent typed operations including rows, and AC-3 preserves dict-form behavior; neither artifact defines how relocated cells reach that contract.
-- Failure: Moving row cells out of fields/new leaves their normalization and conflict behavior undefined, risking lost row data. Add: "typed_op maps top-level cells into the operation's fields or new dictionary; conflicting nested and top-level cells are rejected, and existing nested cells remain supported."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-002: The repair requirement covers schema-invalid replies, but the planned guard excludes valid JSON arrays, scalars, and nul
+## AR-001: The required diagnostic would appear twice during normal feature extraction because counts are computed twice.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-5 and B-5 require one targeted repair for relaxed, schema-invalid bounded replies. CHANGE_PLAN.json D-5 retains final.startswith('{') for both exception guards, excluding non-object JSON that fails the artifact schema.
-- Failure: The repair requirement covers schema-invalid replies, but the planned guard excludes valid JSON arrays, scalars, and null. Add: "A relaxed bounded reply that parses as JSON but violates the artifact schema receives one repair regardless of its first character; malformed JSON receives repair only when it begins with '{'."
+- References: CHANGE_PLAN.json §1 places the diagnostic inside interpretation_counts and requires one line; supplied scripts/lib/change_class.py:257-258 invokes that function separately for criteria and requirements. The plan must specify reuse so implementation and stderr acceptance tests agree on diagnostic cardinality.
+- Failure: The required diagnostic would appear twice during normal feature extraction because counts are computed twice. Add: "For app feature extraction, call interpretation_counts once, reuse both counts, and emit at most one unknown-count diagnostic."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-003: Streaming header handling is optional in the plan although relaxed-response reporting is unconditional in the requiremen
+## AR-002: A valid interpretation with empty sections is present but receives no diagnostic under the plan, conflicting with AC-4.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-4 requires a relaxed mode whenever a Converse/chat response carries the non-empty header. CHANGE_PLAN.json D-6 permits documenting unavailable streaming headers, and Scope cuts permits dropping streaming header capture, without explicitly requiring affected calls to use the covered transport.
-- Failure: Streaming header handling is optional in the plan although relaxed-response reporting is unconditional in the requirements. Add: "Every updated-plan completion path must propagate the relaxed header; when streaming cannot expose it, route those completions through the non-streaming transport."
+- References: CHANGE_SPEC.json AC-4 and §8 require logging when an interpretation exists but a count is zero; CHANGE_PLAN.json §1 logs only when interpretation() is non-empty. Supplied scripts/lib/change_class.py:215-223 returns {} for both empty sections and missing/invalid input. Align AC-4 with the explicit empty-object decision.
+- Failure: A valid interpretation with empty sections is present but receives no diagnostic under the plan, conflicting with AC-4. Add: "Treat an empty sections object as absent for diagnostic purposes; valid non-empty sections with either count zero emit the diagnostic."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: The specification treats every non-empty header as relaxed but also treats malformed headers as enforced, leaving arbitr
+## AR-003: The plan permits cutting behavior that remains mandatory for acceptance.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json section 8 says "Header absent/malformed: treat as enforced," while section 15 and AC-4 say any non-empty x-seren-schema-relaxed value signals relaxed enforcement. CHANGE_PLAN.json section 12 additionally treats blank headers as enforced without defining blank or malformed.
-- Failure: The specification treats every non-empty header as relaxed but also treats malformed headers as enforced, leaving arbitrary values ambiguous. Add: "Trim header whitespace; any remaining non-empty value means relaxed, regardless of its contents, and an absent or whitespace-only value leaves the mode unchanged."
+- References: CHANGE_PLAN.json §Scope cuts under time pressure says to cut the stderr diagnostic first, while CHANGE_SPEC.json AC-4 and OB-3 require it and CHANGE_PLAN.json §16 requires AC-4 tests. Remove the scope-cut permission so implementation cannot legitimately omit behavior that verification must require.
+- Failure: The plan permits cutting behavior that remains mandatory for acceptance. Add: "The AC-4 diagnostic is required and may not be cut under time pressure."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Moving row cells to the top level leaves their normalization and precedence unspecified, risking dropped row content.
-
-- Severity: HIGH
-- References: CHANGE_PLAN D-1 moves cells out of fields/new, but D-3 specifies only pair-array-to-dict conversion; AC-2 requires equivalent row operations and AC-3 preserves dict behavior. scripts/lib/worker_schemas.py:197-200 currently allows cells inside both fields and new, so relocation needs an explicit consumer mapping and conflicting-input test.
-- Failure: Moving row cells to the top level leaves their normalization and precedence unspecified, risking dropped row content. Add: "typed_op maps top-level cells into the operation's row payload; existing nested cells remain supported and take precedence when both forms occur."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-006: The header holder can be read as enabling repair when only x-seren-schema-check is present, changing enforced bounded-wr
+## AR-004: Adding logging inside interpretation_counts produces duplicate diagnostics during normal feature extraction, contradicti
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-4 stores both headers and says "if set" the completion returns a relaxed mode, without identifying which value controls it. CHANGE_SPEC AC-4 requires the mode to remain unchanged without the relaxed header, and AC-6 forbids repair for non-relaxed bounded writers; add a check-header-only regression case.
-- Failure: The header holder can be read as enabling repair when only x-seren-schema-check is present, changing enforced bounded-writer behavior. Add: "Only a nonblank x-seren-schema-relaxed value marks a response relaxed; x-seren-schema-check alone never changes the mode or repair eligibility."
+- References: scripts/lib/change_class.py:257-258 calls interpretation_counts separately for criteria and requirements. CHANGE_PLAN.json §1 places logging inside that function, while CHANGE_SPEC.json OB-3 requires one diagnostic line; a helper-only stderr test would miss the regression.
+- Failure: Adding logging inside interpretation_counts produces duplicate diagnostics during normal feature extraction, contradicting the one-line requirement. Amend the plan: “features shall call interpretation_counts once per app feature extraction and reuse both counts; test that this emits exactly one diagnostic.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: Pair arrays leave duplicate-entry counts and string lengths unbounded, allowing oversized model packets to consume valid
+## AR-005: Mixed interpretations with IDs in only one section have ambiguous fallback behavior and compatibility guarantees.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN D-1/D-2 specify arrays of {name,value} without maxItems or value-length limits; D-3 accepts duplicate names with last-wins semantics. The supplied worker_schemas.py:181-182,197-200 shows that existing field objects have a finite key set and bounded strings; explicitly retaining equivalent bounds prevents the representation change from removing those protections.
-- Failure: Pair arrays leave duplicate-entry counts and string lengths unbounded, allowing oversized model packets to consume validation and normalization resources. Add: “Bound each pair array by its allowed field-name count and preserve the previous per-field string-length limits.”
+- References: CHANGE_PLAN.json §1 says “if the id count is 0” and “ids win over structure when present,” but §10 promises identical counts for id-bearing interpretations. scripts/lib/change_class.py:229-230 currently returns zero for an ID-less section even when the other section has IDs; per-section fallback changes that tuple and potentially the class. Narrow the compatibility promise to sections containing IDs.
+- Failure: Mixed interpretations with IDs in only one section have ambiguous fallback behavior and compatibility guarantees. Amend the plan: “Apply ID precedence independently per section; preserve counts for sections containing IDs and use structural fallback for the other section, with tests for both mixed cases.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: AC-5 requires repair for schema-invalid relaxed replies, but D-5 excludes replies not beginning with `{`, leaving contra
+## AR-006: The diagnostic's emission scope is unspecified, so a helper-only test can pass while classification prints twice.
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-5 and B-5 require targeted repair for relaxed schema-invalid replies; CHANGE_PLAN.json D-5 retains the `final.startswith('{')` condition. A valid JSON array failing the artifact schema therefore has two incompatible expected outcomes; align acceptance criteria and add that negative case.
-- Failure: AC-5 requires repair for schema-invalid relaxed replies, but D-5 excludes replies not beginning with `{`, leaving contradictory test expectations. Add: “Repair relaxed bounded replies once only when trimmed output begins with `{`; other invalid output raises without repair.”
+- References: CHANGE_PLAN.json §1 places logging in interpretation_counts and promises one line; supplied change_class.py:257-258 calls interpretation_counts twice per app features() evaluation. AC-4's stderr test does not specify its entry point, leaving the observable line-count assertion ambiguous.
+- Failure: The diagnostic's emission scope is unspecified, so a helper-only test can pass while classification prints twice. Add: "Each features() evaluation emits exactly one unknown-count diagnostic when either interpretation count is zero; test stderr through features()."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: Row equivalence tests lack a defined mapping from top-level `cells` to the existing nested dict representation.
+## AR-007: The plan both requires the diagnostic and permits removing it, leaving contradictory pass criteria.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json D-1 moves cells to a top-level array, while D-3 specifies only fields/new pair-to-dict normalization; CHANGE_SPEC.json AC-2 requires equivalent typed ops including rows. Without a destination and collision rule, independently written row tests and normalization code can disagree.
-- Failure: Row equivalence tests lack a defined mapping from top-level `cells` to the existing nested dict representation. Add: “Before typed-op conversion, move top-level cells into new for insert_row and fields for set_fields; reject simultaneous top-level and nested cells.”
+- References: CHANGE_SPEC.json AC-4 and OB-3 require a diagnostic for a present interpretation with a zero count. CHANGE_PLAN.json §16 requires AC-1..AC-4 tests, but 'Scope cuts under time pressure' explicitly allows cutting the AC-4 log; implementing that cut cannot satisfy the approved test oracle.
+- Failure: The plan both requires the diagnostic and permits removing it, leaving contradictory pass criteria. Add: "The AC-4 diagnostic and its stderr assertion are mandatory and cannot be cut under time pressure."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Malformed non-empty relaxed headers have contradictory expected results, preventing a definitive header test oracle.
+## AR-008: Mixed-format interpretations lack an explicit fallback oracle: IDs in one section could suppress structural counting in
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json section 8 treats malformed headers as enforced, but section 15 and AC-4 treat any non-empty relaxed header as unenforced. CHANGE_PLAN.json D-4 also captures x-seren-schema-check without specifying its effect; reconcile these rules and test arbitrary non-empty values and check-only responses.
-- Failure: Malformed non-empty relaxed headers have contradictory expected results, preventing a definitive header test oracle. Add: “Any non-empty x-seren-schema-relaxed value marks the response relaxed regardless of its contents; absent or empty values do not, and x-seren-schema-check alone never marks it relaxed.”
+- References: CHANGE_PLAN.json §1 says 'if the id count is 0' and 'ids win over structure when present' without specifying section scope. Its §16 and implementation step 2 list id-less and id-bearing tests but no mixed case; different implementations could pass those tests while returning different counts for mixed inputs.
+- Failure: Mixed-format interpretations lack an explicit fallback oracle: IDs in one section could suppress structural counting in the other. Add: "Apply ID precedence independently per section; test ID requirements with id-less criteria and id-less requirements with ID criteria."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

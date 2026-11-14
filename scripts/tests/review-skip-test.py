@@ -355,5 +355,87 @@ class SkipReview(unittest.TestCase):
         self.assertFalse(fx.stub().exists())
 
 
+INTERPRETATION = Path('.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json')
+
+
+def done_table(rows, ids=False):
+    lines = ['| ID | Criterion |' if ids else '| Criterion | Check |', '| --- | --- |']
+    for n in range(1, rows + 1):
+        lines.append('| D-%d | Shows result %d |' % (n, n) if ids else '| Shows result %d | Look at it |' % n)
+    return '\n'.join(lines)
+
+
+def bullets(count, ids=False):
+    return '\n'.join(('- R-%d: Does thing %d' % (n, n)) if ids else ('- Does thing %d' % n) for n in range(1, count + 1))
+
+
+class InterpretationCounts(unittest.TestCase):
+    def project(self, required, done, owned=None, sections=None):
+        fx = Fixture(self, owned or ['src/a.py', 'src/b.py', 'src/c.py', 'src/d.py'])
+        if sections is None:
+            sections = {'required_functionality': required, 'definition_of_done': done}
+        target = fx.project / INTERPRETATION
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({'sections': sections}))
+        return fx
+
+    def counts(self, fx):
+        return change_class.interpretation_counts(str(fx.project))
+
+    def features(self, fx):
+        return change_class.features('app', str(fx.project), str(fx.plan))
+
+    def test_ac1_idless_small_app_is_small(self):
+        fx = self.project(bullets(4), done_table(4))
+        f = self.features(fx)
+        self.assertEqual((f['requirements'], f['criteria']), (4, 4))
+        self.assertEqual(change_class.deterministic_class(f), 'small')
+
+    def test_ac2_idless_counts_exclude_header_and_separator(self):
+        self.assertEqual(self.counts(self.project(bullets(4), done_table(4))), (4, 4))
+
+    def test_ac2_id_bearing_counts_preserved(self):
+        fx = self.project(bullets(3, ids=True), done_table(5, ids=True))
+        self.assertEqual(self.counts(fx), (3, 5))
+
+    def test_ac3_over_limit_is_not_small(self):
+        for req, done in ((7, 4), (4, 9)):
+            with self.subTest(req=req, done=done):
+                fx = self.project(bullets(req), done_table(done))
+                self.assertEqual(self.counts(fx), (req, done))
+                self.assertNotEqual(change_class.deterministic_class(self.features(fx)), 'small')
+
+    def test_ac4_zero_count_logs_one_line_and_is_not_small(self):
+        import contextlib
+        import io
+        fx = self.project('Prose with no list items at all.', done_table(4))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            f = self.features(fx)
+        self.assertEqual(f['requirements'], 0)
+        self.assertNotEqual(change_class.deterministic_class(f), 'small')
+        self.assertEqual(len([line for line in err.getvalue().splitlines() if line.strip()]), 1, err.getvalue())
+
+    def test_ac4_no_interpretation_or_empty_sections_do_not_log(self):
+        import contextlib
+        import io
+        fx = Fixture(self, ['src/a.py'])
+        empty = self.project('', '', sections={})
+        for target in (fx, empty):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                f = self.features(target)
+            self.assertEqual((f['requirements'], f['criteria']), (0, 0))
+            self.assertEqual(err.getvalue().strip(), '')
+
+    def test_mixed_ids_only_in_requirements(self):
+        fx = self.project(bullets(3, ids=True), done_table(4))
+        self.assertEqual(self.counts(fx), (3, 4))
+
+    def test_mixed_ids_only_in_criteria(self):
+        fx = self.project(bullets(5), done_table(2, ids=True))
+        self.assertEqual(self.counts(fx), (5, 2))
+
+
 if __name__ == '__main__':
     unittest.main()

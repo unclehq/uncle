@@ -3,6 +3,7 @@
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -59,6 +60,11 @@ def usable(path, kind):
             and payload.get('kind') == kind)
 
 
+def passes(command):
+    """Whether a validation command succeeds. Silent: the caller decides what a failure means."""
+    return subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
 def check(command, description):
     """Report a failed validation as an operator-readable stop, not a traceback."""
     if subprocess.run(command).returncode:
@@ -78,12 +84,25 @@ def main():
     canonical_notes = project / '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json'
     canonical_notes.parent.mkdir(parents=True, exist_ok=True)
     canonical_tests = project / '.uncle/workflow/documents' / test_name.replace('.md', '.json')
-    outputs = ((canonical_notes, notes(changed_files(project))),
-               (canonical_tests, tests(args.kind)))
-    for path, content in outputs:
-        if not args.missing_only or not usable(path, content['kind']):
-            path.write_text(json.dumps(content) + '\n', encoding='utf-8')
     root = Path(__file__).resolve().parent
+    notes_rel = '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json'
+    tests_rel = '.uncle/workflow/documents/' + test_name.replace('.md', '.json')
+    # The same commands that judge the handoff at the end of this script. An existing report is kept only if it passes them: one
+    # whose schema and kind are right but whose content the validator rejects (a status word it does not know) used to be
+    # preserved, fail the check below, and end the run. Now it is set aside as .invalid and replaced by the conservative record.
+    outputs = ((canonical_notes, notes(changed_files(project)),
+                ['python3', str(root / 'implementation_notes.py'), 'validate', str(project), notes_rel, '--require-json']),
+               (canonical_tests, tests(args.kind),
+                ['python3', str(root / 'test_report.py'), 'validate', str(project), args.kind, tests_rel]))
+    for path, content, validate in outputs:
+        if args.missing_only and usable(path, content['kind']):
+            if passes(validate):
+                continue
+            kept = path.with_name(path.name + '.invalid')
+            kept.write_bytes(path.read_bytes())
+            print('Implementation handoff fallback: %s did not validate; kept it at %s and recorded a conservative one.'
+                  % (path.name, kept.relative_to(project)), file=sys.stderr)
+        path.write_text(json.dumps(content) + '\n', encoding='utf-8')
     check(['python3', str(root / 'implementation_notes.py'), 'validate', str(project),
            '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json', '--require-json'],
           'the implementation notes did not validate')

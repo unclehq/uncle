@@ -66,6 +66,7 @@ green-check
 green-check-vacuous
 green-defer-mutation
 test-report
+implementation-report-fallback
 failure-severity
 test-failure-disposition
 verification-steps

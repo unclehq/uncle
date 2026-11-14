@@ -2,6 +2,7 @@
 """JSON-authoritative implementation test reports with Markdown views."""
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -16,6 +17,36 @@ def artifact_json():
 
 def _esc(value):
     return str(value).replace('|', r'\|').replace('\n', ' ')
+
+
+ALLOWED_STATUSES = ('PASS', 'FAIL', 'BLOCKED', 'NOT RUN', 'DRIVER PENDING', 'N/A')
+
+
+def normalize_status(value):
+    """The report's own status for what an agent wrote, or None when it cannot be placed honestly.
+
+    The agent that writes this report is told other status words elsewhere: the checklist workers use BLOCKED-SETUP,
+    BLOCKED-HUMAN and BLOCKED-IMPOSSIBLE, and agents write PASSED or SKIPPED naturally. A report whose fifth command read
+    BLOCKED-SETUP was rejected whole ("command result 5 has invalid status") and, because the fallback kept it, ended the
+    run at the end of implementation. Variants of a status map to that status; a word that is not clearly one of them
+    (PARTIAL, PASS WITH WARNINGS) stays invalid, and nothing unrecognized is ever read as PASS."""
+    if not isinstance(value, str):
+        return None
+    text = re.sub(r'\s+', ' ', value.strip().upper().replace('_', ' ').replace('-', ' ')).strip()
+    if text in ALLOWED_STATUSES:
+        return text
+    words = text.split(' ')
+    if text == 'NA':
+        return 'N/A'
+    if text in ('PASSED', 'OK', 'SUCCESS', 'SUCCEEDED', 'GREEN'):
+        return 'PASS'
+    if text in ('FAILED', 'FAILURE', 'ERROR', 'RED'):
+        return 'FAIL'
+    if words[0] == 'BLOCKED':
+        return 'BLOCKED'            # BLOCKED SETUP, BLOCKED HUMAN, BLOCKED IMPOSSIBLE
+    if text in ('SKIPPED', 'NOTRUN', 'NOT RAN', 'NOT EXECUTED', 'NOT TESTED', 'UNRUN'):
+        return 'NOT RUN'
+    return None
 
 
 def _validate(payload, kind):
@@ -47,12 +78,16 @@ def _validate(payload, kind):
     # test"/"Performance checks", genuinely inapplicable to this change).
     # Widening the enum to match the deliberate distinction the prompt asks
     # for, rather than asking the prompt to give it up.
-    allowed = {'PASS', 'FAIL', 'BLOCKED', 'NOT RUN', 'DRIVER PENDING', 'N/A'}
     for index, row in enumerate(commands, 1):
         if not isinstance(row, dict) or not row.get('command'):
             raise ValueError('command result %d is missing command' % index)
-        if row.get('status') not in allowed:
-            raise ValueError('command result %d has invalid status' % index)
+        status = normalize_status(row.get('status'))
+        if status is None:
+            raise ValueError('command result %d has invalid status %r (use one of: %s)'
+                             % (index, row.get('status'), ', '.join(ALLOWED_STATUSES)))
+        if status != row.get('status'):
+            row['status_detail'] = str(row.get('status'))       # keep what the agent wrote; the saved report carries the canonical word
+            row['status'] = status
         if not row.get('output'):
             raise ValueError('command result %d is missing output' % index)
         requirements = row.get('requirements', [])

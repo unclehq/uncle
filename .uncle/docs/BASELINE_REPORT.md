@@ -1,94 +1,71 @@
-# Baseline report - Issue 280 (--no-footprint)
+# Baseline report (Issue 282)
 
-Omitted sections: Existing failures/flaky (none documented in repo; driver baseline is authority); Reproduction (feature, not a bug)
+Omitted sections: Reproduction result (not a bug repro; behavior gap observed by reading code); Existing failures/flaky (driver baseline is authority, none documented in repo for this area)
 
 ## 1. Change-request summary
-See CHANGE_REQUEST.md (Issue 280): opt-in `--no-footprint` so the PR looks like an ordinary contribution: no Uncle files in the diff, no attestation, maintainer-style text, AI-assistance disclosure, default mode byte-identical.
+CHANGE_REQUEST.md (Issue 282): `scripts/from-issue.sh` must read the whole issue thread on every fetch path, verify completeness, preserve provenance, treat comments as untrusted, and document it.
 
 ## 2. Repository architecture
-- `uncle` (bash, 1199 lines): CLI flag parsing (`uncle:340-352`), mode resolution (`uncle:476-499`), exports env to workflow.
-- `scripts/change-workflow.sh` (5323 lines): existing-code workflow; calls `change_pr_engine start` (`:4005`) and `bind` (`:5181`).
-- `scripts/lib/change-pr.sh` (2201 lines): bash wrappers (`change_pr_complete_route` `:202`, `change_pr_publish` `:266`, `assert_tree_matches_attested` `:33`, `change_pr_engine` `:369`) plus an embedded Python engine (the PR journal state machine, `:384-2201`).
-- `scripts/lib/attestation.py`, `build_attestation.py`, `handoff_export.py`: attestation sealing/attaching; `scripts/stagegate.sh:473-490,7271` attests greenfield builds.
-- `scripts/lib/uncle_gitignore.py`: manages Uncle lines in the project `.gitignore`.
+Shell driver scripts in `scripts/`, Python helpers in `scripts/lib/`, suites in `scripts/tests/` (`*-test.sh`, `*-test.py`), critical tier listed in `scripts/tests/critical-suites.txt`. Runners: `scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh`.
 
-## 3. Relevant code paths (change-pr.sh engine)
-| Symbol | Line | Role |
-|---|---|---|
-| `snapshot(audit, excludes, attestation)` | 918 | builds the tree that is committed: always adds `.uncle/docs/**` (936-940, keeps them past ignore at 949), adds root `FINAL_AUDIT.md` when audit (~1030), optionally attestation files; `.gitignore` managed lines stripped only when not audit |
-| `handoff(j)` | 1805 | consent prompts, builds PR body: Work summary, Manual verification, warning/NOTE/override banners, `attest(j)`, `attestation().attach_body`, `closing_trailer` (1880-1936); push; `gh pr create` (2010) |
-| `attest`/`sealed_attestation`/`attest_handoff` | 730/424/819 | seal attestation; hand-off export |
-| `automatic_commit` / `prepare_commit` | 1271/1229 | `git commit --no-gpg-sign -m <title>`; signing handed to human when `commit.gpgsign` true |
-| `validate(j)` | 1117 | re-snapshots and compares reviewed_tree/commit_tree |
-| `sync_audit_copy` | 1258 | checks out root FINAL_AUDIT.md |
-| `auto_summary` | 1366 | unattended summary text naming Uncle and `.uncle/docs/FINAL_AUDIT.md` |
-| `closing_trailer` | 533 (BEGIN/END markers 485/588) | `Closes`/`Refs` + Still open |
-| `label_prefix`/`branch_name` | 1408/1428 | branch prefix feat/ bug/ doc/ else `uncle/` |
-| `assert_tree_matches_attested` | 33 (bash) | allowlists `.uncle/docs/*`, attestation files; errors if an attested `.uncle/docs` artifact is ignored |
-| `main()` | 2035 | action dispatch (`start`, `bind`, `commit-tree`, `attest-handoff`, ...) |
+## 3. Relevant code paths
+- `scripts/from-issue.sh:613-615` `fetch_with_gh`: `gh issue view --json title,body,url,state,labels,comments`.
+- `scripts/from-issue.sh:617-620` `fetch_with_curl`: only `GET /repos/o/r/issues/N`; no comments endpoint, no pagination.
+- `scripts/from-issue.sh:622-639` fetch selection (`USED_GH`), failure exit.
+- `scripts/from-issue.sh:641-668` parsing: python path appends `### Comment from <author>` per comment (lines 644-658); jq path extracts only `.body` (660-663).
+- `scripts/from-issue.sh:802-813` attachment freeze applied to `$BODY` (comments are inside BODY on python path).
+- `scripts/from-issue.sh:824-882` `write_change_request` heredoc places `$BODY` under `## Motivation`.
+- `scripts/from-issue.sh:734` `fetch_kind` passed to `change_pr_engine`.
+- Docs: `GITHUB_INTEGRATION.md` "Import an issue" (lines 11-15) says only title and body.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| EB-1 | PR publish, default | commit tree includes `.uncle/docs/**` and root `FINAL_AUDIT.md` | change-pr.sh:936-940, ~1030 | Yes (default mode) |
-| EB-2 | PR publish, default | attestation sealed, `.uncle/attestation.*` in tree, attestation block in body | change-pr.sh:1919-1932 | Yes |
-| EB-3 | PR body | Work summary + Manual verification + banners + attestation + Closes/Refs | change-pr.sh:1891-1935 | Yes |
-| EB-4 | commit | message is PR title only | change-pr.sh:1275 | Yes |
-| EB-5 | NOT_READY audit | draft PR with warning banner and findings; human consent or override record | change-pr.sh:1895-1918, 2150-2165 | Yes (gate) |
-| EB-6 | no issue label | branch `uncle/<slug>-<owner>` | change-pr.sh:1408-1430 | Yes |
-| EB-7 | handoff publish mode | attest-handoff then handoff_export | change-pr.sh:212 | Yes |
+| B-1 | Import issue via authenticated gh, python3 present | Body + each non-empty comment appended as `### Comment from <login>` under Motivation | from-issue.sh:644-658 | Yes (content), format may change |
+| B-2 | Import via curl fallback | Comments silently absent | from-issue.sh:617-620 | No (defect) |
+| B-3 | Import with jq only | Body only, comments absent | from-issue.sh:660-663 | No (defect) |
+| B-4 | Fetch failure on all paths | Prints failure, exit 1 | from-issue.sh:636-640 | Yes |
+| B-5 | Empty title | Exit 1 with rate-limit hint | from-issue.sh:670-673 | Yes |
+| B-6 | Change request written | Header has `Issue N` and `Seeded from [o/r#N](url)`; fixed section skeleton | from-issue.sh:824-882 | Yes |
+| B-7 | Neither python3 nor jq | Exit 1 | from-issue.sh:665-668 | Yes |
+| B-8 | gh succeeded | `USED_GH=1` (gates later issue close/PR flow) | from-issue.sh:626-631 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| EI-1 | Published tree equals audited commit_tree, byte for byte | `validate` 1117-1146 | pr-reconcile-test.py, pr-auto-commit-test.py | High |
-| EI-2 | Publication needs READY verdict or recorded override/consent | `validate`, `verdict-override` 2150 | pr-auto-publish-test.sh | High |
-| EI-3 | Nothing under `.uncle/` outside the allowlist is tracked/staged | `assert_tree_matches_attested` 33-46 | pr-publish-reason-test.sh | High |
-| EI-4 | User's index/working files never overwritten; commit signing never invoked automatically | `snapshot` temp index; `--no-gpg-sign`; `prepare_commit` | pr-auto-commit-test.py | High |
-| EI-5 | Closes only on evidence, else Refs | `closing_trailer` | pr-closes-refs-test.sh | High |
+| I-1 | Issue metadata header (`Issue N`, seed URL) is first and parseable | heredoc 835-839 | worktree-run-test.sh, others (grep from-issue.sh) | Medium |
+| I-2 | Attachment freeze runs on body text before seeding | 802-813 | not confirmed | Low |
+| I-3 | gh-fetched issue sets USED_GH only on non-empty output | 626-631 | worktree-run-test.sh stub gh | Medium |
 
-## 6. Current interface contracts
-- CLI: `uncle` accepts a fixed flag set (`uncle:233-352`); unknown flags refused with code `UNCLE_REFUSE_CODE`.
-- Journal `.uncle/workflow/pr/journal.json` keys incl. `reviewed_tree`, `commit_tree`, `title`, `body`, `draft`, `attestation`, `statement`.
-- Config: `.uncle/config` lines `key value` (read with awk, e.g. `misc.auto_mode`, `uncle:478`).
+## 6. Current contracts
+CLI: `from-issue.sh` args unchanged by baseline. Output file `.uncle/docs/CHANGE_REQUEST.md` (or root override via `generated_input_path`). gh stub in tests answers `issue view` and label lookup only (worktree-run-test.sh:108).
 
 ## 7. Existing automated-test coverage
-PR-related: `scripts/tests/pr-auto-commit-test.py`, `pr-reconcile-test.py`, `pr-auto-publish-test.sh`, `pr-closes-refs-test.sh` (extracts the closing_trailer block by BEGIN/END markers), `pr-publish-reason-test.sh`, `attestation-test.py`, `build-attestation-test.py`. Two runners: `scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh`; default tier = `scripts/tests/critical-suites.txt`. Shell and Python suites use separate temp dirs and bind no common ports, so they form one parallel group.
+No suite targets comment handling. Suites invoking from-issue.sh: install-safety-test.sh, pr-auto-publish-test.sh, worktree-run-test.sh, plus several `*-test.py` (headless-run, home-actions, repl-session, implementation-completion, gitignore-post-push). Shell and Python runners use separate temp dirs and no shared ports, so they run as one parallel group (`1 2`).
 
 ## 9. Baseline test results
-Commands come from scripts/run-shell-tests.sh and scripts/run-python-tests.sh (the Uncle-documented runners). No pre-existing failure is documented here; some Python suites may fail on a clean checkout - the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. I ran no suite.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (CLAUDE.md/driver guidance). No results produced here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout. Parallel group: `1 2`.
 
 ## 12. Likely change surface
-`uncle`, `scripts/lib/change-pr.sh`, new pure module `scripts/lib/footprint.py`, `scripts/stagegate.sh` (attestation call guard), `scripts/tests/critical-suites.txt`, new test `scripts/tests/no-footprint-test.py`, `README.md`.
+`scripts/from-issue.sh` (fetch + parse + seed template), new `scripts/lib/issue_thread.py`, `GITHUB_INTEGRATION.md`, new tests, `critical-suites.txt`.
 
 ## 13. Regression-sensitive components
-`snapshot` and `validate` (tree binding), `handoff` body assembly, `assert_tree_matches_attested`, `closing_trailer` helper (extracted by marker in a test - markers must stay), handoff export.
+Tests that stub `gh` for from-issue.sh (worktree-run-test.sh stub only handles `issue view` and label lookups: any new `gh api` call must tolerate a stub that returns nothing/fails without breaking those suites); attachment freezer; branch-name derivation using TITLE.
 
 ## 14. Outside the change
-Attestation format/`uncle verify`, approval gates, audit verdict logic, agent CLI adapters, TUI.
+PR publishing, issue closing, mode detection, workflow drivers, new-application brief (`write_new_project_brief`) beyond sharing BODY.
 
 ## 15. Unknowns and assumptions
-- Agent CLIs may add attribution lines (e.g. Co-Authored-By) only if the agent itself commits; the driver composes the PR commit message, so this is assumed not to occur in the published commit. UNRESOLVED only for agent-authored commits made before publish; handled by the leak scan.
-- Whether the greenfield `stagegate.sh` merge path produces a PR is assumed no (it merges locally); guard there is for attestation file only.
+- The 'existing handling for untrusted piped text' referenced in the request was not located in from-issue.sh; assumed to be elsewhere; the plan adds its own neutralization for comments.
+- Unknown whether other suites assert exact `### Comment from` text (to be grepped at implementation).
 
-## 16. Initial risk assessment
-| Risk | Level |
-|---|---|
-| Tree-binding (`validate`) mismatch if snapshot variants diverge between start/bind/validate | High |
-| Default-mode byte drift from refactoring shared body code | High |
-| Uncle vocabulary leaking via model-written summary text | Medium |
-| `.gitignore` managed-line residue | Medium |
+## 16. Initial risk
+Medium: stubbed gh in existing suites may break if new gh calls fail hard; mitigated by treating comment-fetch failure on a stub as explicit, tested behavior.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-```
-
-## Parallel verification groups
-
-```text
-1 2
 ```
 

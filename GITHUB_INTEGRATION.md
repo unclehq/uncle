@@ -14,6 +14,12 @@ Choose **From GitHub issue**, enter its URL or number, and select **change reque
 
 Import uses your current project; it does not clone a repository. Public issues can use a read-only `curl` fallback.
 
+The whole comment thread is imported too, under `## Motivation` as `### Issue thread`: every comment (paged 100 at a time, no page cap) in chronological order with author, association, link and timestamps. Comment text is quoted and treated as untrusted data. Obvious noise (`+1`, `thanks`, emoji-only) is listed as excluded rather than shown. The seed also carries a `## Thread Review` section telling the analyst that a later maintainer statement wins on contradiction, that conflicts are recorded, and that each requirement cites its body or comment id and link.
+
+If the comments fetched do not match the issue's comment count, or a fetch fails, import stops with an error. Set `UNCLE_ISSUE_ALLOW_INCOMPLETE=1` to import the partial thread anyway; the document then records that the thread is incomplete.
+
+Comments from authors who are not an owner, member or collaborator are flagged `non-collaborator` and get no automatic precedence. The thread is read once at import time; later comments are not re-fetched, so the document records the fetch count to make staleness visible.
+
 ## Create a PR
 
 The change workflow offers PR publication after a READY audit. This also works with a local `CHANGE_REQUEST.md`.

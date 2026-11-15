@@ -1,166 +1,164 @@
-# Change plan - Issue 280 (--no-footprint)
+# Change plan (Issue 282)
 
-Seeded from [unclehq/uncle#280](https://github.com/unclehq/uncle/issues/280).
+Omitted sections: Schema/persistence (none); Migration (none); Concurrency (none); Feature flag (only the incomplete-override env var)
 
-Issue 280
+Issue 282
 
-Omitted sections: Schema/persistence (one journal key only, in 9); Concurrency (single-process engine, unchanged); Migration (none); Observability (one terminal line)
+Seeded from [unclehq/uncle#282](https://github.com/unclehq/uncle/issues/282).
 
 ## 1. Selected technical approach
 
-Flag `--no-footprint` sets `UNCLE_NO_FOOTPRINT=1`; the PR engine records `no_footprint` in its journal at `start` and every later action reads the journal. A new pure module `scripts/lib/footprint.py` holds the domain logic (disclosure resolution, body rendering, vendor-line stripping, vocabulary scan). The engine's `snapshot` gets a bare variant that omits `.uncle/**`, root FINAL_AUDIT.md, attestation files and managed `.gitignore` lines. Exact path rule for bare snapshots: everything under `.uncle/` is excluded; root-level files whose stem (name without extension) is PROJECT_PLAN, CHANGE_PLAN, CHANGE_SPEC, IMPLEMENTATION_NOTES or VERIFICATION_REPORT are excluded; root FINAL_AUDIT.md and explicitly identified attestation outputs are excluded; every other path outside `.uncle/` is preserved unchanged, so legitimate source files with similar names in subdirectories are never dropped. All new behavior sits behind `if no_footprint(j)` so the default path executes the same code as today.
+New pure Python helper `scripts/lib/issue_thread.py` that takes issue JSON and a list of REST comment objects and returns rendered Markdown plus counts. `from-issue.sh` fetches comments on every path via the REST comments endpoint (`gh api --paginate` on gh path; paged `curl` with `per_page=100` on curl path), verifies count against the issue's `comments` field, and feeds the helper. jq fallback builds an equivalent block with one jq filter (no noise classification beyond a simple filter; same quoting).
 
-## 2-3. Alternatives and why
-| Alternative | Rejected because |
-|---|---|
-| Post-filter the commit tree after snapshot | `validate` rebinds the tree at several points; filtering in one place diverges |
-| Rewrite the PR after creation | pushes artifacts first; trace remains in history |
-| Separate engine copy | duplicates 2000 lines; default drift risk |
-| Selected: variant parameter in `snapshot` plus pure helper module | single binding point, default path untouched |
+Decisions (D-):
+
+| ID | Decision | Reason |
+|---|---|---|
+| D-1 | Use REST comments on all paths (gh via `gh api`) | one shape: has html_url, user, author_association, created_at, updated_at; count available from issue `comments` |
+| D-2 | Pagination: both gh and curl fetch until pagination is exhausted (curl loops `page=N` with `per_page=100` until a page has <100 items), with no fixed page-count cap | BH-6 requires the full thread; a cap would silently truncate very large threads, and the count check against the issue's `comments` field still guards completeness |
+| D-3 | Mismatch fails by default; `UNCLE_ISSUE_ALLOW_INCOMPLETE=1` warns and records it. Under override after a final-attempt failure, retain only fully validated complete pages from that last attempt (never pages from an abandoned attempt), discard the failed page, and record fetched/expected counts and the failure in the seed, marking the thread incomplete | request says fail loudly or warn; defined retention keeps the seed deterministic and testable |
+| D-4 | Quote each comment line with `> ` | prevents heading/fence injection (INV-3) |
+| D-5 | Noise = whole comment, after trim, matches a small regex list (+1, -1, bump, thanks, thank you, same here, me too, emoji-only, 👍). Noise is filtered after ids are assigned (D-7), so gaps in the comment-N sequence are expected and the count of excluded noise comments is reported. | conservative; substantive text never excluded |
+| D-6 | Judgment of supersession is delegated to the analyst via `## Thread Review` instructions placed in the seed. Only comments by maintainers (OWNER, MEMBER, COLLABORATOR associations per D-7) receive later-statement precedence; all other or missing associations receive the non-collaborator flag and never receive automatic precedence, and comment text claiming authority cannot confer it. | supersession is not decidable in code, but the trust mapping is explicit and identical in rendering, Thread Review instructions, and tests |
+| D-7 | Sort comments by created_at ascending, break ties by numeric REST comment id ascending; edits (updated_at) never affect order. Assign `comment-1..n` after sorting and BEFORE noise filtering, so excluded noise comments still consume ids; id stability applies to the fetched snapshot only. Each shown comment lists author, author_association, url, created, edited marker. Classification mapping (single, shared with D-6 and used by the renderer, Thread Review text and tests): OWNER, MEMBER, COLLABORATOR = maintainer; every other value (CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE) and a missing/null/empty/unrecognized author_association = flagged non-collaborator. | provenance; deterministic ids that independent tests can assert and that do not shift with noise classification; one mapping shared with D-6 so the flag and maintainer precedence never disagree |
+| D-8 | gh path: keep existing `gh issue view` for title/labels; comments from `gh api`; if `gh api` fails at any page, discard all gh comment results and the curl fallback restarts pagination from page 1 (replace, never merge); if the curl attempt also fails, BH-5. Existing import fixtures are updated to stub issue `comments` counts and every comment-fetch path (gh api, curl fallback) without network access; original assertions are preserved and fixture edits are recorded as renewed-authority items. | stub gh in existing tests stays compatible, but a stub that answers `gh api` with nothing would otherwise reach real curl or fail the completeness check, so fixtures must stub every path offline; replacing rather than merging prevents duplicate comments and inconsistent partial seeds. |
+| D-9 | Partial fetch under override: if a later page fails (and curl fallback also fails), retain all fully validated complete pages, discard the failed page, and record fetched/expected counts and the failure reason in the seed. Without the override the import exits 1 and writes no seed. A curl fallback restarts pagination and replaces gh results. | INV-1 forbids silently omitting fetched comments; a defined retention rule makes the second-page-failure case testable (BH-5) |
+
+- Association mapping (applies identically on gh/Python, curl/Python and curl/jq paths): OWNER, MEMBER, COLLABORATOR -> maintainer, no flag; CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE, and any missing/null/empty/unknown value -> flagged non-collaborator, no maintainer precedence.
+- Tests must exercise every listed association value plus a missing value and an unknown value, and a comment whose text claims to be the maintainer.
+
+## 2. Alternatives
+(a) `gh issue view --json comments` only: no edit times, no count check, curl/jq unaffected. (b) Summarize long threads: loses fidelity. (c) LLM-side thread fetching: moves untrusted fetch into the agent, no deterministic completeness check.
+
+## 3. Why preferred
+Deterministic, testable, one data shape, minimal surface.
 
 ## 4. Components to modify
 See change-impact table.
 
 ## 5. Not to modify
-`attestation.py`, `build_attestation.py`, `handoff_export.py`, `uncle verify`, audit/verdict scripts, gate scripts, agent adapters, the `closing_trailer` BEGIN/END block (reused as is).
+PR flow, issue closing, `write_new_project_brief` logic (it consumes BODY, unchanged contract), freezer, mode detection, workflow drivers, existing tests unless a grep proves they assert the old `### Comment from` text.
 
 ## 6. Data flow
-`uncle --no-footprint` -> env -> `change_pr_engine start` -> journal `no_footprint=true` -> `snapshot(bare)` for reviewed_tree/commit_tree -> `handoff`: `footprint.render_body(inputs)` -> `footprint.scan(title, body, message, branch)` -> `automatic_commit` with composed message -> push -> `gh pr create`.
-
-## 7. State transitions
-None new. Phases unchanged.
+fetch issue -> fetch comments (paged) -> count check -> helper renders `### Issue thread` block -> appended to BODY -> attachment freeze -> seed heredoc. A `## Thread Review` section is added to the seed after `## Motivation` (CR template only).
 
 ## 8. Interface changes
-- CLI: `--no-footprint` (usage text, pre-scan lists at `uncle:233,252,341`, parse at `:347`).
-- Config keys `footprint.disclosure`, `footprint.trailer`, `footprint.name_uncle`; env `UNCLE_FOOTPRINT_DISCLOSURE`, `UNCLE_FOOTPRINT_TRAILER` (env beats config beats default).
-- `footprint.py` API: `resolve_disclosure(config, env)`, `render_body(summary, why, testing, followups, closing, disclosure)`, `render_message(title, summary, trailer)`, `strip_vendor_lines(text)`, `scan(fields, allow_uncle)`.
-
-## 9. Persistence
-Journal gains optional boolean `no_footprint`; absent = false.
+New env var `UNCLE_ISSUE_ALLOW_INCOMPLETE`. New helper CLI: `python3 -I scripts/lib/issue_thread.py --issue FILE --comments FILE` printing the block; exit 3 on count mismatch unless `--allow-incomplete`.
 
 ## 10. Compatibility
-Flag absent => flag-off branches only. Old journals valid.
+
+Header format unchanged. Old `### Comment from` headings removed (D-4, INV-3). Existing import fixtures are edited only to stub issue counts and all comment-fetch paths (including curl fallback) without network access, and for obsolete headings; their original assertions are preserved and each fixture edit is recorded in IMPLEMENTATION_NOTES.md as a renewed-authority item.
 
 ## 12. Error and recovery
-Scan failure raises ValueError before the `prepared` phase save, so no commit/push occurs; rerun after the text is corrected. In bare mode `assert_tree_matches_attested` requires zero tracked/staged `.uncle/` paths and skips the ignored-artifact check (artifacts are intentionally untracked). A `.gitignore` whose stripped content is empty and absent at HEAD is omitted from the tree.
+Short/failed fetch -> exit 1 with message and override hint (BH-4/5). Comment page JSON invalid -> treated as failed fetch.
 
-## 13-14. Rollback
-Flag-off path is the existing code; revert the commit or stop passing the flag. No data migration.
-
-## 15. Containment
-Opt-in flag; default untouched; journal records the mode so a resume cannot flip it.
-
-## Decisions (routine, resolved)
-
-| ID | Decision | Reason |
-|---|---|---|
-| D-1 | Trailer default `Assisted-by: AI tooling`; body line per spec assumptions | neutral, matches emerging projects' policy form |
-| D-2 | Policy override via `.uncle/config` + env (env beats config beats default). Validation: an empty or whitespace-only disclosure override, from env or config, is invalid and rejects publication before any publication write (no fallback to the default, no silent removal); only the commit trailer may be empty, which omits the trailer. | existing config style; no new file; keeps the mandatory body disclosure (I-3) from being erased by configuration |
-| D-3 | Driver alone composes the commit message (text only); vendor lines stripped from generated text. Composing the message never invokes git signing. | agent CLI attribution (Q4) is replaced by the one disclosure; message preparation is separated from signed commit execution (see D-8) |
-| D-8 | Signing boundary: automatic_commit never invokes a signer, GPG agent or pinentry. When a project commit requires signing, the driver presents the exact git command (with the composed message) for the user to run, then verifies the resulting commit; it never retries or falls back to an unsigned commit. Test fixtures commit with -c commit.gpgsign=false, --no-gpg-sign. | binding Git-signing rules prohibit automatic use of the user's signing keys |
-| D-4 | NOT_READY/unattended-waiver details stay local; PR is draft with one neutral note | keeps gates (draft) without Uncle audit vocabulary |
-| D-5 | What/Why from the change request Summary/Motivation or the human's prompt answers; Testing from the plan's verification commands | project's own commands |
-| D-6 | Branch fallback prefix `change/`; no labels | removes `uncle/` |
-| D-7 | Greenfield `stagegate.sh` attestation generation is skipped when the persisted journal mode is no-footprint; the guard is mandatory and not cuttable. On resume, stagegate derives its attestation decision from the persisted journal mode; `UNCLE_NO_FOOTPRINT=1` selects the mode only when initializing a new run. | no attestation file in mode (AC-2 forbids producing one, so the guard cannot be a scope cut); the journal is authoritative, so a resume with a different env value can neither suppress attestation in a default-mode journal (AC-7) nor produce it in a no-footprint journal |
-
-## Restrictions
-
-| ID | source_kind | Source | Reqs | Property | Mechanism | CAP | Feasibility evidence | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST Desired behavior | AC-1 | no Uncle files in diff | bare `snapshot` | CAP-GIT | `snapshot` change-pr.sh:918-1060 inspected; temp index, no user-index writes | CODING |
-| R-2 | USER | CHANGE_REQUEST Decisions | AC-2 | no attestation | skip `attest`, attach, handoff export, stagegate attest (stagegate guard mandatory, not cuttable) | CAP-GIT | attest call sites 1919-1932, 212, stagegate.sh:490 | CODING |
-| R-3 | USER | CHANGE_REQUEST | AC-3, AC-5 | maintainer-style, no Uncle vocabulary | `footprint.render_body`, `scan`; the scan runs before any publication write: leak rejection precedes branch/index updates, commits, pushes and gh mutations, while temporary-index snapshots and local object creation may occur before scanning | CAP-PY | pure Python, stdlib | CODING |
-| R-4 | USER | CHANGE_REQUEST | AC-4 | disclosure present | defaults + overrides; scan(fields, allow_uncle) gives tracked project content no exemption: publication fields (title, body, message, branch) may never name Uncle, and Uncle is permitted only in the rendered disclosure line, and only when footprint.name_uncle is true (allow_uncle applies to that line alone) | CAP-PY | config read pattern uncle:478 | CODING |
-| R-5 | USER | CHANGE_REQUEST Open Q2 | AC-6 | gates not weakened | no edits to `validate` gate logic | CAP-GIT | validate 1117-1146 | CODING |
-| R-6 | USER | CHANGE_REQUEST | AC-7 | default byte-identical | flag-off branches; golden test | CAP-PY | existing suites | CODING |
-| R-7 | REPOSITORY | AGENTS/CLAUDE rules | all | no weakening of existing tests; new suite in critical tier | add to critical-suites.txt | CAP-PY | scripts/tests/critical-suites.txt | CODING |
-
-Runner binding: Python tests via `bash scripts/run-python-tests.sh`; fixture git commands use `-c commit.gpgsign=false`, `--no-gpg-sign`. LIVE_VERIFICATION: none needs credentials; `gh` calls are stubbed in tests; a real PR creation is a manual check only.
+## 14. Rollback
+Revert the commit; additive helper and a template section.
 
 ## 16. Automated-test strategy
 
-New `scripts/tests/no-footprint-test.py` (hyphenated name; loads the engine the way `pr-auto-commit-test.py` does, and `footprint.py` directly). Required explicit command beyond baseline: `bash scripts/run-python-tests.sh -- no-footprint`; the suite is also added to `critical-suites.txt` so default runs include it. Cases map to AC-1..AC-8; leak-injection and staged-artifact negatives are the defect-injection evidence. Additional cases: (a) bare-tree inventory with root files of each listed stem (PROJECT_PLAN, CHANGE_PLAN, CHANGE_SPEC, IMPLEMENTATION_NOTES, VERIFICATION_REPORT), FINAL_AUDIT.md, plus a legitimate nested file with a similar name and an unrelated file, asserting exactly the specified paths are excluded and all others preserved; (b) leak injection snapshots refs and the user index before and after the rejected run, asserting both unchanged and zero commit, push and gh mutation calls; (c) a stub gpg program recording invocation, run with commit.gpgsign=true, asserting the signer is never invoked and the exact user-run command is emitted; (d) a fixture repo whose tracked files contain the word uncle, asserting rejection in title/branch/message/non-disclosure body and acceptance only in the disclosure line with name_uncle=true.
+- `scripts/tests/issue-thread-test.py`: unit tests of render, noise, quoting, edited, association, ordering, count mismatch, with defect-injection cases (e.g. noise regex that eats `+1 but please add X`).
+- `scripts/tests/from-issue-thread-test.sh`: stubs `gh`, `curl`, and a python-less PATH for the jq path; cases: clarification on three paths, 2-page thread (150 comments), short fetch, failed fetch, override, zero comments, injection comment, docs grep.
+- Additional required cases: (a) large-thread pagination test, 101 pages of 100 comments each, on both gh and curl stubs, asserting all comments are fetched and the count check passes; (b) parity test where the Python-rendered block is the oracle and the curl/jq output must match it on a shared fixture (comment ids, noise exclusions, flags, edited markers, quoting); (c) shell cases where gh fails on page 2 and curl succeeds (each comment exactly once, N/N), where both fail mid-way, and where page 2 fails under UNCLE_ISSUE_ALLOW_INCOMPLETE=1 (page-1 comments retained, failed page discarded, seed records fetched/expected counts and failure); (d) defect-injection unit cases: treating CONTRIBUTOR or a missing association as maintainer, and assigning comment-N ids after noise filtering, must be rejected by the tests.
 
 ## 17. Regression strategy
-
-Baseline commands `bash scripts/run-shell-tests.sh` and `bash scripts/run-python-tests.sh` (group `1 2`) must match baseline; default-mode golden comparison (AC-7); `pr-closes-refs-test.sh` marker extraction must still work. Resume matrix tests: default-mode journal resumed with `UNCLE_NO_FOOTPRINT=1` still attests; no-footprint journal resumed without the env still skips attestation.
+Run full shell and Python runners; compare to baseline; grep suites for `Comment from`.
 
 ## 18. Manual verification
-M-1: in a throwaway repo with a stub or fork remote, run a change with `--no-footprint`; `git show --stat` and the PR page show only source files, maintainer-style body, disclosure. M-2: same without flag shows today's output.
+Run from-issue.sh against a real public issue with comments via curl (gh unauthenticated) and confirm thread and counts; judge Thread Review readability.
 
-## 20. Implementation sequence
-
-1. Pure helper module `scripts/lib/footprint.py` (disclosure resolution incl. empty/whitespace rejection, body/message rendering, vendor-line stripping, scan). Its tests live in step 5's `no-footprint-test.py`; step 1 owns no test file.
-   Owns: `scripts/lib/footprint.py`
-2. Engine changes: journal flag, bare snapshot, validate variant, `assert_tree_matches_attested` bare mode, body/commit/branch/attestation branches, scan call, handoff skip
-   Owns: `scripts/lib/change-pr.sh`
-   Depends on: 1, 3, 4
-3. CLI flag, usage, exports, stagegate attestation guard
-   Owns: `uncle`, `scripts/stagegate.sh`
-4. Docs
-   Owns: `README.md`
-5. Test suite and tier registration (can be written alongside 1-3 from the contracts above; finalized after 2)
-   Owns: `scripts/tests/no-footprint-test.py`, `scripts/tests/critical-suites.txt`
-   Depends on: 1, 2
-6. Reconcile: run the baseline commands and the explicit new-suite command; owns no source files, and routes any fix back to the step that owns the file.
-   Owns: `[]`
-   Depends on: 2, 3, 4, 5
-
-## 21. Scope cuts under time pressure
-
-Cut first: config-key policy overrides (keep env), opt-in naming (B-9), branch prefix (D-6). Never cut: bare tree (R-1), no attestation (R-2), scan (R-3), disclosure (R-4), default byte-identity (R-6). The stagegate attestation guard (D-7) is mandatory and cannot be cut; greenfield runs in no-footprint mode must not invoke attestation generation.
-
-## 22. Risks
-| Risk | Mitigation |
-|---|---|
-| Tree-binding divergence | one `bare` selector read from journal in every `snapshot` call; test validate round trip |
-| Default drift | golden comparison; flag-off code unchanged |
-| Failing audit hidden from PR reviewer | draft status plus neutral note; submitter sees findings locally; documented in README |
-| Scan false positives (word `uncle` in project) | allowed only if present in the project's own tracked files; otherwise refuse and tell user to edit |
+## 19. Observability
+Print `Fetched N/M comments` line on every import; warning line when overridden.
 
 ## Change-impact table
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/lib/footprint.py` (new) | pure body/message/disclosure/scan logic | domain logic apart from engine | Low | no-footprint-test.py |
-| `scripts/lib/change-pr.sh` | bare snapshot, journal flag, body/commit/branch/attestation branches, assert variant | core of the mode | High | no-footprint-test.py, pr-*-test |
-| `uncle` | accept flag, usage, export env | entry point | Low | no-footprint-test.py |
-| `scripts/stagegate.sh` | skip build_attestation when flag set | no attestation file | Low | no-footprint-test.py (grep/guard) |
-| `scripts/tests/no-footprint-test.py` (new), `scripts/tests/critical-suites.txt` | new suite in critical tier | coverage | None | self |
-| `README.md` | document mode, limits, disclosure | AC-8 | None | grep check |
+| `scripts/from-issue.sh` | comment fetch functions, count check, helper call, jq block, Thread Review template section | all paths full thread | stubbed gh in existing suites | from-issue-thread-test.sh, existing suites |
+| `scripts/lib/issue_thread.py` | new pure renderer/classifier | testable domain logic | low | issue-thread-test.py |
+| `GITHUB_INTEGRATION.md` | document thread reading | AC-7 | none | grep in shell test |
+| `scripts/tests/issue-thread-test.py` | new | unit | none | self |
+| `scripts/tests/from-issue-thread-test.sh` | new | integration | none | self |
+| `scripts/tests/critical-suites.txt` | add two suite names | default runners execute them | none | runner output |
 
 ## Traceability
 
+Noise exclusion and non-collaborator flags are mandatory on every path (gh/Python, curl/Python, curl/jq). Integration tests run the same shared comment fixture through all three paths and compare the excluded set and flags; neither behavior is a scope cut, and the jq filter implements the identical noise regex list and flagging rule as the helper.
+
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1 | B-2, B-12, entry preflight: before `start` in no-footprint mode, reject repositories with excluded artifacts (.uncle/**, root FINAL_AUDIT.md, attestation outputs, managed .gitignore lines) tracked at HEAD or present in the user index, without altering either, and list the conflicting paths. | I-1 | change-pr.sh snapshot | no-footprint-test.py (includes negative cases: artifact tracked at HEAD and artifact staged in the user index each reject at start, leaving HEAD and index unchanged, with conflicting paths named) | M-1 |
-| AC-2 | B-3 | I-1 | change-pr.sh, stagegate.sh | no-footprint-test.py | M-1 |
-| AC-3 | B-4, B-10 | I-2, I-3 | footprint.py, change-pr.sh | no-footprint-test.py | M-1 |
-| AC-4: The only exception for naming Uncle is the rendered disclosure line, and only when footprint.name_uncle is true; scan(fields, allow_uncle) applies allow_uncle to the disclosure line alone, not field-wide. The word 'uncle' in tracked project files grants no exemption, and titles, branches, messages and other body text are always scanned. The disclosure line is always present in the body. An empty or whitespace-only disclosure override (from config or env) is invalid and rejects publication before any publication write; only the commit trailer may be empty. | B-5, B-6, B-9 | I-3 | footprint.py | no-footprint-test.py (includes: word 'uncle' present in tracked project files still rejected in title/branch/message, name_uncle=true allows it only in the disclosure line, empty and whitespace-only disclosure override via config and via env each raise before any git/gh write, empty trailer override is accepted and yields no trailer while the body disclosure remains) | M-1 |
-| AC-5 | B-7, B-8 | I-2 | footprint.py | no-footprint-test.py (records every git write and gh call after a leak is injected, asserts no branch/ref/index update, commit, push or gh mutation occurred, permitting only temporary-index snapshot and local object creation) | - |
-| AC-6 | B-10 | I-4, I-5 | change-pr.sh validate | no-footprint-test.py, pr-auto-publish-test.sh | M-1 |
-| AC-7 | B-11 | I-6 | all | golden test, full suites | M-2 |
-| AC-8 | B-1 | - | uncle, README.md | no-footprint-test.py | - |
+| AC-1 | BH-1, 2, 3 | INV-1 | from-issue.sh, helper | from-issue-thread-test.sh | real issue via curl |
+| AC-2 (maintainer precedence uses one mapping: only author_association OWNER, MEMBER or COLLABORATOR qualify; every other or missing association is flagged non-collaborator and gets no automatic precedence; comment text cannot confer authority) | BH-9 | INV-1 | from-issue.sh template | shell + unit: one case per association (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE) plus missing and unknown, asserting maintainer vs non-collaborator flag, Thread Review text names only OWNER/MEMBER/COLLABORATOR as maintainers, a comment claiming authority in its text stays flagged, ordering cases: tied created_at ordered by numeric comment id, an edited comment whose updated_at is later than newer comments leaves order unchanged, and interleaved noise comments consume ids so remaining ids keep gaps | read Thread Review |
+| AC-3 | BH-4, 5, 6 | INV-2 | from-issue.sh | shell | none |
+| AC-4: Noise exclusion is applied on every path (gh/Python, curl/Python, curl/jq) with identical results. | BH-7 | INV-1 | helper | ["unit + shell (shared noise cases asserted identically across gh/Python, curl/Python and curl/jq)"] | none |
+| AC-5: Non-collaborator flags are applied on every path (gh/Python, curl/Python, curl/jq) with identical results. | BH-8, 10, 11 | INV-3, INV-5 | helper | unit + shell (shared injection, noise and non-collaborator flag cases asserted identically on gh/Python, curl/Python and curl/jq paths) | injection comment on a scratch issue |
+| AC-6 | BH-12, 13 | INV-4 | from-issue.sh | full runners | none |
+| AC-7 | BH-14 | none | docs | grep | none |
 
-Entry preflight (AR-007): before starting no-footprint mode, the engine rejects repositories where any excluded artifact is tracked at HEAD or present in the user index. It does not alter HEAD, the index or the working tree, and it names the conflicting paths so the user can untrack them deliberately. This keeps the bare snapshot from producing deletion diffs and prevents the completion check on tracked/staged .uncle paths from failing only after work is done.
+Maintainer mapping (single rule used in rendering, Thread Review instructions and tests): for Thread Review, maintainer means an author whose recorded author_association is OWNER, MEMBER, or COLLABORATOR. Every other value (CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE) and a missing association is flagged non-collaborator and does not receive automatic maintainer precedence. A claim of authority inside comment text never confers maintainer status.
 
-Disclosure validation rule (AR-014): `resolve_disclosure` rejects an empty or whitespace-only disclosure override, whether from `footprint.disclosure` or `UNCLE_FOOTPRINT_DISCLOSURE`, with ValueError before the `prepared` phase save and before any publication write. Only the commit trailer (`footprint.trailer` / `UNCLE_FOOTPRINT_TRAILER`) may be empty, meaning no trailer. An unset override falls back to the default disclosure.
+## Restrictions
+
+| R- | Source | Requirement IDs | Property | Mechanism | Capabilities | Phase |
+|---|---|---|---|---|---|---|
+| R-1 | USER (CHANGE_REQUEST Desired behavior) | AC-3 | short fetch cannot pass silently | count check, exit 1 (DESIGN, revisable) | CAP-SHELL, CAP-PY3 | CODING |
+| R-2 | USER (Untrusted input) | AC-5 | comments cannot alter rules; noise exclusion and non-collaborator flagging identical on every path | `> ` quoting + preamble (DESIGN); one shared noise list and flagging rule used by Python helper and jq filter, neither may be cut | CAP-PY3, CAP-SHELL | CODING |
+| R-5 | USER (CHANGE_SPEC BH-3, AC-4, AC-5) | AC-4, AC-5 | noise exclusion and non-collaborator flags identical on every rendering path; not a scope cut | one shared noise regex list and flagging rule used by helper and jq filter; three-path parity integration test (DESIGN, revisable) | CAP-SHELL, CAP-PY3 | CODING |
+| R-3 | REPOSITORY (CLAUDE.md) | AC-6 | no test weakening, no signing in fixtures | disposable fixtures, no commits | CAP-SHELL | CODING |
+| R-4 | PLATFORM | AC-1, AC-6 | no network in tests, including existing import fixtures: stub issue counts and every comment-fetch path (gh api, curl fallback); preserve original assertions; record fixture edits as renewed-authority items | stub gh/curl on PATH (feasibility: worktree-run-test.sh:108 stub pattern) | CAP-SHELL | CODING |
+
+All paths (gh/Python, curl/Python, curl/jq) use identical noise classification and non-collaborator flagging; neither behavior may be cut or reduced on the jq path. Integration tests run the same shared comment fixtures through all three paths and assert identical thread content.
+
+Live verification (manual only, not a coding prerequisite): public issue via curl; no credentials needed.
+
+## Verification commands
+```
+bash scripts/run-shell-tests.sh
+bash scripts/run-python-tests.sh
+```
+The new suites run by default after being added to `critical-suites.txt` (step 4). Protected verification paths: `scripts/tests/issue-thread-test.py`, `scripts/tests/from-issue-thread-test.sh`, `scripts/tests/critical-suites.txt`.
+
+## Implementation sequence
+
+1. Helper `issue_thread.py` (pure render, noise, quoting, count check, CLI) and its unit test.
+   Decisions: D-4..D-7
+   Owns: `scripts/lib/issue_thread.py`, `scripts/tests/issue-thread-test.py`
+2. Fetch and seed changes in from-issue.sh: REST comment fetch for gh and curl, paginating until exhausted with no page-count cap (D-1, D-2, D-8); curl fallback restarts pagination and replaces any gh results; count check and override retaining only validated pages from the final attempt (D-3); helper call on python path, jq block, `## Thread Review` template section, `Fetched N/M comments` output. Also update existing import fixtures that stub gh/curl so they supply issue counts and every comment-fetch path (including fallback) without network access, preserving original assertions and recording each edit as a renewed-authority item in IMPLEMENTATION_NOTES.md.
+   Owns: `scripts/from-issue.sh`
+   Depends on: 1
+3. **Update existing import fixtures** — Find by grep the existing from-issue test fixtures that stub gh/curl and edit them only to stub the issue comment count and every comment-fetch path (gh api, curl fallback) without network access, preserving their original assertions. Record each edit in IMPLEMENTATION_NOTES.md as a renewed-authority item. Run the existing from-issue suites with curl on PATH replaced by a failing stub to prove they use no network.
+   Depends on: 2
+4. Integration test with stubs for all paths and docs update.
+   Owns: `scripts/tests/from-issue-thread-test.sh`, `GITHUB_INTEGRATION.md`
+   Depends on: 2
+5. Register suites.
+   
+   The unit test in step 1 and docs in step 3 can be written in parallel with step 2 since they depend only on the helper contract.
+   Owns: `scripts/tests/critical-suites.txt`, `.uncle/docs/IMPLEMENTATION_NOTES.md`
+   Depends on: 1, 4
+
+## Scope cuts under time pressure
+
+Noise exclusion and non-collaborator flagging are mandatory on every rendering path (gh/Python, curl/Python, curl/jq) and cannot be cut. Cut first: docs detail beyond the required thread-reading section. Never cut: count check, curl comments, quoting, noise exclusion, non-collaborator flagging.
+
+## Risks and unresolved questions
+
+- Existing stub gh may answer `gh api` with nothing, which would fall through to real curl or fail the count check: existing fixtures are updated, without network, to stub counts and all fetch paths (R-4), preserving their existing assertions, and renewed authority is recorded where an override applies. The D-8 fallback (restart and replace, no merge) must be exercised by existing suites; run them early. Add a test where gh page 2 fails after page 1 succeeds, to confirm no duplicates, and an override test where the final attempt fails on page 2.
+- `gh api --paginate` emits concatenated JSON arrays; helper parses with raw_decode.
+- GitHub rate-limit for unauthenticated curl (60/h) may fail large fetches; surfaced via BH-5.
+- Existing 'untrusted piped text' handling not located (baseline unknown); plan adds its own neutralization and does not rely on it.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | Cutting the stagegate guard would allow a forbidden attestation, contradicting R-2 and AC-2. | Section 21 cut list drops D-7 and states the stagegate attestation guard is mandatory and cannot be cut. |
-| AR-002 | Accepted | Real conflict: an env-based stagegate guard can flip attestation behavior on resume, contradicting journal-governed mode. | D-7 now keys stagegate suppression on the persisted journal mode; env selects mode only for new runs; AC-8 text unchanged. |
-| AR-003 | Accepted | The tracked-file vocabulary exception in the risks section contradicts the spec's disclosure-only, opt-in naming rule. | R-4 mechanism now states Uncle is permitted only in the disclosure line when footprint.name_uncle is true, with no exemption for tracked project content. |
-| AR-004 | Accepted | Real gap: override precedence had no value validation, so an empty disclosure could erase the required body disclosure (I-3) or silently fall back. | D-2 now states that an empty or whitespace-only disclosure override (env or config) is rejected before publication writes, and only the trailer may be empty. |
-| AR-005 | Accepted | The plan lacked an exact path rule outside .uncle; a precise exclusion contract makes the bare snapshot testable and avoids leaks or dropped source files. | Edit s1.1 to state the exact root-path exclusion rule for bare snapshots. |
-| AR-006 | Accepted | An env-based guard can change attestation behavior when a journal of the opposite mode is resumed, violating the journal-controls-resume rule and AC-7. | D-7 now derives the stagegate attestation decision from the persisted journal mode; the env applies only to a new run; AC-7 and regression strategy updated. |
-| AR-007 | Accepted | Bare snapshots would delete tracked artifacts while completion rejects tracked .uncle paths; an entry-time rejection removes the conflict before any work is done. | Add a start-time preflight rejection to s22 and AC-1 (tracked at HEAD or staged excluded artifacts, no mutation, conflicting paths named). |
-| AR-008 | Accepted | The tracked-file exception contradicts the spec's explicit opt-in, disclosure-only rule and would silently disable the scan; the risk-table wording is owned by another writer. | R-4 restriction now binds scan: tracked project content exempts nothing; Uncle is allowed only in the disclosure line when footprint.name_uncle is true. |
-| AR-009 | Accepted | The driver must not invoke the user's signer automatically; message preparation and signed commit execution need an explicit boundary. | D-3 now separates message composition from commit execution; added a signing-boundary decision row D-8. |
-| AR-010 | Accepted | The tracked-file exception in the risk row contradicts disclosure-only opt-in naming; tracked content must grant no vocabulary exemption. | AC-4 traceability row now states Uncle is permitted only in the disclosure line when footprint.name_uncle is true, with no tracked-file exemption, and tests cover it. |
-| AR-011 | Accepted | Real gap: precedence rules without validation let an empty override erase the required body disclosure (I-3). | AC-4 row: empty/whitespace disclosure override (config or env) is rejected before publication writes; only the trailer may be empty; test added. |
-| AR-012 | Accepted | The tracked-file exception contradicts the spec's disclosure-only, opt-in naming rule and gives tests conflicting oracles. | AC-4 traceability row now states the single exception: Uncle only on the disclosure line when footprint.name_uncle is true, no tracked-content exemption. |
-| AR-013 | Accepted | The scan ordering was ambiguous between 'before any git write' and 'before commit/push'; an explicit ordering rule makes it testable. | Add scan-ordering rule to s14 (new restriction R-8 on R-3's mechanism) and extend AC-5 behaviors/tests to assert no publication writes before rejection. |
-| AR-014 | Accepted | Empty disclosure override is undefined while I-3 requires a body disclosure; one rule for config and env gives tests a single expected result. | Edited AC-4 (requirement, tests) and added a rule block in s22: empty/whitespace disclosure override rejected before publication writes; only trailer may be empty. |
-| AR-015 | Accepted | The cut list made the stagegate guard optional while R-2 and AC-2 require no attestation, so the guard must be mandatory. | Section 21 (s19.1) drops D-7 from cuttable items and states the guard is mandatory; D-7 and R-2 text updated to match. |
+| AR-001 | Accepted | Scope cuts contradicted required noise exclusion and non-collaborator flagging (AC-4, AC-5, BH-3). | Rewrote s20.1 so noise exclusion and non-collaborator flagging are mandatory on every path; updated AC-4/AC-5 tests to cover all paths. |
+| AR-002 | Accepted | A fixed 100-page cap contradicts unconditional full-thread import (BH-6); pagination must run until exhausted on both paths. | D-2 now fetches until pagination is exhausted with no page cap; step-2 text and s1 intro updated to match. |
+| AR-003 | Accepted | The plan gave later maintainer statements precedence without defining who qualifies; an explicit association mapping removes the trust ambiguity. | AC-2 traceability row and a new rule block in Traceability define OWNER/MEMBER/COLLABORATOR as maintainers; all others flagged non-collaborator. |
+| AR-004 | Accepted | Retention across gh failure, curl fallback and override was undefined and could yield duplicate or inconsistent partial seeds. | D-8 and D-3 define restart/replace semantics and validated-page retention under override; step-2 and risk s21.1.i1 updated to match. |
+| AR-005 | Accepted | Existing gh stubs may return nothing for gh api, falling through to real curl or failing the count check; fixtures need network-free stubs. | Edit D-8, s8.1 compatibility, R-4 and step-2 to require network-free fixture updates, preserved assertions, and renewed-authority recording. |
+| AR-006 | Accepted | Parity of noise exclusion and non-collaborator flags across gh/Python, curl/Python and curl/jq is required by BH-3, AC-4 and AC-5; scope cuts contradicting it are removed. | AC-4/AC-5 rows, s16 note and R-5 restriction make noise exclusion and flags mandatory on every path with a three-path parity test. |
+| AR-007 | Accepted | Maintainer precedence needs one explicit association mapping used by rendering, Thread Review instructions, and tests. | Edit D-6 and D-7 to define the OWNER/MEMBER/COLLABORATOR mapping and add it to AC-2's requirement, behaviors and tests. |
+| AR-008 | Accepted | The jq path must share noise classification and non-collaborator flagging with Python; allowing cuts makes the BH-3 oracle ambiguous. | Edit AC-4, AC-5 and R-2 to require identical noise and flagging on all paths, and add a Restrictions block banning those cuts and requiring cross-path tests. |
+| AR-009 | Accepted | Override after a partial fetch needs a testable output contract so INV-1 holds for fetched comments. | Add decision D-9 defining retention, discard and recording on page failure under override, and add a second-page-failure test to the traceability row for AC-3's behaviors. |
+| AR-010 | Accepted | The plan named no association mapping, so flags and maintainer precedence were untestable; one explicit mapping resolves this. | Edited D-6, D-7, and AC-2 and added a mapping block after the decisions in section 1. |
+| AR-011 | Accepted | Ordering, tie-breaking, edit handling and ID assignment relative to noise filtering were unspecified, so independent tests could assert different sequences. | Revised D-7 and D-5 with an ordering/ID contract; AC-2 now requires tests for tied timestamps, edits and interleaved noise. |

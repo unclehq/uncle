@@ -119,8 +119,18 @@ if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
     printf '{"title":"Add widget %s","body":"Body of issue %s","url":"https://github.com/owner/repo/issues/%s","state":"OPEN","labels":[],"comments":[]}\n' "$num" "$num" "$num"
     exit 0
 fi
+if [[ "${1:-}" == "api" ]]; then
+    # Issue 282: comment count and comment pages, offline (zero comments).
+    case "${2:-}" in
+        */comments*) printf '[]\n'; exit 0 ;;
+        *) printf '{"comments":0}\n'; exit 0 ;;
+    esac
+fi
 exit 1
 GH
+# Issue 282: curl must never reach the network from this suite.
+printf '#!/bin/sh\necho "curl blocked in test" >&2\nexit 7\n' > "$TMP/bin/curl"
+chmod +x "$TMP/bin/curl"
 chmod +x "$TMP/bin/fake-signer" "$TMP/bin/git" "$TMP/bin/gh"
 export PATH="$TMP/bin:$PATH" REAL_GIT
 export GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1

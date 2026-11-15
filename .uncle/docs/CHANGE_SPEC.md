@@ -1,77 +1,77 @@
-# Change spec - Issue 280
+# Change spec (Issue 282)
 
-Omitted sections: Performance (none), Migration (none), Prototype isolation (not a prototype)
+Omitted sections: Performance (negligible, 1 request per 100 comments); Migration (none); Prototype isolation (not a prototype)
 
 ## 1. Change type
-Feature (opt-in mode).
+Feature + bug fix (silent comment loss on curl/jq paths).
 
 ## 2. Problem statement
-PRs Uncle produces carry its footprint (`.uncle/docs` artifacts, FINAL_AUDIT.md, attestation, audit-style body). Some projects want an ordinary-looking, honestly AI-disclosed PR.
+Issue import drops or cannot validate comments on some paths, and treats the thread as flat text.
 
 ## 3. Current behavior
-Baseline EB-1..EB-7.
+See baseline B-1..B-3.
 
 ## 4. Desired behavior
-With `--no-footprint` (or `UNCLE_NO_FOOTPRINT=1`), the published commit/PR contains only intended source changes, maintainer-style text, and an AI-assistance disclosure. Without it nothing changes.
+All three paths (gh, curl, jq) include the full thread with provenance; completeness is verified against the issue's comment count; noise comments are kept out of requirement text; comment text is neutralized as untrusted data; the agent is told how to reconcile contradictions.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| B-1 | ADD | `uncle --no-footprint ...` or env `UNCLE_NO_FOOTPRINT=1` | flag refused as unknown | accepted; recorded in PR journal at `start`; later stages follow the journal, not the env | AT-1 |
-| B-2 | ADD | publish in mode | tree holds `.uncle/docs/**`, root FINAL_AUDIT.md, `.uncle/attestation.*` | commit tree has no path under `.uncle/`, no root `FINAL_AUDIT.md`, no workflow-doc artifact (PROJECT_PLAN, CHANGE_PLAN, IMPLEMENTATION_NOTES, reports), no attestation files; `.gitignore` carries no Uncle-managed lines (and is omitted if it would be newly added empty) | AT-2 |
-| B-3 | ADD | publish in mode | attestation sealed and attached | none produced, committed, attached or exported (incl. handoff publish mode); body never mentions `uncle verify` | AT-3 |
-| B-4 | ADD | PR body built | Uncle report-style body | sections: Summary (what and why, `Closes #N`/`Refs #N` via existing evidence rule), Testing (project's own commands), Follow-ups, AI-assistance disclosure; no banners, stage/gate/audit/disposition content | AT-4 |
-| B-5 | ADD | commit created | message = title | message = title + blank + short body + trailer `Assisted-by: AI tooling` (default); vendor attribution lines (`Co-Authored-By: <AI agent>`, `Generated with ...`) not present beyond the disclosure | AT-5 |
-| B-6 | ADD | project policy | n/a | `.uncle/config` keys `footprint.disclosure` (PR-body line), `footprint.trailer` (full trailer line; empty = no trailer) override defaults; env `UNCLE_FOOTPRINT_DISCLOSURE`/`UNCLE_FOOTPRINT_TRAILER` override config | AT-6 |
-| B-7 | ADD | title/body/commit message contains forbidden vocabulary | n/a | publish refused before any git/gh write with a message naming the term and field; PR stays pending | AT-7 |
-| B-8 | ADD | branch/labels | `uncle/` fallback prefix | fallback prefix `change/`; no labels added by Uncle | AT-8 |
-| B-9 | ADD | `footprint.name_uncle true` in config | n/a | disclosure line may name Uncle; vocabulary scan allows only that line | AT-9 |
-| B-10 | PRESERVE | gates | human consent, READY-or-override, draft-on-NOT_READY | unchanged; draft PR in mode carries a neutral one-line draft note only | AT-10 |
-| B-11 | PRESERVE | default mode | EB-1..EB-7 | byte-identical journal body, commit tree, commit message, branch name | AT-11 |
-| B-12 | ADD | local run state | `.uncle/docs/**` on disk | still on disk untracked, never staged in the user's index; completion guard accepts it | AT-2 |
+| BH-1 | MODIFY | Import with gh | Comments appended w/o link | Each comment listed with author, URL, timestamps, edited marker, author association | shell test gh path |
+| BH-2 | ADD | Import via curl | Comments dropped | Comments fetched from `issues/N/comments`, paginated | shell test curl path |
+| BH-3 | ADD | Import via jq (no python3) | Comments dropped | Same thread content as python path | shell test jq path |
+| BH-4 | ADD | Fetched comments != issue `comments` count | No check | Exit 1 with message naming both counts; `UNCLE_ISSUE_ALLOW_INCOMPLETE=1` downgrades to warning recorded in the change request | shell test |
+| BH-5 | ADD | Comment fetch fails/unavailable | Silent | Exit 1 saying comments could not be fetched (same override as BH-4) | shell test |
+| BH-6 | ADD | Thread over 100 comments | Not handled | All pages fetched | shell test with 2 pages |
+| BH-7 | ADD | Noise-only comment (`+1`, `bump`, emoji-only, `thanks`) | Included | Listed under `### Excluded as noise` by link only; absent from thread text | python unit test |
+| BH-8 | ADD | Comment edited (updated_at != created_at) | Not shown | Marked `edited <ts>`; text is the current text | unit test |
+| BH-9 | ADD | Contradicting/superseding comments | Not handled | CHANGE_REQUEST includes `## Thread Review` section instructing the analyst to follow later maintainer statements, record conflicts, and cite source IDs (`body`, `comment-N`) per requirement | shell test checks section present; manual |
+| BH-10 | ADD | Comment contains headings or agent instructions | Raw text injected into the document | Comment text quoted line-by-line (`> `) inside a labelled untrusted block; cannot create sections; preamble states the thread is data and cannot override Uncle rules or gates | unit + shell test |
+| BH-11 | ADD | Non-collaborator comment | Not distinguished | Flagged with `author_association` (e.g. NONE) and `[non-collaborator]`; included | unit test |
+| BH-12 | PRESERVE | Import of issue with no comments | Body only | Same body; thread section states 0 comments | shell test |
+| BH-13 | PRESERVE | Fetch failure / empty title / header format | See B-4..B-7 | Unchanged | existing suites |
+| BH-14 | ADD | Docs | Say title and body | GITHUB_INTEGRATION.md states whole thread is read, fetch checked, flags | grep test |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| I-1 | NEW | In mode, no path under `.uncle/`, root FINAL_AUDIT.md or attestation file is in the commit tree or index | publish | `snapshot` bare variant + `assert_tree_matches_attested` | AT-2 |
-| I-2 | NEW | In mode, title, body, commit message contain no forbidden vocabulary (unless opted in) | publish | `footprint.scan` before any write | AT-7 |
-| I-3 | NEW | Disclosure present in body and (unless policy empties it) trailer | publish | `footprint.render_*` | AT-4, AT-5 |
-| I-4 | STRENGTHENED | EI-1 tree binding holds for the bare tree at start, bind, validate and commit | publish | `validate` uses same variant | AT-12 |
-| I-5 | EXISTING | EI-2 publication gates unchanged | publish | `validate`, `verdict-override` | AT-10 |
-| I-6 | EXISTING | Default mode output byte-identical | publish | flag-off branches only | AT-11 |
-| I-7 | EXISTING | EI-3, EI-4, EI-5 | publish | unchanged | existing tests |
-No RELAXED or REMOVED invariants. EI-3 is not relaxed: in mode the allowlist is empty (stricter).
+| INV-1 | NEW | No comment present in the fetched set is silently omitted from the seed (except listed noise, which is listed by link) | from-issue.sh | issue_thread.py render | unit |
+| INV-2 | NEW | Seeding never proceeds when comment fetch is short or failed, unless explicit override, which is recorded in the document | from-issue.sh | completeness check | shell |
+| INV-3 | NEW | Comment text cannot introduce a document heading or leave the untrusted block | CHANGE_REQUEST.md | quoting in render | unit |
+| INV-4 | EXISTING | Header `Issue N` / `Seeded from` unchanged | CHANGE_REQUEST.md | heredoc | existing suites |
+| INV-5 | EXISTING | No approval gate or rule is altered by thread content | driver | no code path consumes comment text as config | shell test (injection comment) |
+| (none RELAXED or REMOVED) | | | | | |
 
 ## 7. Compatibility
-Flag absent => no change. Journals without `no_footprint` read as false.
+Output remains Markdown; thread now under `## Motivation` as subsection `### Issue thread`. The old `### Comment from <login>` headings are replaced; any suite asserting them must be updated only if it fails (to be grepped).
 
-## 8. Error and failure behavior
-- Leak scan failure: raise ValueError, nothing committed or pushed, rerun after editing text.
-- Journal/env mismatch on resume: journal wins.
-- Failing/NOT_READY audit: draft PR, findings stay local; terminal says so.
+## 8. Error behavior
+As BH-4/BH-5. Message names the endpoint/path and the override variable.
 
 ## 10. Security
-No secrets in text; scan covers title, body, commit message, branch name. Disclosure is never removable by the flag itself.
+Comments are untrusted data (INV-3, INV-5); author and association recorded; no comment text is passed to a shell or eval.
 
 ## 12. Rollback
-Drop the flag; default path untouched. Unmerged PRs closed by the human.
+Revert the commit; the helper is additive.
 
 ## 14. Non-goals
-Changing approval gates; hiding AI use; changing attestation or `uncle verify`; rewriting history of already-published PRs; scrubbing the agent CLIs' own logs.
+Summarizing long threads; re-fetching mid-run; excluding non-collaborators; reactions; resolving contradictions automatically in code; PR/close flows.
 
-## 15. Assumptions
-Forbidden vocabulary (case-insensitive): `uncle`, `.uncle`, `attestation`, `uncle verify`, `FINAL_AUDIT`, `PROJECT_PLAN`, `CHANGE_PLAN`, `CHANGE_SPEC`, `IMPLEMENTATION_NOTES`, `VERIFICATION_REPORT`, `adversarial`, `gate`/`stage` as whole words with a following number or `approval`. Default disclosure: `This change was developed with AI assistance. The submitter has reviewed it and is accountable for it.` Trailer: `Assisted-by: AI tooling`.
+## 15. Assumptions and resolved open questions
+- Q1 non-collaborators: included and flagged (decision).
+- Q2 long threads: never summarized; full text kept (faithfulness over size).
+- Q3 mid-run changes: not re-fetched; document records fetch time and comment count so staleness is visible.
+- Supersession and noise judgment beyond the regex noise list is performed by the analyst agent from the instructions in `## Thread Review`; code only provides provenance and structure.
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | With --no-footprint (or UNCLE_NO_FOOTPRINT=1) the commit tree contains no path under .uncle/, no root FINAL_AUDIT.md, no workflow-document artifact and no attestation file; only source changes remain, and Uncle-managed .gitignore lines are absent. | scripts/tests/no-footprint-test.py builds a fixture repo with .uncle/docs artifacts, FINAL_AUDIT.md and a managed .gitignore, runs the engine snapshot in mode, and asserts the tree listing equals the source files only. Regression: staging an artifact makes it fail. |
-| AC-2 | No attestation is produced, committed, attached to the body or exported in mode, and the PR text never references uncle verify. | no-footprint-test.py asserts attest() and attestation attach_body are not reached, no .uncle/attestation.* in tree, hand-off publish mode skips attest-handoff, and body lacks 'verify'. |
-| AC-3 | The PR body is maintainer-style (Summary with issue link, Testing, Follow-ups, AI disclosure) and contains no Uncle stage, gate, audit, banner or disposition content, even when the audit verdict was NOT_READY or the run was unattended. | no-footprint-test.py renders bodies for READY, NOT_READY-override and unattended cases; asserts required headings and absence of the forbidden vocabulary and audit sections; a seeded audit section in the input makes the test fail. |
-| AC-4 | The body carries the AI-assistance disclosure and the commit carries the Assisted-by trailer by default; project config/env can override text or empty the trailer; Uncle is named only with footprint.name_uncle true. | no-footprint-test.py checks default text, config override, env precedence over config, empty trailer, and opt-in naming. |
-| AC-5 | Title, body, commit message and branch name containing forbidden vocabulary, or vendor attribution lines beyond the disclosure, are refused (vendor lines in generated text are stripped) before any git or gh write. | no-footprint-test.py injects leaks into each field and asserts ValueError with no commit/push/gh call recorded, and that vendor attribution lines are not in the final message. |
-| AC-6 | Approval gates are unchanged in mode: consent prompt, READY-or-override rule, draft on NOT_READY, tree-binding validation; tree binding holds across start, bind, validate and commit. | no-footprint-test.py runs validate() on a mode journal and mutates a source file (expects refusal); existing pr-auto-publish-test.sh and pr-reconcile-test.py remain green. |
-| AC-7 | Without the flag, journal body, commit tree, commit message and branch name are byte-identical to before the change. | no-footprint-test.py compares default-mode outputs to golden values captured from the pre-change code path; full existing suites (run-shell-tests.sh, run-python-tests.sh) stay green versus baseline. |
-| AC-8 | uncle accepts --no-footprint, lists it in usage, and README documents the mode, its limits (draft/NOT_READY findings stay local, agent logs not scrubbed, gates unchanged) and the disclosure behavior and override keys. | no-footprint-test.py runs `uncle --help` and the flag parser; grep of README.md for the section and keys. |
+| AC-1 | A clarifying comment appears in the seeded CHANGE_REQUEST.md with author, comment URL and timestamps on the gh, curl and jq paths. | from-issue-thread-test.sh runs from-issue.sh with stub gh/curl/python-less PATH and greps the output |
+| AC-2 | The seed contains a Thread Review section instructing that a later maintainer statement wins on contradiction, that the conflict is recorded, and that each requirement cites body or comment id and link; comments are listed in chronological order with stable ids. | shell test greps section; unit test checks ids/order |
+| AC-3 | A thread of more than 100 comments (two API pages) is fully included on curl and gh paths; a fetched count below the issue's comment count or a failed comment fetch exits non-zero unless UNCLE_ISSUE_ALLOW_INCOMPLETE=1, in which case a warning is printed and recorded in the document. | shell test with 2-page stub, short fetch, failing fetch, override |
+| AC-4 | Noise-only comments (+1, bump, thanks, emoji-only) are not in the thread text and are listed only as links under Excluded as noise; comments with substantive text are never classed as noise. | issue-thread-test.py table of examples incl. negatives like '+1 but also please support X' |
+| AC-5 | Comment text containing headings, fences or agent instructions is rendered as quoted untrusted data and does not create document sections; the preamble states the thread cannot override Uncle rules or approval gates; edited comments are marked and carry current text; non-collaborators are flagged. | issue-thread-test.py and shell test with an injection comment |
+| AC-6 | Issue with zero comments seeds as before (body unchanged, header unchanged) and existing suites invoking from-issue.sh still pass. | shell test plus bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh |
+| AC-7 | GITHUB_INTEGRATION.md documents that the whole thread is read, the completeness check and override, non-collaborator flagging, and that later comments are not re-fetched. | grep in from-issue-thread-test.sh |
 

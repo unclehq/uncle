@@ -178,5 +178,9 @@ gitignore-post-push
 # Hand-off with no base commit: seed, truthful completion text, no signer invoked.
 handoff-no-base
 
+# Issue thread import: comments seeded into CHANGE_REQUEST.md with provenance, pagination and completeness checks.
+issue-thread
+from-issue-thread
+
 # Opt-in no-footprint publication mode: bare tree, no attestation, vocabulary scan, mandatory disclosure.
 no-footprint

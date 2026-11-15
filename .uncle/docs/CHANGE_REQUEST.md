@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 280
+Issue 282
 
-Seeded from [unclehq/uncle#280](https://github.com/unclehq/uncle/issues/280).
+Seeded from [unclehq/uncle#282](https://github.com/unclehq/uncle/issues/282).
 
 ## Change Type
 
@@ -10,47 +10,50 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
---no-footprint: produce a PR with no trace of Uncle
+Review the full issue thread, including comments, when creating a change request
 
 ## Motivation
 
 ## Summary
 
-Add a `--no-footprint` mode in which the pull request Uncle produces looks like an ordinary contribution to the target project. No Uncle-created files appear in the PR, and the PR text reads the way a maintainer would want a PR to read, not like an Uncle audit report. The PR honestly discloses that AI assistance was used.
+When Uncle builds a change request from a GitHub issue, it should read the whole issue: the body and every comment in the thread. The change request must reflect what the thread asks for now, not only what the opening post said.
+
+## Current behavior
+
+`scripts/from-issue.sh` fetches comments with `gh issue view --json ...,comments` and, on the Python path, appends each comment to the body under a `### Comment from <author>` heading. That works only on one path:
+
+- **curl fallback** (no `gh`, or `gh` not authenticated): the REST `issues/<n>` endpoint does not include comments, so they are silently dropped.
+- **jq fallback** (no `python3`): only `.body` is extracted, so comments are dropped.
+- **Long threads:** there is no check that the fetch returned every comment, so a truncated or paginated fetch is indistinguishable from a complete one.
+- **Thread meaning:** comments are concatenated in order, with no handling of the cases where the thread changes the request.
 
 ## Desired behavior
 
-- **No Uncle files in the PR diff.** Nothing under `.uncle/`, no workflow docs (`PROJECT_PLAN.md`, `CHANGE_PLAN.md`, `IMPLEMENTATION_NOTES.md`, verification and audit reports), and no other generated artifact is committed or visible in the PR. Only the intended source changes remain.
-- **No attestation.** This mode does not produce, commit or attach an attestation, and the PR does not reference `uncle verify`.
-- **Maintainer-style PR text.** The title, description and comments follow what an OSS project expects:
-  - what changed and why, linked to the issue it addresses;
-  - how it was tested, in terms of the project's own tests and commands;
-  - notable trade-offs or follow-ups;
-  - no stage logs, gate records, review dispositions, audit tables or Uncle-specific vocabulary.
-- **AI-assistance disclosure.** The PR includes a short, standard disclosure that AI tooling assisted, in the form projects increasingly ask for (a line in the description, and a commit trailer where the project's policy calls for one). It does not name Uncle or describe Uncle's internals unless the user opts in. The human submitter remains the accountable author.
-- **No Uncle residue in the tree.** Uncle's working state lives outside the branch (untracked or out-of-tree) and is never staged.
-- **Normal mode is unchanged.** `--no-footprint` is opt-in and does not alter default behavior.
-
-## Decisions
-
-- **Attestation:** dropped in this mode.
-- **Disclosure:** included. The mode reduces Uncle's footprint. It does not conceal that AI assisted.
-
-## Open questions
-
-1. **Footprint boundary.** Define a concrete, testable boundary: files, PR title and body, commit messages and trailers, branch names and labels.
-2. **Human gates.** The approval gates and the human merge decision stay exactly as they are. This issue must not weaken them.
-3. **Disclosure wording.** Decide the default text and trailer format, and how a project's own contribution policy can override them.
-4. **Agent CLI attribution.** Decide how the mode interacts with agent CLIs that add their own attribution lines by default.
+- **Every fetch path returns the full thread.** The curl path also calls `issues/<n>/comments` and follows pagination. The jq path includes comments. A run that cannot fetch comments says so instead of proceeding as though there were none.
+- **Completeness is checked.** Uncle compares the number of comments it received with the issue's comment count and fails loudly, or warns, on a mismatch.
+- **The thread is reviewed, not just appended.** When drafting the change request, Uncle identifies:
+  - clarifications and added requirements from comments;
+  - comments that supersede or contradict the opening post (the later maintainer statement wins, and the change request says so);
+  - edited comments and the body's current text, not an earlier version;
+  - discussion that is not a requirement, such as +1s and status chatter, kept out of the requirements.
+- **Provenance is preserved.** Each requirement in the change request traces back to the body or to a specific comment (author and link), so a reviewer can check the source.
+- **Untrusted input.** Comment text is untrusted input, the same as the body. It cannot override Uncle's rules or approval gates. Comment authorship is recorded, and the existing handling for untrusted piped text applies.
 
 ## Acceptance criteria
 
-- With `--no-footprint`, the PR diff contains only the intended source changes, with no Uncle-generated files and no attestation.
-- The PR description follows a maintainer-style template (what, why, testing, follow-ups) and contains no Uncle stage, gate or audit content.
-- The PR contains the AI-assistance disclosure and no reference to Uncle unless the user opts in.
-- Without the flag, output is byte-identical to today's.
-- Tests cover the mode, including a regression test that fails if a generated artifact is staged or an audit section leaks into the PR text.
-- README documents the mode, its limits, and the disclosure behavior.
+- A test issue with a clarifying comment produces a change request that includes that clarification on the `gh`, curl and jq paths.
+- A comment that contradicts the body produces a change request that follows the later statement and records the conflict.
+- A thread longer than one API page is fully included, and a short fetch fails or warns.
+- Noise-only comments do not appear as requirements.
+- Each requirement cites its source (body or comment).
+- A comment containing instructions aimed at the agent does not change Uncle's behavior.
+- README or GITHUB_INTEGRATION.md documents that the whole thread is read.
+
+## Open questions
+
+1. Should comments from non-collaborators be included by default, flagged, or excluded?
+2. Should a very long thread be summarized, and how does the summary stay faithful to the source?
+3. How should a thread that changes after the change request is drafted (new comments mid-run) be handled?
 
 ## Observed Current Behavior
 

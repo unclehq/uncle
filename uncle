@@ -67,8 +67,8 @@ usage() {
     cat <<'EOF'
 Usage: uncle [-h|--help|--performance|--runs] [--attended] [--noui]
        uncle --application [TEXT] [--attended]
-       uncle --issue [ISSUE] [--attended]
-       uncle --change-request [--attended] < request.md
+       uncle --issue [ISSUE] [--attended] [--no-footprint] [--oss]
+       uncle --change-request [--attended] [--no-footprint] [--oss] < request.md
        uncle --audit [BRANCH]
        uncle --revalidate [--noui] [--attended] [--dry-run] [--no-supervisor]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]

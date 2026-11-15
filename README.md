@@ -227,6 +227,24 @@ Limits and disclosure:
 * Without the flag, behavior is unchanged. The mode is recorded in the run journal, so a resume cannot flip it.
 * `--no-footprint` hides Uncle from the pull request. It does not remove the AI-assistance disclosure, and you remain responsible for following the target project's contribution policy on AI-assisted changes.
 
+### Contributing to open-source projects (`--oss`)
+
+Pass `--oss` when the change targets a project you do not own. Uncle reads the project's own contribution guidance before planning and follows it instead of Uncle defaults.
+
+* `--oss` implies `--no-footprint`: the diff and pull request text carry no Uncle files or vocabulary. The run journal records the mode, and a resume keeps it.
+* The plan lists each guideline with its `file:line` source (CONTRIBUTING, PR template, DCO, commit and title format, CI and Makefile commands) and an Unknown list for guidance it could not find. With no guidance at all, conventions inferred from recent merged pull requests and CI are labeled `inferred`.
+* The project's own verification commands are used. A required check that cannot run is reported as not run, never as passed.
+* Commits carry `Signed-off-by` when DCO is required, the pull request body fills the project's template (the AI-assistance disclosure is kept), and titles follow the stated format.
+* If the project prohibits AI contributions, publication is refused before any branch, commit, push or `gh` write.
+* Conflicting guidelines, or an issue that is assigned, labeled not open, or needs discussion, stop the run at a human gate with the reasons listed.
+
+Decisions and limits:
+
+* Forks are not automated. Uncle uses the existing remote logic; if you cannot push, the run stops with instructions.
+* Guidance in a wiki or other external place is listed as unknown. Paste it into the change request to have it followed.
+* `--oss` is never inferred; pass it explicitly.
+* Without the flag, behavior is unchanged.
+
 ## Documentation and advanced usage
 
 * [Quickstart](docs/quickstart.md) and [Prerequisites](PREREQUISITES.md)

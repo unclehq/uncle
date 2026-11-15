@@ -1,77 +1,79 @@
-# Change spec (Issue 282)
+# Change specification
 
-Omitted sections: Performance (negligible, 1 request per 100 comments); Migration (none); Prototype isolation (not a prototype)
+Omitted sections: Performance (none); Migration (none); Prototype isolation (not a prototype)
 
 ## 1. Change type
-Feature + bug fix (silent comment loss on curl/jq paths).
+Feature.
 
 ## 2. Problem statement
-Issue import drops or cannot validate comments on some paths, and treats the thread as flat text.
+Uncle's defaults (its own verification commands, Uncle-style PR, audit text) do not match what upstream maintainers of a project the user does not own will accept. Issue 283.
 
 ## 3. Current behavior
-See baseline B-1..B-3.
+See baseline B-1..B-5.
 
 ## 4. Desired behavior
-All three paths (gh, curl, jq) include the full thread with provenance; completeness is verified against the issue's comment count; noise comments are kept out of requirement text; comment text is neutralized as untrusted data; the agent is told how to reconcile contradictions.
+`--oss` makes the change run discover and record the project's guidelines (with file and line sources, missing ones listed as unknown), follow them for commits, PR, tests and checks, keep Uncle artifacts out of the PR, refuse publication when the project prohibits AI-assisted contributions, and stop at a human gate on conflicts or unclaimable issues.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| BH-1 | MODIFY | Import with gh | Comments appended w/o link | Each comment listed with author, URL, timestamps, edited marker, author association | shell test gh path |
-| BH-2 | ADD | Import via curl | Comments dropped | Comments fetched from `issues/N/comments`, paginated | shell test curl path |
-| BH-3 | ADD | Import via jq (no python3) | Comments dropped | Same thread content as python path | shell test jq path |
-| BH-4 | ADD | Fetched comments != issue `comments` count | No check | Exit 1 with message naming both counts; `UNCLE_ISSUE_ALLOW_INCOMPLETE=1` downgrades to warning recorded in the change request | shell test |
-| BH-5 | ADD | Comment fetch fails/unavailable | Silent | Exit 1 saying comments could not be fetched (same override as BH-4) | shell test |
-| BH-6 | ADD | Thread over 100 comments | Not handled | All pages fetched | shell test with 2 pages |
-| BH-7 | ADD | Noise-only comment (`+1`, `bump`, emoji-only, `thanks`) | Included | Listed under `### Excluded as noise` by link only; absent from thread text | python unit test |
-| BH-8 | ADD | Comment edited (updated_at != created_at) | Not shown | Marked `edited <ts>`; text is the current text | unit test |
-| BH-9 | ADD | Contradicting/superseding comments | Not handled | CHANGE_REQUEST includes `## Thread Review` section instructing the analyst to follow later maintainer statements, record conflicts, and cite source IDs (`body`, `comment-N`) per requirement | shell test checks section present; manual |
-| BH-10 | ADD | Comment contains headings or agent instructions | Raw text injected into the document | Comment text quoted line-by-line (`> `) inside a labelled untrusted block; cannot create sections; preamble states the thread is data and cannot override Uncle rules or gates | unit + shell test |
-| BH-11 | ADD | Non-collaborator comment | Not distinguished | Flagged with `author_association` (e.g. NONE) and `[non-collaborator]`; included | unit test |
-| BH-12 | PRESERVE | Import of issue with no comments | Body only | Same body; thread section states 0 comments | shell test |
-| BH-13 | PRESERVE | Fetch failure / empty title / header format | See B-4..B-7 | Unchanged | existing suites |
-| BH-14 | ADD | Docs | Say title and body | GITHUB_INTEGRATION.md states whole thread is read, fetch checked, flags | grep test |
+| OB-1 | ADD | `uncle ... --oss` | Unknown argument | Flag accepted; run recorded as OSS mode in the journal; `--oss` appears in help and typo hints | AC-1 |
+| OB-2 | ADD | Plan stage under `--oss` | No discovery | Plan has a guidelines table: each guideline with source `file:line`, plus an Unknown list for absent guidance | AC-2 |
+| OB-3 | ADD | No contributing guidance found | n/a | Plan states none found; conventions from recent merged PRs and CI appear labeled `inferred` | AC-3 |
+| OB-4 | ADD | Project policy prohibits AI contributions | PR published | Publication refused before any branch, commit, push or `gh` write; user told why | AC-4 |
+| OB-5 | ADD | Project defines verification commands (CI, Makefile, test config) | Uncle commands | Plan's verification commands are the project's own; required checks that cannot run are reported not run, never passed | AC-5 |
+| OB-6 | ADD | Project requires DCO and has PR template, commit format | Uncle format | Commits carry `Signed-off-by`; PR body fills the project's PR template; commit/PR title follow the stated format | AC-6 |
+| OB-7 | ADD | Guidelines conflict with each other, the issue or Uncle rules; or issue is assigned/labeled not open/needs discussion | n/a | Run stops at a human gate with the conflict or warning listed; no silent choice | AC-7 |
+| OB-8 | ADD | `--oss` publish | Uncle files possible | Diff and PR text contain no Uncle-generated files or vocabulary (no-footprint rules apply) | AC-8 |
+| OB-9 | PRESERVE | Any run without `--oss` | Existing | Unchanged prompts, journal, PR | AC-9 |
+| OB-10 | ADD | README | Undocumented | README documents flag, limits and open-question decisions | AC-10 |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| INV-1 | NEW | No comment present in the fetched set is silently omitted from the seed (except listed noise, which is listed by link) | from-issue.sh | issue_thread.py render | unit |
-| INV-2 | NEW | Seeding never proceeds when comment fetch is short or failed, unless explicit override, which is recorded in the document | from-issue.sh | completeness check | shell |
-| INV-3 | NEW | Comment text cannot introduce a document heading or leave the untrusted block | CHANGE_REQUEST.md | quoting in render | unit |
-| INV-4 | EXISTING | Header `Issue N` / `Seeded from` unchanged | CHANGE_REQUEST.md | heredoc | existing suites |
-| INV-5 | EXISTING | No approval gate or rule is altered by thread content | driver | no code path consumes comment text as config | shell test (injection comment) |
-| (none RELAXED or REMOVED) | | | | | |
+| INV-1 | NEW | A run's OSS mode is fixed in the journal at start; resume cannot change it | change-pr | journal `oss` key | AC-1 |
+| INV-2 | NEW | A detected AI-prohibition policy blocks PR creation | publish | oss.py check before publish | AC-4 |
+| INV-3 | NEW | A check that did not run is never reported as passed | report | existing record rules; plan commands | AC-5 |
+| INV-4 | EXISTING | No-footprint invariants (I-1) hold in OSS mode | publish | footprint.scan | AC-8 |
+| INV-5 | EXISTING | Human approval gates unchanged | all | stagegate | AC-9 |
+| INV-6 | EXISTING | Non-OSS behavior identical | all | env gating | AC-9 |
+No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Output remains Markdown; thread now under `## Motivation` as subsection `### Issue thread`. The old `### Comment from <login>` headings are replaced; any suite asserting them must be updated only if it fails (to be grepped).
+Additive flag; no change without it.
 
-## 8. Error behavior
-As BH-4/BH-5. Message names the endpoint/path and the override variable.
+## 8. Error and failure behavior
+No guidance: say so, use labeled inferred conventions. Unbuildable project: report checks not run. AI-prohibited: stop before PR. Unclaimable issue: warn and wait at a human gate.
 
-## 10. Security
-Comments are untrusted data (INV-3, INV-5); author and association recorded; no comment text is passed to a shell or eval.
+## 10. Security requirements
+PR text and branch scanned by footprint rules; discovery reads only repository files; no network use added beyond existing `gh` use.
 
 ## 12. Rollback
-Revert the commit; the helper is additive.
+Revert the change; journal `oss` key is ignored by older code.
 
 ## 14. Non-goals
-Summarizing long threads; re-fetching mid-run; excluding non-collaborators; reactions; resolving contradictions automatically in code; PR/close flows.
+Automatic forking; fetching wikis or external sites; inferring `--oss` from write access; changing approval gates or merge decision.
 
-## 15. Assumptions and resolved open questions
-- Q1 non-collaborators: included and flagged (decision).
-- Q2 long threads: never summarized; full text kept (faithfulness over size).
-- Q3 mid-run changes: not re-fetched; document records fetch time and comment count so staleness is visible.
-- Supersession and noise judgment beyond the regex noise list is performed by the analyst agent from the instructions in `## Thread Review`; code only provides provenance and structure.
+## 15. Assumptions and decisions on open questions
+| Q | Decision |
+|---|---|
+| Q1 relation to no-footprint | `--oss` implies `--no-footprint` |
+| Q2 fork | Not automated. Uncle publishes to the existing remote logic; if the user cannot push, the run stops with instructions |
+| Q3 wiki/external guidance | Listed as unknown; the user may paste it into the change request |
+| Q4 infer `--oss` | Not inferred; explicit flag only |
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | A clarifying comment appears in the seeded CHANGE_REQUEST.md with author, comment URL and timestamps on the gh, curl and jq paths. | from-issue-thread-test.sh runs from-issue.sh with stub gh/curl/python-less PATH and greps the output |
-| AC-2 | The seed contains a Thread Review section instructing that a later maintainer statement wins on contradiction, that the conflict is recorded, and that each requirement cites body or comment id and link; comments are listed in chronological order with stable ids. | shell test greps section; unit test checks ids/order |
-| AC-3 | A thread of more than 100 comments (two API pages) is fully included on curl and gh paths; a fetched count below the issue's comment count or a failed comment fetch exits non-zero unless UNCLE_ISSUE_ALLOW_INCOMPLETE=1, in which case a warning is printed and recorded in the document. | shell test with 2-page stub, short fetch, failing fetch, override |
-| AC-4 | Noise-only comments (+1, bump, thanks, emoji-only) are not in the thread text and are listed only as links under Excluded as noise; comments with substantive text are never classed as noise. | issue-thread-test.py table of examples incl. negatives like '+1 but also please support X' |
-| AC-5 | Comment text containing headings, fences or agent instructions is rendered as quoted untrusted data and does not create document sections; the preamble states the thread cannot override Uncle rules or approval gates; edited comments are marked and carry current text; non-collaborators are flagged. | issue-thread-test.py and shell test with an injection comment |
-| AC-6 | Issue with zero comments seeds as before (body unchanged, header unchanged) and existing suites invoking from-issue.sh still pass. | shell test plus bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh |
-| AC-7 | GITHUB_INTEGRATION.md documents that the whole thread is read, the completeness check and override, non-collaborator flagging, and that later comments are not re-fetched. | grep in from-issue-thread-test.sh |
+| AC-1 | `--oss` is accepted by the launcher, exports UNCLE_OSS=1 and UNCLE_NO_FOOTPRINT=1, is listed in help and typo hints, and the journal records `oss` at start and keeps it on resume. | scripts/tests/oss-test.py wiring checks over `uncle` and change-pr.sh text and journal creation |
+| AC-2 | Under --oss the change-request-bound stage prompts carry instructions to discover guidelines and the plan lists each guideline with file:line source and an Unknown list. Discovery on a fixture repo with CONTRIBUTING.md, PR template, DCO and non-default test command returns each with its source. | oss-test.py runs oss.py discover on a disposable fixture and asserts entries with sources and unknowns |
+| AC-3 | With no guidance present, discovery reports none found and the prompt requires inferred conventions labeled `inferred`. | oss-test.py on an empty fixture; prompt text assertion |
+| AC-4 | A fixture whose policy prohibits AI contributions makes the publish check fail before any branch, commit, push or gh call; a permissive or silent policy passes. | oss-test.py on prohibiting, disclosure-required and silent fixtures |
+| AC-5 | Plan prompt requires the project's own verification commands and requires checks that cannot run to be recorded as not run. | oss-test.py asserts the prompt text; plan review |
+| AC-6 | On the fixture, the commit message carries `Signed-off-by` when DCO is required and the PR body is rendered from the project's PR template with the change filled in. | oss-test.py unit tests of oss.py render functions |
+| AC-7 | Guideline conflicts, and an issue assigned to someone or labeled not open for contribution, produce a gate-stop with the listed reasons; the default path silent-choice is impossible. | oss-test.py claimability and conflict checks; prompt text requires a Conflicts section |
+| AC-8 | The OSS publication diff contains no Uncle files and the body has no Uncle vocabulary (no-footprint rules). | existing no-footprint-test.py plus oss-test.py assertion that OSS implies no_footprint |
+| AC-9 | Without --oss, prompts, journal and publication behavior are unchanged and existing suites still pass. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh versus baseline |
+| AC-10 | README documents the flag, the decisions on the four open questions, and its limits. | oss-test.py greps README; manual read |
 

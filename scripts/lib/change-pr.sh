@@ -409,6 +409,47 @@ def bare():
         return os.environ.get('UNCLE_NO_FOOTPRINT') == '1'
 
 
+def oss_mode():
+    # --oss mode: the journal's recorded value is authoritative (missing key means false); the environment only
+    # selects it before a journal exists. Publication never consults the environment once a journal is present.
+    try:
+        return bool(json.loads(JOURNAL.read_text()).get('oss'))
+    except (OSError, ValueError, AttributeError):
+        return os.environ.get('UNCLE_OSS') == '1'
+
+
+def oss_lib():
+    import sys as _sys
+    lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+    if lib not in _sys.path:
+        _sys.path.insert(0, lib)
+    import oss as module
+    return module
+
+
+def oss_compose(summary, manual, body, message):
+    # The body and commit message submitted to gh/git are the outputs of render_pr_body and signoff.
+    module = oss_lib()
+    entries = module.discover('.')['guidelines']
+    template = ''
+    for rel in module.PR_TEMPLATES:
+        if os.path.isfile(rel) and os.path.realpath(rel).startswith(os.path.realpath('.') + os.sep):
+            template = read(Path(rel))
+            break
+    if template:
+        body = module.render_pr_body(template, summary, manual)
+    if module.dco_required(entries):
+        name, email = git('config', 'user.name'), git('config', 'user.email')
+        if not name or not email:
+            raise ValueError('DCO sign-off is required but git user.name/user.email are not set.')
+        message = module.signoff(message, name, email)
+    return body, message
+
+
+def oss_title(title):
+    return oss_lib().apply_title_format(title, oss_lib().discover('.')['guidelines'])
+
+
 def footprint():
     import sys as _sys
     lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
@@ -1715,6 +1756,9 @@ def start_build():
              phase='started', url='', number=None, early_ref=False)
     if os.environ.get('UNCLE_NO_FOOTPRINT') == '1':
         j['no_footprint'] = True
+    if os.environ.get('UNCLE_OSS') == '1':
+        j['oss'] = True
+        j['no_footprint'] = True
     default = default_branch(remotes)
     if default is not None:
         target = current_branch if current_branch != default else branch_name(j)
@@ -1935,6 +1979,11 @@ def record_pr(j, row):
 
 
 def handoff(j):
+    # --oss: the policy check runs first, before any branch, commit, push or gh call; a refusal aborts.
+    if j.get('oss'):
+        ok, reason = oss_lib().check_publish('.')
+        if not ok:
+            raise ValueError(reason)
     if j.get('phase') == 'handoff-attested':
         raise ValueError('this change was handed off to the host; rerun the final audit to publish normally')
     # Recover an exact commit that completed immediately before its journal
@@ -2062,7 +2111,11 @@ def handoff(j):
             body = fp.render_body(summary, change_request_section('Motivation|Why|Background'), manual,
                                   'Opened as a draft pending maintainer review.' if held else '', closing,
                                   policy['disclosure'])
+            if j.get('oss'):
+                title = oss_title(title)
             message = fp.render_message(title, summary, policy['trailer'])
+            if j.get('oss'):
+                body, message = oss_compose(summary, manual, body, message)
             fp.scan({'title': title, 'body': body, 'message': message, 'branch': j['head_branch']},
                     policy['name_uncle'])
             j.update(phase='prepared', title=title, body=body, message=message)
@@ -2241,6 +2294,9 @@ def main():
         if carried:
             j['base_checkout_branch'] = carried
         if nf_mode:
+            j['no_footprint'] = True
+        if oss_mode():
+            j['oss'] = True
             j['no_footprint'] = True
         if not j['origin']:
             j['audit_remotes'] = remote_configuration()

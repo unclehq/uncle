@@ -457,6 +457,24 @@ preview_run() {
 . "$ROOT/scripts/lib/progress.sh"
 . "$ROOT/scripts/lib/issue-close.sh"
 . "$ROOT/scripts/lib/change-pr.sh"
+
+# --oss mode: the journal's recorded value is authoritative on resume (missing key means false); a conflicting flag or
+# environment is rejected, never silently followed. Without a journal the flag/environment decides and implies no-footprint.
+change_oss_resolve() {
+    local j=".uncle/workflow/pr/journal.json" v
+    if [[ -s "$j" ]]; then
+        v="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1])).get("oss") else "0")' "$j" 2>/dev/null)" || v=0
+        if [[ "$v" == 1 ]]; then
+            export UNCLE_OSS=1 UNCLE_NO_FOOTPRINT=1
+        elif [[ "${UNCLE_OSS:-}" == 1 ]]; then
+            printf 'This run was not started with --oss; refusing to switch modes on resume.\n' >&2
+            exit 2
+        fi
+    elif [[ "${UNCLE_OSS:-}" == 1 ]]; then
+        export UNCLE_NO_FOOTPRINT=1
+    fi
+}
+change_oss_resolve
 [ -r "$ROOT/scripts/lib/finished-extras.sh" ] && . "$ROOT/scripts/lib/finished-extras.sh" || true
 declare -f finished_extras > /dev/null || finished_extras() { :; }
 
@@ -2106,6 +2124,8 @@ bind_change_request_source() {
     [[ -s "$DOCUMENT_BUDGET_SOURCE" ]] || { printf '%s\n' "$prompt_file"; return 0; }
 
     local bound_prompt="$LOG_DIR/${log_name}.change-request-bound-prompt.md"
+    local oss_appendix=""
+    [[ "${UNCLE_OSS:-}" != 1 ]] || oss_appendix="$ROOT/prompts/change/oss-guidelines.md"
     {
         cat "$prompt_file"
         cat <<'CHANGE_REQUEST_SOURCE'
@@ -2120,6 +2140,7 @@ they do not replace its issue identity or requested outcome.
 CHANGE_REQUEST_SOURCE
         printf 'Selected path: %s\n\n' "$DOCUMENT_BUDGET_SOURCE"
         cat "$DOCUMENT_BUDGET_SOURCE"
+        [[ -z "$oss_appendix" ]] || { printf '\n\n'; cat "$oss_appendix"; }
     } > "$bound_prompt"
     printf '%s\n' "$bound_prompt"
 }
@@ -4166,6 +4187,13 @@ while true; do
             # One consistency check over the finished plan before anyone approves it; its own timed stage and fail-open
             # (scripts/lib/change-plan-duties-stage.sh).
             change_plan_duties_stage || true
+            if [[ "${UNCLE_OSS:-}" == 1 ]]; then
+                # --oss: list conflicts and issue warnings before the approval gate; nothing is chosen silently.
+                if oss_reasons="$(python3 -I "$ROOT/scripts/lib/oss.py" gate-reasons --plan .uncle/docs/CHANGE_PLAN.md \
+                        --issue .uncle/workflow/issue.json 2>&1)"; then :; else
+                    printf 'OSS gate: resolve before approving:\n%s\n' "$oss_reasons" | tee .uncle/workflow/oss-gate.txt
+                fi
+            fi
             set_state WAIT_ANALYSIS_APPROVAL
             ;;
 

@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 276
+Issue 282
 
-Seeded from [unclehq/uncle#276](https://github.com/unclehq/uncle/issues/276).
+Seeded from [unclehq/uncle#282](https://github.com/unclehq/uncle/issues/282).
 
 ## Change Type
 
@@ -10,58 +10,50 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Hand-off builds with no base commit publish no attestation or audit findings: every hosted PR is a non-draft that says "NOT VERIFIED, do not trust its attestation", even when the audit is NOT_READY
+Review the full issue thread, including comments, when creating a change request
 
 ## Motivation
 
-## What happened
+## Summary
 
-This was a hosted, unattended build in hand-off mode (`UNCLE_PUBLISH_MODE=handoff`, `UNCLE_HOSTED=1`). The host's build script set up the sandbox work tree from the target repository's files but not its history. The target repository has a commit on `main`. The sandbox had none:
+When Uncle builds a change request from a GitHub issue, it should read the whole issue: the body and every comment in the thread. The change request must reflect what the thread asks for now, not only what the opening post said.
 
-```
-[+00:00:00] Initialized Git repository in /home/daytona/work
-Run policy: no git history to branch from; continuing without a run branch.
-...
-$ git log
-fatal: your current branch 'master' does not have any commits yet
-```
+## Current behavior
 
-At the end of the build:
+`scripts/from-issue.sh` fetches comments with `gh issue view --json ...,comments` and, on the Python path, appends each comment to the body under a `### Comment from <author>` heading. That works only on one path:
 
-```
-[+00:14:00] Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in the PR and attestation).
-[+00:14:00] Current state: COMPLETE
-[+00:14:00] Unattended: no base commit, so no PR was made.
-[+00:14:00] PR: none (no base commit)
-```
+- **curl fallback** (no `gh`, or `gh` not authenticated): the REST `issues/<n>` endpoint does not include comments, so they are silently dropped.
+- **jq fallback** (no `python3`): only `.body` is extracted, so comments are dropped.
+- **Long threads:** there is no check that the fetch returned every comment, so a truncated or paginated fetch is indistinguishable from a complete one.
+- **Thread meaning:** comments are concatenated in order, with no handling of the cases where the thread changes the request.
 
-Neither `.uncle/attestation.json` nor a hand-off record was written. The host then published the pull request itself:
+## Desired behavior
 
-- it was a normal pull request, not a draft, even though the audit was `NOT_READY`
-- it contained only the three changed files: no attestation and no audit findings
-- its description quoted `uncle verify` run in the sandbox before publishing:
-  ```
-  nothing to verify: HEAD does not exist (this repository has no commits yet; commit the build, including .uncle/attestation.json, then run uncle verify again)
-  NOT VERIFIED
-  This change could not be verified. Do not trust its attestation as it stands.
-  ```
+- **Every fetch path returns the full thread.** The curl path also calls `issues/<n>/comments` and follows pagination. The jq path includes comments. A run that cannot fetch comments says so instead of proceeding as though there were none.
+- **Completeness is checked.** Uncle compares the number of comments it received with the issue's comment count and fails loudly, or warns, on a mismatch.
+- **The thread is reviewed, not just appended.** When drafting the change request, Uncle identifies:
+  - clarifications and added requirements from comments;
+  - comments that supersede or contradict the opening post (the later maintainer statement wins, and the change request says so);
+  - edited comments and the body's current text, not an earlier version;
+  - discussion that is not a requirement, such as +1s and status chatter, kept out of the requirements.
+- **Provenance is preserved.** Each requirement in the change request traces back to the body or to a specific comment (author and link), so a reviewer can check the source.
+- **Untrusted input.** Comment text is untrusted input, the same as the body. It cannot override Uncle's rules or approval gates. Comment authorship is recorded, and the existing handling for untrusted piped text applies.
 
-The previous hand-off pull request from the same host, a different build, has the same `NOT VERIFIED` text. So every pull request this host publishes tells the reviewer not to trust it, and none of them carries the audit's verdict or findings.
+## Acceptance criteria
 
-## Cause
+- A test issue with a clarifying comment produces a change request that includes that clarification on the `gh`, curl and jq paths.
+- A comment that contradicts the body produces a change request that follows the later statement and records the conflict.
+- A thread longer than one API page is fully included, and a short fetch fails or warns.
+- Noise-only comments do not appear as requirements.
+- Each requirement cites its source (body or comment).
+- A comment containing instructions aimed at the agent does not change Uncle's behavior.
+- README or GITHUB_INTEGRATION.md documents that the whole thread is read.
 
-1. With `UNATTENDED=1` and no `HEAD`, the workflow skips `change_pr_complete` entirely ([`scripts/change-workflow.sh#L5261-L5274`](https://github.com/unclehq/uncle/blob/3cecf2b3e46d59fa00389edd50ccb0fc93b2679a/scripts/change-workflow.sh#L5261-L5274)). That function writes the hand-off record and attestation and makes a `NOT_READY` build a draft (issue 107). Without a base commit, hand-off mode therefore has nothing to hand off.
-2. The line printed just before it ("findings are in the PR and attestation") is unconditional, so it is wrong on this path.
-3. The host's build script copies the target files into a fresh repository instead of cloning or fetching the base branch, so every hosted build takes this path. That script is outside this repository; this item is for the release owner.
+## Open questions
 
-## Requested fix
-
-1. In hand-off mode with no base commit, either commit the starting tree as a base before the build starts, so `HEAD` exists, or still write the hand-off record with the attestation, the audit verdict, its findings and `draft: true` when the audit isn't `READY`.
-2. Print "findings are in the PR and attestation" only when they will be.
-3. Build script (release owner): clone or fetch the target repository's base branch into the sandbox so the build has a base commit and a run branch. Open `NOT_READY` builds as drafts with the verdict and findings in the description. Don't quote `uncle verify` output from a sandbox with no `HEAD`.
-4. Add a test: an unattended hand-off build whose work tree has no commits still produces a hand-off record with the attestation, the verdict and the draft flag.
-
-Related: #233 (hand-off mode left the attestation out of `handoff.json`).
+1. Should comments from non-collaborators be included by default, flagged, or excluded?
+2. Should a very long thread be summarized, and how does the summary stay faithful to the source?
+3. How should a thread that changes after the change request is drafted (new comments mid-run) be handled?
 
 ## Observed Current Behavior
 

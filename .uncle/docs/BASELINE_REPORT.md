@@ -1,65 +1,66 @@
-# Baseline report
+# Baseline report (Issue 282)
 
-Omitted sections: Reproduction (done by reading code and the issue log, not run); Performance (none)
+Omitted sections: Reproduction result (not a bug repro; behavior gap observed by reading code); Existing failures/flaky (driver baseline is authority, none documented in repo for this area)
 
 ## 1. Change-request summary
-Issue 276 (CHANGE_REQUEST.md). An unattended hand-off build (`UNCLE_PUBLISH_MODE=handoff`, `UNATTENDED=1`) whose work tree has no commit publishes nothing: no `.uncle/attestation.json`, no `handoff.json`, no audit verdict/findings, no `draft` flag. The completion text also claims findings are in the PR.
+CHANGE_REQUEST.md (Issue 282): `scripts/from-issue.sh` must read the whole issue thread on every fetch path, verify completeness, preserve provenance, treat comments as untrusted, and document it.
 
 ## 2. Repository architecture
-Bash drivers (`scripts/change-workflow.sh`) source libs in `scripts/lib/`. PR/hand-off engine is an embedded Python program in `scripts/lib/change-pr.sh` (`change_pr_engine <action>`), plus `scripts/lib/handoff_export.py`. Tests are `scripts/tests/*-test.sh|py`, run by `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (default tier = `scripts/tests/critical-suites.txt`).
+Shell driver scripts in `scripts/`, Python helpers in `scripts/lib/`, suites in `scripts/tests/` (`*-test.sh`, `*-test.py`), critical tier listed in `scripts/tests/critical-suites.txt`. Runners: `scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh`.
 
 ## 3. Relevant code paths
-- `scripts/change-workflow.sh:44-48` run policy call; `:3997` `change_pr_engine start`.
-- `scripts/lib/run-policy.sh:158-166` `run_policy_change_branch`: unborn HEAD -> prints "no git history to branch from" and returns 0.
-- `scripts/change-workflow.sh:5269-5284` unattended completion: `git rev-parse --verify HEAD` else prints "Unattended: no base commit, so no PR was made." and skips `change_pr_complete`.
-- `scripts/lib/change-pr.sh:198-214` `change_pr_complete_route` hand-off branch -> `attest-handoff` (`:815`) then `handoff_export.py`.
-- `scripts/lib/change-pr.sh:903-911` `head()`/`branch()` need a commit; audit action creates the journal with `original_head=head()` (~`:2064`); `start_build` returns on unborn HEAD or no remote (`:1550-1557`).
-- `scripts/lib/handoff_export.py:83-123` writes `.uncle/handoff/handoff.json` (`draft = not verdict.startswith('READY')`, `base_commit`, attestation, verdict); `changes()` tolerates empty base.
-- `scripts/lib/audit-verdict.sh:216` unconditional "findings are in the PR and attestation".
+- `scripts/from-issue.sh:613-615` `fetch_with_gh`: `gh issue view --json title,body,url,state,labels,comments`.
+- `scripts/from-issue.sh:617-620` `fetch_with_curl`: only `GET /repos/o/r/issues/N`; no comments endpoint, no pagination.
+- `scripts/from-issue.sh:622-639` fetch selection (`USED_GH`), failure exit.
+- `scripts/from-issue.sh:641-668` parsing: python path appends `### Comment from <author>` per comment (lines 644-658); jq path extracts only `.body` (660-663).
+- `scripts/from-issue.sh:802-813` attachment freeze applied to `$BODY` (comments are inside BODY on python path).
+- `scripts/from-issue.sh:824-882` `write_change_request` heredoc places `$BODY` under `## Motivation`.
+- `scripts/from-issue.sh:734` `fetch_kind` passed to `change_pr_engine`.
+- Docs: `GITHUB_INTEGRATION.md` "Import an issue" (lines 11-15) says only title and body.
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Hand-off/unattended build, HEAD exists, audit NOT_READY | handoff.json with attestation, verdict, `draft:true` | handoff-export-test.py; change-pr.sh:207 | Yes |
-| B-2 | Any run, unborn HEAD, non-hand-off | run policy skips branch with message | run-policy.sh:164 | Yes |
-| B-3 | Unattended, unborn HEAD | no PR/hand-off, prints "no base commit" | change-workflow.sh:5281 | Modify only for hand-off mode |
-| B-4 | NOT_READY final audit, gate off | prints "findings are in the PR and attestation", state COMPLETE | audit-verdict.sh:216 | Modify wording only when untrue |
-| B-5 | Non-hand-off unattended, HEAD exists | `change_pr_complete` publishes (draft if not READY) | unattended-test.sh:366-380 | Yes |
+| B-1 | Import issue via authenticated gh, python3 present | Body + each non-empty comment appended as `### Comment from <login>` under Motivation | from-issue.sh:644-658 | Yes (content), format may change |
+| B-2 | Import via curl fallback | Comments silently absent | from-issue.sh:617-620 | No (defect) |
+| B-3 | Import with jq only | Body only, comments absent | from-issue.sh:660-663 | No (defect) |
+| B-4 | Fetch failure on all paths | Prints failure, exit 1 | from-issue.sh:636-640 | Yes |
+| B-5 | Empty title | Exit 1 with rate-limit hint | from-issue.sh:670-673 | Yes |
+| B-6 | Change request written | Header has `Issue N` and `Seeded from [o/r#N](url)`; fixed section skeleton | from-issue.sh:824-882 | Yes |
+| B-7 | Neither python3 nor jq | Exit 1 | from-issue.sh:665-668 | Yes |
+| B-8 | gh succeeded | `USED_GH=1` (gates later issue close/PR flow) | from-issue.sh:626-631 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | A NOT_READY verdict is never published as a ready PR | handoff_export.py:100 draft flag; PR draft path | handoff-export-test.py | High |
-| I-2 | Run never works on main/preexisting branch when history exists | run-policy.sh | run-policy-test.sh | High |
-| I-3 | Workflow never commits the project without consent in non-hand-off mode | CLAUDE.md/driver design | various | Medium |
+| I-1 | Issue metadata header (`Issue N`, seed URL) is first and parseable | heredoc 835-839 | worktree-run-test.sh, others (grep from-issue.sh) | Medium |
+| I-2 | Attachment freeze runs on body text before seeding | 802-813 | not confirmed | Low |
+| I-3 | gh-fetched issue sets USED_GH only on non-empty output | 626-631 | worktree-run-test.sh stub gh | Medium |
 
-## 6. Contracts
-`handoff.json` schema `SCHEMA` in handoff_export.py: fields base_commit, draft, audit_verdict, attestation, changes, tree. `base_commit` empty means empty tree. Host script is outside this repo.
+## 6. Current contracts
+CLI: `from-issue.sh` args unchanged by baseline. Output file `.uncle/docs/CHANGE_REQUEST.md` (or root override via `generated_input_path`). gh stub in tests answers `issue view` and label lookup only (worktree-run-test.sh:108).
 
 ## 7. Existing automated-test coverage
-`unattended-test.sh` (stubs `change_pr_complete`, harness extracts driver functions), `handoff-export-test.py` (real git fixtures), `run-policy-test.sh`, `pr-auto-publish-test.sh`, `pr-publish-reason-test.sh`. No test covers unborn HEAD in hand-off mode. The shell and Python runners use separate temp dirs and share no ports, so they run as one parallel group.
+No suite targets comment handling. Suites invoking from-issue.sh: install-safety-test.sh, pr-auto-publish-test.sh, worktree-run-test.sh, plus several `*-test.py` (headless-run, home-actions, repl-session, implementation-completion, gitignore-post-push). Shell and Python runners use separate temp dirs and no shared ports, so they run as one parallel group (`1 2`).
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh` (named in the task's runner guidance). Not run here; the driver baseline is authoritative. Some Python suites are documented as failing on a clean checkout.
-
-## 10. Existing failures
-Unknown until driver baseline; see `.uncle/workflow/green-check.baseline.tsv`.
+Commands come from `scripts/run-shell-tests.sh` and `scripts/run-python-tests.sh` (CLAUDE.md/driver guidance). No results produced here; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites may already fail on a clean checkout. Parallel group: `1 2`.
 
 ## 12. Likely change surface
-`scripts/lib/run-policy.sh`, `scripts/change-workflow.sh` (unattended completion text), `scripts/lib/audit-verdict.sh` (message), new test, `scripts/tests/critical-suites.txt`.
+`scripts/from-issue.sh` (fetch + parse + seed template), new `scripts/lib/issue_thread.py`, `GITHUB_INTEGRATION.md`, new tests, `critical-suites.txt`.
 
 ## 13. Regression-sensitive components
-run-policy branch creation; unattended completion for non-hand-off runs; PR engine journal binding to `original_head`.
+Tests that stub `gh` for from-issue.sh (worktree-run-test.sh stub only handles `issue view` and label lookups: any new `gh api` call must tolerate a stub that returns nothing/fails without breaking those suites); attachment freezer; branch-name derivation using TITLE.
 
 ## 14. Outside the change
-Host build script (release owner, not in repo); `handoff_export.py` schema; PR publication for repos with history; the PR text quoting `uncle verify`.
+PR publishing, issue closing, mode detection, workflow drivers, new-application brief (`write_new_project_brief`) beyond sharing BODY.
 
 ## 15. Unknowns and assumptions
-- A1: `scripts/run-shell-tests.sh -- <name>` selects one suite (same form as the Python runner); implementer confirms with `--help`.
-- A2: With a seeded base, the audit action creates the PR journal even with no remote (journal creation at change-pr.sh ~2064 is not gated on remote); to be confirmed by the new test.
+- The 'existing handling for untrusted piped text' referenced in the request was not located in from-issue.sh; assumed to be elsewhere; the plan adds its own neutralization for comments.
+- Unknown whether other suites assert exact `### Comment from` text (to be grepped at implementation).
 
 ## 16. Initial risk
-Medium: a synthetic base commit differs from the host's real base; handoff.json `base_commit` will then name the seed commit, which the host must treat as local-only (release-owner item).
+Medium: stubbed gh in existing suites may break if new gh calls fail hard; mitigated by treating comment-fetch failure on a stub as explicit, tested behavior.
 
 ## Exact build and test commands executed
 

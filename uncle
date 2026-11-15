@@ -124,6 +124,8 @@ passes. It cannot be combined with other startup options or --audit.
 --runs lists the runs across this project's git worktrees (see
 `from-issue.sh --worktree`): one line per worktree holding a run, as
 `#<issue> <state> <locked|idle> <path>`; `no runs` or `no worktrees` otherwise.
+--no-footprint (or UNCLE_NO_FOOTPRINT=1) makes a change run publish a clean PR: only
+source files, a maintainer-style description, no Uncle artifacts or attestation.
 --unattended is passed to the driver you pick: it runs every human gate
 without a person, records what nobody reviewed, and reports that at the end.
 --noui (or UNCLE_NOUI=1) runs a startup action headlessly: no curses, plain
@@ -160,6 +162,7 @@ UNCLE_STDIN_TTY=0
 [[ ! -t 0 ]] || UNCLE_STDIN_TTY=1
 UNCLE_FLAG_ATTENDED=""
 UNCLE_FLAG_UNATTENDED=""
+UNCLE_FLAG_NO_FOOTPRINT=""
 UNCLE_CR_DIR=""
 UNCLE_PENDING_STDIN=""
 # 1 once a startup option (bare --application, bare --issue,
@@ -338,13 +341,14 @@ while [[ $# -gt 0 ]]; do
             done
             for _a in "$@"; do
                 case "$_a" in
-                    --revalidate|--dry-run|--no-supervisor|--noui|--attended|--unattended|--noinput) ;;
+                    --revalidate|--dry-run|--no-supervisor|--noui|--attended|--unattended|--noinput|--no-footprint) ;;
                     *) printf 'Unknown argument: %s\n' "$_a" >&2; exit "$UNCLE_REFUSE_CODE" ;;
                 esac
             done
             cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/lib/revalidate.py" "${_reval_args[@]}" ;;
         --dry-run|--no-supervisor) shift ;;
         --unattended)  UNCLE_FLAG_UNATTENDED=1; shift ;;
+        --no-footprint) UNCLE_FLAG_NO_FOOTPRINT=1; export UNCLE_NO_FOOTPRINT=1; shift ;;
         --attended)    UNCLE_FLAG_ATTENDED=1; shift ;;
         --noui)        UNCLE_FLAG_NOUI=1; shift ;;
         # Seen by the pre-scan above (it forces the curses UI even with no terminal); nothing more to record here.
@@ -433,7 +437,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --application --issue --change-request --audit --revalidate --dry-run verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --no-footprint --application --issue --change-request --audit --revalidate --dry-run verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else

@@ -1,8 +1,8 @@
 # Change Request
 
-Issue 276
+Issue 280
 
-Seeded from [unclehq/uncle#276](https://github.com/unclehq/uncle/issues/276).
+Seeded from [unclehq/uncle#280](https://github.com/unclehq/uncle/issues/280).
 
 ## Change Type
 
@@ -10,58 +10,47 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Hand-off builds with no base commit publish no attestation or audit findings: every hosted PR is a non-draft that says "NOT VERIFIED, do not trust its attestation", even when the audit is NOT_READY
+--no-footprint: produce a PR with no trace of Uncle
 
 ## Motivation
 
-## What happened
+## Summary
 
-This was a hosted, unattended build in hand-off mode (`UNCLE_PUBLISH_MODE=handoff`, `UNCLE_HOSTED=1`). The host's build script set up the sandbox work tree from the target repository's files but not its history. The target repository has a commit on `main`. The sandbox had none:
+Add a `--no-footprint` mode in which the pull request Uncle produces looks like an ordinary contribution to the target project. No Uncle-created files appear in the PR, and the PR text reads the way a maintainer would want a PR to read, not like an Uncle audit report. The PR honestly discloses that AI assistance was used.
 
-```
-[+00:00:00] Initialized Git repository in /home/daytona/work
-Run policy: no git history to branch from; continuing without a run branch.
-...
-$ git log
-fatal: your current branch 'master' does not have any commits yet
-```
+## Desired behavior
 
-At the end of the build:
+- **No Uncle files in the PR diff.** Nothing under `.uncle/`, no workflow docs (`PROJECT_PLAN.md`, `CHANGE_PLAN.md`, `IMPLEMENTATION_NOTES.md`, verification and audit reports), and no other generated artifact is committed or visible in the PR. Only the intended source changes remain.
+- **No attestation.** This mode does not produce, commit or attach an attestation, and the PR does not reference `uncle verify`.
+- **Maintainer-style PR text.** The title, description and comments follow what an OSS project expects:
+  - what changed and why, linked to the issue it addresses;
+  - how it was tested, in terms of the project's own tests and commands;
+  - notable trade-offs or follow-ups;
+  - no stage logs, gate records, review dispositions, audit tables or Uncle-specific vocabulary.
+- **AI-assistance disclosure.** The PR includes a short, standard disclosure that AI tooling assisted, in the form projects increasingly ask for (a line in the description, and a commit trailer where the project's policy calls for one). It does not name Uncle or describe Uncle's internals unless the user opts in. The human submitter remains the accountable author.
+- **No Uncle residue in the tree.** Uncle's working state lives outside the branch (untracked or out-of-tree) and is never staged.
+- **Normal mode is unchanged.** `--no-footprint` is opt-in and does not alter default behavior.
 
-```
-[+00:14:00] Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in the PR and attestation).
-[+00:14:00] Current state: COMPLETE
-[+00:14:00] Unattended: no base commit, so no PR was made.
-[+00:14:00] PR: none (no base commit)
-```
+## Decisions
 
-Neither `.uncle/attestation.json` nor a hand-off record was written. The host then published the pull request itself:
+- **Attestation:** dropped in this mode.
+- **Disclosure:** included. The mode reduces Uncle's footprint. It does not conceal that AI assisted.
 
-- it was a normal pull request, not a draft, even though the audit was `NOT_READY`
-- it contained only the three changed files: no attestation and no audit findings
-- its description quoted `uncle verify` run in the sandbox before publishing:
-  ```
-  nothing to verify: HEAD does not exist (this repository has no commits yet; commit the build, including .uncle/attestation.json, then run uncle verify again)
-  NOT VERIFIED
-  This change could not be verified. Do not trust its attestation as it stands.
-  ```
+## Open questions
 
-The previous hand-off pull request from the same host, a different build, has the same `NOT VERIFIED` text. So every pull request this host publishes tells the reviewer not to trust it, and none of them carries the audit's verdict or findings.
+1. **Footprint boundary.** Define a concrete, testable boundary: files, PR title and body, commit messages and trailers, branch names and labels.
+2. **Human gates.** The approval gates and the human merge decision stay exactly as they are. This issue must not weaken them.
+3. **Disclosure wording.** Decide the default text and trailer format, and how a project's own contribution policy can override them.
+4. **Agent CLI attribution.** Decide how the mode interacts with agent CLIs that add their own attribution lines by default.
 
-## Cause
+## Acceptance criteria
 
-1. With `UNATTENDED=1` and no `HEAD`, the workflow skips `change_pr_complete` entirely ([`scripts/change-workflow.sh#L5261-L5274`](https://github.com/unclehq/uncle/blob/3cecf2b3e46d59fa00389edd50ccb0fc93b2679a/scripts/change-workflow.sh#L5261-L5274)). That function writes the hand-off record and attestation and makes a `NOT_READY` build a draft (issue 107). Without a base commit, hand-off mode therefore has nothing to hand off.
-2. The line printed just before it ("findings are in the PR and attestation") is unconditional, so it is wrong on this path.
-3. The host's build script copies the target files into a fresh repository instead of cloning or fetching the base branch, so every hosted build takes this path. That script is outside this repository; this item is for the release owner.
-
-## Requested fix
-
-1. In hand-off mode with no base commit, either commit the starting tree as a base before the build starts, so `HEAD` exists, or still write the hand-off record with the attestation, the audit verdict, its findings and `draft: true` when the audit isn't `READY`.
-2. Print "findings are in the PR and attestation" only when they will be.
-3. Build script (release owner): clone or fetch the target repository's base branch into the sandbox so the build has a base commit and a run branch. Open `NOT_READY` builds as drafts with the verdict and findings in the description. Don't quote `uncle verify` output from a sandbox with no `HEAD`.
-4. Add a test: an unattended hand-off build whose work tree has no commits still produces a hand-off record with the attestation, the verdict and the draft flag.
-
-Related: #233 (hand-off mode left the attestation out of `handoff.json`).
+- With `--no-footprint`, the PR diff contains only the intended source changes, with no Uncle-generated files and no attestation.
+- The PR description follows a maintainer-style template (what, why, testing, follow-ups) and contains no Uncle stage, gate or audit content.
+- The PR contains the AI-assistance disclosure and no reference to Uncle unless the user opts in.
+- Without the flag, output is byte-identical to today's.
+- Tests cover the mode, including a regression test that fails if a generated artifact is staged or an audit section leaks into the PR text.
+- README documents the mode, its limits, and the disclosure behavior.
 
 ## Observed Current Behavior
 

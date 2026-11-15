@@ -177,3 +177,6 @@ gitignore-post-push
 
 # Hand-off with no base commit: seed, truthful completion text, no signer invoked.
 handoff-no-base
+
+# Opt-in no-footprint publication mode: bare tree, no attestation, vocabulary scan, mandatory disclosure.
+no-footprint

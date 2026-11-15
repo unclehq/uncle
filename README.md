@@ -210,6 +210,23 @@ Uncle can start from a GitHub issue and carry the change through planning, imple
 
 In attended mode, Uncle shows you the audited diff and asks for approval before it creates the commit, branch, push and pull request. In unattended mode it publishes the pull request itself, as a draft when the final audit is not READY. Either way Uncle stops at the pull request, and your normal GitHub review, CI and merge controls remain the final authority. See [GitHub integration](GITHUB_INTEGRATION.md).
 
+### Publishing without an Uncle footprint (`--no-footprint`)
+
+Pass `--no-footprint` when the pull request should look like an ordinary maintainer contribution. In this mode the published commit and pull request contain only your source changes:
+
+* No `.uncle/` files, root `FINAL_AUDIT.md`, plan or report files (`PROJECT_PLAN`, `CHANGE_PLAN`, `CHANGE_SPEC`, `IMPLEMENTATION_NOTES`, `VERIFICATION_REPORT` at the repository root), attestation files, or managed `.gitignore` lines. Files with similar names in subdirectories are kept.
+* No attestation is produced or attached, and no `uncle/` branch prefix or labels are used (the fallback branch prefix is `change/`).
+* The title, body, commit message and branch name are scanned for Uncle vocabulary. If anything leaks, publication is refused before any branch, commit, push or `gh` write, so you can correct the text and rerun.
+* The pull request body is written in plain maintainer style: what and why, how it was tested (your project's own verification commands), and follow-ups.
+* An AI-assistance disclosure is always present in the body, and by default the commit carries the trailer `Assisted-by: AI tooling`. Set `footprint.disclosure` / `footprint.trailer` in `.uncle/config`, or `UNCLE_FOOTPRINT_DISCLOSURE` / `UNCLE_FOOTPRINT_TRAILER` in the environment (environment wins). An empty disclosure is rejected; an empty trailer omits the trailer. Set `footprint.name_uncle` to true to let the disclosure line name Uncle; nowhere else may.
+
+Limits and disclosure:
+
+* Review gates are not weakened. When the final audit is not READY, or an unattended waiver was used, the pull request is still opened as a draft with one neutral note; the audit details stay local, so you see the findings but the pull request reviewer does not.
+* Repositories that already track excluded artifacts (at `HEAD` or in your index) are rejected at start, with the paths listed, so you can untrack them deliberately.
+* Without the flag, behavior is unchanged. The mode is recorded in the run journal, so a resume cannot flip it.
+* `--no-footprint` hides Uncle from the pull request. It does not remove the AI-assistance disclosure, and you remain responsible for following the target project's contribution policy on AI-assisted changes.
+
 ## Documentation and advanced usage
 
 * [Quickstart](docs/quickstart.md) and [Prerequisites](PREREQUISITES.md)

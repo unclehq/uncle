@@ -1,164 +1,164 @@
-# Change plan (Issue 282)
+# Change plan: `--oss`
 
-Omitted sections: Schema/persistence (none); Migration (none); Concurrency (none); Feature flag (only the incomplete-override env var)
+Issue 283
 
-Issue 282
+Seeded from [unclehq/uncle#283](https://github.com/unclehq/uncle/issues/283).
 
-Seeded from [unclehq/uncle#282](https://github.com/unclehq/uncle/issues/282).
+Omitted sections: Schema (journal key only, see 9); Migration (none); Concurrency (none new); Feature-flag (the flag itself)
 
 ## 1. Selected technical approach
 
-New pure Python helper `scripts/lib/issue_thread.py` that takes issue JSON and a list of REST comment objects and returns rendered Markdown plus counts. `from-issue.sh` fetches comments on every path via the REST comments endpoint (`gh api --paginate` on gh path; paged `curl` with `per_page=100` on curl path), verifies count against the issue's `comments` field, and feeds the helper. jq fallback builds an equivalent block with one jq filter (no noise classification beyond a simple filter; same quoting).
+- New pure module `scripts/lib/oss.py`: `discover(root)` returns guideline entries `{kind, text, source file:line}` plus an unknown list. Discovery reads only files whose fully resolved path (symlinks followed) lies inside the resolved repository root; any guidance path whose resolved target lies outside the root is rejected, reported in the unknown list with its path and reason, and its contents are never read or reproduced. Also: `ai_policy(entries)` returns `prohibited|disclose|allowed|unknown`; `dco_required`; `claimable(issue_json)`; `render_pr_body(template, summary, testing)`; `signoff(message, name, email)`; CLI `oss.py check-publish` exits nonzero with a reason on prohibition.
+- New prompt appendix `prompts/change/oss-guidelines.md`, appended by `bind_change_request_source` only when `UNCLE_OSS=1`. It tells the stage to read the guidance files, write a guidelines table with `file:line` sources, list unknowns, label inferred conventions `inferred`, use the project's own verification commands (not Uncle's) and a Conflicts section, and states checks that cannot run are recorded not run.
+- `uncle` parses `--oss`, exports `UNCLE_OSS=1` and `UNCLE_NO_FOOTPRINT=1`.
+- `change-pr.sh` records `oss` in the journal, runs `oss.py check-publish` before any write, signs off commits when DCO is required, and builds the body from the project's PR template when one exists.
 
-Decisions (D-):
-
-| ID | Decision | Reason |
-|---|---|---|
-| D-1 | Use REST comments on all paths (gh via `gh api`) | one shape: has html_url, user, author_association, created_at, updated_at; count available from issue `comments` |
-| D-2 | Pagination: both gh and curl fetch until pagination is exhausted (curl loops `page=N` with `per_page=100` until a page has <100 items), with no fixed page-count cap | BH-6 requires the full thread; a cap would silently truncate very large threads, and the count check against the issue's `comments` field still guards completeness |
-| D-3 | Mismatch fails by default; `UNCLE_ISSUE_ALLOW_INCOMPLETE=1` warns and records it. Under override after a final-attempt failure, retain only fully validated complete pages from that last attempt (never pages from an abandoned attempt), discard the failed page, and record fetched/expected counts and the failure in the seed, marking the thread incomplete | request says fail loudly or warn; defined retention keeps the seed deterministic and testable |
-| D-4 | Quote each comment line with `> ` | prevents heading/fence injection (INV-3) |
-| D-5 | Noise = whole comment, after trim, matches a small regex list (+1, -1, bump, thanks, thank you, same here, me too, emoji-only, 👍). Noise is filtered after ids are assigned (D-7), so gaps in the comment-N sequence are expected and the count of excluded noise comments is reported. | conservative; substantive text never excluded |
-| D-6 | Judgment of supersession is delegated to the analyst via `## Thread Review` instructions placed in the seed. Only comments by maintainers (OWNER, MEMBER, COLLABORATOR associations per D-7) receive later-statement precedence; all other or missing associations receive the non-collaborator flag and never receive automatic precedence, and comment text claiming authority cannot confer it. | supersession is not decidable in code, but the trust mapping is explicit and identical in rendering, Thread Review instructions, and tests |
-| D-7 | Sort comments by created_at ascending, break ties by numeric REST comment id ascending; edits (updated_at) never affect order. Assign `comment-1..n` after sorting and BEFORE noise filtering, so excluded noise comments still consume ids; id stability applies to the fetched snapshot only. Each shown comment lists author, author_association, url, created, edited marker. Classification mapping (single, shared with D-6 and used by the renderer, Thread Review text and tests): OWNER, MEMBER, COLLABORATOR = maintainer; every other value (CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE) and a missing/null/empty/unrecognized author_association = flagged non-collaborator. | provenance; deterministic ids that independent tests can assert and that do not shift with noise classification; one mapping shared with D-6 so the flag and maintainer precedence never disagree |
-| D-8 | gh path: keep existing `gh issue view` for title/labels; comments from `gh api`; if `gh api` fails at any page, discard all gh comment results and the curl fallback restarts pagination from page 1 (replace, never merge); if the curl attempt also fails, BH-5. Existing import fixtures are updated to stub issue `comments` counts and every comment-fetch path (gh api, curl fallback) without network access; original assertions are preserved and fixture edits are recorded as renewed-authority items. | stub gh in existing tests stays compatible, but a stub that answers `gh api` with nothing would otherwise reach real curl or fail the completeness check, so fixtures must stub every path offline; replacing rather than merging prevents duplicate comments and inconsistent partial seeds. |
-| D-9 | Partial fetch under override: if a later page fails (and curl fallback also fails), retain all fully validated complete pages, discard the failed page, and record fetched/expected counts and the failure reason in the seed. Without the override the import exits 1 and writes no seed. A curl fallback restarts pagination and replaces gh results. | INV-1 forbids silently omitting fetched comments; a defined retention rule makes the second-page-failure case testable (BH-5) |
-
-- Association mapping (applies identically on gh/Python, curl/Python and curl/jq paths): OWNER, MEMBER, COLLABORATOR -> maintainer, no flag; CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE, and any missing/null/empty/unknown value -> flagged non-collaborator, no maintainer precedence.
-- Tests must exercise every listed association value plus a missing value and an unknown value, and a comment whose text claims to be the maintainer.
-
-## 2. Alternatives
-(a) `gh issue view --json comments` only: no edit times, no count check, curl/jq unaffected. (b) Summarize long threads: loses fidelity. (c) LLM-side thread fetching: moves untrusted fetch into the agent, no deterministic completeness check.
+## 2. Alternatives considered
+* Agent-only prompt change: no deterministic AI-policy refusal. Rejected.
+* Separate OSS driver: large duplication. Rejected.
+* Auto-fork: needs write access and network; out of scope (decision Q2).
 
 ## 3. Why preferred
-Deterministic, testable, one data shape, minimal surface.
+Reuses the no-footprint machinery and prompt binding, adds a deterministic pure module that is testable offline, and leaves non-OSS paths untouched.
 
 ## 4. Components to modify
 See change-impact table.
 
-## 5. Not to modify
-PR flow, issue closing, `write_new_project_brief` logic (it consumes BODY, unchanged contract), freezer, mode detection, workflow drivers, existing tests unless a grep proves they assert the old `### Comment from` text.
+## 5. Components not to modify
+`workflow.sh`, `stagegate.sh`, approval-gate scripts, `footprint.py`, attestation, TUI.
 
-## 6. Data flow
-fetch issue -> fetch comments (paged) -> count check -> helper renders `### Issue thread` block -> appended to BODY -> attachment freeze -> seed heredoc. A `## Thread Review` section is added to the seed after `## Motivation` (CR template only).
+## 6. Data-flow
+`--oss` -> env -> prompt appendix (plan stage) and journal (publish) -> `oss.py check-publish` -> publish or refuse.
 
 ## 8. Interface changes
-New env var `UNCLE_ISSUE_ALLOW_INCOMPLETE`. New helper CLI: `python3 -I scripts/lib/issue_thread.py --issue FILE --comments FILE` printing the block; exit 3 on count mismatch unless `--allow-incomplete`.
+New flag `--oss`; env `UNCLE_OSS=1`; journal key `oss: true`.
+
+## 9. Persistence
+Journal gains optional `oss` boolean; older code ignores it.
 
 ## 10. Compatibility
-
-Header format unchanged. Old `### Comment from` headings removed (D-4, INV-3). Existing import fixtures are edited only to stub issue counts and all comment-fetch paths (including curl fallback) without network access, and for obsolete headings; their original assertions are preserved and each fixture edit is recorded in IMPLEMENTATION_NOTES.md as a renewed-authority item.
+Gated on env/journal key; absent means current behavior.
 
 ## 12. Error and recovery
-Short/failed fetch -> exit 1 with message and override hint (BH-4/5). Comment page JSON invalid -> treated as failed fetch.
+| Condition | Behavior |
+|---|---|
+| Policy prohibits AI | `check-publish` refuses before any git/gh write; message names source file:line; rerun after the human decision |
+| Policy unknown or disclose | Proceed; disclosure already mandatory under no-footprint |
+| Guidance missing | Prompt requires inferred-labeled conventions |
+| Issue claimed or not open | Plan stage lists a warning; plan approval gate is the human decision |
+| Conflicting guidance | Listed in plan Conflicts section; approval gate decides |
 
 ## 14. Rollback
-Revert the commit; additive helper and a template section.
+Revert the commit. Journals written with `oss` remain readable.
 
 ## 16. Automated-test strategy
 
-- `scripts/tests/issue-thread-test.py`: unit tests of render, noise, quoting, edited, association, ordering, count mismatch, with defect-injection cases (e.g. noise regex that eats `+1 but please add X`).
-- `scripts/tests/from-issue-thread-test.sh`: stubs `gh`, `curl`, and a python-less PATH for the jq path; cases: clarification on three paths, 2-page thread (150 comments), short fetch, failed fetch, override, zero comments, injection comment, docs grep.
-- Additional required cases: (a) large-thread pagination test, 101 pages of 100 comments each, on both gh and curl stubs, asserting all comments are fetched and the count check passes; (b) parity test where the Python-rendered block is the oracle and the curl/jq output must match it on a shared fixture (comment ids, noise exclusions, flags, edited markers, quoting); (c) shell cases where gh fails on page 2 and curl succeeds (each comment exactly once, N/N), where both fail mid-way, and where page 2 fails under UNCLE_ISSUE_ALLOW_INCOMPLETE=1 (page-1 comments retained, failed page discarded, seed records fetched/expected counts and failure); (d) defect-injection unit cases: treating CONTRIBUTOR or a missing association as maintainer, and assigning comment-N ids after noise filtering, must be rejected by the tests.
+New `scripts/tests/oss-test.py`, run by `bash scripts/run-python-tests.sh -- oss`; fixtures are disposable git repos with `commit.gpgsign=false` and `tag.gpgsign=false`, using `git -c commit.gpgsign=false -c tag.gpgsign=false` and `--no-gpg-sign`. Cases: discovery with sources and unknowns, empty fixture, AI prohibition vs silent, DCO sign-off, PR template rendering, claimability, wiring greps for AC-1/AC-5/AC-10. Resume-precedence cases (AC-1/INV-1): on resume the journal's OSS value governs prompt binding and publication regardless of the current flag or environment; a missing key means false; assert both mismatch directions (journal oss=true with no flag/env keeps the appendix, policy check and no-footprint; journal oss=false or legacy journal with `--oss`/`UNCLE_OSS=1` stays non-OSS or rejects the conflicting flag) and a legacy journal without the key. Added to `critical-suites.txt`.
 
 ## 17. Regression strategy
-Run full shell and Python runners; compare to baseline; grep suites for `Comment from`.
+Full shell and Python default tiers versus baseline; existing `no-footprint-test.py` unchanged.
 
 ## 18. Manual verification
-Run from-issue.sh against a real public issue with comments via curl (gh unauthenticated) and confirm thread and counts; judge Thread Review readability.
+Run `uncle --issue` dry flow on a scratch fork with `--oss` and read the plan guideline table; confirm refusal on a prohibiting fixture.
 
 ## 19. Observability
-Print `Fetched N/M comments` line on every import; warning line when overridden.
+Publish refusal message names the policy source; plan table shows sources.
 
 ## Change-impact table
+
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/from-issue.sh` | comment fetch functions, count check, helper call, jq block, Thread Review template section | all paths full thread | stubbed gh in existing suites | from-issue-thread-test.sh, existing suites |
-| `scripts/lib/issue_thread.py` | new pure renderer/classifier | testable domain logic | low | issue-thread-test.py |
-| `GITHUB_INTEGRATION.md` | document thread reading | AC-7 | none | grep in shell test |
-| `scripts/tests/issue-thread-test.py` | new | unit | none | self |
-| `scripts/tests/from-issue-thread-test.sh` | new | integration | none | self |
-| `scripts/tests/critical-suites.txt` | add two suite names | default runners execute them | none | runner output |
+| `scripts/lib/oss.py` (new) | pure discovery (with resolved-path containment: out-of-root symlink targets reported unknown, unread), policy, template, sign-off, check CLI | deterministic, testable | Low | `oss-test.py` (including a fixture with a guidance symlink pointing outside the repo: asserted unknown and its content absent from output) |
+| `prompts/change/oss-guidelines.md` (new) | stage instructions | guideline discovery and recording | Low | prompt assertions |
+| `scripts/change-workflow.sh` | append prompt when `UNCLE_OSS=1` in `bind_change_request_source` | inject into stages | Medium | wiring test, full suite |
+| `uncle` | parse `--oss`, help, allow-list, typo hints | flag | Medium | wiring test |
+| `scripts/lib/change-pr.sh` | journal key, publish check, DCO sign-off, template body | outward action | High | `oss-test.py`, `pr-auto-publish` |
+| `scripts/tests/oss-test.py` (new) | suite | coverage | Low | self |
+| `scripts/tests/critical-suites.txt` | add `oss` | default tier | Low | runner |
+| `README.md` | document flag and limits | AC-10 | Low | grep |
 
 ## Traceability
 
-Noise exclusion and non-collaborator flags are mandatory on every path (gh/Python, curl/Python, curl/jq). Integration tests run the same shared comment fixture through all three paths and compare the excluded set and flags; neither behavior is a scope cut, and the jq filter implements the identical noise regex list and flagging rule as the helper.
+Resume-precedence rule: on resume, the OSS mode stored in the run journal is authoritative over the `--oss` flag and `UNCLE_OSS` environment variable. A journal with oss=true keeps OSS guidance and the no-footprint publication check even when the flag and env are absent. A journal with oss=false, or a legacy journal without an `oss` key, is treated as non-OSS; `UNCLE_OSS=1` does not change it, and a conflicting `--oss` flag is rejected before any stage runs. The journal's mode is restored before prompt binding.
+
+AC-7 verification is behavioral: advisory warnings or prompt text alone do not satisfy it. The gate-stop test must show the workflow halts at the existing human gate with the reasons listed and does not advance until approval is given.
+
+PR body composition rule: `render_pr_body` fills the project's PR template, retains the mandatory AI disclosure, and appends it when the template has no disclosure field. The complete rendered body then passes through the existing no-footprint validation before any publication write. If template requirements conflict with the disclosure or no-footprint rules, publication stops at the existing human gate with the conflict listed.
+
+Resume precedence: the journal's recorded `oss` value is authoritative for prompts and publication. A missing key means false. On resume the driver restores `UNCLE_OSS` and the implied `UNCLE_NO_FOOTPRINT` from the journal before prompt binding or any publication write, and rejects a conflicting `--oss` flag before stage execution. A non-OSS run cannot acquire OSS behavior, and an OSS run cannot lose it.
+
+Resume rule (INV-1): on resume, the journal's `oss` value is authoritative over the current flag or environment, and a missing key means false. Before any prompt binding or publication write, restore both `UNCLE_OSS` and the implied `UNCLE_NO_FOOTPRINT` from the journal. A conflicting `--oss` flag is rejected before stage execution. A resumed non-OSS run cannot acquire OSS behavior.
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AC-1 | BH-1, 2, 3 | INV-1 | from-issue.sh, helper | from-issue-thread-test.sh | real issue via curl |
-| AC-2 (maintainer precedence uses one mapping: only author_association OWNER, MEMBER or COLLABORATOR qualify; every other or missing association is flagged non-collaborator and gets no automatic precedence; comment text cannot confer authority) | BH-9 | INV-1 | from-issue.sh template | shell + unit: one case per association (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE) plus missing and unknown, asserting maintainer vs non-collaborator flag, Thread Review text names only OWNER/MEMBER/COLLABORATOR as maintainers, a comment claiming authority in its text stays flagged, ordering cases: tied created_at ordered by numeric comment id, an edited comment whose updated_at is later than newer comments leaves order unchanged, and interleaved noise comments consume ids so remaining ids keep gaps | read Thread Review |
-| AC-3 | BH-4, 5, 6 | INV-2 | from-issue.sh | shell | none |
-| AC-4: Noise exclusion is applied on every path (gh/Python, curl/Python, curl/jq) with identical results. | BH-7 | INV-1 | helper | ["unit + shell (shared noise cases asserted identically across gh/Python, curl/Python and curl/jq)"] | none |
-| AC-5: Non-collaborator flags are applied on every path (gh/Python, curl/Python, curl/jq) with identical results. | BH-8, 10, 11 | INV-3, INV-5 | helper | unit + shell (shared injection, noise and non-collaborator flag cases asserted identically on gh/Python, curl/Python and curl/jq paths) | injection comment on a scratch issue |
-| AC-6 | BH-12, 13 | INV-4 | from-issue.sh | full runners | none |
-| AC-7 | BH-14 | none | docs | grep | none |
+| AC-1 (including resume: the journal's stored OSS mode is authoritative over env and flag) | OB-1 | INV-1 | uncle, change-pr.sh, change-workflow.sh (resume restoration before prompt binding) | `oss-test.py` wiring, resume cases: journal oss=true with flag/env absent keeps OSS prompts, guidelines table, no-footprint and publication check, journal oss=false with UNCLE_OSS=1 stays non-OSS, legacy journal without `oss` key means false (env UNCLE_OSS=1 does not enable OSS), conflicting --oss flag on resume rejected before any stage runs | flag in help, resume an OSS run without --oss and confirm the guidelines table and publish check still apply |
+| AC-2, AC-3 | OB-2, OB-3 | INV-3 | oss.py, prompt | discovery tests | read plan table |
+| AC-4: any detected AI prohibition takes precedence over permissive or conflicting guidance and cannot be waived by plan approval; `check-publish` refuses before any publication write. | OB-4 | INV-2 | oss.py, change-pr.sh | policy tests, fixture with both a prohibition and permissive guidance asserting `prohibited` and refusal regardless of plan approval, entry-point test: run the publication entry point in `change-pr.sh` against a prohibiting fixture with recording git/gh shims on PATH, asserting nonzero exit, the policy source file:line in the message, and zero branch, commit, push or gh invocations recorded | prohibiting fixture |
+| AC-5 | OB-5 | INV-3 | prompt | prompt assertion | plan commands |
+| AC-6 | OB-6 | INV-4: the final body, after template rendering, always contains the AI disclosure and passes no-footprint validation. | oss.py, change-pr.sh | render tests, `render_pr_body` tests: template without a disclosure field gets the disclosure appended, template with one keeps it, and the rendered body is validated by no-footprint checks after rendering, `render_pr_body` and `signoff` unit tests, title/commit-format tests: explicit formats discovered from guidance are applied to the commit message and PR title, DCO trailer preserved, incompatible requirements listed for the existing human gate, integration test in `oss-test.py`: for a disposable DCO-required fixture with a PR template, run the real publish entry point of `change-pr.sh` with recording git/gh shims and assert that the actual commit message passed to git contains the required `Signed-off-by` trailer and that the PR body submitted to gh contains the populated project template content | PR body read, commit message trailer read |
+| AC-7 | OB-7 | INV-5 | oss.py, prompt | ["claimability tests", "gate-stop test: run conflicting guidance and an unclaimable issue (claimed or not open) through the workflow with approval withheld, assert the listed reasons appear, no stage advances, and no default choice is silently selected even when one is available"] | gate view |
+| AC-8 | OB-8 | INV-4 | change-pr.sh | ["footprint + oss tests", "template rendering: a template without a disclosure field gets the disclosure appended", "template containing forbidden Uncle vocabulary or an incompatible requirement is not altered: the rendered body fails the existing no-footprint validation and publication stops at the human gate with the conflict listed", "complete rendered body passes existing no-footprint validation"] | diff read |
+| AC-9 | OB-9 | INV-6 | all | full suites, resumed non-OSS and legacy journals show no OSS prompt appendix or publish check | none |
+| AC-10 | OB-10 | none | README.md | README grep | read |
 
-Maintainer mapping (single rule used in rendering, Thread Review instructions and tests): for Thread Review, maintainer means an author whose recorded author_association is OWNER, MEMBER, or COLLABORATOR. Every other value (CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE) and a missing association is flagged non-collaborator and does not receive automatic maintainer precedence. A claim of authority inside comment text never confers maintainer status.
+Resume precedence (AR-008): on resume, the journal's stored OSS mode overrides the environment and the --oss flag. A missing `oss` key means false. Before any prompt binding or publication write, the stored mode restores both UNCLE_OSS and the implied UNCLE_NO_FOOTPRINT, so the policy check and no-footprint enforcement always run for an OSS run. A resumed non-OSS run cannot acquire OSS behavior from the environment. A --oss flag that conflicts with the stored mode is rejected before stage execution.
 
 ## Restrictions
 
-| R- | Source | Requirement IDs | Property | Mechanism | Capabilities | Phase |
-|---|---|---|---|---|---|---|
-| R-1 | USER (CHANGE_REQUEST Desired behavior) | AC-3 | short fetch cannot pass silently | count check, exit 1 (DESIGN, revisable) | CAP-SHELL, CAP-PY3 | CODING |
-| R-2 | USER (Untrusted input) | AC-5 | comments cannot alter rules; noise exclusion and non-collaborator flagging identical on every path | `> ` quoting + preamble (DESIGN); one shared noise list and flagging rule used by Python helper and jq filter, neither may be cut | CAP-PY3, CAP-SHELL | CODING |
-| R-5 | USER (CHANGE_SPEC BH-3, AC-4, AC-5) | AC-4, AC-5 | noise exclusion and non-collaborator flags identical on every rendering path; not a scope cut | one shared noise regex list and flagging rule used by helper and jq filter; three-path parity integration test (DESIGN, revisable) | CAP-SHELL, CAP-PY3 | CODING |
-| R-3 | REPOSITORY (CLAUDE.md) | AC-6 | no test weakening, no signing in fixtures | disposable fixtures, no commits | CAP-SHELL | CODING |
-| R-4 | PLATFORM | AC-1, AC-6 | no network in tests, including existing import fixtures: stub issue counts and every comment-fetch path (gh api, curl fallback); preserve original assertions; record fixture edits as renewed-authority items | stub gh/curl on PATH (feasibility: worktree-run-test.sh:108 stub pattern) | CAP-SHELL | CODING |
+| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Feasibility evidence | Phase |
+|---|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST Desired behavior | AC-4 | PR not created when AI prohibited | `oss.py check-publish` before publish write | deterministic, offline | CAP-GIT-FIXTURE | `change-pr.sh:1710-1717, 2147` inspected; entry-point test with recording git/gh shims asserts zero write calls on refusal | CODING |
+| R-2 | USER | CHANGE_REQUEST | AC-8 | no Uncle artifacts | imply no-footprint; when filling a project PR template, `render_pr_body` preserves the mandatory AI disclosure (appending it if the template has no disclosure field) and never silently alters or omits template content; the complete template-rendered PR body then passes existing no-footprint validation after rendering and before publication; if template requirements conflict with disclosure or no-footprint rules (e.g. forbidden vocabulary), the run stops at the existing human gate with the conflict listed | reuse | CAP-NONE | `uncle:351` inspected | CODING |
+| R-3 | USER | CHANGE_REQUEST | AC-9 | unchanged without flag; mode fixed at start | journal-authoritative gating: recorded `oss` governs prompts and publication on resume; missing means false; conflicting `--oss` rejected before stage execution | safe | CAP-NONE | `change-workflow.sh:2097-2120` inspected | CODING |
+| R-4 | PLATFORM | CLAUDE.md signing rules | AC-6 | fixtures disable signing | explicit git flags | no user key use | CAP-GIT-FIXTURE | stated in strategy | CODING |
+| R-5 | DESIGN | plan | AC-4 | keyword heuristic for policy | revisable pattern list in `oss.py` | agent cannot be sole gate | CAP-NONE | none needed | CODING |
 
-All paths (gh/Python, curl/Python, curl/jq) use identical noise classification and non-collaborator flagging; neither behavior may be cut or reduced on the jq path. Integration tests run the same shared comment fixtures through all three paths and assert identical thread content.
-
-Live verification (manual only, not a coding prerequisite): public issue via curl; no credentials needed.
-
-## Verification commands
-```
-bash scripts/run-shell-tests.sh
-bash scripts/run-python-tests.sh
-```
-The new suites run by default after being added to `critical-suites.txt` (step 4). Protected verification paths: `scripts/tests/issue-thread-test.py`, `scripts/tests/from-issue-thread-test.sh`, `scripts/tests/critical-suites.txt`.
+Live verification (CAP-GH-LIVE, LIVE_VERIFICATION phase): requires `gh` authentication and a scratch fork; not a coding prerequisite. No checks are approved for live auto-run; manual check only.
 
 ## Implementation sequence
 
-1. Helper `issue_thread.py` (pure render, noise, quoting, count check, CLI) and its unit test.
-   Decisions: D-4..D-7
-   Owns: `scripts/lib/issue_thread.py`, `scripts/tests/issue-thread-test.py`
-2. Fetch and seed changes in from-issue.sh: REST comment fetch for gh and curl, paginating until exhausted with no page-count cap (D-1, D-2, D-8); curl fallback restarts pagination and replaces any gh results; count check and override retaining only validated pages from the final attempt (D-3); helper call on python path, jq block, `## Thread Review` template section, `Fetched N/M comments` output. Also update existing import fixtures that stub gh/curl so they supply issue counts and every comment-fetch path (including fallback) without network access, preserving original assertions and recording each edit as a renewed-authority item in IMPLEMENTATION_NOTES.md.
-   Owns: `scripts/from-issue.sh`
+Steps are mostly independent files.
+
+1. Pure module `oss.py` (discover with resolved-path containment, ai_policy, dco, claimable, render, signoff, commit-message and PR-title format discovery, check CLI). Reqs AC-2..AC-7.
+   Owns: `scripts/lib/oss.py`
+2. Prompt appendix. The stage records discovered commit-message and PR-title formats in the plan guidelines table and lists incompatible formatting requirements in the Conflicts section. Reqs AC-2, AC-3, AC-5, AC-6, AC-7.
+   Owns: `prompts/change/oss-guidelines.md`
+3. Tests `oss-test.py` and add `oss` to critical tier. Reqs all. Builds on the API of step 1 and the prompt file name of step 2 (no code dependency).
+   Owns: `scripts/tests/oss-test.py`, `scripts/tests/critical-suites.txt`
+4. Launcher flag and prompt-binding hook. On resume, read the journal's `oss` value (missing means false) and use it, not the current flag or environment, to decide `UNCLE_OSS`/`UNCLE_NO_FOOTPRINT` exports and appendix binding before any stage runs; reject a conflicting `--oss` flag. The prompt appendix also instructs the stage to list, in the Conflicts section, any PR-template requirement that conflicts with mandatory AI disclosure or no-footprint rules, so the existing human gate decides. Reqs AC-1, AC-9.
+   Owns: `uncle`, `scripts/change-workflow.sh`
+   Depends on: 2, 5
+5. Publish wiring: journal key (authoritative on resume; missing means false), check, sign-off, template body. Publication reads the journal value, never the environment, to decide the policy check and no-footprint enforcement. The `oss.py check-publish` call must run first in the publication entry point and its failure must abort. Discover explicit commit-message and PR-title formats, apply them to publication output, preserve required DCO trailers, and send incompatible formatting requirements to the existing human gate. The commit message and PR body actually submitted to git/gh must be the outputs of `signoff` and `render_pr_body`, not the pre-existing message or body, so shim-based integration tests can observe them. Add entry-point tests in `oss-test.py` with recording git/gh shims: on a prohibiting fixture assert failure, policy source, and zero branch/commit/push/gh invocations; on a DCO fixture with a PR template assert the recorded commit message and PR body. Reqs AC-1, AC-4, AC-6, AC-8.
+   Owns: `scripts/lib/change-pr.sh`
    Depends on: 1
-3. **Update existing import fixtures** — Find by grep the existing from-issue test fixtures that stub gh/curl and edit them only to stub the issue comment count and every comment-fetch path (gh api, curl fallback) without network access, preserving their original assertions. Record each edit in IMPLEMENTATION_NOTES.md as a renewed-authority item. Run the existing from-issue suites with curl on PATH replaced by a failing stub to prove they use no network.
-   Depends on: 2
-4. Integration test with stubs for all paths and docs update.
-   Owns: `scripts/tests/from-issue-thread-test.sh`, `GITHUB_INTEGRATION.md`
-   Depends on: 2
-5. Register suites.
-   
-   The unit test in step 1 and docs in step 3 can be written in parallel with step 2 since they depend only on the helper contract.
-   Owns: `scripts/tests/critical-suites.txt`, `.uncle/docs/IMPLEMENTATION_NOTES.md`
-   Depends on: 1, 4
+6. README. Reqs AC-10.
+   Owns: `README.md`
+   Depends on: 4, 5
 
-## Scope cuts under time pressure
+Completion rule (binding; overrides the scope-cut section): PR template rendering, required DCO sign-off, and claimability checks (AC-6, AC-7) remain required for completion; deferral requires an explicitly approved specification change. The scope-cut section may not be used to drop them or to substitute a README limit. Only items not required by an acceptance criterion may be cut under time pressure.
 
-Noise exclusion and non-collaborator flagging are mandatory on every rendering path (gh/Python, curl/Python, curl/jq) and cannot be cut. Cut first: docs detail beyond the required thread-reading section. Never cut: count check, curl comments, quoting, noise exclusion, non-collaborator flagging.
+## 21. Scope cuts under time pressure
 
-## Risks and unresolved questions
+Never cut: AI-policy refusal, flag gating, resume precedence, PR template rendering, required DCO sign-off, claimability checks, and any behavior or test listed in the traceability table; the AC-6 and AC-7 tests stay in critical-suites.txt and must pass. Deferral of any of these requires an explicitly approved specification change. Only items not required by an acceptance criterion (for example README wording polish) may be cut under time pressure.
 
-- Existing stub gh may answer `gh api` with nothing, which would fall through to real curl or fail the count check: existing fixtures are updated, without network, to stub counts and all fetch paths (R-4), preserving their existing assertions, and renewed authority is recorded where an override applies. The D-8 fallback (restart and replace, no merge) must be exercised by existing suites; run them early. Add a test where gh page 2 fails after page 1 succeeds, to confirm no duplicates, and an override test where the final attempt fails on page 2.
-- `gh api --paginate` emits concatenated JSON arrays; helper parses with raw_decode.
-- GitHub rate-limit for unauthenticated curl (60/h) may fail large fetches; surfaced via BH-5.
-- Existing 'untrusted piped text' handling not located (baseline unknown); plan adds its own neutralization and does not rely on it.
+## 22. Risks and unresolved questions
+* Keyword AI-policy detection is heuristic (R-5); documented in README as a safety net, with the plan-stage agent also required to flag policy.
+* Fork flow is manual (decision Q2); no blocking questions remain.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | Scope cuts contradicted required noise exclusion and non-collaborator flagging (AC-4, AC-5, BH-3). | Rewrote s20.1 so noise exclusion and non-collaborator flagging are mandatory on every path; updated AC-4/AC-5 tests to cover all paths. |
-| AR-002 | Accepted | A fixed 100-page cap contradicts unconditional full-thread import (BH-6); pagination must run until exhausted on both paths. | D-2 now fetches until pagination is exhausted with no page cap; step-2 text and s1 intro updated to match. |
-| AR-003 | Accepted | The plan gave later maintainer statements precedence without defining who qualifies; an explicit association mapping removes the trust ambiguity. | AC-2 traceability row and a new rule block in Traceability define OWNER/MEMBER/COLLABORATOR as maintainers; all others flagged non-collaborator. |
-| AR-004 | Accepted | Retention across gh failure, curl fallback and override was undefined and could yield duplicate or inconsistent partial seeds. | D-8 and D-3 define restart/replace semantics and validated-page retention under override; step-2 and risk s21.1.i1 updated to match. |
-| AR-005 | Accepted | Existing gh stubs may return nothing for gh api, falling through to real curl or failing the count check; fixtures need network-free stubs. | Edit D-8, s8.1 compatibility, R-4 and step-2 to require network-free fixture updates, preserved assertions, and renewed-authority recording. |
-| AR-006 | Accepted | Parity of noise exclusion and non-collaborator flags across gh/Python, curl/Python and curl/jq is required by BH-3, AC-4 and AC-5; scope cuts contradicting it are removed. | AC-4/AC-5 rows, s16 note and R-5 restriction make noise exclusion and flags mandatory on every path with a three-path parity test. |
-| AR-007 | Accepted | Maintainer precedence needs one explicit association mapping used by rendering, Thread Review instructions, and tests. | Edit D-6 and D-7 to define the OWNER/MEMBER/COLLABORATOR mapping and add it to AC-2's requirement, behaviors and tests. |
-| AR-008 | Accepted | The jq path must share noise classification and non-collaborator flagging with Python; allowing cuts makes the BH-3 oracle ambiguous. | Edit AC-4, AC-5 and R-2 to require identical noise and flagging on all paths, and add a Restrictions block banning those cuts and requiring cross-path tests. |
-| AR-009 | Accepted | Override after a partial fetch needs a testable output contract so INV-1 holds for fetched comments. | Add decision D-9 defining retention, discard and recording on page failure under override, and add a second-page-failure test to the traceability row for AC-3's behaviors. |
-| AR-010 | Accepted | The plan named no association mapping, so flags and maintainer precedence were untestable; one explicit mapping resolves this. | Edited D-6, D-7, and AC-2 and added a mapping block after the decisions in section 1. |
-| AR-011 | Accepted | Ordering, tie-breaking, edit handling and ID assignment relative to noise filtering were unspecified, so independent tests could assert different sequences. | Revised D-7 and D-5 with an ordering/ID contract; AC-2 now requires tests for tied timestamps, edits and interleaved noise. |
+| AR-001 | Accepted | The scope-cut list contradicts mandatory AC-6 and AC-7; those behaviors cannot be deferred by documentation alone. | Adds a binding completion rule to the Implementation sequence that overrides the scope-cut section: template rendering, DCO sign-off and claimability remain required. |
+| AR-002 | Accepted | INV-1 fixes OSS mode at start, and the plan left env and journal competing on resume; making the journal authoritative closes that gap. | Added a resume-precedence rule to the traceability section and extended the AC-1 row's components, tests and manual checks to cover resume. |
+| AR-003 | Accepted | OB-6 requires commit and PR title formats; the plan only covered DCO sign-off and body templates. | Extend AC-6 traceability, R-4 restriction and step-5 with commit-message/PR-title format discovery, application, DCO preservation and human-gate on conflict. |
+| AR-004 | Accepted | Template rendering had no rule for templates omitting required disclosure or containing forbidden vocabulary; a silent omission or edit would break AC-8 and OB-7. | Adds a template-rendering rule to AC-8 and R-2, a step-5 text clause in the Implementation sequence, and a traceability test for AC-8. |
+| AR-005 | Accepted | Prompts used the environment while publication used the journal, so a resumed run could change mode; the journal must be the single authority. | Added a resume-precedence rule to s17 and extended AC-1, AC-9 and R-3 to require journal-governed mode and tests for both mismatch directions and legacy journals. |
+| AR-006 | Accepted | Template rendering could bypass the mandatory disclosure and no-footprint validation; composition and validation order must be explicit. | Added a rendering-order rule to s17 and extended AC-6/AC-8 behaviors, invariants and tests; R-2 mechanism now covers validating the final body. |
+| AR-007 | Accepted | Plan §12 let the approval gate decide conflicting guidance without excluding AI prohibitions, which could override the mandatory publication block (INV-2). | AC-4 traceability row now states that any detected AI prohibition takes precedence over permissive guidance, cannot be waived by plan approval, and is tested with a conflicting-guidance fixture. |
+| AR-008 | Accepted | Plan left env vs journal precedence undefined, so a resume without --oss could drop the policy check and no-footprint enforcement. | Add a resume-precedence rule block to s17 and extend AC-1 requirement and tests to cover mismatch directions and legacy journals. |
+| AR-009 | Accepted | Real gap: discover(root) had no symlink containment rule, so an untrusted checkout could surface external file contents. | Section 1 discover() item and the oss.py change-impact row now require resolved-path containment, with out-of-root guidance reported as unknown unread, plus a test. |
+| AR-010 | Accepted | Helper unit tests cannot show the publish entry point refuses before side effects; an entry-point test with recording shims is needed. | Extend AC-4 tests, R-1 evidence and step-5 with an entry-point test using recording git/gh shims asserting failure, policy source and zero write calls. |
+| AR-011 | Accepted | Warnings and prompt assertions alone cannot prove a gate-stop; a behavioral test with approval withheld is needed for AC-7. | AC-7 row now requires a workflow-level gate-stop test (approval withheld, reasons listed, no stage advancement, default choice available); Traceability section notes it. |
+| AR-012 | Accepted | Resume precedence between env and journal was unspecified; a testable rule is needed to satisfy INV-1. | Add resume-precedence rule and mismatch/legacy tests to s12.1 (tests), AC-1 traceability row, and steps 4 and 5. |
+| AR-013 | Accepted | Unit tests of render/sign-off helpers cannot detect a publish caller that still uses the original message or body, so an integration assertion is needed. | AC-6 tests now require running the publish entry point with recording git/gh shims on a DCO fixture with a PR template; step-5 wires the helper outputs into the real commit and PR body. |

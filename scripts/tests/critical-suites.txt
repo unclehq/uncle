@@ -184,3 +184,6 @@ from-issue-thread
 
 # Opt-in no-footprint publication mode: bare tree, no attestation, vocabulary scan, mandatory disclosure.
 no-footprint
+
+# Open-source contribution mode: guideline discovery, AI-policy refusal, DCO, PR template, claimability.
+oss

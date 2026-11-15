@@ -126,6 +126,9 @@ passes. It cannot be combined with other startup options or --audit.
 `#<issue> <state> <locked|idle> <path>`; `no runs` or `no worktrees` otherwise.
 --no-footprint (or UNCLE_NO_FOOTPRINT=1) makes a change run publish a clean PR: only
 source files, a maintainer-style description, no Uncle artifacts or attestation.
+--oss (or UNCLE_OSS=1) contributes to a third-party project: the plan records the
+project's own contribution rules, publication is refused when its policy prohibits AI
+contributions, and no-footprint publication applies. A resumed run keeps its recorded mode.
 --unattended is passed to the driver you pick: it runs every human gate
 without a person, records what nobody reviewed, and reports that at the end.
 --noui (or UNCLE_NOUI=1) runs a startup action headlessly: no curses, plain
@@ -163,6 +166,7 @@ UNCLE_STDIN_TTY=0
 UNCLE_FLAG_ATTENDED=""
 UNCLE_FLAG_UNATTENDED=""
 UNCLE_FLAG_NO_FOOTPRINT=""
+UNCLE_FLAG_OSS=""
 UNCLE_CR_DIR=""
 UNCLE_PENDING_STDIN=""
 # 1 once a startup option (bare --application, bare --issue,
@@ -341,7 +345,7 @@ while [[ $# -gt 0 ]]; do
             done
             for _a in "$@"; do
                 case "$_a" in
-                    --revalidate|--dry-run|--no-supervisor|--noui|--attended|--unattended|--noinput|--no-footprint) ;;
+                    --revalidate|--dry-run|--no-supervisor|--noui|--attended|--unattended|--noinput|--no-footprint|--oss) ;;
                     *) printf 'Unknown argument: %s\n' "$_a" >&2; exit "$UNCLE_REFUSE_CODE" ;;
                 esac
             done
@@ -349,6 +353,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run|--no-supervisor) shift ;;
         --unattended)  UNCLE_FLAG_UNATTENDED=1; shift ;;
         --no-footprint) UNCLE_FLAG_NO_FOOTPRINT=1; export UNCLE_NO_FOOTPRINT=1; shift ;;
+        --oss)         UNCLE_FLAG_OSS=1; export UNCLE_OSS=1 UNCLE_NO_FOOTPRINT=1; shift ;;
         --attended)    UNCLE_FLAG_ATTENDED=1; shift ;;
         --noui)        UNCLE_FLAG_NOUI=1; shift ;;
         # Seen by the pre-scan above (it forces the curses UI even with no terminal); nothing more to record here.
@@ -437,7 +442,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --no-footprint --application --issue --change-request --audit --revalidate --dry-run verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --attended --unattended --no-footprint --oss --application --issue --change-request --audit --revalidate --dry-run verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else

@@ -1,88 +1,104 @@
-## AR-001: The scope cuts permit violating required noise exclusion and collaborator flagging.
+## AR-001: The scope-cut permission contradicts mandatory acceptance criteria.
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json §Scope cuts under time pressure permits cutting jq noise exclusion and the non-collaborator flag; CHANGE_SPEC.json AC-4, AC-5 and BH-3 require these behaviors, including equivalent jq output. Implementation and verification could therefore disagree about whether these omissions are acceptable.
-- Failure: The scope cuts permit violating required noise exclusion and collaborator flagging. Replace them with: “Noise exclusion and non-collaborator flagging are mandatory on every rendering path and cannot be cut.”
+- References: CHANGE_PLAN.json §21 permits cutting template rendering, DCO sign-off and claimability; CHANGE_SPEC.json AC-6 and AC-7 require these behaviors. Merely documenting their absence in README would let implementation claim completion while failing the approved requirements.
+- Failure: The scope-cut permission contradicts mandatory acceptance criteria. Replace it with: "PR template rendering, required DCO sign-off, and claimability checks remain required for completion; deferral requires an explicitly approved specification change."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: The 100-page cap contradicts unconditional full-thread import for larger threads.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN.json D-2 caps pagination at 100 pages, while CHANGE_SPEC.json BH-6 requires all pages and Q2 requires full text for long threads. A thread exceeding 10,000 comments cannot satisfy both; gh automatic pagination and the capped curl loop may also behave differently.
-- Failure: The 100-page cap contradicts unconditional full-thread import for larger threads. The plan should say: “Both gh and curl fetch until pagination is exhausted, without a fixed page-count cap.”
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-003: The authority rule does not define which authors qualify as maintainers.
-
-- Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-2 and BH-9 give later maintainer statements precedence; BH-11 requires non-collaborator flagging, but neither artifact defines the association mapping. Different interpretations could change which contradictory statement becomes a requirement.
-- Failure: The authority rule does not define which authors qualify as maintainers. The plan should say: “For Thread Review, maintainer means an author whose recorded association is OWNER, MEMBER, or COLLABORATOR; all other associations are flagged non-collaborator and do not receive automatic precedence.”
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-004: Partial-page failure followed by fallback or override has no defined retention policy.
-
-- Severity: MEDIUM
-- References: CHANGE_PLAN.json D-8 requires curl fallback after gh failure; D-3 and CHANGE_SPEC.json BH-5 permit continuing under override. Neither defines whether previously fetched pages are retained, replaced, or merged, allowing duplicate comments or inconsistent partial seeds.
-- Failure: Partial-page failure followed by fallback or override has no defined retention policy. The plan should say: “Curl fallback restarts pagination and replaces gh results; if the final attempt fails, override retains only its fully validated pages and records that the thread is incomplete.”
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-005: Existing gh fixtures may now fall through to real curl requests or fail the mandatory completeness check.
+## AR-002: Resume behavior leaves environment and persisted mode competing.
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json D-8, §5, R-4 and §21 explicitly combine curl fallback, restricted test edits, network-free tests and empty gh-api stub responses. Add: "Update existing import fixtures to stub issue counts and every comment-fetch path, including fallback, without network access; preserve their original assertions and record these fixture edits as renewed-authority items."
-- Failure: Existing gh fixtures may now fall through to real curl requests or fail the mandatory completeness check. The plan requires existing suites to pass but permits fixture updates only for obsolete headings, leaving this compatibility regression unresolved.
+- References: CHANGE_SPEC.json INV-1 fixes OSS mode at start and forbids changing it on resume. CHANGE_PLAN.json §1 binds prompts only when UNCLE_OSS=1, while §10 gates behavior on 'env/journal key' without precedence or restoration rules; resuming without the original environment could omit required guidance.
+- Failure: Resume behavior leaves environment and persisted mode competing. Add: "On resume, the journal's OSS value is authoritative, with a missing value treated as false; restore both OSS and implied no-footprint behavior before prompt binding or publication, and reject a conflicting --oss flag."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: The jq fallback may retain noise or omit non-collaborator flags while Python excludes and flags the same comments.
+## AR-003: Commit and PR title formatting has no implementation contract despite being required.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 promises an equivalent jq block, but §20 permits dropping jq noise exclusion and non-collaborator flagging; CHANGE_SPEC.json BH-3, AC-4 and AC-5 require parity, noise exclusion and flags. Add: "Noise exclusion and non-collaborator flags are mandatory on every path; integration tests compare these behaviors across gh/Python, curl/Python and curl/jq, and neither behavior is a scope cut."
-- Failure: The jq fallback may retain noise or omit non-collaborator flags while Python excludes and flags the same comments. The permitted scope cuts contradict path parity and allow environment-dependent seeded requirements.
+- References: CHANGE_SPEC.json OB-6 requires commit and PR titles to follow stated formats. CHANGE_PLAN.json §1 and implementation step 5 cover DCO sign-off and PR body templates only; its AC-6 tests likewise cover rendering and sign-off, allowing title and commit formatting to be omitted.
+- Failure: Commit and PR title formatting has no implementation contract despite being required. Add: "Discover explicit commit-message and PR-title formats, apply them to publication output, preserve required DCO trailers, and send incompatible formatting requirements to the existing human gate."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: The plan grants later maintainer statements precedence without defining which authors qualify, leaving a trust decision
+## AR-004: Template rendering lacks a rule for templates that omit required disclosure or contain forbidden vocabulary.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json D-6/D-7 and CHANGE_SPEC.json BH-9/BH-11 specify precedence and association labels but no mapping between them. An implementation or analyst could treat CONTRIBUTOR status or a claim inside a comment as maintainer authority; use one explicit mapping in rendering, Thread Review instructions, and tests.
-- Failure: The plan grants later maintainer statements precedence without defining which authors qualify, leaving a trust decision ambiguous. Add: "Only OWNER, MEMBER, and COLLABORATOR associations qualify for maintainer precedence; all other or missing associations receive the non-collaborator flag, and comment text cannot confer authority."
+- References: CHANGE_PLAN.json §1 requires the project's PR template, while §12 says disclosure is already mandatory under no-footprint. CHANGE_SPEC.json AC-8 forbids Uncle vocabulary and OB-7 requires a gate for conflicting guidance; the rendering contract does not specify how these requirements interact, permitting silent omission or template alteration.
+- Failure: Template rendering lacks a rule for templates that omit required disclosure or contain forbidden vocabulary. Add: "Preserve required AI disclosure when filling a PR template; if template requirements conflict with disclosure or no-footprint rules, stop at the existing human gate with the conflict listed."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-008: The jq acceptance oracle conflicts with permitted scope cuts.
+## AR-005: Resume behavior can change an existing run's mode because prompts use the environment while publication may use the jour
 
 - Severity: HIGH
-- References: CHANGE_SPEC.json BH-3 requires the same thread content as Python, and AC-4/AC-5 require noise exclusion and flagging; CHANGE_PLAN.json §1 allows a simpler jq filter and §Scope cuts permits dropping these behaviors. Implementers and test authors can legitimately choose incompatible expected outputs; remove the scope exceptions and test shared cases on all three paths.
-- Failure: The jq acceptance oracle conflicts with permitted scope cuts. Add: "All paths use identical noise classification and non-collaborator flagging; neither behavior may be cut."
+- References: CHANGE_PLAN.json §1 gates the appendix on UNCLE_OSS=1, while §10 gates behavior on env/journal without precedence; CHANGE_SPEC.json INV-1 fixes mode at start and AC-9 preserves non-OSS behavior. Resolve precedence explicitly so resumed OSS runs retain guidance and resumed non-OSS runs cannot acquire OSS behavior.
+- Failure: Resume behavior can change an existing run's mode because prompts use the environment while publication may use the journal. Add: “On resume, the recorded OSS mode governs prompts and publication, absent oss means false, and a conflicting --oss flag is rejected before stage execution.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-009: Override behavior after a later page fails lacks a testable output contract.
+## AR-006: Template rendering leaves preservation of mandatory no-footprint disclosure unspecified.
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC.json BH-5 permits continuing after fetch failure, while INV-1 forbids silently omitting fetched comments; CHANGE_PLAN.json §16 lists failed-fetch and override cases without defining their combination after partial success. A test cannot determine whether retaining earlier pages or emitting an empty thread is correct; specify retention and cover a second-page failure.
-- Failure: Override behavior after a later page fails lacks a testable output contract. Add: "With the override enabled, retain all successfully fetched complete pages, discard the failed page, and record fetched/expected counts and the failure in the seed."
+- Severity: HIGH
+- References: CHANGE_PLAN.json §1 introduces render_pr_body(template, summary, testing) and replaces the body with the project's template; §12 assumes disclosure is already mandatory under no-footprint. CHANGE_SPEC.json INV-4 and AC-8 require existing no-footprint protections to survive; define composition and validation order to prevent the replacement body from bypassing them.
+- Failure: Template rendering leaves preservation of mandatory no-footprint disclosure unspecified. Add: “Template rendering must retain mandatory AI disclosure, append it when the template has no disclosure field, and pass the complete rendered body through existing no-footprint validation before publication.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Collaborator classification and maintainer precedence have no defined mapping.
+## AR-007: The plan lets the approval gate decide conflicting guidance without excluding AI prohibitions, leaving a path to overrid
 
-- Severity: MEDIUM
-- References: CHANGE_SPEC.json BH-11 gives NONE only as an example, and BH-9 instructs following later maintainer statements; CHANGE_PLAN.json D-6/D-7 supplies no classification table. Tests cannot independently determine flags or which authors qualify for precedence; define one mapping and exercise every association plus a missing value.
-- Failure: Collaborator classification and maintainer precedence have no defined mapping. Add: "OWNER, MEMBER, and COLLABORATOR count as maintainers; every other or missing author_association is flagged non-collaborator and does not receive maintainer precedence."
+- Severity: HIGH
+- References: CHANGE_PLAN.json §12 says both "Conflicting guidance ... approval gate decides" and "Policy prohibits AI ... rerun after the human decision"; CHANGE_SPEC.json INV-2 requires a detected prohibition to block PR creation. Specify precedence so conflicting policies cannot turn mandatory refusal into an approval-dependent choice.
+- Failure: The plan lets the approval gate decide conflicting guidance without excluding AI prohibitions, leaving a path to override the mandatory publication block. Add: "Any detected AI prohibition takes precedence over permissive guidance and cannot be waived by plan approval."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: Stable comment IDs lack an ordering and filtering contract.
+## AR-008: Resume behavior does not specify which mode wins when the environment disagrees with the journal, allowing an OSS run to
+
+- Severity: HIGH
+- References: CHANGE_PLAN.json §10 says "Gated on env/journal key" and §1 enables no-footprint through launcher exports; CHANGE_SPEC.json INV-1 fixes OSS mode in the journal across resumes. Define the precedence and restoration behavior so resuming without --oss cannot bypass either safeguard.
+- Failure: Resume behavior does not specify which mode wins when the environment disagrees with the journal, allowing an OSS run to lose its publication safeguards. Add: "On resume, the stored OSS mode overrides the environment and enables both the policy check and no-footprint enforcement before any publication write."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-009: Repository-only discovery lacks a rule for guidance symlinks that resolve outside the repository, potentially exposing l
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-2 requires chronological order and stable IDs; CHANGE_PLAN.json D-7 specifies comment-1..n, while D-5 removes noise from thread text. Neither specifies tie handling, whether edited timestamps affect order, or whether excluded comments consume IDs; independent tests could assert different valid sequences, so define these rules and cover tied timestamps, edits, and interleaved noise.
-- Failure: Stable comment IDs lack an ordering and filtering contract. Add: "Sort by created_at ascending, break ties by numeric REST comment id, then assign comment-N before noise filtering; edits never affect ordering, and stability applies to the fetched snapshot."
+- References: CHANGE_SPEC.json §10 requires discovery to read only repository files; CHANGE_PLAN.json §1 defines discover(root) as returning text and source locations but provides no symlink boundary rule. Specify resolved-path containment so an untrusted checkout cannot make discovery read and reproduce external files.
+- Failure: Repository-only discovery lacks a rule for guidance symlinks that resolve outside the repository, potentially exposing local files through guideline text. Add: "Discovery must reject guidance paths whose resolved targets lie outside the repository root and report them as unknown without reading their contents."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-010: Policy unit tests cannot establish that publication refuses before side effects.
+
+- Severity: HIGH
+- References: CHANGE_PLAN.json §16 specifies policy cases but no publication-entry-point assertion; CHANGE_SPEC.json AC-4 requires refusal before any branch, commit, push or gh call. A correctly failing helper can coexist with a publish caller that checks too late or ignores failure.
+- Failure: Policy unit tests cannot establish that publication refuses before side effects. Add: "Run the publication entry point against a prohibiting fixture with recording git/gh shims; assert failure, the policy source, and zero branch, commit, push or gh invocations."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-011: Claimability and prompt assertions cannot verify the required gate-stop.
+
+- Severity: HIGH
+- References: CHANGE_SPEC.json AC-7 requires a gate-stop and makes silent default selection impossible; CHANGE_PLAN.json §12 describes warnings and §16 lists claimability tests. Neither specifies a behavioral test of the gate, so advisory output could satisfy the planned checks without stopping execution.
+- Failure: Claimability and prompt assertions cannot verify the required gate-stop. Add: "Exercise conflicting guidance and unclaimable issues through the workflow with approval withheld; assert listed reasons and no stage advancement, including when a default choice is available."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-012: Resume behavior lacks a testable precedence rule for conflicting environment and journal values.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC.json INV-1 fixes OSS mode at start; CHANGE_PLAN.json §10 says only 'Gated on env/journal key,' while §1 gates the appendix on UNCLE_OSS=1. AC-1 verification covers wiring and journal creation without specifying resume cases, allowing tests and implementation to choose different precedence.
+- Failure: Resume behavior lacks a testable precedence rule for conflicting environment and journal values. Add: "On resume, journal OSS mode governs prompts and publication regardless of the current flag or environment; a missing key means false, and tests cover both mismatch directions and legacy journals."
+- Fix: Address in the plan.
+- Verify: Re-run the check.
+
+## AR-013: Rendering helpers can pass while publication drops DCO trailers or template content.
+
+- Severity: MEDIUM
+- References: CHANGE_SPEC.json AC-6 verifies publication-facing behavior using only unit tests of render functions; CHANGE_PLAN.json §16 likewise lists sign-off and rendering cases without asserting their integration. The planned tests would not detect a caller that continues using the existing message or body.
+- Failure: Rendering helpers can pass while publication drops DCO trailers or template content. Add: "For a DCO-required fixture with a PR template, exercise publication using recording shims and assert that the actual commit message and submitted PR body contain the required trailer and populated template."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

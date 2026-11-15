@@ -347,6 +347,29 @@ def note_deviation(project, rel, turn, row):
                  'see .uncle/workflow/triage-actions.tsv row %d.\n' % (rel, turn, row))
 
 
+def revert_managed_gitignore(project):
+    """Undo a tracked-.gitignore change that only adds Uncle's own ignore entries (a bare `.uncle` appended during a turn).
+
+    Uncle's rules live in .git/info/exclude, so such a line is never wanted in the tracked file: left alone it shows as an
+    uncommitted modification right after the project's commit. Anything else in the diff (a rule the project or the person
+    added, a removal) is left exactly as it is. Returns True when the file was restored."""
+    try:
+        live = Path(project) / '.gitignore'
+        if not live.is_file() or live.is_symlink():
+            return False
+        head = subprocess.run(['git', 'show', 'HEAD:.gitignore'], cwd=project, capture_output=True, timeout=30)
+        if head.returncode != 0:
+            return False
+        before = head.stdout.decode('utf-8')
+        after = live.read_text(encoding='utf-8')
+        if before == after or not only_adds_managed(before, after):
+            return False
+        live.write_bytes(head.stdout)
+        return True
+    except (OSError, UnicodeDecodeError, subprocess.SubprocessError):
+        return False
+
+
 def end(args):
     project = os.path.realpath(args.project)
     sandbox = Path(args.state_dir) / 'triage' / 'sandbox'
@@ -480,6 +503,7 @@ def end(args):
         row = tsv_row(args.state_dir, args.turn, proposal, 'APPLIED', rel, pre_hash, post_hash)
         note_deviation(project, rel, args.turn, row)
 
+    revert_managed_gitignore(project)
     drop_sandbox(project, sandbox)
     if sandbox.exists():
         taint('The sandbox could not be removed: %s' % sandbox)

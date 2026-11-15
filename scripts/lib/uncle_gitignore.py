@@ -127,9 +127,34 @@ def freeze(project_root):
         return False
 
 
+def _tracked_in_main_checkout(project_root):
+    """True when <project_root> is the user's own checkout (not a linked worktree) and tracks its .gitignore.
+
+    That file belongs to the project: Uncle's rules live in .git/info/exclude there, and a run's linked worktree is the only
+    place a tracked .gitignore is normalized."""
+    import subprocess
+
+    def git(*args):
+        try:
+            out = subprocess.run(['git', *args], cwd=project_root, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return out.stdout.strip() if out.returncode == 0 else None
+
+    if git('ls-files', '--error-unmatch', '--', '.gitignore') is None:
+        return False
+    gd = git('rev-parse', '--path-format=absolute', '--absolute-git-dir')
+    cd = git('rev-parse', '--path-format=absolute', '--git-common-dir')
+    if not gd or not cd:
+        return False
+    return os.path.realpath(gd) == os.path.realpath(cd)
+
+
 def ensure(project_root):
-    """Normalize <project_root>/.gitignore. Returns True when it was changed."""
-    if is_frozen(project_root):
+    """Normalize <project_root>/.gitignore. Returns True when it was changed.
+
+    Never rewrites a .gitignore the project tracks in its own (non-worktree) checkout."""
+    if is_frozen(project_root) or _tracked_in_main_checkout(project_root):
         return False
     path = os.path.join(project_root, ".gitignore")
     try:

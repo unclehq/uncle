@@ -1203,6 +1203,9 @@ def snapshot(audit=False, excludes=(), attestation=False):
             oid = git('hash-object', '-w', '--no-filters', '--stdin', data=AUDIT.read_bytes())
             mode = b'100755' if AUDIT.stat().st_mode & 0o100 else b'100644'
             entries.append(mode + b' ' + oid.encode() + b'\tFINAL_AUDIT.md\0')
+            # The commit also carries the audit where the other approved documents live. It is absent from the audited tree
+            # (the audit is judged against a tree that cannot contain itself), so only the commit tree adds it.
+            entries.append(mode + b' ' + oid.encode() + b'\t.uncle/docs/FINAL_AUDIT.md\0')
         if attestation and not nf:
             for name in ATTESTATION_FILES:
                 path = Path(name)

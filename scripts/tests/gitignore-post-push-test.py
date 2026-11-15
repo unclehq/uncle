@@ -48,11 +48,24 @@ def run_cli(r):
 
 
 class FreezeBehavior(unittest.TestCase):
-    def test_unfrozen_ensure_normalizes_legacy(self):
+    def test_unfrozen_ensure_never_rewrites_tracked_gitignore_in_main_checkout(self):
         with tempfile.TemporaryDirectory() as t:
             r = repo(t)
             run_cli(r)
-            self.assertNotEqual((r / '.gitignore').read_text(), LEGACY)
+            self.assertEqual((r / '.gitignore').read_text(), LEGACY)
+            self.assertEqual(git(t, 'status', '--porcelain', '--', '.gitignore').stdout.strip(), '')
+
+    def test_unfrozen_ensure_normalizes_legacy_in_linked_worktree(self):
+        with tempfile.TemporaryDirectory() as t:
+            r = repo(t)
+            wt = Path(t + '-wt')
+            git(t, 'worktree', 'add', '-q', '-b', 'run', str(wt))
+            try:
+                run_cli(wt)
+                self.assertNotEqual((wt / '.gitignore').read_text(), LEGACY)
+                self.assertEqual((r / '.gitignore').read_text(), LEGACY)
+            finally:
+                git(t, 'worktree', 'remove', '--force', str(wt))
 
     def test_freeze_writes_marker_and_cli_leaves_gitignore_untouched(self):
         with tempfile.TemporaryDirectory() as t:

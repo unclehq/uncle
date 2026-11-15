@@ -1,8 +1,8 @@
 # Defects
 
-## Retained artifacts from an earlier run are named as holding current findings (audit-verdict.sh:216-222); plus spacing typo 'inthe' in the attestation-only message (line 219-222).
+## None
 
-- **Status:** FAIL
-- **Evidence:** Function at scripts/lib/audit-verdict.sh:216-225 uses only `[[ -s file ]]` for handoff.json and attestation.json; no run_id/mtime comparison. Scenario 4 output: 'Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in the hand-off record (.uncle/handoff/handoff.json) and the attestation (.uncle/attestation.json)).' Scenario 2 output contains 'inthe'. Not covered by driver green-check as a live exercise of this function.
-- **Expected result:** Messages name only artifacts confirmed written for the current run; none confirmed -> point to .uncle/docs/FINAL_AUDIT.md; hand-off completion does not claim findings are in a published PR; retained artifacts alone do not justify naming them.
-- **Actual result:** (1) none: 'findings are in .uncle/docs/FINAL_AUDIT.md' - OK. (2) attestation only: 'findings are inthe attestation (.uncle/attestation.json)' - names correct artifact but has a missing-space typo ('inthe'). (3) both: names hand-off record and attestation, no PR-publication claim - OK. (4) retained/stale: message still names the hand-off record and attestation as holding findings, because the function only tests file existence/non-emptiness (-s) and has no run-provenance check; expected pointer to .uncle/docs/FINAL_AUDIT.md. All scenarios ended in STATE=COMPLETE.
+- **Status:** BLOCKED-HUMAN
+- **Evidence:** MANUAL_CHECKLIST.json row MC-400; scripts/lib/change-pr.sh (change_pr_publish, lines ~239-276). No terminal observation of the decline path.
+- **Expected result:** Declining publication preserves successful completion and does not trigger publication or require repeating completed verification or approvals.
+- **Actual result:** Not observed. The row needs a complete interactive default-mode run (--no-footprint omitted, UNCLE_NO_FOOTPRINT unset) with human-gated approvals and a person declining the optional publication offer at the terminal. A worker cannot supply that. The code shows an interactive publish consent path (change_pr_publish 1) but no run was observed, so no pass or fail is claimed.

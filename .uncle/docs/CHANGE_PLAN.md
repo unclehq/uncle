@@ -1,125 +1,166 @@
-# Change plan: issue 276
+# Change plan - Issue 280 (--no-footprint)
 
-Omitted sections: schema/persistence (none), migration (none), concurrency (none), feature flag (gated by existing UNCLE_PUBLISH_MODE=handoff)
+Seeded from [unclehq/uncle#280](https://github.com/unclehq/uncle/issues/280).
 
-Seeded from [unclehq/uncle#276](https://github.com/unclehq/uncle/issues/276).
+Issue 280
 
-Issue 276
+Omitted sections: Schema/persistence (one journal key only, in 9); Concurrency (single-process engine, unchanged); Migration (none); Observability (one terminal line)
 
 ## 1. Selected technical approach
 
-D-1 (revised, AR-001/AR-008): no project commit is created, no branch is created, HEAD is not created or advanced, and the user's real index and working tree are never read-modified or written. Build, verification, approval and completion neither create nor require a project commit or a clean tree, in every mode. Add `run_policy_snapshot_base` in `scripts/lib/run-policy.sh`, called from the existing no-history branch of `run_policy_change_branch` (line ~164) only when `UNCLE_PUBLISH_MODE=handoff` and HEAD is unborn; all other modes behave exactly as today. It captures the starting tree as a file-hash and path inventory that includes untracked files and excludes all `.uncle/` paths, built in an isolated temporary index (`GIT_INDEX_FILE` pointing at a temp file, removed on exit, starting empty so pre-staged `.uncle/` entries in the user's index cannot leak in): `git add -A -- . ':(exclude).uncle'` against the temp index, then `git write-tree`. The tree is verified to contain no `.uncle/` path (`git ls-tree -r --name-only`); if any appears the snapshot is abandoned. The resulting tree id and inventory are exported/recorded as hand-off base evidence (`UNCLE_HANDOFF_BASE_TREE`). Where the hand-off exporter requires a commit-shaped base id, an unsigned internal evidence object may be derived from that tree with `git -c commit.gpgsign=false -c user.name=Uncle -c user.email=uncle@localhost commit-tree --no-gpg-sign`, held only under the private ref `refs/uncle/handoff-base`; it is not on any branch, is not a project commit, and is never pushed. On any failure (including after the temp-index add) it removes the temp index, warns, leaves the real index and working tree byte-identical to their pre-run state and HEAD unborn, and returns 0 as today. If consuming this base requires edits to `change-pr.sh` beyond reading the exported value, stop and amend the plan.
-D-2: `scripts/lib/audit-verdict.sh:216` completion text names only artifacts confirmed written for this run (e.g. the PR URL only if a PR was published, `handoff.json` only if the hand-off record exists on disk, the attestation only if `.uncle/attestation.json` exists); HEAD existence is not a condition. When no such artifact was confirmed, the text points to `.uncle/docs/FINAL_AUDIT.md`.
-D-3: `scripts/change-workflow.sh:5280-5283` no-HEAD message: when `UNCLE_PUBLISH_MODE=handoff` and no base evidence was captured, say no hand-off record was written because there is no base. Non-hand-off text unchanged.
+Flag `--no-footprint` sets `UNCLE_NO_FOOTPRINT=1`; the PR engine records `no_footprint` in its journal at `start` and every later action reads the journal. A new pure module `scripts/lib/footprint.py` holds the domain logic (disclosure resolution, body rendering, vendor-line stripping, vocabulary scan). The engine's `snapshot` gets a bare variant that omits `.uncle/**`, root FINAL_AUDIT.md, attestation files and managed `.gitignore` lines. Exact path rule for bare snapshots: everything under `.uncle/` is excluded; root-level files whose stem (name without extension) is PROJECT_PLAN, CHANGE_PLAN, CHANGE_SPEC, IMPLEMENTATION_NOTES or VERIFICATION_REPORT are excluded; root FINAL_AUDIT.md and explicitly identified attestation outputs are excluded; every other path outside `.uncle/` is preserved unchanged, so legitimate source files with similar names in subdirectories are never dropped. All new behavior sits behind `if no_footprint(j)` so the default path executes the same code as today.
 
-## 2. Alternatives
-(a) Write hand-off with empty base when no HEAD: needs engine changes (`head()`, journal, attest) throughout change-pr.sh; high risk. (b) Fix only the host: outside repo.
-
-## 3. Why preferred
-Smallest surface; reuses the fully tested hand-off path; no engine or schema edits.
+## 2-3. Alternatives and why
+| Alternative | Rejected because |
+|---|---|
+| Post-filter the commit tree after snapshot | `validate` rebinds the tree at several points; filtering in one place diverges |
+| Rewrite the PR after creation | pushes artifacts first; trace remains in history |
+| Separate engine copy | duplicates 2000 lines; default drift risk |
+| Selected: variant parameter in `snapshot` plus pure helper module | single binding point, default path untouched |
 
 ## 4. Components to modify
 See change-impact table.
 
 ## 5. Not to modify
-`change-pr.sh`, `handoff_export.py`, host script, `uncle verify`.
+`attestation.py`, `build_attestation.py`, `handoff_export.py`, `uncle verify`, audit/verdict scripts, gate scripts, agent adapters, the `closing_trailer` BEGIN/END block (reused as is).
 
-## 6. Data flow / 7. state
+## 6. Data flow
+`uncle --no-footprint` -> env -> `change_pr_engine start` -> journal `no_footprint=true` -> `snapshot(bare)` for reviewed_tree/commit_tree -> `handoff`: `footprint.render_body(inputs)` -> `footprint.scan(title, body, message, branch)` -> `automatic_commit` with composed message -> push -> `gh pr create`.
 
-The seed runs only under UNCLE_PUBLISH_MODE=handoff. In hand-off mode the base is built from an isolated index (inventory includes untracked files); its commit/tree sha becomes `original_head` in the audit-created journal and `handoff.json.base_commit`, with the inventory stored alongside. Outside hand-off mode no commit is created and the starting tree is represented by the file inventory and hashes only. HEAD remains unborn in both cases. No state-machine change.
+## 7. State transitions
+None new. Phases unchanged.
+
+## 8. Interface changes
+- CLI: `--no-footprint` (usage text, pre-scan lists at `uncle:233,252,341`, parse at `:347`).
+- Config keys `footprint.disclosure`, `footprint.trailer`, `footprint.name_uncle`; env `UNCLE_FOOTPRINT_DISCLOSURE`, `UNCLE_FOOTPRINT_TRAILER` (env beats config beats default).
+- `footprint.py` API: `resolve_disclosure(config, env)`, `render_body(summary, why, testing, followups, closing, disclosure)`, `render_message(title, summary, trailer)`, `strip_vendor_lines(text)`, `scan(fields, allow_uncle)`.
+
+## 9. Persistence
+Journal gains optional boolean `no_footprint`; absent = false.
 
 ## 10. Compatibility
-Only the hand-off-mode + unborn-HEAD case changes. Hosts must treat the seed commit as local; release owner to clone the real base per the issue (out of scope).
+Flag absent => flag-off branches only. Old journals valid.
 
 ## 12. Error and recovery
+Scan failure raises ValueError before the `prepared` phase save, so no commit/push occurs; rerun after the text is corrected. In bare mode `assert_tree_matches_attested` requires zero tracked/staged `.uncle/` paths and skips the ignored-artifact check (artifacts are intentionally untracked). A `.gitignore` whose stripped content is empty and absent at HEAD is omitted from the tree.
 
-Seed failure -> warning, continue; the real index and work tree are left exactly as they were before the run (the seed uses only a temporary index, which is deleted), so a failed startup never changes the user's staged selections. D-3 message makes the missing record explicit. A rerun on an existing seed sees HEAD and skips seeding.
+## 13-14. Rollback
+Flag-off path is the existing code; revert the commit or stop passing the flag. No data migration.
 
-## 14. Rollback
-Revert the change; no persisted format changes.
+## 15. Containment
+Opt-in flag; default untouched; journal records the mode so a resume cannot flip it.
 
-## 16-17. Automated and regression tests
+## Decisions (routine, resolved)
 
-T-1 `scripts/tests/run-policy-test.sh`: cases for seed (hand-off, unborn), no seed without hand-off, no seed with existing HEAD (HEAD unchanged). INV-3 cases: (a) unborn repo with `.uncle/` files (e.g. `.uncle/docs/PLAN.md`, `.uncle/state`) already staged in the user's index plus a normal source file -> `git ls-tree -r --name-only HEAD` contains no `.uncle/` path, contains the source file, and the user's real index is unchanged (same `git ls-files -s` output and index file hash before and after, pre-staged `.uncle/` entries still staged); (b) untracked `.uncle/` -> absent from the seed; (c) failure injected after the temporary index has been populated (e.g. failing `commit-tree`/`update-ref` via PATH shim or env hook) -> warning emitted, function returns 0, HEAD still unborn, real index listing and work-tree file hashes identical to the pre-run snapshot, no temp index file left behind. T-2 new `scripts/tests/handoff-no-base-test.sh` has separate scenarios, each in its own temp repo with no commits, git signing disabled in the fixture, gh/remote absent. T-2a (successful seed): the fixture explicitly arranges a NOT_READY final audit (AC-3 applies only to NOT_READY) and drives the unattended hand-off completion path; assert handoff.json (attestation present, audit_verdict NOT_READY, draft true, base_commit = seed sha) and that `.uncle/attestation.json` exists; D-2 assertions are artifact-based: completion text mentions the hand-off record and attestation only when those files exist and never claims a PR in hand-off mode. T-2c (non-NOT_READY): with a READY audit, assert audit_verdict and draft keep their existing mapping (draft not forced true). T-2b (injected seed failure, e.g. commit forced to fail): HEAD stays absent; assert the D-3 no-hand-off-record message, that no handoff.json is written, that completion text names no unwritten artifact and points to `.uncle/docs/FINAL_AUDIT.md`, and that the exit status equals the pre-change exit status for the same no-HEAD run. Reuse harness style of unattended-test.sh and fixtures of handoff-export-test.py. T-2 is added to `critical-suites.txt` as `handoff-no-base`. Regression: the driver's two default runners; also run explicitly `bash scripts/run-shell-tests.sh -- handoff-no-base` (confirm flag form with `--help`). Tests that must fail before the fix: T-2a handoff.json assertion; T-1 case (a) must also fail against a naive `git add -A -- . ':(exclude).uncle'` plus `git commit` implementation.
+| ID | Decision | Reason |
+|---|---|---|
+| D-1 | Trailer default `Assisted-by: AI tooling`; body line per spec assumptions | neutral, matches emerging projects' policy form |
+| D-2 | Policy override via `.uncle/config` + env (env beats config beats default). Validation: an empty or whitespace-only disclosure override, from env or config, is invalid and rejects publication before any publication write (no fallback to the default, no silent removal); only the commit trailer may be empty, which omits the trailer. | existing config style; no new file; keeps the mandatory body disclosure (I-3) from being erased by configuration |
+| D-3 | Driver alone composes the commit message (text only); vendor lines stripped from generated text. Composing the message never invokes git signing. | agent CLI attribution (Q4) is replaced by the one disclosure; message preparation is separated from signed commit execution (see D-8) |
+| D-8 | Signing boundary: automatic_commit never invokes a signer, GPG agent or pinentry. When a project commit requires signing, the driver presents the exact git command (with the composed message) for the user to run, then verifies the resulting commit; it never retries or falls back to an unsigned commit. Test fixtures commit with -c commit.gpgsign=false, --no-gpg-sign. | binding Git-signing rules prohibit automatic use of the user's signing keys |
+| D-4 | NOT_READY/unattended-waiver details stay local; PR is draft with one neutral note | keeps gates (draft) without Uncle audit vocabulary |
+| D-5 | What/Why from the change request Summary/Motivation or the human's prompt answers; Testing from the plan's verification commands | project's own commands |
+| D-6 | Branch fallback prefix `change/`; no labels | removes `uncle/` |
+| D-7 | Greenfield `stagegate.sh` attestation generation is skipped when the persisted journal mode is no-footprint; the guard is mandatory and not cuttable. On resume, stagegate derives its attestation decision from the persisted journal mode; `UNCLE_NO_FOOTPRINT=1` selects the mode only when initializing a new run. | no attestation file in mode (AC-2 forbids producing one, so the guard cannot be a scope cut); the journal is authoritative, so a resume with a different env value can neither suppress attestation in a default-mode journal (AC-7) nor produce it in a no-footprint journal |
 
-T-3 (AR-012, inside T-1/T-2 fixtures): under a hostile inherited environment (global/system config with `commit.gpgsign=true`, `tag.gpgsign=true` and `gpg.program` set to a fake signer that records each invocation to a file and exits non-zero), create the fixture repository and run the seed and hand-off paths. Assert the recorder file shows zero invocations and every fixture Git subprocess received both repo-local signing settings and the explicit `-c ...=false` / `--no-gpg-sign` / `--no-sign` flags.
+## Restrictions
+
+| ID | source_kind | Source | Reqs | Property | Mechanism | CAP | Feasibility evidence | Phase |
+|---|---|---|---|---|---|---|---|---|
+| R-1 | USER | CHANGE_REQUEST Desired behavior | AC-1 | no Uncle files in diff | bare `snapshot` | CAP-GIT | `snapshot` change-pr.sh:918-1060 inspected; temp index, no user-index writes | CODING |
+| R-2 | USER | CHANGE_REQUEST Decisions | AC-2 | no attestation | skip `attest`, attach, handoff export, stagegate attest (stagegate guard mandatory, not cuttable) | CAP-GIT | attest call sites 1919-1932, 212, stagegate.sh:490 | CODING |
+| R-3 | USER | CHANGE_REQUEST | AC-3, AC-5 | maintainer-style, no Uncle vocabulary | `footprint.render_body`, `scan`; the scan runs before any publication write: leak rejection precedes branch/index updates, commits, pushes and gh mutations, while temporary-index snapshots and local object creation may occur before scanning | CAP-PY | pure Python, stdlib | CODING |
+| R-4 | USER | CHANGE_REQUEST | AC-4 | disclosure present | defaults + overrides; scan(fields, allow_uncle) gives tracked project content no exemption: publication fields (title, body, message, branch) may never name Uncle, and Uncle is permitted only in the rendered disclosure line, and only when footprint.name_uncle is true (allow_uncle applies to that line alone) | CAP-PY | config read pattern uncle:478 | CODING |
+| R-5 | USER | CHANGE_REQUEST Open Q2 | AC-6 | gates not weakened | no edits to `validate` gate logic | CAP-GIT | validate 1117-1146 | CODING |
+| R-6 | USER | CHANGE_REQUEST | AC-7 | default byte-identical | flag-off branches; golden test | CAP-PY | existing suites | CODING |
+| R-7 | REPOSITORY | AGENTS/CLAUDE rules | all | no weakening of existing tests; new suite in critical tier | add to critical-suites.txt | CAP-PY | scripts/tests/critical-suites.txt | CODING |
+
+Runner binding: Python tests via `bash scripts/run-python-tests.sh`; fixture git commands use `-c commit.gpgsign=false`, `--no-gpg-sign`. LIVE_VERIFICATION: none needs credentials; `gh` calls are stubbed in tests; a real PR creation is a manual check only.
+
+## 16. Automated-test strategy
+
+New `scripts/tests/no-footprint-test.py` (hyphenated name; loads the engine the way `pr-auto-commit-test.py` does, and `footprint.py` directly). Required explicit command beyond baseline: `bash scripts/run-python-tests.sh -- no-footprint`; the suite is also added to `critical-suites.txt` so default runs include it. Cases map to AC-1..AC-8; leak-injection and staged-artifact negatives are the defect-injection evidence. Additional cases: (a) bare-tree inventory with root files of each listed stem (PROJECT_PLAN, CHANGE_PLAN, CHANGE_SPEC, IMPLEMENTATION_NOTES, VERIFICATION_REPORT), FINAL_AUDIT.md, plus a legitimate nested file with a similar name and an unrelated file, asserting exactly the specified paths are excluded and all others preserved; (b) leak injection snapshots refs and the user index before and after the rejected run, asserting both unchanged and zero commit, push and gh mutation calls; (c) a stub gpg program recording invocation, run with commit.gpgsign=true, asserting the signer is never invoked and the exact user-run command is emitted; (d) a fixture repo whose tracked files contain the word uncle, asserting rejection in title/branch/message/non-disclosure body and acceptance only in the disclosure line with name_uncle=true.
+
+## 17. Regression strategy
+
+Baseline commands `bash scripts/run-shell-tests.sh` and `bash scripts/run-python-tests.sh` (group `1 2`) must match baseline; default-mode golden comparison (AC-7); `pr-closes-refs-test.sh` marker extraction must still work. Resume matrix tests: default-mode journal resumed with `UNCLE_NO_FOOTPRINT=1` still attests; no-footprint journal resumed without the env still skips attestation.
 
 ## 18. Manual verification
-None required; optionally run a hand-off build in a commit-less sandbox.
+M-1: in a throwaway repo with a stub or fork remote, run a change with `--no-footprint`; `git show --stat` and the PR page show only source files, maintainer-style body, disclosure. M-2: same without flag shows today's output.
 
-## 19. Observability
-Seed emits one stderr line naming the seed commit sha.
+## 20. Implementation sequence
+
+1. Pure helper module `scripts/lib/footprint.py` (disclosure resolution incl. empty/whitespace rejection, body/message rendering, vendor-line stripping, scan). Its tests live in step 5's `no-footprint-test.py`; step 1 owns no test file.
+   Owns: `scripts/lib/footprint.py`
+2. Engine changes: journal flag, bare snapshot, validate variant, `assert_tree_matches_attested` bare mode, body/commit/branch/attestation branches, scan call, handoff skip
+   Owns: `scripts/lib/change-pr.sh`
+   Depends on: 1, 3, 4
+3. CLI flag, usage, exports, stagegate attestation guard
+   Owns: `uncle`, `scripts/stagegate.sh`
+4. Docs
+   Owns: `README.md`
+5. Test suite and tier registration (can be written alongside 1-3 from the contracts above; finalized after 2)
+   Owns: `scripts/tests/no-footprint-test.py`, `scripts/tests/critical-suites.txt`
+   Depends on: 1, 2
+6. Reconcile: run the baseline commands and the explicit new-suite command; owns no source files, and routes any fix back to the step that owns the file.
+   Owns: `[]`
+   Depends on: 2, 3, 4, 5
+
+## 21. Scope cuts under time pressure
+
+Cut first: config-key policy overrides (keep env), opt-in naming (B-9), branch prefix (D-6). Never cut: bare tree (R-1), no attestation (R-2), scan (R-3), disclosure (R-4), default byte-identity (R-6). The stagegate attestation guard (D-7) is mandatory and cannot be cut; greenfield runs in no-footprint mode must not invoke attestation generation.
+
+## 22. Risks
+| Risk | Mitigation |
+|---|---|
+| Tree-binding divergence | one `bare` selector read from journal in every `snapshot` call; test validate round trip |
+| Default drift | golden comparison; flag-off code unchanged |
+| Failing audit hidden from PR reviewer | draft status plus neutral note; submitter sees findings locally; documented in README |
+| Scan false positives (word `uncle` in project) | allowed only if present in the project's own tracked files; otherwise refuse and tell user to edit |
 
 ## Change-impact table
-
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| `scripts/lib/run-policy.sh` | add seed function (isolated temporary index via GIT_INDEX_FILE, write-tree, commit-tree, update-ref; `.uncle/` excluded from the seed tree even if pre-staged; real index and work tree untouched on success and failure) and call | give hand-off a base commit | Medium: runs before branch logic | T-1 (incl. unborn repo with pre-staged `.uncle/` files asserting no `.uncle` paths in the seed tree, index-preservation, and failure-after-staging cases) |
-| `scripts/lib/audit-verdict.sh` | conditional completion message | wording truthful | Low | T-2a, T-2b |
-| `scripts/change-workflow.sh` | hand-off no-HEAD message | truthful output | Low | T-2b |
-| `scripts/tests/run-policy-test.sh` | seed cases | cover AC-1, AC-2 | Low | itself |
-| `scripts/tests/handoff-no-base-test.sh` | new suite | cover AC-3..5 | Low | itself |
-| `scripts/tests/critical-suites.txt` | add suite name | run in default tier | Low | runner |
+| `scripts/lib/footprint.py` (new) | pure body/message/disclosure/scan logic | domain logic apart from engine | Low | no-footprint-test.py |
+| `scripts/lib/change-pr.sh` | bare snapshot, journal flag, body/commit/branch/attestation branches, assert variant | core of the mode | High | no-footprint-test.py, pr-*-test |
+| `uncle` | accept flag, usage, export env | entry point | Low | no-footprint-test.py |
+| `scripts/stagegate.sh` | skip build_attestation when flag set | no attestation file | Low | no-footprint-test.py (grep/guard) |
+| `scripts/tests/no-footprint-test.py` (new), `scripts/tests/critical-suites.txt` | new suite in critical tier | coverage | None | self |
+| `README.md` | document mode, limits, disclosure | AC-8 | None | grep check |
 
 ## Traceability
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| With UNCLE_PUBLISH_MODE=handoff and unborn HEAD, a base snapshot (tree id plus file-hash/path inventory including untracked files, excluding .uncle/) is captured without creating a project commit, creating HEAD or a branch, changing the index, or invoking a signer. | BH-1 | INV-2, INV-3 | run-policy.sh | T-1 (incl. unborn repo with pre-staged .uncle/ files: seed built in an isolated temporary index, seed tree has no .uncle/ paths, user's index unchanged, failure-after-staging case) | none |
-| AC-2 | BH-5, BH-6 | INV-4 | run-policy.sh | T-1 (incl. failure-after-staging leaves index and working tree unchanged) | none |
-| AC-3 applies to a NOT_READY audit: for an unattended hand-off build that starts commit-less and ends with a NOT_READY audit, handoff.json is written with attestation present, audit_verdict NOT_READY and draft true. Other audit outcomes retain their existing verdict and draft mapping. | BH-2 | INV-1 | run-policy.sh | T-2a | optional |
-| AC-4: Completion text names only artifacts confirmed written for this run (PR, hand-off record, attestation); otherwise it points to .uncle/docs/FINAL_AUDIT.md. HEAD existence alone is not the condition. | BH-3 | - | audit-verdict.sh | T-2a, T-2b | none |
-| AC-5 | BH-4 | - | change-workflow.sh | T-2b | none |
-| AC-6 | all PRESERVE | all EXISTING | all | driver commands | none |
+| AC-1 | B-2, B-12, entry preflight: before `start` in no-footprint mode, reject repositories with excluded artifacts (.uncle/**, root FINAL_AUDIT.md, attestation outputs, managed .gitignore lines) tracked at HEAD or present in the user index, without altering either, and list the conflicting paths. | I-1 | change-pr.sh snapshot | no-footprint-test.py (includes negative cases: artifact tracked at HEAD and artifact staged in the user index each reject at start, leaving HEAD and index unchanged, with conflicting paths named) | M-1 |
+| AC-2 | B-3 | I-1 | change-pr.sh, stagegate.sh | no-footprint-test.py | M-1 |
+| AC-3 | B-4, B-10 | I-2, I-3 | footprint.py, change-pr.sh | no-footprint-test.py | M-1 |
+| AC-4: The only exception for naming Uncle is the rendered disclosure line, and only when footprint.name_uncle is true; scan(fields, allow_uncle) applies allow_uncle to the disclosure line alone, not field-wide. The word 'uncle' in tracked project files grants no exemption, and titles, branches, messages and other body text are always scanned. The disclosure line is always present in the body. An empty or whitespace-only disclosure override (from config or env) is invalid and rejects publication before any publication write; only the commit trailer may be empty. | B-5, B-6, B-9 | I-3 | footprint.py | no-footprint-test.py (includes: word 'uncle' present in tracked project files still rejected in title/branch/message, name_uncle=true allows it only in the disclosure line, empty and whitespace-only disclosure override via config and via env each raise before any git/gh write, empty trailer override is accepted and yields no trailer while the body disclosure remains) | M-1 |
+| AC-5 | B-7, B-8 | I-2 | footprint.py | no-footprint-test.py (records every git write and gh call after a leak is injected, asserts no branch/ref/index update, commit, push or gh mutation occurred, permitting only temporary-index snapshot and local object creation) | - |
+| AC-6 | B-10 | I-4, I-5 | change-pr.sh validate | no-footprint-test.py, pr-auto-publish-test.sh | M-1 |
+| AC-7 | B-11 | I-6 | all | golden test, full suites | M-2 |
+| AC-8 | B-1 | - | uncle, README.md | no-footprint-test.py | - |
 
-## Restrictions
+Entry preflight (AR-007): before starting no-footprint mode, the engine rejects repositories where any excluded artifact is tracked at HEAD or present in the user index. It does not alter HEAD, the index or the working tree, and it names the conflicting paths so the user can untrack them deliberately. This keeps the bare snapshot from producing deletion diffs and prevents the completion check on tracked/staged .uncle paths from failing only after work is done.
 
-| ID | source_kind | Source | Reqs | Property | Mechanism | Rationale | CAP | Phase |
-|---|---|---|---|---|---|---|---|---|
-| R-1 | USER | CHANGE_REQUEST.md fix 1 | AC-1, AC-3 | hand-off carries a commit-free base record; build, verification and completion never create or require a project commit | commit-free snapshot (D-1): isolated temporary index excluding .uncle plus file-hash and path inventory including untracked files; runs only under UNCLE_PUBLISH_MODE=handoff, never modifies the user's index, HEAD stays unborn, no project commit in any mode | user's binding commit-free rule; revisable DESIGN choice within it, seed limited to the user-chosen hand-off publish flow | CAP-git | CODING |
-| R-2 | REPOSITORY | CLAUDE.md signing rules | AC-1 | no signer is invoked by the product path; fixture commits disable signing | D-1 never invokes git commit or any signer and makes no real-project commit, branch, or index change; any evidence object uses `--no-gpg-sign` under a private ref; test fixtures set `commit.gpgsign=false`, `tag.gpgsign=false` repo-locally plus explicit `-c commit.gpgsign=false -c tag.gpgsign=false` and `--no-gpg-sign`/`--no-sign` on every fixture Git subprocess; a negative test runs under inherited `commit.gpgsign=true` with a failing recording fake signer (`gpg.program`) and asserts zero invocations | mandated | CAP-git | CODING |
-| R-3 | USER | issue fix 2 | AC-4 | completion message names only artifacts confirmed written this run | D-2 | direct | CAP-bash | CODING |
-
-Constraint (AR-008): the implementation must not create a project commit, checkpoint or tag to satisfy any stage; only disposable test fixtures may commit, and then with signing disabled.
-
-Feasibility: run-policy.sh:158-166 and change-pr.sh:2064 inspected; local git and bash only. No live-auth prerequisites.
-
-## 20. Implementation sequence
-
-Steps 1-3 are independent files and may run in parallel.
-
-1. Commit-free base snapshot function in run-policy (D-1 revised; R-1, R-2): runs only under UNCLE_PUBLISH_MODE=handoff; builds the seed tree in an isolated temporary index (write-tree) from a file-hash and path inventory that includes untracked files and excludes `.uncle/` even if pre-staged; the user's real index, worktree and HEAD are left unchanged on success and failure; non-hand-off modes make no commit, add or index change; `.uncle` exclusion is verified on the written tree.
-   Owns: `scripts/lib/run-policy.sh`
-2. Message fixes (D-2 artifact-based completion wording, D-3)
-   Owns: `scripts/lib/audit-verdict.sh`, `scripts/change-workflow.sh`
-3. Tests: seed cases, new suite (two scenarios T-2a/T-2b), critical-suites entry, written from the spec contract. The recording fake-signer helper for the AR-012 negative signing test is inlined in handoff-no-base-test.sh (no separate file) and that script is a protected verification path. Also assert the fixture's HEAD and refs are unchanged by any non-hand-off run.
-   Owns: `scripts/tests/run-policy-test.sh`, `scripts/tests/handoff-no-base-test.sh`, `scripts/tests/critical-suites.txt`
-4. Verification only: run the two default runners plus the explicit suite command and report results. Edits only files already owned by steps 1-3; creates no new files and makes no project commit.
-   Owns: `scripts/lib/run-policy.sh`, `scripts/lib/audit-verdict.sh`, `scripts/change-workflow.sh`, `scripts/tests/run-policy-test.sh`, `scripts/tests/handoff-no-base-test.sh`, `scripts/tests/critical-suites.txt`
-   Depends on: 1, 2, 3
-
-## 21. Scope cuts under time pressure
-
-D-3 and AC-5 verification remain required unless the user explicitly approves a revised scope. If time expires, cut only optional items first: the optional manual hand-off run in a commit-less sandbox, then extra edge-case variants in T-1 (but keep the T-1 pre-staged regression). Never cut the commit-free snapshot seed behavior (D-1), including its isolated-index and `.uncle` exclusion guarantees, D-2, D-3, or the T-2 assertions that cover AC-3, AC-4 and AC-5 (including the handoff.json assertion).
-
-## 22. Risks and unresolved questions
-- Synthetic base sha differs from the host's real base; host must clone the real base (issue item 3, release owner).
-- A2 (journal creation without remote) is verified by T-2; if it fails, stop and amend the plan.
-- Runner flag form for one suite is unconfirmed (A1); fall back to running the new script with `bash` directly.
+Disclosure validation rule (AR-014): `resolve_disclosure` rejects an empty or whitespace-only disclosure override, whether from `footprint.disclosure` or `UNCLE_FOOTPRINT_DISCLOSURE`, with ValueError before the `prepared` phase save and before any publication write. Only the commit trailer (`footprint.trailer` / `UNCLE_FOOTPRINT_TRAILER`) may be empty, meaning no trailer. An unset override falls back to the default disclosure.
 
 ## Adversarial review dispositions
 
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Partially accepted | Project commits during build are prohibited, so D-1 must not commit on HEAD/branch or touch the index; but the hand-off engine needs a base id, so a non-branch snapshot object plus a hash/path inventory is used instead. | Rewrote D-1 (s1.1), s6.1, R-1, R-2, AC-1 and step-1 to a commit-free snapshot: isolated index, inventory including untracked files, HEAD stays unborn. |
-| AR-002 | Accepted | HEAD existence does not prove a PR or attestation was written, so completion wording must follow confirmed artifact outcomes. | D-2 in s1.1 and T-2 in s10.1 now key completion text on artifacts confirmed written this run, else point to FINAL_AUDIT.md. |
-| AR-003 | Accepted | AC-3 lacked an audit-result precondition while BH-2 limits NOT_READY/draft:true to a NOT_READY audit; T-2 must arrange that audit explicitly. | AC-3 now applies only to a NOT_READY audit; T-2 arranges a NOT_READY audit and checks that other verdicts keep their existing mapping. |
-| AR-004 | Accepted | AC-5 is a mandatory acceptance criterion, so the plan must not allow cutting D-3 or its test unilaterally. | Section 21 (s17.1) now keeps D-3 and AC-5 verification required unless the user approves a revised scope; only non-acceptance items may be cut. |
-| AR-005 | Partially accepted | Build, verification and completion must stay commit-free, but the issue's hand-off needs a base commit, so the seed is confined to the user-selected hand-off publish mode. | Rewrite D-1, section 6, R-1 and step 1 so the seed runs only under UNCLE_PUBLISH_MODE=handoff, uses an isolated index, and keeps non-hand-off builds commit-free. |
-| AR-006 | Accepted | A pathspec exclude on git add does not remove already-staged .uncle entries, so committing the index could violate INV-3 and alter the user's index. | D-1 now builds the seed tree in an isolated temporary index excluding .uncle, leaves the user's index untouched; T-1 adds pre-staged and failure-after-staging cases. |
-| AR-007 | Accepted | Real gap: `git add -A` can leave the index changed if commit fails, silently altering the user's staged selections. | D-1 builds the seed with an isolated temporary index (GIT_INDEX_FILE); §12 and T-1 add index/work-tree preservation on failure with a failure-after-staging test. |
-| AR-008 | Accepted | A real project commit during build startup contradicts the binding no-project-commit rule; commits are a user-approved publishing action and signing rules govern only disposable fixtures. | Replace D-1 in s1.1 with a commit-free file-snapshot base; update R-1, R-2, step-1 and the s17 scope cut; add a no-commit constraint to s15. |
-| AR-009 | Accepted | A pathspec exclude on git add does not remove already-staged .uncle entries, so committing the live index could violate INV-3; an isolated index fixes this and leaves the user's index untouched. | Rewrote D-1 (s1.1) to build the seed tree from a temporary GIT_INDEX_FILE excluding .uncle, and T-1 (s10.1) to add a pre-staged .uncle case and an index-unchanged assertion. |
-| AR-010 | Accepted | A pathspec exclude on git add does not remove already-staged .uncle entries, so INV-3 needs an explicit pre-staged-state test and an isolated-index mechanism. | D-1 builds the seed from an isolated index excluding .uncle; T-1 adds an unborn repo case with staged .uncle files asserting the seed tree has no .uncle paths. |
-| AR-011 | Accepted | A successful seed means HEAD exists, so the no-HEAD messages (D-3, BH-4) can only be exercised in a separate injected-seed-failure case. | s10.1 splits T-2 into T-2a (successful seed) and T-2b (injected seed failure); traceability and change-impact rows updated to match. |
-| AR-012 | Accepted | Disabling signing alone does not prove an inherited signing=true config cannot reach a signer; a recording fake signer test is a cheap, direct proof. | R-2 mechanism extended and s10.1 gains a negative test with inherited signing=true and a failing recording fake signer asserting zero invocations. |
+| AR-001 | Accepted | Cutting the stagegate guard would allow a forbidden attestation, contradicting R-2 and AC-2. | Section 21 cut list drops D-7 and states the stagegate attestation guard is mandatory and cannot be cut. |
+| AR-002 | Accepted | Real conflict: an env-based stagegate guard can flip attestation behavior on resume, contradicting journal-governed mode. | D-7 now keys stagegate suppression on the persisted journal mode; env selects mode only for new runs; AC-8 text unchanged. |
+| AR-003 | Accepted | The tracked-file vocabulary exception in the risks section contradicts the spec's disclosure-only, opt-in naming rule. | R-4 mechanism now states Uncle is permitted only in the disclosure line when footprint.name_uncle is true, with no exemption for tracked project content. |
+| AR-004 | Accepted | Real gap: override precedence had no value validation, so an empty disclosure could erase the required body disclosure (I-3) or silently fall back. | D-2 now states that an empty or whitespace-only disclosure override (env or config) is rejected before publication writes, and only the trailer may be empty. |
+| AR-005 | Accepted | The plan lacked an exact path rule outside .uncle; a precise exclusion contract makes the bare snapshot testable and avoids leaks or dropped source files. | Edit s1.1 to state the exact root-path exclusion rule for bare snapshots. |
+| AR-006 | Accepted | An env-based guard can change attestation behavior when a journal of the opposite mode is resumed, violating the journal-controls-resume rule and AC-7. | D-7 now derives the stagegate attestation decision from the persisted journal mode; the env applies only to a new run; AC-7 and regression strategy updated. |
+| AR-007 | Accepted | Bare snapshots would delete tracked artifacts while completion rejects tracked .uncle paths; an entry-time rejection removes the conflict before any work is done. | Add a start-time preflight rejection to s22 and AC-1 (tracked at HEAD or staged excluded artifacts, no mutation, conflicting paths named). |
+| AR-008 | Accepted | The tracked-file exception contradicts the spec's explicit opt-in, disclosure-only rule and would silently disable the scan; the risk-table wording is owned by another writer. | R-4 restriction now binds scan: tracked project content exempts nothing; Uncle is allowed only in the disclosure line when footprint.name_uncle is true. |
+| AR-009 | Accepted | The driver must not invoke the user's signer automatically; message preparation and signed commit execution need an explicit boundary. | D-3 now separates message composition from commit execution; added a signing-boundary decision row D-8. |
+| AR-010 | Accepted | The tracked-file exception in the risk row contradicts disclosure-only opt-in naming; tracked content must grant no vocabulary exemption. | AC-4 traceability row now states Uncle is permitted only in the disclosure line when footprint.name_uncle is true, with no tracked-file exemption, and tests cover it. |
+| AR-011 | Accepted | Real gap: precedence rules without validation let an empty override erase the required body disclosure (I-3). | AC-4 row: empty/whitespace disclosure override (config or env) is rejected before publication writes; only the trailer may be empty; test added. |
+| AR-012 | Accepted | The tracked-file exception contradicts the spec's disclosure-only, opt-in naming rule and gives tests conflicting oracles. | AC-4 traceability row now states the single exception: Uncle only on the disclosure line when footprint.name_uncle is true, no tracked-content exemption. |
+| AR-013 | Accepted | The scan ordering was ambiguous between 'before any git write' and 'before commit/push'; an explicit ordering rule makes it testable. | Add scan-ordering rule to s14 (new restriction R-8 on R-3's mechanism) and extend AC-5 behaviors/tests to assert no publication writes before rejection. |
+| AR-014 | Accepted | Empty disclosure override is undefined while I-3 requires a body disclosure; one rule for config and env gives tests a single expected result. | Edited AC-4 (requirement, tests) and added a rule block in s22: empty/whitespace disclosure override rejected before publication writes; only trailer may be empty. |
+| AR-015 | Accepted | The cut list made the stagegate guard optional while R-2 and AC-2 require no attestation, so the guard must be mandatory. | Section 21 (s19.1) drops D-7 from cuttable items and states the guard is mandatory; D-7 and R-2 text updated to match. |

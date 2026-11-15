@@ -2,15 +2,23 @@
 
 ## Findings
 
-### MC-902
+### MC-200
 
-- **Action:** Sourced scripts/lib/audit-verdict.sh in four isolated temp sandboxes (AUDIT_GATE=0, WORKFLOW_NOT_READY_GATE unset, stub set_state) and called final_audit_route_verdict NOT_READY. Scenarios: (1) no artifacts; (2) only .uncle/attestation.json freshly written; (3) fresh handoff.json + attestation.json; (4) both artifacts present but with mtime 2020-01-01 (retained from an earlier run, nothing written this run).
-- **Expected result:** Messages name only artifacts confirmed written for the current run; none confirmed -> point to .uncle/docs/FINAL_AUDIT.md; hand-off completion does not claim findings are in a published PR; retained artifacts alone do not justify naming them.
-- **Actual result:** (1) none: 'findings are in .uncle/docs/FINAL_AUDIT.md' - OK. (2) attestation only: 'findings are inthe attestation (.uncle/attestation.json)' - names correct artifact but has a missing-space typo ('inthe'). (3) both: names hand-off record and attestation, no PR-publication claim - OK. (4) retained/stale: message still names the hand-off record and attestation as holding findings, because the function only tests file existence/non-emptiness (-s) and has no run-provenance check; expected pointer to .uncle/docs/FINAL_AUDIT.md. All scenarios ended in STATE=COMPLETE.
-- **Defects:** Retained artifacts from an earlier run are named as holding current findings (audit-verdict.sh:216-222); plus spacing typo 'inthe' in the attestation-only message (line 219-222).
+- **Action:** Ran the real change_pr_engine handoff (scripts/lib/change-pr.sh) in a disposable fixture repo with UNCLE_NO_FOOTPRINT=1 (no-footprint mode, journal no_footprint=true) and a READY frozen/bound audit. First sent empty stdin, then answered the prompts (default title, summary, manual steps) and answered 'n' at the publication consent prompt. Used a temporary probe in /tmp/mc200 that reuses the pr-auto-commit-test fixtures (fake gh and git shims, signing disabled).
+- **Expected result:** The prompt requires an explicit decision, and declining leaves the completed work available locally without publishing or treating that decision as a verification failure.
+- **Actual result:** With empty input the engine printed the audited diff and title prompt, then 'PR pending: No answer received; PR remains pending. Rerun to resume.' No commit and no PR were created. After 'n' at 'Commit and publish exactly this audited diff and create the PR? [y/n]:' it printed 'PR pending: Publication declined; rerun to resume PR handoff.' It exited with returncode 1 as a pending state, and no commits, commit-tree calls or gh pr create calls were made. HEAD stayed equal to the original, the journal phase stayed 'bound' (resumable), and the audited working-tree change in source.txt ('audited') was kept locally. The exit is non-zero, and this check did not run the driver's gate handling, so I did not observe how the driver classifies that non-zero exit (for example, whether it counts as a verification failure).
+- **Defects:** None
+
+### MC-400
+
+- **Action:** Read the checklist row and inspected scripts/lib/change-pr.sh for the publication prompt path. Did not run an interactive default-mode workflow, because it needs live human approvals and a human answering the publication prompt.
+- **Expected result:** Declining publication preserves successful completion and does not trigger publication or require repeating completed verification or approvals.
+- **Actual result:** Not observed. The row needs a complete interactive default-mode run (--no-footprint omitted, UNCLE_NO_FOOTPRINT unset) with human-gated approvals and a person declining the optional publication offer at the terminal. A worker cannot supply that. The code shows an interactive publish consent path (change_pr_publish 1) but no run was observed, so no pass or fail is claimed.
+- **Defects:** None
 
 ## Acceptance gate
 
 | ID | Required | Status | Evidence |
 |---|---|---|---|
-| MC-902 | YES | FAIL | Function at scripts/lib/audit-verdict.sh:216-225 uses only `[[ -s file ]]` for handoff.json and attestation.json; no run_id/mtime comparison. Scenario 4 output: 'Final audit is NOT_READY; completing so the PR reviewer can decide (findings are in the hand-off record (.uncle/handoff/handoff.json) and the attestation (.uncle/attestation.json)).' Scenario 2 output contains 'inthe'. Not covered by driver green-check as a live exercise of this function. |
+| MC-200 | YES | PASS | Probe output: 'EMPTY rc 1 ... PR pending: No answer received'; 'DECLINE rc 1 ... PR pending: Publication declined; rerun to resume PR handoff.'; 'creates 0 commits [] head==orig True'; 'journal bound True'; 'source.txt audited'. The probe's unittest run passed (Ran 1 test, OK). Source: scripts/lib/change-pr.sh lines ~2018-2023. |
+| MC-400 | YES | BLOCKED-HUMAN | MANUAL_CHECKLIST.json row MC-400; scripts/lib/change-pr.sh (change_pr_publish, lines ~239-276). No terminal observation of the decline path. |

@@ -30,9 +30,22 @@ change_pr_extras_reason() {
 # modified tracked files are expected and the clean-status check does not apply (it is the post-commit check, and applying it here
 # refused every run whose change edits a tracked file). The audit's root FINAL_AUDIT.md is written by the handoff, so its absence
 # (or a stale copy an earlier run left tracked) is not a difference either, provided the attested copy is this run's audit. Content drift from the attested tree and ignored artifacts still refuse.
+# True when this run is in no-footprint mode: the persisted journal decides once it exists, UNCLE_NO_FOOTPRINT=1 only before it does.
+change_pr_no_footprint() {
+    local j=".uncle/workflow/pr/journal.json" v
+    if [[ -s "$j" ]]; then
+        v="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1])).get("no_footprint") else "0")' "$j" 2>/dev/null)" || v=0
+        [[ "$v" == 1 ]]
+        return
+    fi
+    [[ "${UNCLE_NO_FOOTPRINT:-}" == 1 ]]
+}
+
 assert_tree_matches_attested() {
-    local tree="${1:-}" when="${2:-}" bad=0 line path
+    local tree="${1:-}" when="${2:-}" bad=0 line path bare=0
     local allow='^\.uncle/(docs/.*|attestation\.json|attestation\.sig|allowed_signers)$'
+    # No-footprint mode: nothing under .uncle/ may be tracked or staged (empty allowlist) and the artifacts are intentionally untracked.
+    if change_pr_no_footprint; then bare=1; allow='^$'; fi
     if [[ "$when" != pre ]]; then
         while IFS= read -r line; do
             [[ -n "$line" ]] || continue
@@ -64,7 +77,7 @@ assert_tree_matches_attested() {
                && git show "$tree:FINAL_AUDIT.md" 2>/dev/null | cmp -s - .uncle/docs/FINAL_AUDIT.md; then continue; fi
             echo "path differs from the attested tree ($status): $path" >&2; bad=1
         done < <(git diff --name-status --no-renames "$tree" 2>/dev/null)
-        while IFS= read -r line; do
+        while [[ "$bare" == 0 ]] && IFS= read -r line; do
             [[ -n "$line" ]] || continue
             echo "approved artifact is ignored: $line" >&2; bad=1
         done < <(git ls-tree -r --name-only "$tree" -- .uncle/docs 2>/dev/null | git check-ignore --no-index -v --stdin 2>/dev/null)
@@ -387,6 +400,90 @@ OVERRIDE = STATE / 'pr' / 'verdict-override'
 AUDIT = Path('.uncle/docs/FINAL_AUDIT.md')
 
 
+def bare():
+    # No-footprint mode. Once a journal exists its flag is authoritative, so a resume cannot flip the mode; the environment
+    # only selects it before there is a journal (a run that is starting).
+    try:
+        return bool(json.loads(JOURNAL.read_text()).get('no_footprint'))
+    except (OSError, ValueError, AttributeError):
+        return os.environ.get('UNCLE_NO_FOOTPRINT') == '1'
+
+
+def footprint():
+    import sys as _sys
+    lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+    if lib not in _sys.path:
+        _sys.path.insert(0, lib)
+    import footprint as module
+    return module
+
+
+def footprint_config():
+    config = {}
+    try:
+        lines = Path(os.environ.get('UNCLE_CONFIG') or '.uncle/config').read_text().splitlines()
+    except OSError:
+        return config
+    for line in lines:
+        parts = line.strip().split(None, 1)
+        if parts and parts[0].startswith('footprint.'):
+            config[parts[0]] = parts[1].strip() if len(parts) == 2 else ''
+    return config
+
+
+def footprint_policy():
+    # Resolved and validated before any publication write. An empty disclosure override is invalid (never a fallback).
+    config = footprint_config()
+    for source, value in (('UNCLE_FOOTPRINT_DISCLOSURE', os.environ.get('UNCLE_FOOTPRINT_DISCLOSURE')),
+                          ('footprint.disclosure', config.get('footprint.disclosure'))):
+        if value is not None and not value.strip():
+            raise ValueError(source + ' is empty; a disclosure line is required.')
+    resolved = footprint().resolve_disclosure(config, dict(os.environ))
+    trailer = None
+    if isinstance(resolved, dict):
+        disclosure, trailer = resolved['disclosure'], resolved.get('trailer')
+    elif isinstance(resolved, (tuple, list)):
+        disclosure, trailer = resolved[0], (resolved[1] if len(resolved) > 1 else None)
+    else:
+        disclosure = resolved
+    if trailer is None:
+        if 'UNCLE_FOOTPRINT_TRAILER' in os.environ:
+            trailer = os.environ['UNCLE_FOOTPRINT_TRAILER']
+        else:
+            trailer = config.get('footprint.trailer', 'Assisted-by: AI tooling')
+    name_uncle = config.get('footprint.name_uncle', '').lower() in ('true', '1', 'yes', 'on')
+    return dict(disclosure=disclosure, trailer=trailer.strip(), name_uncle=name_uncle)
+
+
+def change_request_section(names):
+    try:
+        text = read(input_document('CHANGE_REQUEST.md'))
+    except Exception:
+        return ''
+    match = re.search(r'^##\s+(?:\d+\.\s+)?(?:' + names + r')\s*\n(.*?)(?=^##\s|\Z)', text, re.M | re.S | re.I)
+    return ' '.join(match.group(1).split()) if match else ''
+
+
+def bare_testing():
+    # D-5: the plan's own verification commands.
+    for name in ('UPDATED_PROJECT_PLAN.md', 'CHANGE_PLAN.md'):
+        try:
+            text = read(input_document(name))
+        except Exception:
+            continue
+        match = re.search(r'^##\s+Verification commands\s*\n(.*?)(?=^##\s|\Z)', text, re.M | re.S | re.I)
+        if match:
+            lines = [x.strip() for x in match.group(1).splitlines()
+                     if x.strip() and not x.strip().startswith(('```', '#'))]
+            if lines:
+                return 'Ran: ' + '; '.join('`' + x.strip('`') + '`' for x in lines[:8])
+    return 'Run the project test suite.'
+
+
+def commit_message(j):
+    return j.get('message') or j['title']
+
+
 # Distinct from every other failure so the driver can tell the one case an
 # operator may overrule (exit 3) from corruption that only a rerun fixes.
 class NotReadyError(ValueError):
@@ -454,6 +551,8 @@ def envelope():
 def envelopes_enabled():
     # Attestation is enforced for every run whose driver created envelopes/;
     # a manifest without the directory is a directory that went missing.
+    if bare():
+        return False        # no-footprint mode produces no attestation
     return (STATE / 'envelopes').is_dir() or (STATE / 'envelopes.manifest').exists()
 
 
@@ -918,6 +1017,7 @@ def branch():
 def snapshot(audit=False, excludes=(), attestation=False):
     # Never write the user's index. Store raw bytes so clean filters cannot
     # hide drift or publish content different from the files the auditor read.
+    nf = bare()     # no-footprint: nothing under .uncle/, no audit or attestation entries
     fd, index = tempfile.mkstemp(dir=STATE, prefix='pr-index-')
     os.close(fd)
     os.unlink(index)
@@ -936,14 +1036,14 @@ def snapshot(audit=False, excludes=(), attestation=False):
         # appended to .gitignore mid-run (by a test or a first-run refresh) ignores the whole directory, which hid every approved
         # document from the audit-time snapshot and made `bind` refuse the finished audit for a change nobody made.
         docs_dir = Path('.uncle/docs')
-        if docs_dir.is_dir():
+        if docs_dir.is_dir() and not nf:
             for found in docs_dir.rglob('*'):
                 if found.is_file() or found.is_symlink():
                     paths.add(os.fsencode(found.as_posix()))
         paths.discard(b'')
         # The trust root is the one .uncle/ file a person force-adds on purpose. It is ignored and under
         # .uncle/, so the rules below would drop it and the commit would delete a tracked trust root.
-        trust_root = {b'.uncle/allowed_signers'} & head_paths
+        trust_root = set() if nf else {b'.uncle/allowed_signers'} & head_paths
         # Whatever .gitignore covers is not hashed, tracked or not.
         # `ls-files --others --exclude-standard` above already drops ignored
         # *untracked* files; a tracked file is never reported as ignored
@@ -959,7 +1059,7 @@ def snapshot(audit=False, excludes=(), attestation=False):
             if ignored.returncode not in (0, 1):
                 raise ValueError('git check-ignore failed: '
                                  + ignored.stderr.decode('utf-8', 'replace').strip())
-            keep = trust_root | {x for x in paths if x.startswith(b'.uncle/docs/')}
+            keep = trust_root | (set() if nf else {x for x in paths if x.startswith(b'.uncle/docs/')})
             paths -= set(ignored.stdout.split(b'\0')) - keep
         entries = []
         batched = []
@@ -980,6 +1080,7 @@ def snapshot(audit=False, excludes=(), attestation=False):
             # FINAL_AUDIT.md is skipped here and appended under the `audit`
             # flag instead, so a snapshot can be taken with or without it.
             if (not raw
+                    or (nf and (raw == b'.uncle' or raw.startswith(b'.uncle/')))
                     or (raw.startswith(b'.uncle/') and not raw.startswith(b'.uncle/docs/') and raw not in trust_root)
                     or raw == b'.uncle/docs/FINAL_AUDIT.md'
                     # A root FINAL_AUDIT.md is the driver's copy of that audit
@@ -994,6 +1095,18 @@ def snapshot(audit=False, excludes=(), attestation=False):
             # under the `attestation` flag, like .uncle/docs/FINAL_AUDIT.md under `audit`.
             if name in ATTESTATION_FILES:
                 continue
+            if nf and name == '.gitignore' and raw not in head_paths and Path(name).is_file():
+                # A .gitignore Uncle created and nothing else wrote is Uncle's own file: omitted when only managed lines remain.
+                import sys as _sys
+                lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+                if lib not in _sys.path:
+                    _sys.path.insert(0, lib)
+                try:
+                    from uncle_gitignore import strip_managed
+                    if not strip_managed(Path(name).read_bytes().decode('utf-8', 'replace')).strip():
+                        continue
+                except ImportError:
+                    pass
             if any(name.startswith(x) if x.endswith('/') else name == x for x in excludes):
                 continue
             path = Path(name)
@@ -1043,13 +1156,13 @@ def snapshot(audit=False, excludes=(), attestation=False):
                 raise ValueError('hash-object returned %d ids for %d files.' % (len(oids), len(batched)))
             for (mode, raw, _), oid in zip(batched, oids):
                 entries.append(mode.encode() + b' ' + oid.encode() + b'\t' + raw + b'\0')
-        if audit:
+        if audit and not nf:
             if AUDIT.is_symlink() or not AUDIT.is_file():
                 raise ValueError('.uncle/docs/FINAL_AUDIT.md must be a regular file.')
             oid = git('hash-object', '-w', '--no-filters', '--stdin', data=AUDIT.read_bytes())
             mode = b'100755' if AUDIT.stat().st_mode & 0o100 else b'100644'
             entries.append(mode + b' ' + oid.encode() + b'\tFINAL_AUDIT.md\0')
-        if attestation:
+        if attestation and not nf:
             for name in ATTESTATION_FILES:
                 path = Path(name)
                 if not path.is_file() or path.is_symlink():
@@ -1127,7 +1240,8 @@ def validate(j, ready=True):
         if not override_allows(j, verdict[1]):
             raise NotReadyError('PR requires an owned READY verdict.')
     # With a Statement the commit tree also carries the attestation files.
-    committed = snapshot(True, attestation=True) if isinstance(j.get('statement'), dict) else snapshot(True)
+    committed = (snapshot(True, attestation=True)
+                 if isinstance(j.get('statement'), dict) and not j.get('no_footprint') else snapshot(True))
     if snapshot() != j['reviewed_tree'] or committed != j['commit_tree']:
         raise ValueError('Reviewed files changed; rerun FINAL_AUDIT.')
     current = head()
@@ -1165,7 +1279,7 @@ def manual_signed_commit(j, reason=None):
     command = ('cd ' + shlex.quote(os.getcwd())
                + ' && git read-tree ' + shlex.quote(j['commit_tree'])
                + ' && git commit ' + ('-S ' if j.get('requires_signature', True) else '--no-gpg-sign ')
-               + '-m ' + shlex.quote(j['title']))
+               + '-m ' + shlex.quote(commit_message(j)))
     if os.environ.get('UNCLE_SIGNING_JSON') == '1':
         block = json.dumps(command) + ' '
     else:
@@ -1272,7 +1386,7 @@ def automatic_commit(j):
     # Stage the exact audited tree and let normal hooks run. The explicit flag
     # prevents inherited configuration from invoking the user's signer.
     git('read-tree', j['commit_tree'])
-    committed = subprocess.run(['git', 'commit', '--no-gpg-sign', '-m', j['title']],
+    committed = subprocess.run(['git', 'commit', '--no-gpg-sign', '-m', commit_message(j)],
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if committed.returncode:
         reason = committed.stderr.strip()
@@ -1406,9 +1520,10 @@ def slug(text):
 
 
 def label_prefix(origin):
+    fallback = 'change/' if bare() else 'uncle/'     # D-6: no Uncle name in the branch of a no-footprint run
     fields = origin.strip().split('\t')
     if len(fields) != 3 or fields[2] != 'gh':
-        return 'uncle/'
+        return fallback
     try:
         result = subprocess.run(['gh', 'issue', 'view', fields[1], '--repo', fields[0],
                                  '--json', 'labels'], capture_output=True, text=True,
@@ -1417,12 +1532,12 @@ def label_prefix(origin):
             raise ValueError('Label lookup failed')
         labels = {label['name'].casefold() for label in json.loads(result.stdout)['labels']}
     except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, AttributeError):
-        print('Label lookup failed; using uncle/ prefix', flush=True)
-        return 'uncle/'
+        print('Label lookup failed; using ' + fallback + ' prefix', flush=True)
+        return fallback
     for label, prefix in [('enhancement', 'feat/'), ('bug', 'bug/'), ('documentation', 'doc/')]:
         if label in labels:
             return prefix
-    return 'uncle/'
+    return fallback
 
 
 def branch_name(j):
@@ -1544,8 +1659,23 @@ def started_journal():
     return j
 
 
+def entry_preflight():
+    # AR-007: no-footprint mode refuses a repository that already tracks .uncle/ paths (HEAD or index), changing nothing.
+    if not bare():
+        return
+    tracked = set()
+    if subprocess.run(['git', 'rev-parse', '--verify', '-q', 'HEAD'], stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL).returncode == 0:
+        tracked.update(git('ls-tree', '-r', '--name-only', 'HEAD', '--', '.uncle').splitlines())
+    tracked.update(git('ls-files', '--cached', '--', '.uncle').splitlines())
+    if tracked:
+        raise StartError('no-footprint mode needs no tracked .uncle/ paths; untrack these first: '
+                         + ', '.join(sorted(tracked)[:10]))
+
+
 def start():
     try:
+        entry_preflight()
         start_build()
     except ValueError as error:
         raise StartError(str(error)) from error
@@ -1583,6 +1713,8 @@ def start_build():
              intended_head='', commit_tree='', audit_hash='', verdict_run='',
              base_repo='', head_repo='', base_branch='', head_branch='',
              phase='started', url='', number=None, early_ref=False)
+    if os.environ.get('UNCLE_NO_FOOTPRINT') == '1':
+        j['no_footprint'] = True
     default = default_branch(remotes)
     if default is not None:
         target = current_branch if current_branch != default else branch_name(j)
@@ -1855,7 +1987,8 @@ def handoff(j):
         # checked only after the operator had typed a PR title, a work summary,
         # verification steps and a y/n: four answers collected for a PR the
         # driver had already decided it would not create.
-        blocked = release_blocked_reason(j)
+        nf = bare()
+        blocked = None if nf else release_blocked_reason(j)
         if blocked:
             if auto_publish():
                 print('Not publishing as READY: ' + blocked, flush=True)
@@ -1875,8 +2008,11 @@ def handoff(j):
         if envelopes_enabled():
             print('After consent, .uncle/attestation.json (and .sig when a signer exists) are added to this commit.', flush=True)
         if auto_publish():
-            title, summary, manual = title_default(), auto_summary(), auto_manual_steps()
-            print('Unattended: generated PR title, summary and verification steps; no one confirmed them.', flush=True)
+            if nf:
+                title, summary, manual = title_default(), change_request_section('Summary') or title_default(), bare_testing()
+            else:
+                title, summary, manual = title_default(), auto_summary(), auto_manual_steps()
+                print('Unattended: generated PR title, summary and verification steps; no one confirmed them.', flush=True)
         else:
             title = ask('PR title [default: ' + title_default() + ']: ', title_default())
             summary = ask('Work summary: ')
@@ -1888,12 +2024,13 @@ def handoff(j):
         validate(j)
         if remote_sha(j) != j['remote_before']:
             raise ValueError('Remote changed during prompts; rerun FINAL_AUDIT.')
+        policy = footprint_policy() if nf else None     # validated before any publication write
         body = '## Work summary\n\n' + summary + '\n\n## Manual verification\n\n' + manual + '\n'
         if auto_publish() and blocked and not j.get('release_skipped'):
             j['release_skipped'] = blocked
             save(j)
         skipped = j.get('release_skipped')
-        if skipped:
+        if skipped and not nf:
             # First thing a reviewer reads. A PR published over a failing audit
             # must not look like one that passed.
             rows = blocking_findings()
@@ -1904,7 +2041,7 @@ def handoff(j):
                 for row in rows[:10]:
                     banner += '> - ' + row.replace('\n', ' ') + '\n'
             body = banner + '\n' + body
-        waived = unattended_audit_waiver(j)
+        waived = 0 if nf else unattended_audit_waiver(j)
         if waived:
             # Said plainly at the top: the review that was skipped is this one.
             body = ('> [!NOTE]\n'
@@ -1912,11 +2049,25 @@ def handoff(j):
                     'The auditor said NOT READY. Human review is this PR; the findings are in '
                     '`.uncle/docs/FINAL_AUDIT.md`.\n\n' % (waived, '' if waived == 1 else 's')) + body
         record = override_record()
-        if len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash']:
+        if not nf and len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash']:
             # An overridden verdict is not a READY verdict; the PR says so.
             body = ('> Published over a **' + record[1]
                     + '** audit verdict. The PR reviewer decides whether it merges.\n\n') + body
-        if envelopes_enabled():
+        if nf:
+            # No-footprint: no attestation, no Uncle sections. The body, commit message and branch are composed by the
+            # footprint module and scanned for leaks before the `prepared` save, so a rejection precedes every write.
+            fp = footprint()
+            held = bool(skipped) or (len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash'])
+            closing = closing_trailer(j, j['origin'].strip().split('\t')) if j['origin'] else ''
+            body = fp.render_body(summary, change_request_section('Motivation|Why|Background'), manual,
+                                  'Opened as a draft pending maintainer review.' if held else '', closing,
+                                  policy['disclosure'])
+            message = fp.render_message(title, summary, policy['trailer'])
+            fp.scan({'title': title, 'body': body, 'message': message, 'branch': j['head_branch']},
+                    policy['name_uncle'])
+            j.update(phase='prepared', title=title, body=body, message=message)
+            save(j)
+        elif envelopes_enabled():
             # The release envelope, Statement and signature; refuses here,
             # before any git write, when the blocking policy says so.
             attest(j)
@@ -1928,13 +2079,14 @@ def handoff(j):
             sealed = sealed_attestation(j)
             sealed['gate_publication'] = ('UNATTENDED (no human approval)' if auto_publish()
                                           else 'APPROVED (human)')
-        j['attestation'] = sealed
-        body = attestation().attach_body(body, sealed)
-        if j['origin']:
-            origin = j['origin'].strip().split('\t')
-            body += '\n' + closing_trailer(j, origin) + '\n'
-        j.update(phase='prepared', title=title, body=body)
-        save(j)  # Consent and mutation intent precede commit creation.
+        if not nf:
+            j['attestation'] = sealed
+            body = attestation().attach_body(body, sealed)
+            if j['origin']:
+                origin = j['origin'].strip().split('\t')
+                body += '\n' + closing_trailer(j, origin) + '\n'
+            j.update(phase='prepared', title=title, body=body)
+            save(j)  # Consent and mutation intent precede commit creation.
     if j['phase'] == 'prepared':
         if isinstance(j.get('statement'), dict):
             restore_attestation_files(j)
@@ -1992,7 +2144,7 @@ def handoff(j):
         raise ValueError('Base repository changed during prompts; rerun FINAL_AUDIT.')
     if remote_sha(j) != j['intended_head']:
         raise ValueError('Remote changed during lookup; rerun FINAL_AUDIT.')
-    if attestation().MARKER not in j['body']:
+    if not j.get('no_footprint') and attestation().MARKER not in j['body']:
         # A journal prepared before attestation existed; validate() just
         # passed, so the seal describes this audited change. Once only.
         j['attestation'] = sealed_attestation(j)
@@ -2063,6 +2215,7 @@ def main():
     elif action == 'freeze':
         started = None
         previous = None
+        nf_mode = bare()
         if JOURNAL.exists():
             previous = load()
             if previous['phase'] in ('creating', 'unknown'):
@@ -2087,6 +2240,8 @@ def main():
         carried = (started or previous or {}).get('base_checkout_branch')
         if carried:
             j['base_checkout_branch'] = carried
+        if nf_mode:
+            j['no_footprint'] = True
         if not j['origin']:
             j['audit_remotes'] = remote_configuration()
         save(j)
@@ -2101,7 +2256,7 @@ def main():
         # canonical block and re-ignores `.uncle/docs/` and the attestation. Publish then refused the finished audit
         # ('approved artifact is ignored', tree-mismatch) for a change nobody made. Only in a linked worktree, which uncle
         # created and normalizes on creation; the user's own checkout is never rewritten here.
-        if git('rev-parse', '--absolute-git-dir') != git('rev-parse', '--path-format=absolute', '--git-common-dir'):
+        if not bare() and git('rev-parse', '--absolute-git-dir') != git('rev-parse', '--path-format=absolute', '--git-common-dir'):
             import sys as _sys
             lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
             if lib not in _sys.path:
@@ -2114,7 +2269,8 @@ def main():
         j.update(audit_hash=audit_hash(), commit_tree=snapshot(True),
                  verdict_run=read(STATE / 'audit-verdict').split('\t')[0], phase='bound')
         # Sealed here, after the last agent stage and before any handoff.
-        j['attestation'] = seal_attestation(j)
+        if not bare():
+            j['attestation'] = seal_attestation(j)
         save(j)
     elif action == 'artifact':
         # The digest every envelope and the Statement subject name: working

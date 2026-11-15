@@ -475,6 +475,13 @@ fi
 # release envelope says fail, and the attestation records that it completed over an override. No git history means no attestation.
 build_attest_completed() {
     local verdict artifact overridden=0 original
+    # No-footprint mode forbids an attestation. The persisted journal mode governs a resume; the env only selects a new run.
+    if [[ -f "$PROJECT_ROOT/.uncle/workflow/pr/journal.json" ]]; then
+        python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("no_footprint") else 1)' \
+            "$PROJECT_ROOT/.uncle/workflow/pr/journal.json" 2>/dev/null && return 0
+    elif [[ "${UNCLE_NO_FOOTPRINT:-}" == 1 ]]; then
+        return 0
+    fi
     verdict="$(completed_verdict)"
     if [[ -s "$GREEN_OVERRIDE_FILE" || -s "$AUDIT_OVERRIDE_FILE" ]]; then
         overridden=1

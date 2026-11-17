@@ -1112,7 +1112,7 @@ def structure_schema(model, ids, ownership):
                 value = _text(12000, 0) if inline else _object({
                     'owns': {'type': 'array', 'maxItems': 150, 'items': _text(4000)}}, ['owns'])
                 variants.append(_object({'op': {'const': 'set_text' if inline else 'set_step'},
-                                         'id': {'type': 'string', 'enum': keys}, field: value}, ['op', 'id', field]))
+                                         'id': _text(120), field: value}, ['op', 'id', field]))   # membership: id_membership_errors
         schema['properties']['ops']['items'] = {'anyOf': variants} if variants else {}
         schema['properties']['ops']['maxItems'] = 120 if variants else 0
         schema['properties']['commands_replace']['maxItems'] = 0
@@ -1181,6 +1181,10 @@ def apply_structure_repair(directory, project):
     legacy = edit_ops_packet()
     legacy['properties']['protected_verification_paths'] = {'type': 'string'}
     conforms(delivery, {'anyOf': [structure_schema(model, scope['ids'], scope['ownership']), legacy]})
+    from worker_schemas import id_membership_errors
+    membership = id_membership_errors(delivery, scope['ids'])   # the wire schema no longer carries ID enums
+    if membership:
+        raise Conflict('structural repair names an id outside its scope: %s' % '; '.join(membership))
     if delivery.get('dispositions'):
         raise Conflict('structural repair must preserve existing dispositions')
     operations = delivery.get('ops') or []

@@ -194,7 +194,7 @@ def _op(ids=None, model=None):
     """One flat edit of the plan model (docs/plan-model.md): every value a string, so any grammar accepts it.
     `ids`, when given, are the only ids the edit may name."""
     from plan_model import FIELD_NAMES, OP_NAMES, ROW_KINDS
-    pick = (lambda extra=(): {'type': 'string', 'enum': sorted(ids) + list(extra)}) if ids else (lambda extra=(): _text(120, 0))
+    pick = lambda extra=(): _text(120, 0)   # ids are checked locally (id_membership_errors), never by an enum
     step = ['title', 'text', 'owns', 'depends_on']
     block = _object({'kind': {'type': 'string', 'enum': ['prose', 'heading', 'code', 'list']},
                      'text': _text(EDIT_MAX, 0), 'level': _text(2, 0), 'lang': _text(30, 0),
@@ -217,7 +217,7 @@ def _op(ids=None, model=None):
             if ids is not None and not keys:
                 continue
             variants.append(_object({'op': {'const': 'set_fields'},
-                                     'id': _choice(keys) if ids is not None else _text(120),
+                                     'id': _text(120),
                                      'fields': _pairs([f[0] for f in specs if f[0] != 'id'], 8000)},
                                     ('op', 'id', 'fields')))
     if model is not None:
@@ -228,9 +228,9 @@ def _op(ids=None, model=None):
 
 def _new_step(ids=None):
     steps = [key for key in ids if key.startswith('step-')] if ids is not None else None
-    anchor = _choice(steps) if steps else _text(120)
+    anchor = _text(120)
     strings = {'type': 'array', 'maxItems': 150, 'items': _text(4000)}
-    return _object({'op': {'const': 'insert_step'}, 'after': _choice(steps + ['end']) if steps else _text(120),
+    return _object({'op': {'const': 'insert_step'}, 'after': _text(120),
                     'before': anchor,
                     'new': _object({'title': _text(EDIT_MAX, 0), 'text': _text(EDIT_MAX, 0), 'owns': strings,
                                     'depends_on': strings}, ('title', 'text', 'owns', 'depends_on'))}, ('op', 'new'))
@@ -305,7 +305,7 @@ def model_op(model, ids=None, intent=None):
         variants.append(_object(dict(op={'const': op}, **properties), ['op'] + list(required)))
 
     def pick(values):
-        return {'type': 'string', 'enum': sorted(values)}
+        return _text(120, 0)   # no enum: ids are checked locally by id_membership_errors
 
     block = {'anyOf': [
         _object({'kind': {'const': 'prose'}, 'text': _text(EDIT_MAX, 0)}, ('kind', 'text')),
@@ -386,6 +386,31 @@ def _minimal(schema):
         if len(result['enum']) == 1:
             result['const'] = result.pop('enum')[0]
     return result
+
+
+ID_FIELDS = ('id', 'target', 'after', 'before')
+
+
+def id_membership_errors(packet, allowed):
+    """Local replacement for the removed wire-schema ID enums: every id an op names (`id`, `target`, `after`, `before`)
+    must be in `allowed`.  '' and 'end' are anchors, not ids.  An empty `allowed` rejects every supplied id.
+    Returns a list of error strings (empty when the packet is fine)."""
+    allowed = set(allowed or ())
+    errors = []
+    containers = []
+    if isinstance(packet, dict):
+        containers.append(('ops', packet.get('ops')))
+        for number, group in enumerate(packet.get('resolutions') or []):
+            containers.append(('resolutions[%d].ops' % number, group.get('ops') if isinstance(group, dict) else None))
+    for where, ops in containers:
+        for position, op in enumerate(ops or []):
+            if not isinstance(op, dict):
+                continue
+            for field in ID_FIELDS:
+                value = op.get(field)
+                if isinstance(value, str) and value not in ('', 'end') and value not in allowed:
+                    errors.append('%s[%d].%s: %r is not an id this edit may name' % (where, position, field, value))
+    return errors
 
 
 def _ops(ids, model, maximum, generic_model=None, intent=None):

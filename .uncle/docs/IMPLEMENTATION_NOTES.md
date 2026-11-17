@@ -1,5 +1,29 @@
 # Implementation notes
 
-### Deviations
+## Step 1
 
-- `.gitignore`: Changed outside the plan's change-impact table. Recorded by the driver because this run was unattended and the implementation did not record it; the implementation notes may explain it in prose. Review it in the diff.
+### Files changed
+
+- `scripts/lib/http_agent.py` — Written by isolated step 1; 1
+
+## Step 2
+
+### Files changed
+
+- `scripts/lib/updated_plan_ops.py` — Written by isolated step 2; 2
+- `scripts/lib/worker_schemas.py` — Written by isolated step 2; 2
+
+## Step 3
+
+### Files changed
+
+- `scripts/change-workflow.sh` — Written by isolated step 3; 3
+- `scripts/lib/implementation-gates.sh` — Written by isolated step 3; 3
+
+## Step 4
+
+### Files changed
+
+- `scripts/tests/critical-suites.txt` — Written by isolated step 4; 4
+- `scripts/tests/review-incomplete-exit-test.sh` — Written by isolated step 4; 4
+- `scripts/tests/schema-feedback-retry-test.py` — Written by isolated step 4; 4

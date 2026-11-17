@@ -4594,6 +4594,7 @@ while true; do
                         0) continue ;;
                         2) ;;
                         3) continue ;;
+                        4) echo "Exit status 3: review incomplete (unattended)."; exit 3 ;;
                         *) triage_stop_reason "$STATE_DIR" human; exit 1 ;;
                     esac
                 else
@@ -4636,6 +4637,7 @@ REPAIR
                             0) continue ;;
                             2) ;;
                             3) continue ;;
+                            4) echo "Exit status 3: review incomplete (unattended)."; exit 3 ;;
                             *) triage_stop_reason "$STATE_DIR" human; exit 1 ;;
                         esac
                     fi

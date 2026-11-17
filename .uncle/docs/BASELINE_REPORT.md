@@ -1,89 +1,68 @@
-# Baseline report
+# Baseline report (Issue 286)
 
-Omitted sections: Reproduction result (feature, not a bug); Baseline test results as run (driver supplies them, see section 9)
+Omitted sections: Reproduction result (cannot reproduce without a grammar-limited provider; mocked in tests); Areas outside change folded into section 12
 
 ## 1. Change-request summary
-Issue 283 (`.uncle/docs/CHANGE_REQUEST.md`): add an `--oss` launcher flag so a change run against an upstream open-source issue follows that project's submission and testing guidelines, records each with a source, surfaces conflicts at a human gate, stops before PR creation if the project forbids AI-assisted PRs, and leaves behavior unchanged without the flag.
+See .uncle/docs/CHANGE_REQUEST.md (Issue 286): unattended runs exit 1 at IMPLEMENT when self-hosted reviewer JSON fails the output schema after a grammar-constrained mode is unavailable/too large and the call falls back to a looser mode.
 
 ## 2. Repository architecture
-* `uncle` (bash launcher, 1203 lines): parses flags, exports env (`UNCLE_NO_FOOTPRINT`), dispatches to `scripts/from-issue.sh` / `scripts/change-workflow.sh`.
-* `scripts/change-workflow.sh` (5323 lines): existing-code driver; stage prompts live in `prompts/change/*.md`.
-* `scripts/lib/change-pr.sh` (2357 lines): embedded Python publishes the PR; run journal at `.uncle/workflow/pr/journal.json`.
-* `scripts/lib/footprint.py` (140 lines): pure no-footprint rendering and vocabulary scan (Issue 280).
-* Tests: `scripts/tests/*-test.py` (Python), `*-test.sh` (shell); default tier listed in `scripts/tests/critical-suites.txt`.
+Bash drivers (`scripts/change-workflow.sh`, `scripts/lib/*.sh`) call Python self-hosted runners (`scripts/lib/self_hosted.py`, `http_agent.py`, `self_hosted_http.py`). Output schemas live in `scripts/lib/worker_schemas.py`, `runner_schema.py`, `updated_plan_ops.py`.
 
 ## 3. Relevant code paths
-| Path | Lines | Role |
-|---|---|---|
-| `uncle` | 127, 165, 344, 351, 440 | `--no-footprint` help text, flag var, revalidate arg allow-list, parse, typo-hint list |
-| `scripts/change-workflow.sh` | 2097-2120 `bind_change_request_source` | appends the change request to baseline/change-spec/change-plan/updated-change-plan/adversarial-review/manual-checklist prompts |
-| `scripts/lib/change-pr.sh` | 33-48, 1523, 1663-1672, 1716-1717, 2147, 2244 | no-footprint detection, branch prefix, tracked-`.uncle` refusal, journal flag, publish body check |
-| `scripts/lib/footprint.py` | 89-120 | `render_body`, `render_message`, `scan` |
-| `scripts/stagegate.sh` | 480-482 | skips attestation under no-footprint |
-| `README.md` | 213-228 | `--no-footprint` documentation |
+- `scripts/lib/self_hosted_http.py:1534` `_final_call` (modes json_schema/json_object/prompt); `:1568` `constrained_completion` falls through `caps['modes']`, a rejected mode (HTTP in `REJECTED`, line 30, includes 400) is skipped. aws-bedrock/anthropic-api profiles (`:1571`) have no fallback.
+- `scripts/lib/http_agent.py:1344-1463` final-answer loop; `validate(final)` at 1450; for non-bounded writers a `{`-prefixed invalid answer goes to `repair_answer` (1442-1458); otherwise `ValueError` with `save_rejected('schema')` (658) is raised. No validator-error feedback to the model.
+- `scripts/lib/self_hosted.py:2463-2548` reviewer loop; `:2473` raises InvalidReviewerDocument when the delivery file is absent; `:2506-2544` one retry (`format_retried`) appending the error to the prompt; second failure re-raises.
+- `scripts/change-workflow.sh:4600-4640` repair-once then 'Implementation remains incomplete' then `implementation_incomplete_choice`; non-zero/other status -> `exit 1`.
+- `scripts/lib/implementation-gates.sh:76-83` unattended with no rejected rows returns 1.
+- Schemas with `enum`: `worker_schemas.py` (20 occurrences), `runner_schema.py` (5), `updated_plan_ops.py` (1), `self_hosted.py` (8).
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | `uncle ... --oss` | refused as `Unknown argument` / typo hint | `uncle:344`, `uncle:440` | No (changes) |
-| B-2 | Change run without `--oss` | Uncle default verification, Uncle-style PR | `scripts/lib/change-pr.sh` | Yes |
-| B-3 | `--no-footprint` run | bare tree, maintainer-style body, disclosure, vocabulary scan, `change/` branch | README 213-228; `scripts/tests/no-footprint-test.py` | Yes |
-| B-4 | Change stages | prompts carry bound change request only; no upstream-guideline discovery | `change-workflow.sh:2097-2120` | Yes without flag |
-| B-5 | PR body | built from `footprint.render_body` (no-footprint) or Uncle audit body; project PR template ignored | `footprint.py:89` | Yes without flag |
+| B-1 | Server accepts json_schema | Answer shaped by server, validated locally | http_agent.py:1450 | Yes |
+| B-2 | json_schema rejected with 400 | Falls to next mode, mode remembered in caps['rejected'] | self_hosted_http.py:1588-1596 | Yes |
+| B-3 | Final answer fails schema, starts with `{` | repair_answer attempted | http_agent.py:1456-1458 | Yes |
+| B-4 | Final answer fails schema, repair unavailable | ValueError 'violates the artifact schema', rejected text saved to .uncle/workflow/logs | http_agent.py:1459 | Yes (message prefix) |
+| B-5 | Reviewer delivery missing/invalid | One prompt-appended retry, then InvalidReviewerDocument | self_hosted.py:2527-2544 | Yes |
+| B-6 | Implementation incomplete, unattended, no rejected rows | Prints 'run remains pending at IMPLEMENT', return 1, driver exit 1 | implementation-gates.sh:76-83 | MODIFY only for review-delivery-only case |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | No-footprint publication contains no Uncle artifacts or vocabulary | `footprint.scan`, `change-pr.sh:1663`, `2147` | `no-footprint-test.py` | High |
-| I-2 | Mode is fixed in the journal at start; resume cannot flip it | `change-pr.sh:33-41, 1716` | `no-footprint-test.py` | Medium |
-| I-3 | Human gates are never bypassed; publication only after audit gate | `stagegate.sh`, change-pr | `gates`, `pr-auto-publish` suites | High |
-| I-4 | Unknown launcher args are refused | `uncle:344` | launcher suites | Medium |
+| I-1 | Invalid output is never published as a reviewer artifact | self_hosted.py:2506-2529 | self-hosted suites | Medium |
+| I-2 | Retries are bounded | format_retried flag; attempts list | self-hosted-retry-test.py (HTTP-level) | Medium |
+| I-3 | Unattended never waives an empty row set | implementation-gates.sh:76-83 | implementation-gate shell suites (unverified names) | Medium |
+| I-4 | A schema-valid answer is the only accepted answer | validate() http_agent.py:1450 | UNRESOLVED exact test | Medium |
 
-## 6. Current interface contracts
-* CLI flags and env vars in `uncle` usage text; `UNCLE_NO_FOOTPRINT=1` env contract.
-* Journal JSON keys (`no_footprint`, etc.) at `change-pr.sh:1710-1717`.
-* Artifact JSON schema `uncle.artifact/v1`.
+## 6. Interface contracts
+Worker packet/plan-op JSON schemas (worker_schemas.py, updated_plan_ops.py) are consumed by the validator and by other stages; field names must not change. Exit status of `change-workflow.sh` is consumed by `uncle_headless.py:504`.
 
 ## 7. Existing automated-test coverage
-`scripts/tests/no-footprint-test.py` covers footprint rendering and wiring. PR publication is covered by `pr-auto-commit`, `pr-auto-publish`, `pr-closes-refs` (critical tier). Shell and Python runners are independent (separate temp dirs, no shared ports; per scripts guidance they run together in about the time of the shell suites alone), so they form one parallel group. No test covers guideline discovery, AI-policy refusal or PR-template rendering.
+Python suites `scripts/tests/*-test.py` (runner `bash scripts/run-python-tests.sh`, default tier from scripts/tests/critical-suites.txt) and shell suites (`bash scripts/run-shell-tests.sh`). Shell and Python runners use separate temp dirs and bind no shared ports, so they run as one parallel group. Self-hosted suites include self-hosted-retry-test.py (transport retries), -flavor, -refused-options.
 
 ## 9. Baseline test results
-Commands come from `scripts/run-shell-tests.sh`, `scripts/run-python-tests.sh` and the project's runner guidance. No results were produced in this stage; the driver's baseline (`.uncle/workflow/green-check.baseline.tsv`) is authoritative. Some Python suites are known to fail on a clean checkout per the runner guidance. Command 3 runs only the new suite, which does not exist yet and is expected to fail or find no tests before the change.
+Commands are from CLAUDE.md-style runner guidance and the scripts present (scripts/run-shell-tests.sh, scripts/run-python-tests.sh). Not executed here; the driver baseline supplies results. Some Python suites are known to fail on a clean checkout.
 
-## 10. Existing failures, warnings, flaky behavior
-Some Python suites already fail on a clean checkout (documented in the repo runner guidance; names come from the driver baseline). No other known issue.
+## 10. Existing failures
+None documented beyond the note above. UNRESOLVED which suites fail at baseline; see .uncle/workflow/green-check.baseline.tsv.
 
 ## 12. Likely change surface
-`uncle`, `scripts/change-workflow.sh`, `scripts/lib/change-pr.sh`, new `scripts/lib/oss.py`, new `prompts/change/oss-guidelines.md`, `scripts/tests/oss-test.py`, `scripts/tests/critical-suites.txt`, `README.md`.
+http_agent.py final-answer loop; self_hosted_http.py (grammar-too-large detection); worker_schemas.py / updated_plan_ops.py / runner_schema.py (enum shrink); self_hosted.py reviewer loop; change-workflow.sh and implementation-gates.sh (unattended review-incomplete result); a new Python suite.
 
 ## 13. Regression-sensitive components
-`uncle` flag parsing (every run), `bind_change_request_source` (every change stage prompt), `change-pr.sh` publish path (the only outward-facing action), no-footprint behavior.
-
-## 14. Areas explicitly outside the change
-New-application driver (`workflow.sh`, `stagegate.sh` stages), approval-gate logic, attestation, TUI, reviewer panel prompts other than the bound-request appendix.
+schema validation shared by all stages; bounded updated-plan writer (must not gain retries, http_agent.py:1352-1356); implementation gate used by interactive runs.
 
 ## 15. Unknowns and assumptions
-* Exact interplay of `--oss` with fork-based PRs depends on remote/`gh` state; assumed unverifiable offline.
-* Wiki-only guidance cannot be fetched deterministically.
+- Exact set of schemas exceeding provider grammar limits is unknown; enum shrink is applied to ID-list enums only.
+- Whether a distinct exit code is acceptable to callers (uncle_headless.py) is unknown; assumed any non-zero is a failure and a documented code is additive.
 
 ## 16. Initial risk assessment
-| Risk | Level |
-|---|---|
-| Heuristic AI-policy detection misses or over-matches | Medium |
-| Prompt appendix leaks into non-`--oss` runs | Low if gated on env |
-| Interaction with no-footprint vocabulary scan | Medium |
+Medium: shared validation path; loosening enums moves ID checking to local validation, which must remain strict.
 
 ## Exact build and test commands executed
 
 ```sh
 bash scripts/run-shell-tests.sh
 bash scripts/run-python-tests.sh
-bash scripts/run-python-tests.sh -- oss
-```
-
-## Parallel verification groups
-
-```text
-1 2
 ```
 

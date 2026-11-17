@@ -73,6 +73,15 @@ change_implementation_incomplete_choice() {
         fi
     fi
     echo
+    if [[ "${UNATTENDED:-0}" == 1 && -z "${ids// /}" ]] && [[ -s "$completion" ]] \
+        && grep -qiE '^[[:space:]]*review' "$completion" \
+        && ! grep -qE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
+        # Every acceptance row is delivered; only a review delivery is missing or rejected. That is a distinct result from
+        # missing acceptance rows, so it gets its own message and the driver's documented exit status 3 (return 4 here).
+        record_unattended_gate implementation-incomplete "stopped: review incomplete; all acceptance rows delivered"
+        echo "Unattended: review incomplete. All acceptance rows are delivered; only a review delivery is missing or rejected."
+        return 4
+    fi
     if [[ "${UNATTENDED:-0}" == 1 && -z "${ids// /}" ]]; then
         # No rejected rows means nothing on the record to waive: the stage
         # delivered no change, or no acceptance report. Waiving an empty set

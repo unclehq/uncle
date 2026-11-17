@@ -187,3 +187,7 @@ no-footprint
 
 # Open-source contribution mode: guideline discovery, AI-policy refusal, DCO, PR template, claimability.
 oss
+
+# Self-hosted final-answer schema feedback retry, ID-enum-free wire schemas, and the review-incomplete unattended exit (issue 286).
+schema-feedback-retry
+review-incomplete-exit

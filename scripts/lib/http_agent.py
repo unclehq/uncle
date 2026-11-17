@@ -955,6 +955,12 @@ def run_agent(values, prompt, policy, limit, turns=80, usage=None, final_schema=
         policy.cleanup()
 
 
+def schema_feedback_retries():
+    # Only the integers 0, 1 or 2 (whitespace trimmed) are valid; anything else uses the default 2, never clamped.
+    text = os.environ.get('UNCLE_SCHEMA_FEEDBACK_RETRIES', '').strip()
+    return int(text) if text in ('0', '1', '2') else 2
+
+
 def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache, seconds,
                tools_required, side='agent'):
     """Run the tool loop; returns (final text, model requests made).
@@ -1454,6 +1460,35 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         raise ValueError('Model response is not valid JSON (%s constraint): %s%s'
                          % (mode, error, rejection_note(save_rejected('json', error, final)))) from None
     except ValueError as error:
+        if not bounded_writer:
+            # Schema feedback replaces repair_final: at most two more constrained calls, then reject.
+            # Feedback carries only the schema path and a fixed description (no values, paths or raw text).
+            for _ in range(schema_feedback_retries()):
+                found = re.match(r'\$[A-Za-z0-9_.\[\]]*', str(error))
+                where = found.group(0) if found else '$'
+                messages.append({'role': 'user', 'content': 'Your previous answer did not satisfy the required JSON schema at %s. '
+                                 'Return the complete JSON object again, matching the required types, required fields and '
+                                 'allowed values exactly. %s' % (where, COMPACT_JSON_REQUEST)})
+                gate()
+                retry, reason, retry_usage, mode = constrained_completion(
+                    values, messages, final_schema, final_name, final_limit, effort,
+                    min(timeout, max(.001, deadline - time.monotonic())))
+                requests += 1
+                record_turn(request_group, requests, {'content': retry}, retry_usage, reason, 'final')
+                add_usage(usage, retry_usage)
+                record_cost(retry_usage)
+                usage['constraint_mode'] = mode
+                final = transport.strip_reasoning(retry).strip()
+                try:
+                    validate(final)
+                except ValueError as again:
+                    error = again
+                    continue
+                if stage is not None:
+                    stage.final_answer = final
+                return final, requests
+            raise ValueError('Model response violates the artifact schema (%s constraint): %s%s'
+                             % (mode, error, rejection_note(save_rejected('schema', error, final)))) from None
         if repairable:
             return repair_final('Model response violates the artifact schema (%s constraint): %s' % (mode, error))
         raise ValueError('Model response violates the artifact schema (%s constraint): %s%s'

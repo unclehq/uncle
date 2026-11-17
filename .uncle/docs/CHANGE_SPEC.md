@@ -1,79 +1,63 @@
-# Change specification
+# Change spec (Issue 286)
 
-Omitted sections: Performance (none); Migration (none); Prototype isolation (not a prototype)
+Omitted sections: Performance (negligible; retries bounded); Migration (none); Prototype isolation (not a prototype)
 
 ## 1. Change type
-Feature.
+Bug fix / robustness.
 
 ## 2. Problem statement
-Uncle's defaults (its own verification commands, Uncle-style PR, audit text) do not match what upstream maintainers of a project the user does not own will accept. Issue 283.
+Self-hosted reviewer/plan-edit output that fails the artifact schema is recorded as a missing delivery; the unattended run then exits 1 at IMPLEMENT even though the implementer delivered every acceptance row.
 
 ## 3. Current behavior
-See baseline B-1..B-5.
+Baseline B-3..B-6.
 
 ## 4. Desired behavior
-`--oss` makes the change run discover and record the project's guidelines (with file and line sources, missing ones listed as unknown), follow them for commits, PR, tests and checks, keep Uncle artifacts out of the PR, refuse publication when the project prohibits AI-assisted contributions, and stop at a human gate on conflicts or unclaimable issues.
+Schemas compile into smaller grammars; a schema-invalid final answer gets bounded validator-error feedback and retry; an unattended run whose only gap is a review delivery ends with a distinct, documented 'review incomplete' result.
 
 ## 5. Observable behavior table
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| OB-1 | ADD | `uncle ... --oss` | Unknown argument | Flag accepted; run recorded as OSS mode in the journal; `--oss` appears in help and typo hints | AC-1 |
-| OB-2 | ADD | Plan stage under `--oss` | No discovery | Plan has a guidelines table: each guideline with source `file:line`, plus an Unknown list for absent guidance | AC-2 |
-| OB-3 | ADD | No contributing guidance found | n/a | Plan states none found; conventions from recent merged PRs and CI appear labeled `inferred` | AC-3 |
-| OB-4 | ADD | Project policy prohibits AI contributions | PR published | Publication refused before any branch, commit, push or `gh` write; user told why | AC-4 |
-| OB-5 | ADD | Project defines verification commands (CI, Makefile, test config) | Uncle commands | Plan's verification commands are the project's own; required checks that cannot run are reported not run, never passed | AC-5 |
-| OB-6 | ADD | Project requires DCO and has PR template, commit format | Uncle format | Commits carry `Signed-off-by`; PR body fills the project's PR template; commit/PR title follow the stated format | AC-6 |
-| OB-7 | ADD | Guidelines conflict with each other, the issue or Uncle rules; or issue is assigned/labeled not open/needs discussion | n/a | Run stops at a human gate with the conflict or warning listed; no silent choice | AC-7 |
-| OB-8 | ADD | `--oss` publish | Uncle files possible | Diff and PR text contain no Uncle-generated files or vocabulary (no-footprint rules apply) | AC-8 |
-| OB-9 | PRESERVE | Any run without `--oss` | Existing | Unchanged prompts, journal, PR | AC-9 |
-| OB-10 | ADD | README | Undocumented | README documents flag, limits and open-question decisions | AC-10 |
+| SB-1 | PRESERVE | Valid final answer | Accepted | Unchanged | existing suites |
+| SB-2 | MODIFY | Final answer fails schema | ValueError after repair attempt | Validator errors sent back to model, up to 2 retries, then the same ValueError | new python suite with fake server |
+| SB-3 | MODIFY | ID-list enums in reviewer/plan-edit schemas | Large enum grammars | IDs are plain strings in the wire schema, checked locally against the same allowed set | schema size + rejection tests |
+| SB-4 | PRESERVE | Bounded updated-plan writer | No retries | Still none | existing test + new assertion |
+| SB-5 | MODIFY | Unattended, implementation complete, review delivery missing/rejected | exit 1 'pending at IMPLEMENT' | Message 'review incomplete', distinct documented exit status | shell suite |
+| SB-6 | PRESERVE | Unattended, acceptance rows not delivered | exit 1 / waive path | Unchanged | existing shell suites |
 
 ## 6. Invariant table
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| INV-1 | NEW | A run's OSS mode is fixed in the journal at start; resume cannot change it | change-pr | journal `oss` key | AC-1 |
-| INV-2 | NEW | A detected AI-prohibition policy blocks PR creation | publish | oss.py check before publish | AC-4 |
-| INV-3 | NEW | A check that did not run is never reported as passed | report | existing record rules; plan commands | AC-5 |
-| INV-4 | EXISTING | No-footprint invariants (I-1) hold in OSS mode | publish | footprint.scan | AC-8 |
-| INV-5 | EXISTING | Human approval gates unchanged | all | stagegate | AC-9 |
-| INV-6 | EXISTING | Non-OSS behavior identical | all | env gating | AC-9 |
+| SI-1 | EXISTING | Invalid output is never accepted as an artifact | all validators | http_agent.py validate | new test |
+| SI-2 | STRENGTHENED | Schema feedback retries are bounded (max 2) | final-answer loop | http_agent.py | new test counting requests |
+| SI-3 | STRENGTHENED | Allowed-ID checks still enforced after enum removal | worker packets, plan ops | local validator | new test with unknown ID |
+| SI-4 | EXISTING | Missing acceptance rows are never reported as review-incomplete | implementation gate | implementation-gates.sh | shell test |
 No RELAXED or REMOVED invariants.
 
 ## 7. Compatibility
-Additive flag; no change without it.
+Packet field names unchanged; existing exit 1 meaning retained for all other failures.
 
-## 8. Error and failure behavior
-No guidance: say so, use labeled inferred conventions. Unbuildable project: report checks not run. AI-prohibited: stop before PR. Unclaimable issue: warn and wait at a human gate.
+## 8. Error behavior
+After retries exhausted the existing ValueError and saved rejected file remain.
 
-## 10. Security requirements
-PR text and branch scanned by footprint rules; discovery reads only repository files; no network use added beyond existing `gh` use.
+## 10. Security
+No secrets in feedback; the validator message is the only added content.
 
 ## 12. Rollback
-Revert the change; journal `oss` key is ignored by older code.
+Revert commit; no persisted state changes.
 
 ## 14. Non-goals
-Automatic forking; fetching wikis or external sites; inferring `--oss` from write access; changing approval gates or merge decision.
+Provider-specific grammar tuning; changing aws-bedrock/anthropic-api no-fallback policy; interactive gate behavior.
 
-## 15. Assumptions and decisions on open questions
-| Q | Decision |
-|---|---|
-| Q1 relation to no-footprint | `--oss` implies `--no-footprint` |
-| Q2 fork | Not automated. Uncle publishes to the existing remote logic; if the user cannot push, the run stops with instructions |
-| Q3 wiki/external guidance | Listed as unknown; the user may paste it into the change request |
-| Q4 infer `--oss` | Not inferred; explicit flag only |
+## 15. Assumptions
+Caller can treat a new documented non-zero exit code as distinct from 1 (UNRESOLVED check in uncle_headless.py).
 
 ## Acceptance criteria
 
 | ID | Criterion | Verification |
 |---|---|---|
-| AC-1 | `--oss` is accepted by the launcher, exports UNCLE_OSS=1 and UNCLE_NO_FOOTPRINT=1, is listed in help and typo hints, and the journal records `oss` at start and keeps it on resume. | scripts/tests/oss-test.py wiring checks over `uncle` and change-pr.sh text and journal creation |
-| AC-2 | Under --oss the change-request-bound stage prompts carry instructions to discover guidelines and the plan lists each guideline with file:line source and an Unknown list. Discovery on a fixture repo with CONTRIBUTING.md, PR template, DCO and non-default test command returns each with its source. | oss-test.py runs oss.py discover on a disposable fixture and asserts entries with sources and unknowns |
-| AC-3 | With no guidance present, discovery reports none found and the prompt requires inferred conventions labeled `inferred`. | oss-test.py on an empty fixture; prompt text assertion |
-| AC-4 | A fixture whose policy prohibits AI contributions makes the publish check fail before any branch, commit, push or gh call; a permissive or silent policy passes. | oss-test.py on prohibiting, disclosure-required and silent fixtures |
-| AC-5 | Plan prompt requires the project's own verification commands and requires checks that cannot run to be recorded as not run. | oss-test.py asserts the prompt text; plan review |
-| AC-6 | On the fixture, the commit message carries `Signed-off-by` when DCO is required and the PR body is rendered from the project's PR template with the change filled in. | oss-test.py unit tests of oss.py render functions |
-| AC-7 | Guideline conflicts, and an issue assigned to someone or labeled not open for contribution, produce a gate-stop with the listed reasons; the default path silent-choice is impossible. | oss-test.py claimability and conflict checks; prompt text requires a Conflicts section |
-| AC-8 | The OSS publication diff contains no Uncle files and the body has no Uncle vocabulary (no-footprint rules). | existing no-footprint-test.py plus oss-test.py assertion that OSS implies no_footprint |
-| AC-9 | Without --oss, prompts, journal and publication behavior are unchanged and existing suites still pass. | bash scripts/run-shell-tests.sh and bash scripts/run-python-tests.sh versus baseline |
-| AC-10 | README documents the flag, the decisions on the four open questions, and its limits. | oss-test.py greps README; manual read |
+| AC-1 | When a final answer fails schema validation, http_agent sends the validator error back to the model and retries at most 2 times before raising the existing 'violates the artifact schema' ValueError; a corrected answer on retry is accepted. | New suite scripts/tests/schema-feedback-retry-test.py with a stub constrained_completion: asserts request count, error text in the follow-up message, success on second try, failure after the bound. |
+| AC-2 | The bounded updated-plan writer path performs no schema-feedback retry. | Same suite: UNCLE_UPDATED_PLAN_ANSWER_TOKENS set, assert exactly one request. |
+| AC-3 | Allowed-ID enum lists (section/acceptance IDs) are removed from the schema sent to the model for reviewer and plan-edit outputs, and the same constraint is enforced by local validation; an unknown ID is still rejected. | Schema-size assertion (no enum list over 8 entries in wire schemas) and rejection test in the new suite plus existing schema suites. |
+| AC-4 | In an unattended run where all acceptance rows are delivered and only a review delivery is missing or rejected, the driver prints 'review incomplete' and exits with a distinct documented status instead of the generic IMPLEMENT-pending exit 1; missing acceptance rows still behave as before. | New shell suite scripts/tests/review-incomplete-exit-test.sh for both cases. |
+| AC-5 | Existing shell and Python verification commands show no new failures versus baseline. | bash scripts/run-shell-tests.sh; bash scripts/run-python-tests.sh |
 

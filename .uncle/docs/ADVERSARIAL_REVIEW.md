@@ -1,104 +1,72 @@
-## AR-001: The scope-cut permission contradicts mandatory acceptance criteria.
+## AR-001: The scope-cut instruction permits omitting mandatory acceptance criteria, leaving completion requirements contradictory.
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json §21 permits cutting template rendering, DCO sign-off and claimability; CHANGE_SPEC.json AC-6 and AC-7 require these behaviors. Merely documenting their absence in README would let implementation claim completion while failing the approved requirements.
-- Failure: The scope-cut permission contradicts mandatory acceptance criteria. Replace it with: "PR template rendering, required DCO sign-off, and claimability checks remain required for completion; deferral requires an explicitly approved specification change."
+- References: .uncle/workflow/documents/CHANGE_PLAN.json, section "Scope cuts under time pressure", permits cutting steps 2 and 3; CHANGE_SPEC.json AC-3 and AC-4 require their behaviors. Remove the unilateral scope cuts so implementation and verification apply the same completion criteria.
+- Failure: The scope-cut instruction permits omitting mandatory acceptance criteria, leaving completion requirements contradictory. Replace it with: "Steps 1–4 are required for completion; deferring steps 2 or 3 requires an explicitly approved scope revision."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-002: Resume behavior leaves environment and persisted mode competing.
-
-- Severity: HIGH
-- References: CHANGE_SPEC.json INV-1 fixes OSS mode at start and forbids changing it on resume. CHANGE_PLAN.json §1 binds prompts only when UNCLE_OSS=1, while §10 gates behavior on 'env/journal key' without precedence or restoration rules; resuming without the original environment could omit required guidance.
-- Failure: Resume behavior leaves environment and persisted mode competing. Add: "On resume, the journal's OSS value is authoritative, with a missing value treated as false; restore both OSS and implied no-footprint behavior before prompt binding or publication, and reject a conflicting --oss flag."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-003: Commit and PR title formatting has no implementation contract despite being required.
+## AR-002: The plan leaves unclear whether existing repair attempts precede, follow, or consume schema-feedback retries, allowing d
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json OB-6 requires commit and PR titles to follow stated formats. CHANGE_PLAN.json §1 and implementation step 5 cover DCO sign-off and PR body templates only; its AC-6 tests likewise cover rendering and sign-off, allowing title and commit formatting to be omitted.
-- Failure: Commit and PR title formatting has no implementation contract despite being required. Add: "Discover explicit commit-message and PR-title formats, apply them to publication output, preserve required DCO trailers, and send incompatible formatting requirements to the existing human gate."
+- References: .uncle/workflow/documents/CHANGE_SPEC.json SB-2 describes current failure "after repair attempt", while AC-1 requires at most two feedback retries before raising; CHANGE_PLAN.json sections 6 and 12 do not reconcile these paths. Specify their ordering and shared termination rule so repair cannot silently extend the promised bound.
+- Failure: The plan leaves unclear whether existing repair attempts precede, follow, or consume schema-feedback retries, allowing divergent request bounds. Add: "For non-bounded writers, schema-feedback retries replace the existing schema-error repair attempt; after two failed retries, save the final rejection and raise the existing schema ValueError without further repair."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-004: Template rendering lacks a rule for templates that omit required disclosure or contain forbidden vocabulary.
+## AR-003: The retry override has no defined range or invalid-input behavior, despite a hard maximum of two.
 
 - Severity: MEDIUM
-- References: CHANGE_PLAN.json §1 requires the project's PR template, while §12 says disclosure is already mandatory under no-footprint. CHANGE_SPEC.json AC-8 forbids Uncle vocabulary and OB-7 requires a gate for conflicting guidance; the rendering contract does not specify how these requirements interact, permitting silent omission or template alteration.
-- Failure: Template rendering lacks a rule for templates that omit required disclosure or contain forbidden vocabulary. Add: "Preserve required AI disclosure when filling a PR template; if template requirements conflict with disclosure or no-footprint rules, stop at the existing human gate with the conflict listed."
+- References: .uncle/workflow/documents/CHANGE_PLAN.json restriction R-1 introduces UNCLE_SCHEMA_FEEDBACK_RETRIES without parsing or boundary semantics; CHANGE_SPEC.json AC-1 and SI-2 cap retries at two. Define zero, negative, excessive, empty, and nonnumeric inputs so configuration cannot bypass the bound or cause inconsistent failures.
+- Failure: The retry override has no defined range or invalid-input behavior, despite a hard maximum of two. Add: "UNCLE_SCHEMA_FEEDBACK_RETRIES accepts only 0, 1, or 2; unset or invalid values use 2, and 0 disables schema-feedback retries; bounded writers always use 0."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-005: Resume behavior can change an existing run's mode because prompts use the environment while publication may use the jour
+## AR-004: The bounded-writer single-request assertion conflicts with preserving its existing recovery behavior and could cause rem
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json §1 gates the appendix on UNCLE_OSS=1, while §10 gates behavior on env/journal without precedence; CHANGE_SPEC.json INV-1 fixes mode at start and AC-9 preserves non-OSS behavior. Resolve precedence explicitly so resumed OSS runs retain guidance and resumed non-OSS runs cannot acquire OSS behavior.
-- Failure: Resume behavior can change an existing run's mode because prompts use the environment while publication may use the journal. Add: “On resume, the recorded OSS mode governs prompts and publication, absent oss means false, and a conflicting --oss flag is rejected before stage execution.”
+- References: CHANGE_PLAN.json §5 protects the bounded writer path, but §17 and CHANGE_SPEC.json AC-2 require a single request. The supplied scripts/lib/http_agent.py:1373–1383 permits a regrammar request after stream stops, and :1439–1458 permits relaxed-schema repair; restrict the single-request assertion to a completed, non-relaxed, schema-invalid response.
+- Failure: The bounded-writer single-request assertion conflicts with preserving its existing recovery behavior and could cause removal of supported retries. Amend the plan: “Bounded writers perform zero schema-feedback retries; existing stream-stop regrammar recovery and relaxed-schema repair remain unchanged.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-006: Template rendering leaves preservation of mandatory no-footprint disclosure unspecified.
+## AR-005: The plan does not settle whether schema feedback replaces, precedes, or follows existing repair, so implementations can
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json §1 introduces render_pr_body(template, summary, testing) and replaces the body with the project's template; §12 assumes disclosure is already mandatory under no-footprint. CHANGE_SPEC.json INV-4 and AC-8 require existing no-footprint protections to survive; define composition and validation order to prevent the replacement body from bypassing them.
-- Failure: Template rendering leaves preservation of mandatory no-footprint disclosure unspecified. Add: “Template rendering must retain mandatory AI disclosure, append it when the template has no disclosure field, and pass the complete rendered body through existing no-footprint validation before publication.”
+- References: CHANGE_PLAN.json §6 specifies validate failure followed by constrained_completion, while CHANGE_SPEC.json SB-2 describes the existing repair attempt without deciding its disposition. The supplied scripts/lib/http_agent.py:1451–1458 separates JSON errors from schema errors and invokes repair_final for repairable responses in both branches; specify ordering and test object-shaped schema failures and malformed JSON separately.
+- Failure: The plan does not settle whether schema feedback replaces, precedes, or follows existing repair, so implementations can remove recovery or exceed the retry bound. Add: “For non-bounded schema-invalid answers, feedback replaces repair_final and allows at most two additional completions; malformed-JSON repair remains unchanged.”
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-007: The plan lets the approval gate decide conflicting guidance without excluding AI prohibitions, leaving a path to overrid
-
-- Severity: HIGH
-- References: CHANGE_PLAN.json §12 says both "Conflicting guidance ... approval gate decides" and "Policy prohibits AI ... rerun after the human decision"; CHANGE_SPEC.json INV-2 requires a detected prohibition to block PR creation. Specify precedence so conflicting policies cannot turn mandatory refusal into an approval-dependent choice.
-- Failure: The plan lets the approval gate decide conflicting guidance without excluding AI prohibitions, leaving a path to override the mandatory publication block. Add: "Any detected AI prohibition takes precedence over permissive guidance and cannot be waived by plan approval."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-008: Resume behavior does not specify which mode wins when the environment disagrees with the journal, allowing an OSS run to
-
-- Severity: HIGH
-- References: CHANGE_PLAN.json §10 says "Gated on env/journal key" and §1 enables no-footprint through launcher exports; CHANGE_SPEC.json INV-1 fixes OSS mode in the journal across resumes. Define the precedence and restoration behavior so resuming without --oss cannot bypass either safeguard.
-- Failure: Resume behavior does not specify which mode wins when the environment disagrees with the journal, allowing an OSS run to lose its publication safeguards. Add: "On resume, the stored OSS mode overrides the environment and enables both the policy check and no-footprint enforcement before any publication write."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-009: Repository-only discovery lacks a rule for guidance symlinks that resolve outside the repository, potentially exposing l
+## AR-006: Raw validator feedback has no defined sanitization rule, so the retry implementation can violate the no-secrets requirem
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json §10 requires discovery to read only repository files; CHANGE_PLAN.json §1 defines discover(root) as returning text and source locations but provides no symlink boundary rule. Specify resolved-path containment so an untrusted checkout cannot make discovery read and reproduce external files.
-- Failure: Repository-only discovery lacks a rule for guidance symlinks that resolve outside the repository, potentially exposing local files through guideline text. Add: "Discovery must reject guidance paths whose resolved targets lie outside the repository root and report them as unknown without reading their contents."
+- References: CHANGE_PLAN.json §6 appends a user message with the validator error; CHANGE_SPEC.json §10 requires "No secrets in feedback" but does not define safe error content. When an exception includes sensitive values or local context, forwarding its text can disclose that content to the provider; specify sanitized feedback and test that sensitive exception content is excluded.
+- Failure: Raw validator feedback has no defined sanitization rule, so the retry implementation can violate the no-secrets requirement. Add: "Feedback must contain only a schema path and a fixed constraint description, excluding rejected values, local file paths, and raw exception text."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-010: Policy unit tests cannot establish that publication refuses before side effects.
+## AR-007: The retry limit has no testable relationship to existing repair attempts, so request-count tests can approve different b
 
 - Severity: HIGH
-- References: CHANGE_PLAN.json §16 specifies policy cases but no publication-entry-point assertion; CHANGE_SPEC.json AC-4 requires refusal before any branch, commit, push or gh call. A correctly failing helper can coexist with a publish caller that checks too late or ignores failure.
-- Failure: Policy unit tests cannot establish that publication refuses before side effects. Add: "Run the publication entry point against a prohibiting fixture with recording git/gh shims; assert failure, the policy source, and zero branch, commit, push or gh invocations."
+- References: CHANGE_SPEC.json SB-2 describes the current repair attempt, while AC-1 counts retries and CHANGE_PLAN.json §6 adds a new loop without specifying repair precedence. Specify this ordering before implementing the request-count tests so an extra repair call cannot silently exceed the intended bound.
+- Failure: The retry limit has no testable relationship to existing repair attempts, so request-count tests can approve different bounds. Add: "Schema failures use at most two additional constrained_completion calls and never invoke repair_answer; JSON parse failures retain existing handling."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-011: Claimability and prompt assertions cannot verify the required gate-stop.
-
-- Severity: HIGH
-- References: CHANGE_SPEC.json AC-7 requires a gate-stop and makes silent default selection impossible; CHANGE_PLAN.json §12 describes warnings and §16 lists claimability tests. Neither specifies a behavioral test of the gate, so advisory output could satisfy the planned checks without stopping execution.
-- Failure: Claimability and prompt assertions cannot verify the required gate-stop. Add: "Exercise conflicting guidance and unclaimable issues through the workflow with approval withheld; assert listed reasons and no stage advancement, including when a default choice is available."
-- Fix: Address in the plan.
-- Verify: Re-run the check.
-
-## AR-012: Resume behavior lacks a testable precedence rule for conflicting environment and journal values.
+## AR-008: The environment override has no defined range or invalid-value behavior, leaving the retry-bound tests without an oracle
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json INV-1 fixes OSS mode at start; CHANGE_PLAN.json §10 says only 'Gated on env/journal key,' while §1 gates the appendix on UNCLE_OSS=1. AC-1 verification covers wiring and journal creation without specifying resume cases, allowing tests and implementation to choose different precedence.
-- Failure: Resume behavior lacks a testable precedence rule for conflicting environment and journal values. Add: "On resume, journal OSS mode governs prompts and publication regardless of the current flag or environment; a missing key means false, and tests cover both mismatch directions and legacy journals."
+- References: CHANGE_PLAN.json R-1 specifies both 'max 2' and UNCLE_SCHEMA_FEEDBACK_RETRIES, but neither AC-1 nor SI-2 defines override semantics. Add cases for unset, zero, one, two, negative, above-limit, empty, and malformed values to make the hard maximum verifiable.
+- Failure: The environment override has no defined range or invalid-value behavior, leaving the retry-bound tests without an oracle. Add: "UNCLE_SCHEMA_FEEDBACK_RETRIES defaults to 2, accepts integers 0–2, and uses 2 for all other values; zero disables schema-feedback retries."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 
-## AR-013: Rendering helpers can pass while publication drops DCO trailers or template content.
+## AR-009: The schema-size assertion permits short ID enums even though AC-3 requires their removal, and can reject unrelated enums
 
 - Severity: MEDIUM
-- References: CHANGE_SPEC.json AC-6 verifies publication-facing behavior using only unit tests of render functions; CHANGE_PLAN.json §16 likewise lists sign-off and rendering cases without asserting their integration. The planned tests would not detect a caller that continues using the existing message or body.
-- Failure: Rendering helpers can pass while publication drops DCO trailers or template content. Add: "For a DCO-required fixture with a PR template, exercise publication using recording shims and assert that the actual commit message and submitted PR body contain the required trailer and populated template."
+- References: CHANGE_SPEC.json AC-3 requires removal of allowed-ID enums but verifies only 'no enum list over 8 entries' plus an unknown-ID rejection. Replace that proxy with field-specific assertions and valid/invalid membership cases; explicitly require that an empty allowed set rejects every supplied ID.
+- Failure: The schema-size assertion permits short ID enums even though AC-3 requires their removal, and can reject unrelated enums. Add: "Tests assert absence of enums on every targeted ID field for allowed sets of sizes 0, 1, 8, and 9, and verify local membership against each supplied set."
 - Fix: Address in the plan.
 - Verify: Re-run the check.
 

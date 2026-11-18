@@ -7052,6 +7052,13 @@ PY
                     set_state REPAIR
                     continue
                 fi
+                if [[ "$checklist_acceptance" == BLOCKED-HUMAN ]]; then
+                    # Rows that wait on a person must reach acceptance_human_continue, which records the
+                    # unattended waiver the final audit reads. Recording only a nonblocking failure left
+                    # them unwaived, and the audit then rated them HIGH.
+                    acceptance_human_continue .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
+                    continue
+                fi
                 if [[ "$checklist_acceptance" != PASS ]]; then
                     record_nonblocking_failure VERIFICATION_REPORT.json "checklist acceptance $checklist_acceptance after completed driver verification"
                 fi
@@ -7114,7 +7121,7 @@ PY
                 # below, not be waved through as nonblocking evidence.
                 if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
                     && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
-                    && [[ "$checklist_acceptance" != PASS && "$checklist_acceptance" != UNKNOWN ]]; then
+                    && [[ "$checklist_acceptance" != PASS && "$checklist_acceptance" != UNKNOWN && "$checklist_acceptance" != BLOCKED-HUMAN ]]; then
                     echo 'Checklist findings are recorded as nonblocking evidence; continuing to final audit.'
                     record_nonblocking_failure VERIFICATION_REPORT.json "checklist acceptance $checklist_acceptance after passing driver green check"
                     set_state FINAL_AUDIT

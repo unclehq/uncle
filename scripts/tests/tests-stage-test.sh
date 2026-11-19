@@ -133,7 +133,8 @@ run_claude_orig="$(declare -f run_claude)"
 run_claude() { eval "$run_claude_orig"; :; }
 eval "${run_claude_orig/run_claude/stub_agent}"
 run_claude() { stub_agent "$@"; [[ "${2#tests-}" != unit ]] || { mkdir -p src; echo prod > src/engine.js; }; }
-expect "production code written during authoring is rejected" '! ( tests_stage ) > "$SCR/stray.out" 2>&1 && grep -q "src/engine.js changed during test authoring" "$SCR/stray.out"'
+( tests_stage ) > "$SCR/stray.out" 2>&1 && stray_rc=0 || stray_rc=$?
+expect "an unclaimed file written during authoring is recorded, not fatal" '[[ "$stray_rc" == 0 ]] && grep -q "note: src/engine.js changed during test authoring" "$SCR/stray.out" && grep -q "src/engine.js" .uncle/docs/TESTS_NOTES.md'
 
 # Ignore rules that move mid-run must not turn an old, untouched file into a stray. (Real run: the implementation rewrote .gitignore while the
 # lanes wrote tests, and a stale .vite/deps from hours earlier stopped being ignored and failed the ownership check.)
@@ -148,7 +149,7 @@ mkdir -p stale-cache; echo old > stale-cache/deps.json; touch -t 202001010000 st
 printf 'stale-cache/\n' > .gitignore
 run_claude() { stub_agent "$@"; [[ "${2#tests-}" != unit ]] || { printf '__pycache__/\n' > .gitignore; mkdir -p src; echo fresh > src/new.js; }; }
 ( tests_stage ) > "$SCR/ignore-moved2.out" 2>&1 && ignore_moved2_rc=0 || ignore_moved2_rc=$?
-expect "a file written during authoring is still a stray when the ignore rules moved too" '[[ "$ignore_moved2_rc" != 0 ]] && grep -q "src/new.js changed during test authoring" "$SCR/ignore-moved2.out" && ! grep -q "stale-cache/deps.json changed" "$SCR/ignore-moved2.out"'
+expect "a file written during authoring is still a stray when the ignore rules moved too" '[[ "$ignore_moved2_rc" == 0 ]] && grep -q "src/new.js changed during test authoring" "$SCR/ignore-moved2.out" && ! grep -q "stale-cache/deps.json changed" "$SCR/ignore-moved2.out"'
 
 # Ownership handed to implementation steps: frozen tests are removed from every step, and steps left with nothing are skipped.
 reset
@@ -220,7 +221,7 @@ printf 'tests/\nvitest.config.js\n' > "$STATE_DIR/tests.paths.fixture"
 tests_background_start > /dev/null 2>&1
 mkdir -p src; echo rogue > src/rogue.js
 ( tests_join ) > "$SCR/join2.out" 2>&1 && join2_rc=0 || join2_rc=$?
-expect "an unowned stray is still rejected at the join" '[[ "$join2_rc" != 0 ]] && grep -q "src/rogue.js changed during test authoring" "$SCR/join2.out"'
+expect "an unowned stray is recorded at the join" '[[ "$join2_rc" == 0 ]] && grep -q "src/rogue.js changed during test authoring" "$SCR/join2.out"'
 
 # A lane that fails once in the background is retried at the join (finished lanes are kept); one that keeps failing fails the join.
 reset

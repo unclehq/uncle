@@ -165,7 +165,7 @@ tests_covered() {
 tests_collate() {
     local dir lane file line problems=0 owner listed="$STATE_DIR/tests/listed.tsv" path
     dir="$(tests_dir)"
-    : > "$listed"; : > "$STATE_DIR/tests/outside.paths"
+    : > "$listed"; : > "$STATE_DIR/tests/outside.paths"; : > "$dir/unclaimed.paths"
     while IFS= read -r lane; do
         if [[ ! -f "$dir/lane-$lane.files" ]]; then
             echo "  lane $lane has no $dir/lane-$lane.files (delete lane-$lane.done and rerun to redo it)"; problems=$((problems + 1)); continue
@@ -196,12 +196,6 @@ tests_collate() {
         path="${line:3}"
         [[ -n "$path" && "$path" != .uncle/* ]] || continue
         awk -F'\t' -v f="$path" '$2 == f { found = 1 } END { exit !found }' "$listed" && continue
-        # The driver installs dependencies itself while the lanes author (the concurrent wave's "Dependencies installed" step), which
-        # creates or rewrites the package manager's lockfile. No lane wrote it and no implementation step owns it, so it read as a
-        # stray and failed tests-complete (a calculator build stopped at IMPLEMENT on `package-lock.json`).
-        case "${path##*/}" in
-            package-lock.json|npm-shrinkwrap.json|yarn.lock|pnpm-lock.yaml|bun.lock|bun.lockb) continue ;;
-        esac
         # `git status` lines are a proxy for "changed during authoring", and the proxy breaks when ignore rules move: an
         # implementation running at the same time rewrote .gitignore, and a stale, untouched .vite/deps (hours older than the run)
         # stopped being ignored, so it looked like a new stray and failed the stage. A file that still exists and is older than the
@@ -211,7 +205,12 @@ tests_collate() {
         # Concurrent mode: the implementation is writing source at the same time, so a changed file an implementation step owns is its own.
         if tests_concurrent && [[ -s "$STATE_DIR/implement-owns.all.tsv" ]] \
                 && awk -F'\t' -v f="$path" '$2 == f { found = 1 } END { exit !found }' "$STATE_DIR/implement-owns.all.tsv"; then continue; fi
-        echo "  $path changed during test authoring and no lane claimed it"; problems=$((problems + 1))
+        # Not a failure. Whether a file is production code, a package manager's lockfile or other tool output cannot be told apart
+        # reliably (names are arbitrary and differ per ecosystem; `cargo` wrote Cargo.lock and stopped a Rust build), and the checks that
+        # matter do not depend on it: protected tests are hash-frozen, two lanes claiming one file still fails, and implementation
+        # owns the source. So it is recorded for the human diff gate (TESTS_NOTES.md) instead of guessed at.
+        echo "  note: $path changed during test authoring and no lane claimed it; recorded for review."
+        printf '%s\n' "$path" >> "$dir/unclaimed.paths"
     done < <(comm -13 "$dir/status.before" <(tests_status_snapshot))
     [[ "$problems" == 0 ]]
 }
@@ -334,6 +333,10 @@ tests_finish() {
             printf '\n'
             [[ ! -f "$dir/lane-$lane.md" ]] || cat "$dir/lane-$lane.md"
         done
+        if [[ -s "$dir/unclaimed.paths" ]]; then
+            printf '\n---\n\n# Unclaimed changes during test authoring\n\nNo lane listed these; they may be tool output (lockfiles, caches) or stray source. Check them in the diff:\n\n'
+            sed 's/^/- /' "$dir/unclaimed.paths"
+        fi
     } > "$notes"
     if [[ "$red" == 1 ]]; then
         if ! tests_red_check "$dir/red-check.md"; then
